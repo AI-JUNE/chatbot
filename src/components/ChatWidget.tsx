@@ -10,6 +10,8 @@ export default function ChatWidget() {
   const [msgs, setMsgs] = useState<Msg[]>([
     { role: 'bot', text: '안녕하세요! 고원 상담 챗봇이에요. 무엇을 도와드릴까요?' },
   ]);
+  const [sessionId] = useState(() => `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
+  const lastUserRef = useRef('');
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, open]);
@@ -18,13 +20,14 @@ export default function ChatWidget() {
     const text = input.trim();
     if (!text || busy) return;
     setInput('');
+    lastUserRef.current = text;
     setMsgs((m) => [...m, { role: 'user', text }]);
     setBusy(true);
     try {
       const r = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, sessionId }),
       });
       const data = await r.json();
       setMsgs((m) => [...m, { role: 'bot', text: data.reply ?? '오류가 발생했어요.', escalate: data.escalate }]);
@@ -32,6 +35,30 @@ export default function ChatWidget() {
       setMsgs((m) => [...m, { role: 'bot', text: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' }]);
     } finally {
       setBusy(false);
+    }
+  }
+
+  // 상담원 연결 접수 — 티켓 생성(인메모리 스텁, 실제 상담원 알림은 준비 중)
+  async function requestAgent() {
+    try {
+      const r = await fetch('/api/escalation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, reason: 'user_request', message: lastUserRef.current }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setMsgs((x) => [...x, {
+          role: 'bot',
+          text: d.created
+            ? `상담원 연결 요청이 접수됐어요. 접수번호 ${d.ticket.id} — 순서대로 도와드릴게요. (데모: 실제 연결은 준비 중)`
+            : `이미 접수된 요청이 있어요. 접수번호 ${d.ticket.id} (${d.ticket.statusLabel}) — 잠시만 기다려 주세요.`,
+        }]);
+      } else {
+        setMsgs((x) => [...x, { role: 'bot', text: '접수 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요.' }]);
+      }
+    } catch {
+      setMsgs((x) => [...x, { role: 'bot', text: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' }]);
     }
   }
 
@@ -51,7 +78,7 @@ export default function ChatWidget() {
               <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
                 <div style={{ background: m.role === 'user' ? 'var(--brand)' : '#fff', color: m.role === 'user' ? '#fff' : 'var(--ink)', border: m.role === 'user' ? 'none' : '1px solid var(--line)', borderRadius: 13, padding: '9px 12px', fontSize: 13.3, lineHeight: 1.5 }}>{m.text}</div>
                 {m.escalate && (
-                  <button onClick={() => setMsgs((x) => [...x, { role: 'bot', text: '상담원 연결 요청이 접수됐어요. (데모: 실제 연결은 준비 중)' }])} style={{ marginTop: 5, fontSize: 12, fontWeight: 700, color: 'var(--brand-600)', background: 'var(--brand-50)', borderRadius: 8, padding: '6px 10px' }}>상담원 연결하기</button>
+                  <button onClick={requestAgent} style={{ marginTop: 5, fontSize: 12, fontWeight: 700, color: 'var(--brand-600)', background: 'var(--brand-50)', borderRadius: 8, padding: '6px 10px' }}>상담원 연결하기</button>
                 )}
               </div>
             ))}

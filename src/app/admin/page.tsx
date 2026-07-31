@@ -23,6 +23,30 @@ interface RuleView {
   effectiveReply: string;
 }
 
+interface TicketView {
+  id: string;
+  sessionId: string;
+  reason: string;
+  message: string;
+  contact?: string;
+  status: 'open' | 'in_progress' | 'resolved' | 'canceled';
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface OpsStats {
+  escalation: { total: number; open: number; inProgress: number; resolved: number; canceled: number };
+  conversation: { totalTurns: number; sessions: number; bySource: Record<string, number>; autoHandled: number; autoRate: number; escalatedTurns: number };
+}
+
+const TICKET_STATUS_LABELS: Record<TicketView['status'], string> = {
+  open: '접수',
+  in_progress: '상담 중',
+  resolved: '완료',
+  canceled: '취소',
+};
+
 interface KBForm {
   id: string;
   category: string;
@@ -43,7 +67,7 @@ const S = {
 };
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<'kb' | 'rules' | 'test'>('kb');
+  const [tab, setTab] = useState<'kb' | 'rules' | 'esc' | 'test'>('kb');
   const [notice, setNotice] = useState('');
 
   // ---- KB ----
@@ -65,10 +89,23 @@ export default function AdminPage() {
     if (data.ok) setRules(data.rules);
   }, []);
 
+  // ---- Escalations ----
+  const [tickets, setTickets] = useState<TicketView[]>([]);
+  const [stats, setStats] = useState<OpsStats | null>(null);
+  const loadEsc = useCallback(async () => {
+    const res = await fetch('/api/admin/escalations');
+    const data = await res.json();
+    if (data.ok) {
+      setTickets(data.tickets);
+      setStats(data.stats);
+    }
+  }, []);
+
   useEffect(() => {
     loadKB();
     loadRules();
-  }, [loadKB, loadRules]);
+    loadEsc();
+  }, [loadKB, loadRules, loadEsc]);
 
   const flash = (msg: string) => {
     setNotice(msg);
@@ -140,6 +177,21 @@ export default function AdminPage() {
     }
   };
 
+  const patchTicket = async (id: string, status: TicketView['status']) => {
+    const res = await fetch('/api/admin/escalations', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      await loadEsc();
+      flash(`${id} → ${TICKET_STATUS_LABELS[status]}`);
+    } else {
+      flash(`변경 실패: ${data.error}`);
+    }
+  };
+
   // ---- Test ----
   const [testInput, setTestInput] = useState('');
   const [testLog, setTestLog] = useState<{ q: string; reply: string; intent: string; source: string }[]>([]);
@@ -168,6 +220,7 @@ export default function AdminPage() {
           [
             ['kb', '지식베이스'],
             ['rules', '시나리오 룰'],
+            ['esc', '상담원 요청'],
             ['test', '응답 테스트'],
           ] as const
         ).map(([key, label]) => (
@@ -261,6 +314,58 @@ export default function AdminPage() {
                   기본 응답으로 되돌리기
                 </button>
               )}
+            </section>
+          ))}
+        </>
+      )}
+
+      {tab === 'esc' && (
+        <>
+          <section style={S.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ fontSize: 16 }}>운영 현황</h2>
+              <button style={S.btnGhost} onClick={loadEsc}>새로고침</button>
+            </div>
+            {stats && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 10, fontSize: 14 }}>
+                <span>대화 <strong>{stats.conversation.totalTurns}</strong>턴 · 세션 <strong>{stats.conversation.sessions}</strong></span>
+                <span>자동처리율 <strong>{Math.round(stats.conversation.autoRate * 100)}%</strong> (룰/KB {stats.conversation.autoHandled}턴)</span>
+                <span>상담원 요청 <strong>{stats.escalation.total}</strong>건 (대기 {stats.escalation.open} · 상담 중 {stats.escalation.inProgress} · 완료 {stats.escalation.resolved})</span>
+              </div>
+            )}
+            <p style={{ ...S.tag, marginTop: 8 }}>로그·티켓은 서버 메모리에만 저장됩니다(재시작 시 초기화 · 영구 저장은 준비 중).</p>
+          </section>
+          {tickets.length === 0 && (
+            <section style={S.card}>
+              <p style={{ fontSize: 14, color: 'var(--sub)' }}>접수된 상담원 연결 요청이 없습니다. 위젯에서 &quot;상담원&quot;을 입력해 테스트할 수 있어요.</p>
+            </section>
+          )}
+          {tickets.map((t) => (
+            <section key={t.id} style={S.card}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                <div>
+                  <strong>{t.id}</strong>{' '}
+                  <span style={S.tag}>
+                    {TICKET_STATUS_LABELS[t.status]} · 세션 {t.sessionId} · 사유 {t.reason}
+                  </span>
+                  {t.message && <p style={{ fontSize: 14, color: 'var(--sub)', margin: '6px 0' }}>마지막 메시지: {t.message}</p>}
+                  <div style={S.tag}>접수 {new Date(t.createdAt).toLocaleString()} · 갱신 {new Date(t.updatedAt).toLocaleString()}</div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {t.status === 'open' && (
+                    <button style={S.btn} onClick={() => patchTicket(t.id, 'in_progress')}>상담 시작</button>
+                  )}
+                  {(t.status === 'open' || t.status === 'in_progress') && (
+                    <>
+                      <button style={S.btnGhost} onClick={() => patchTicket(t.id, 'resolved')}>완료</button>
+                      <button style={{ ...S.btnGhost, color: '#a33' }} onClick={() => patchTicket(t.id, 'canceled')}>취소</button>
+                    </>
+                  )}
+                  {(t.status === 'resolved' || t.status === 'canceled') && (
+                    <button style={S.btnGhost} onClick={() => patchTicket(t.id, 'open')}>다시 열기</button>
+                  )}
+                </div>
+              </div>
             </section>
           ))}
         </>
