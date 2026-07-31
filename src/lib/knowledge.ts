@@ -114,11 +114,11 @@ export interface KBMatch {
 }
 
 /** 키워드 부분일치 스코어링. minScore 미만이면 null(폴백으로 넘어감). */
-export function matchKnowledge(message: string, minScore = 2): KBMatch | null {
+export function matchKnowledge(message: string, minScore = 2, entries: KBEntry[] = KB): KBMatch | null {
   const text = (message || '').toLowerCase();
   if (!text) return null;
   let best: KBMatch | null = null;
-  for (const entry of KB) {
+  for (const entry of entries) {
     let score = 0;
     for (const kw of entry.keywords) {
       if (kw && text.includes(kw)) score += kw.length >= 2 ? 2 : 1;
@@ -129,10 +129,10 @@ export function matchKnowledge(message: string, minScore = 2): KBMatch | null {
 }
 
 /** 간단 검색(관리 콘솔·연관질문 노출용). */
-export function searchKnowledge(query: string, limit = 3): KBEntry[] {
+export function searchKnowledge(query: string, limit = 3, entries: KBEntry[] = KB): KBEntry[] {
   const text = (query || '').toLowerCase();
   if (!text) return [];
-  return KB.map((entry) => {
+  return entries.map((entry) => {
     let score = 0;
     for (const kw of entry.keywords) if (kw && text.includes(kw)) score += 1;
     if (entry.question.toLowerCase().includes(text)) score += 2;
