@@ -2,7 +2,7 @@
 
 // 관리 콘솔(MVP): 지식베이스(FAQ) CRUD · 시나리오 룰 편집 · 응답 테스트.
 // 저장은 인메모리 스텁 — [승인 필요] DB 영구 저장·관리자 인증(현재 ADMIN_TOKEN 미설정 시 개방).
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface KBEntryView {
   id: string;
@@ -37,7 +37,28 @@ interface TicketView {
 
 interface OpsStats {
   escalation: { total: number; open: number; inProgress: number; resolved: number; canceled: number };
-  conversation: { totalTurns: number; sessions: number; bySource: Record<string, number>; autoHandled: number; autoRate: number; escalatedTurns: number };
+  conversation: {
+    totalTurns: number;
+    sessions: number;
+    bySource: Record<string, number>;
+    byChannel: Record<string, number>;
+    topIntents: { intent: string; count: number }[];
+    autoHandled: number;
+    autoRate: number;
+    escalatedTurns: number;
+  };
+}
+
+interface TurnView {
+  id: string;
+  sessionId: string;
+  channel: string;
+  message: string;
+  reply: string;
+  intent: string;
+  source: string;
+  escalate: boolean;
+  at: string;
 }
 
 const TICKET_STATUS_LABELS: Record<TicketView['status'], string> = {
@@ -67,8 +88,36 @@ const S = {
 };
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<'kb' | 'rules' | 'esc' | 'test'>('kb');
+  const [tab, setTab] = useState<'dash' | 'kb' | 'rules' | 'esc' | 'test'>('dash');
   const [notice, setNotice] = useState('');
+
+  // ---- 관리 토큰(ADMIN_TOKEN 설정 시 x-admin-token 필수) ----
+  const [adminToken, setAdminToken] = useState('');
+  const tokenRef = useRef('');
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem('cb_admin_token') || '';
+      if (saved) {
+        setAdminToken(saved);
+        tokenRef.current = saved;
+      }
+    } catch {
+      /* localStorage 미지원 환경 무시 */
+    }
+  }, []);
+  const applyToken = (v: string) => {
+    setAdminToken(v);
+    tokenRef.current = v;
+    try {
+      window.localStorage.setItem('cb_admin_token', v);
+    } catch {
+      /* ignore */
+    }
+  };
+  const authHeaders = (json = false): Record<string, string> => ({
+    ...(json ? { 'Content-Type': 'application/json' } : {}),
+    ...(tokenRef.current ? { 'x-admin-token': tokenRef.current } : {}),
+  });
 
   // ---- KB ----
   const [entries, setEntries] = useState<KBEntryView[]>([]);
@@ -76,7 +125,7 @@ export default function AdminPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const loadKB = useCallback(async () => {
-    const res = await fetch('/api/admin/kb');
+    const res = await fetch('/api/admin/kb', { headers: authHeaders() });
     const data = await res.json();
     if (data.ok) setEntries(data.entries);
   }, []);
@@ -84,7 +133,7 @@ export default function AdminPage() {
   // ---- Rules ----
   const [rules, setRules] = useState<RuleView[]>([]);
   const loadRules = useCallback(async () => {
-    const res = await fetch('/api/admin/rules');
+    const res = await fetch('/api/admin/rules', { headers: authHeaders() });
     const data = await res.json();
     if (data.ok) setRules(data.rules);
   }, []);
@@ -92,12 +141,14 @@ export default function AdminPage() {
   // ---- Escalations ----
   const [tickets, setTickets] = useState<TicketView[]>([]);
   const [stats, setStats] = useState<OpsStats | null>(null);
+  const [recentTurns, setRecentTurns] = useState<TurnView[]>([]);
   const loadEsc = useCallback(async () => {
-    const res = await fetch('/api/admin/escalations');
+    const res = await fetch('/api/admin/escalations?logs=true', { headers: authHeaders() });
     const data = await res.json();
     if (data.ok) {
       setTickets(data.tickets);
       setStats(data.stats);
+      setRecentTurns(data.recentTurns || []);
     }
   }, []);
 
@@ -122,7 +173,7 @@ export default function AdminPage() {
     };
     const res = await fetch('/api/admin/kb', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(true),
       body: JSON.stringify(body),
     });
     const data = await res.json();
@@ -143,7 +194,7 @@ export default function AdminPage() {
   };
 
   const removeKB = async (id: string) => {
-    const res = await fetch(`/api/admin/kb?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const res = await fetch(`/api/admin/kb?id=${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() });
     const data = await res.json();
     if (data.ok) {
       await loadKB();
@@ -156,7 +207,7 @@ export default function AdminPage() {
   const resetAll = async () => {
     await fetch('/api/admin/kb', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(true),
       body: JSON.stringify({ reset: true }),
     });
     await loadKB();
@@ -166,7 +217,7 @@ export default function AdminPage() {
   const patchRule = async (intent: string, patch: { enabled?: boolean; reply?: string | null }) => {
     const res = await fetch('/api/admin/rules', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(true),
       body: JSON.stringify({ intent, ...patch }),
     });
     const data = await res.json();
@@ -180,7 +231,7 @@ export default function AdminPage() {
   const patchTicket = async (id: string, status: TicketView['status']) => {
     const res = await fetch('/api/admin/escalations', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(true),
       body: JSON.stringify({ id, status }),
     });
     const data = await res.json();
@@ -215,9 +266,10 @@ export default function AdminPage() {
       <p style={{ color: 'var(--sub)', fontSize: 14, marginBottom: 16 }}>
         지식베이스·시나리오 편집은 서버 메모리에만 반영됩니다(재시작 시 초기화 · 영구 저장은 준비 중).
       </p>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 16 }}>
         {(
           [
+            ['dash', '대시보드'],
             ['kb', '지식베이스'],
             ['rules', '시나리오 룰'],
             ['esc', '상담원 요청'],
@@ -229,7 +281,89 @@ export default function AdminPage() {
           </button>
         ))}
         {notice && <span style={{ alignSelf: 'center', fontSize: 13, color: 'var(--brand-600)' }}>{notice}</span>}
+        <input
+          style={{ marginLeft: 'auto', border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '6px 10px', fontSize: 13, width: 170 }}
+          type="password"
+          placeholder="관리 토큰(설정 시)"
+          aria-label="관리 토큰"
+          value={adminToken}
+          onChange={(e) => applyToken(e.target.value)}
+          onBlur={() => {
+            loadKB();
+            loadRules();
+            loadEsc();
+          }}
+        />
       </div>
+
+      {tab === 'dash' && (
+        <>
+          <section style={S.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ fontSize: 16 }}>운영 대시보드</h2>
+              <button style={S.btnGhost} onClick={loadEsc}>새로고침</button>
+            </div>
+            {stats ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginTop: 12 }}>
+                {[
+                  ['총 대화 턴', String(stats.conversation.totalTurns)],
+                  ['세션 수', String(stats.conversation.sessions)],
+                  ['자동처리율', `${Math.round(stats.conversation.autoRate * 100)}%`],
+                  ['상담원 요청', `${stats.escalation.total}건 (대기 ${stats.escalation.open})`],
+                ].map(([k, v]) => (
+                  <div key={k} style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-sm)', padding: '12px 14px' }}>
+                    <div style={S.tag}>{k}</div>
+                    <div style={{ fontSize: 21, fontWeight: 800 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 8 }}>통계를 불러오는 중입니다… (401이면 우측 상단에 관리 토큰을 입력하세요)</p>
+            )}
+            {stats && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 12, fontSize: 13, color: 'var(--sub)' }}>
+                <span>응답 소스: {Object.entries(stats.conversation.bySource).map(([k, v]) => `${k} ${v}`).join(' · ') || '-'}</span>
+                <span>채널: {Object.entries(stats.conversation.byChannel).map(([k, v]) => `${k} ${v}`).join(' · ') || '-'}</span>
+                <span>상담원 제안 턴: {stats.conversation.escalatedTurns}</span>
+              </div>
+            )}
+            <p style={{ ...S.tag, marginTop: 8 }}>통계·로그는 서버 메모리 기준입니다(재시작 시 초기화 · 영구 저장은 준비 중).</p>
+          </section>
+          {stats && stats.conversation.topIntents.length > 0 && (
+            <section style={S.card}>
+              <h2 style={{ fontSize: 16, marginBottom: 8 }}>인텐트 TOP {stats.conversation.topIntents.length}</h2>
+              {stats.conversation.topIntents.map((t) => {
+                const max = stats.conversation.topIntents[0].count || 1;
+                return (
+                  <div key={t.intent} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <span style={{ width: 160, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.intent}</span>
+                    <div style={{ flex: 1, background: 'var(--brand-50)', borderRadius: 999, height: 10 }}>
+                      <div style={{ width: `${Math.max(6, Math.round((t.count / max) * 100))}%`, background: 'var(--brand)', borderRadius: 999, height: 10 }} />
+                    </div>
+                    <span style={{ ...S.tag, width: 36, textAlign: 'right' }}>{t.count}</span>
+                  </div>
+                );
+              })}
+            </section>
+          )}
+          <section style={S.card}>
+            <h2 style={{ fontSize: 16, marginBottom: 8 }}>최근 대화 (최대 30건)</h2>
+            {recentTurns.length === 0 && (
+              <p style={{ fontSize: 14, color: 'var(--sub)' }}>아직 대화 로그가 없습니다. 위젯이나 응답 테스트 탭에서 대화해 보세요.</p>
+            )}
+            {recentTurns.map((t) => (
+              <div key={t.id} style={{ borderTop: '1px solid var(--line)', padding: '8px 0' }}>
+                <div style={S.tag}>
+                  {new Date(t.at).toLocaleString()} · {t.channel} · {t.sessionId} · intent {t.intent} · source {t.source}
+                  {t.escalate ? ' · 상담원 제안' : ''}
+                </div>
+                <div style={{ fontSize: 14 }}><strong>Q.</strong> {t.message}</div>
+                <div style={{ fontSize: 14, color: 'var(--sub)' }}><strong>A.</strong> {t.reply}</div>
+              </div>
+            ))}
+          </section>
+        </>
+      )}
 
       {tab === 'kb' && (
         <>

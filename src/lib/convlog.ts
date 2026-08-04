@@ -40,6 +40,8 @@ export interface ConvStats {
   totalTurns: number;
   sessions: number;
   bySource: Record<string, number>;
+  byChannel: Record<string, number>;
+  topIntents: { intent: string; count: number }[]; // 상위 10개
   autoHandled: number; // rule/kb로 즉시 응답한 턴
   autoRate: number; // 자동처리율(0~1, 소수 3자리)
   escalatedTurns: number;
@@ -47,20 +49,30 @@ export interface ConvStats {
 
 export function convStats(): ConvStats {
   const bySource: Record<string, number> = {};
+  const byChannel: Record<string, number> = {};
+  const byIntent: Record<string, number> = {};
   const sessions = new Set<string>();
   let autoHandled = 0;
   let escalatedTurns = 0;
   for (const l of logs) {
     bySource[l.source] = (bySource[l.source] || 0) + 1;
+    byChannel[l.channel] = (byChannel[l.channel] || 0) + 1;
+    byIntent[l.intent] = (byIntent[l.intent] || 0) + 1;
     sessions.add(l.sessionId);
     if (l.source === 'rule' || l.source === 'kb') autoHandled += 1;
     if (l.escalate) escalatedTurns += 1;
   }
+  const topIntents = Object.entries(byIntent)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([intent, count]) => ({ intent, count }));
   const totalTurns = logs.length;
   return {
     totalTurns,
     sessions: sessions.size,
     bySource,
+    byChannel,
+    topIntents,
     autoHandled,
     autoRate: totalTurns ? Math.round((autoHandled / totalTurns) * 1000) / 1000 : 0,
     escalatedTurns,
