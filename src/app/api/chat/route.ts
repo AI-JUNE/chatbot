@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
   }
   const message = body.message ?? '';
   const sessionId = (body.sessionId || 'anon').trim().slice(0, 60) || 'anon';
-  const result = replyTo(message);
+  const result = replyTo(message, sessionId);
 
   // 대화 로그(인메모리 스텁) — 영구 저장은 [승인 필요]
   if (result.source !== 'empty') {

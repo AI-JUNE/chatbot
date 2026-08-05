@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(kakaoErrorResponse('발화를 확인하지 못했어요.'));
   }
 
-  const result = replyTo(parsed.utterance);
+  const result = replyTo(parsed.utterance, `kakao:${parsed.userId}`);
 
   // 대화 로그(인메모리 스텁) — 영구 저장은 [승인 필요]. 사용자 id는 세션 구분용으로만 사용.
   if (result.source !== 'empty') {

@@ -51,7 +51,8 @@ export function toKakaoResponse(result: ChatReply): KakaoSkillResponse {
     const label = s.question.length > 14 ? `${s.question.slice(0, 13)}…` : s.question;
     quickReplies.push({ label, action: 'message', messageText: s.question });
   }
-  if (result.escalate) {
+  // 이미 이번 턴에서 접수(ticketId 존재)된 경우 중복 접수 유도 방지
+  if (result.escalate && !result.ticketId) {
     quickReplies.push({ label: '상담원 연결', action: 'message', messageText: '상담원' });
   }
   if (quickReplies.length) res.template.quickReplies = quickReplies.slice(0, 10);

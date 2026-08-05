@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 interface Suggestion { id: string; question: string }
-interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean; suggestions?: Suggestion[] }
+interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean; suggestions?: Suggestion[]; ticketId?: string }
 
 export default function ChatWidget() {
   const [open, setOpen] = useState(true);
@@ -37,6 +37,7 @@ export default function ChatWidget() {
         text: data.reply ?? '오류가 발생했어요.',
         escalate: data.escalate,
         suggestions: Array.isArray(data.suggestions) ? data.suggestions : undefined,
+        ticketId: typeof data.ticketId === 'string' ? data.ticketId : undefined,
       }]);
     } catch {
       setMsgs((m) => [...m, { role: 'bot', text: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' }]);
@@ -93,7 +94,7 @@ export default function ChatWidget() {
                     ))}
                   </div>
                 )}
-                {m.escalate && (
+                {m.escalate && !m.ticketId && (
                   <button onClick={requestAgent} style={{ marginTop: 5, fontSize: 12, fontWeight: 700, color: 'var(--brand-600)', background: 'var(--brand-50)', borderRadius: 8, padding: '6px 10px' }}>상담원 연결하기</button>
                 )}
               </div>
