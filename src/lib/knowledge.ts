@@ -113,29 +113,42 @@ export interface KBMatch {
   score: number;
 }
 
-/** 키워드 부분일치 스코어링. minScore 미만이면 null(폴백으로 넘어감). */
+/** 한글 비교용 정규화 — 소문자화 + 공백 제거(띄어쓰기 차이 흡수). */
+function normalize(s: string): string {
+  return (s || '').toLowerCase().replace(/\s+/g, '');
+}
+
+/** 키워드 포함 여부 — 원문 또는 공백 제거본 기준("상담 원" ↔ "상담원" 등). */
+function hasKeyword(text: string, compact: string, kw: string): boolean {
+  const k = kw.toLowerCase();
+  return text.includes(k) || compact.includes(k.replace(/\s+/g, ''));
+}
+
+/** 키워드 부분일치 스코어링(띄어쓰기 무시). minScore 미만이면 null(폴백으로 넘어감). */
 export function matchKnowledge(message: string, minScore = 2, entries: KBEntry[] = KB): KBMatch | null {
   const text = (message || '').toLowerCase();
   if (!text) return null;
+  const compact = normalize(message);
   let best: KBMatch | null = null;
   for (const entry of entries) {
     let score = 0;
     for (const kw of entry.keywords) {
-      if (kw && text.includes(kw)) score += kw.length >= 2 ? 2 : 1;
+      if (kw && hasKeyword(text, compact, kw)) score += kw.length >= 2 ? 2 : 1;
     }
     if (score > 0 && (!best || score > best.score)) best = { entry, score };
   }
   return best && best.score >= minScore ? best : null;
 }
 
-/** 간단 검색(관리 콘솔·연관질문 노출용). */
+/** 간단 검색(관리 콘솔·연관질문 노출용). 띄어쓰기 무시 매칭 포함. */
 export function searchKnowledge(query: string, limit = 3, entries: KBEntry[] = KB): KBEntry[] {
   const text = (query || '').toLowerCase();
   if (!text) return [];
+  const compact = normalize(query);
   return entries.map((entry) => {
     let score = 0;
-    for (const kw of entry.keywords) if (kw && text.includes(kw)) score += 1;
-    if (entry.question.toLowerCase().includes(text)) score += 2;
+    for (const kw of entry.keywords) if (kw && hasKeyword(text, compact, kw)) score += 1;
+    if (entry.question.toLowerCase().includes(text) || normalize(entry.question).includes(compact)) score += 2;
     return { entry, score };
   })
     .filter((x) => x.score > 0)

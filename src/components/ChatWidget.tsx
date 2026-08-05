@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 
-interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean }
+interface Suggestion { id: string; question: string }
+interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean; suggestions?: Suggestion[] }
 
 export default function ChatWidget() {
   const [open, setOpen] = useState(true);
@@ -16,8 +17,9 @@ export default function ChatWidget() {
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, open]);
 
-  async function send() {
-    const text = input.trim();
+  // 메시지 전송(입력창·연관질문 칩 공용)
+  async function sendText(raw: string) {
+    const text = raw.trim();
     if (!text || busy) return;
     setInput('');
     lastUserRef.current = text;
@@ -30,13 +32,20 @@ export default function ChatWidget() {
         body: JSON.stringify({ message: text, sessionId }),
       });
       const data = await r.json();
-      setMsgs((m) => [...m, { role: 'bot', text: data.reply ?? '오류가 발생했어요.', escalate: data.escalate }]);
+      setMsgs((m) => [...m, {
+        role: 'bot',
+        text: data.reply ?? '오류가 발생했어요.',
+        escalate: data.escalate,
+        suggestions: Array.isArray(data.suggestions) ? data.suggestions : undefined,
+      }]);
     } catch {
       setMsgs((m) => [...m, { role: 'bot', text: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' }]);
     } finally {
       setBusy(false);
     }
   }
+
+  function send() { sendText(input); }
 
   // 상담원 연결 접수 — 티켓 생성(인메모리 스텁, 실제 상담원 알림은 준비 중)
   async function requestAgent() {
@@ -77,6 +86,13 @@ export default function ChatWidget() {
             {msgs.map((m, i) => (
               <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
                 <div style={{ background: m.role === 'user' ? 'var(--brand)' : '#fff', color: m.role === 'user' ? '#fff' : 'var(--ink)', border: m.role === 'user' ? 'none' : '1px solid var(--line)', borderRadius: 13, padding: '9px 12px', fontSize: 13.3, lineHeight: 1.5 }}>{m.text}</div>
+                {m.suggestions && m.suggestions.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                    {m.suggestions.map((s) => (
+                      <button key={s.id} onClick={() => sendText(s.question)} disabled={busy} style={{ fontSize: 12, fontWeight: 600, color: 'var(--brand-600)', background: '#fff', border: '1px solid var(--line)', borderRadius: 999, padding: '6px 11px', cursor: 'pointer' }}>{s.question}</button>
+                    ))}
+                  </div>
+                )}
                 {m.escalate && (
                   <button onClick={requestAgent} style={{ marginTop: 5, fontSize: 12, fontWeight: 700, color: 'var(--brand-600)', background: 'var(--brand-50)', borderRadius: 8, padding: '6px 10px' }}>상담원 연결하기</button>
                 )}

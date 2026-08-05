@@ -38,15 +38,23 @@ export interface KakaoSkillResponse {
   };
 }
 
-/** 대화엔진 결과를 오픈빌더 v2 simpleText 응답으로 변환. escalate 시 상담원 연결 quickReply 추가. */
+/** 대화엔진 결과를 오픈빌더 v2 simpleText 응답으로 변환.
+ *  연관 FAQ 제안(suggestions)은 quickReplies로, escalate 시 상담원 연결 quickReply 추가(최대 10개). */
 export function toKakaoResponse(result: ChatReply): KakaoSkillResponse {
   const res: KakaoSkillResponse = {
     version: '2.0',
     template: { outputs: [{ simpleText: { text: result.reply.slice(0, 1000) } }] },
   };
-  if (result.escalate) {
-    res.template.quickReplies = [{ label: '상담원 연결', action: 'message', messageText: '상담원' }];
+  const quickReplies: KakaoQuickReply[] = [];
+  for (const s of result.suggestions ?? []) {
+    // 카카오 quickReply label은 14자 이하 권장 — 초과 시 말줄임표 처리
+    const label = s.question.length > 14 ? `${s.question.slice(0, 13)}…` : s.question;
+    quickReplies.push({ label, action: 'message', messageText: s.question });
   }
+  if (result.escalate) {
+    quickReplies.push({ label: '상담원 연결', action: 'message', messageText: '상담원' });
+  }
+  if (quickReplies.length) res.template.quickReplies = quickReplies.slice(0, 10);
   return res;
 }
 
