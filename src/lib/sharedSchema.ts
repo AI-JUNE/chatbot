@@ -3,7 +3,7 @@
 // [승인 필요] 실서비스 동기화(콜봇이 운영 URL 폴링) — 전까지 스키마·엑스포트만 제공(읽기 전용, 개인정보 없음).
 import type { KBEntry } from '@/lib/knowledge';
 import { RULES } from '@/lib/rules';
-import { listKB, getRuleOverride } from '@/lib/adminStore';
+import { listKB, getRuleOverride, listCustomRules } from '@/lib/adminStore';
 
 export const SHARED_SCHEMA_VERSION = 1 as const;
 
@@ -21,7 +21,9 @@ export interface SharedKnowledgeItem {
   channels: SharedChannel[]; // 노출 채널(기본 전 채널)
 }
 
-/** 공용 인텐트 룰 — 정규식은 문자열(source/flags)로 직렬화해 파이썬(콜봇) 쪽에서도 재구성 가능. */
+/** 공용 인텐트 룰 — 정규식은 문자열(source/flags)로 직렬화해 파이썬(콜봇) 쪽에서도 재구성 가능.
+ * 커스텀 룰(관리 콘솔 키워드 룰)은 matchType='keywords'로 표시되며, 정규식만 아는 소비자를 위해
+ * pattern에도 키워드 이스케이프 alternation을 함께 직렬화한다. */
 export interface SharedIntentRule {
   intent: string;
   label: string;
@@ -31,6 +33,9 @@ export interface SharedIntentRule {
   escalate: boolean;
   enabled: boolean;
   channels: SharedChannel[];
+  matchType?: 'regex' | 'keywords'; // 기본 'regex'(내장 룰)
+  keywords?: string[]; // matchType='keywords'일 때 원본 키워드
+  origin?: 'builtin' | 'custom'; // 룰 출처(기본 'builtin')
 }
 
 /** 에스컬레이션(상담원/코디네이터 연결) 채널별 매핑. */
@@ -51,6 +56,11 @@ export interface SharedScenarioBundle {
 }
 
 const ALL_CHANNELS: SharedChannel[] = ['web', 'kakao', 'call'];
+
+/** 정규식 특수문자 이스케이프(키워드 → alternation 직렬화용). */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /** KBEntry → 공용 지식 항목. */
 export function toSharedKnowledge(e: KBEntry): SharedKnowledgeItem {
@@ -79,6 +89,22 @@ export function exportScenarioBundle(scenarioId = 'gowon-cc'): SharedScenarioBun
       channels: [...ALL_CHANNELS],
     };
   });
+  // 커스텀 시나리오 룰(관리 콘솔 키워드 룰) — 내장 룰 뒤에 등록순으로 붙인다(엔진 적용 순서와 동일).
+  for (const c of listCustomRules()) {
+    rules.push({
+      intent: c.intent,
+      label: c.label,
+      pattern: c.keywords.map(escapeRegex).join('|'),
+      flags: 'i',
+      reply: c.reply,
+      escalate: c.escalate,
+      enabled: c.enabled,
+      channels: [...ALL_CHANNELS],
+      matchType: 'keywords',
+      keywords: [...c.keywords],
+      origin: 'custom',
+    });
+  }
   return {
     schemaVersion: SHARED_SCHEMA_VERSION,
     scenarioId,
