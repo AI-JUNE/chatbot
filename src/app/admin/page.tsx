@@ -23,6 +23,25 @@ interface RuleView {
   effectiveReply: string;
 }
 
+interface CustomRuleView {
+  intent: string;
+  label: string;
+  keywords: string[];
+  reply: string;
+  escalate: boolean;
+  enabled: boolean;
+  createdAt: string;
+}
+
+interface CustomRuleForm {
+  label: string;
+  keywords: string;
+  reply: string;
+  escalate: boolean;
+}
+
+const EMPTY_CR_FORM: CustomRuleForm = { label: '', keywords: '', reply: '', escalate: false };
+
 interface TicketView {
   id: string;
   sessionId: string;
@@ -132,10 +151,16 @@ export default function AdminPage() {
 
   // ---- Rules ----
   const [rules, setRules] = useState<RuleView[]>([]);
+  const [customRules, setCustomRules] = useState<CustomRuleView[]>([]);
+  const [crForm, setCrForm] = useState<CustomRuleForm>(EMPTY_CR_FORM);
+  const [crEditing, setCrEditing] = useState<string | null>(null);
   const loadRules = useCallback(async () => {
     const res = await fetch('/api/admin/rules', { headers: authHeaders() });
     const data = await res.json();
-    if (data.ok) setRules(data.rules);
+    if (data.ok) {
+      setRules(data.rules);
+      setCustomRules(data.customRules || []);
+    }
   }, []);
 
   // ---- Escalations ----
@@ -228,6 +253,61 @@ export default function AdminPage() {
     }
   };
 
+  const submitCustomRule = async () => {
+    const body = {
+      ...(crEditing ? { intent: crEditing } : {}),
+      label: crForm.label,
+      keywords: crForm.keywords,
+      reply: crForm.reply,
+      escalate: crForm.escalate,
+    };
+    const res = await fetch('/api/admin/rules', {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      flash(`저장 실패: ${data.error}`);
+      return;
+    }
+    setCrForm(EMPTY_CR_FORM);
+    setCrEditing(null);
+    await loadRules();
+    flash(crEditing ? '커스텀 룰이 수정되었습니다.' : '커스텀 룰이 추가되었습니다.');
+  };
+
+  const toggleCustomRule = async (r: CustomRuleView) => {
+    const res = await fetch('/api/admin/rules', {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({ intent: r.intent, enabled: !r.enabled }),
+    });
+    const data = await res.json();
+    if (data.ok) await loadRules();
+    else flash(`변경 실패: ${data.error}`);
+  };
+
+  const removeCustomRule = async (intent: string) => {
+    const res = await fetch(`/api/admin/rules?intent=${encodeURIComponent(intent)}`, { method: 'DELETE', headers: authHeaders() });
+    const data = await res.json();
+    if (data.ok) {
+      if (crEditing === intent) {
+        setCrEditing(null);
+        setCrForm(EMPTY_CR_FORM);
+      }
+      await loadRules();
+      flash('커스텀 룰이 삭제되었습니다.');
+    } else {
+      flash(`삭제 실패: ${data.error}`);
+    }
+  };
+
+  const downloadLogsCsv = () => {
+    const t = tokenRef.current;
+    window.open('/api/admin/logs/export' + (t ? `?token=${encodeURIComponent(t)}` : ''), '_blank');
+  };
+
   const patchTicket = async (id: string, status: TicketView['status']) => {
     const res = await fetch('/api/admin/escalations', {
       method: 'PATCH',
@@ -301,7 +381,10 @@ export default function AdminPage() {
           <section style={S.card}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2 style={{ fontSize: 16 }}>운영 대시보드</h2>
-              <button style={S.btnGhost} onClick={loadEsc}>새로고침</button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={S.btnGhost} onClick={downloadLogsCsv}>로그 CSV</button>
+                <button style={S.btnGhost} onClick={loadEsc}>새로고침</button>
+              </div>
             </div>
             {stats ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginTop: 12 }}>
@@ -423,7 +506,64 @@ export default function AdminPage() {
 
       {tab === 'rules' && (
         <>
-          <p style={{ ...S.tag, marginBottom: 12 }}>패턴(정규식)은 코드에서 관리하며, 여기서는 활성화 여부와 응답문만 편집합니다.</p>
+          <section style={S.card}>
+            <h2 style={{ fontSize: 16, marginBottom: 4 }}>{crEditing ? `커스텀 룰 수정: ${crEditing}` : '커스텀 룰 추가'}</h2>
+            <p style={{ ...S.tag, marginBottom: 10 }}>키워드가 포함된 메시지에 지정한 응답을 보냅니다. 내장 룰 다음, FAQ 매칭 이전에 적용됩니다.</p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <input style={S.input} placeholder="이름(예: 배송 문의)" value={crForm.label} onChange={(e) => setCrForm({ ...crForm, label: e.target.value })} />
+              <input style={S.input} placeholder="키워드(콤마 구분, 예: 배송, 택배, 언제 와)" value={crForm.keywords} onChange={(e) => setCrForm({ ...crForm, keywords: e.target.value })} />
+            </div>
+            <textarea style={{ ...S.input, minHeight: 60 }} placeholder="응답문" value={crForm.reply} onChange={(e) => setCrForm({ ...crForm, reply: e.target.value })} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginBottom: 8 }}>
+              <input type="checkbox" checked={crForm.escalate} onChange={(e) => setCrForm({ ...crForm, escalate: e.target.checked })} />
+              상담원 접수로 연결(응답 후 접수번호 발급·연락처 요청)
+            </label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={S.btn} onClick={submitCustomRule}>{crEditing ? '수정 저장' : '추가'}</button>
+              {crEditing && (
+                <button
+                  style={S.btnGhost}
+                  onClick={() => {
+                    setCrEditing(null);
+                    setCrForm(EMPTY_CR_FORM);
+                  }}
+                >
+                  취소
+                </button>
+              )}
+            </div>
+          </section>
+          {customRules.map((r) => (
+            <section key={r.intent} style={S.card}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <div>
+                  <strong>{r.label}</strong>{' '}
+                  <span style={S.tag}>({r.intent} · 커스텀{r.escalate ? ' · 상담원 연결' : ''})</span>
+                  <div style={S.tag}>키워드: {r.keywords.join(', ')}</div>
+                  <p style={{ fontSize: 14, color: 'var(--sub)', margin: '6px 0 0' }}>{r.reply}</p>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <button style={r.enabled ? S.btn : S.btnGhost} onClick={() => toggleCustomRule(r)}>
+                    {r.enabled ? '활성' : '비활성'}
+                  </button>
+                  <button
+                    style={S.btnGhost}
+                    onClick={() => {
+                      setCrEditing(r.intent);
+                      setCrForm({ label: r.label, keywords: r.keywords.join(', '), reply: r.reply, escalate: r.escalate });
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                  >
+                    수정
+                  </button>
+                  <button style={{ ...S.btnGhost, color: '#a33' }} onClick={() => removeCustomRule(r.intent)}>
+                    삭제
+                  </button>
+                </div>
+              </div>
+            </section>
+          ))}
+          <p style={{ ...S.tag, margin: '4px 0 12px' }}>아래 내장 룰은 패턴(정규식)을 코드에서 관리하며, 여기서는 활성화 여부와 응답문만 편집합니다.</p>
           {rules.map((r) => (
             <section key={r.intent} style={S.card}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>

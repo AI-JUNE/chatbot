@@ -4,7 +4,7 @@
 // 에스컬레이션 접수 후 연락처 수집을 지원한다(웹·카카오 공통, 서버 측 처리).
 import { matchKnowledge, searchKnowledge } from '@/lib/knowledge';
 import { RULES } from '@/lib/rules';
-import { listKB, getRuleOverride } from '@/lib/adminStore';
+import { listKB, getRuleOverride, matchCustomRule } from '@/lib/adminStore';
 import { getSession, updateSession } from '@/lib/session';
 import { createTicket } from '@/lib/escalation';
 
@@ -100,25 +100,35 @@ export function replyTo(message: string, sessionId = 'anon'): ChatReply {
     }
   }
 
+  // 에스컬레이션 룰은 서버에서 즉시 접수하고 연락처를 요청한다.
+  // 웹 위젯뿐 아니라 카카오 등 버튼이 없는 채널에서도 접수가 완결되도록 엔진에서 처리.
+  const escalateWith = (baseReply: string, intentName: string): ChatReply => {
+    const { ticket, created } = createTicket({ sessionId, reason: `rule:${intentName}`, message: text });
+    updateSession(sessionId, { awaitingContact: true, ticketId: ticket.id, pendingSuggestions: undefined });
+    const tail = created
+      ? `\n접수번호는 ${ticket.id}입니다. 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기"라고 입력해 주세요)`
+      : `\n이미 접수된 요청(${ticket.id})이 있어 이어서 도와드릴게요. 연락처를 남겨주시면 더 빠르게 연락드릴 수 있어요. (건너뛰려면 "건너뛰기")`;
+    return { reply: baseReply + tail, intent: intentName, escalate: true, source: 'rule', ticketId: ticket.id };
+  };
+
   // 1) 인텐트 룰(관리 콘솔 오버라이드 반영: 비활성화 스킵·응답문 교체)
   for (const r of RULES) {
     const ov = getRuleOverride(r.intent);
     if (ov && ov.enabled === false) continue;
     if (r.test.test(text)) {
       const baseReply = ov?.reply || r.reply;
-      // 에스컬레이션 룰(상담원 연결·불만)은 서버에서 즉시 접수하고 연락처를 요청한다.
-      // 웹 위젯뿐 아니라 카카오 등 버튼이 없는 채널에서도 접수가 완결되도록 엔진에서 처리.
-      if (r.escalate === true) {
-        const { ticket, created } = createTicket({ sessionId, reason: `rule:${r.intent}`, message: text });
-        updateSession(sessionId, { awaitingContact: true, ticketId: ticket.id, pendingSuggestions: undefined });
-        const tail = created
-          ? `\n접수번호는 ${ticket.id}입니다. 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기"라고 입력해 주세요)`
-          : `\n이미 접수된 요청(${ticket.id})이 있어 이어서 도와드릴게요. 연락처를 남겨주시면 더 빠르게 연락드릴 수 있어요. (건너뛰려면 "건너뛰기")`;
-        return { reply: baseReply + tail, intent: r.intent, escalate: true, source: 'rule', ticketId: ticket.id };
-      }
+      if (r.escalate === true) return escalateWith(baseReply, r.intent);
       updateSession(sessionId, { pendingSuggestions: undefined });
       return { reply: baseReply, intent: r.intent, escalate: false, source: 'rule' };
     }
+  }
+
+  // 1-b) 커스텀 시나리오 룰(관리 콘솔에서 키워드로 추가한 룰) — 내장 룰 다음, KB 이전
+  const cr = matchCustomRule(text);
+  if (cr) {
+    if (cr.escalate) return escalateWith(cr.reply, cr.intent);
+    updateSession(sessionId, { pendingSuggestions: undefined });
+    return { reply: cr.reply, intent: cr.intent, escalate: false, source: 'rule' };
   }
 
   // 2) 지식베이스(FAQ) 매칭 — 관리 콘솔 편집분(런타임 스토어) 사용

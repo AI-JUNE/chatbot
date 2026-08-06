@@ -86,3 +86,89 @@ export function setRuleOverride(intent: string, patch: { enabled?: boolean; repl
 export function listRuleOverrides(): Record<string, RuleOverride> {
   return Object.fromEntries(ruleOverrides);
 }
+
+// ---- 커스텀 시나리오 룰(키워드 기반) — 관리 콘솔에서 추가/수정/삭제 ----
+// 내장 룰(정규식)과 달리 운영자가 안전하게 키워드로 정의한다. 인메모리 스텁 — [승인 필요] DB 영구 저장.
+export interface CustomRule {
+  intent: string; // "cr_..." 자동 부여(또는 지정)
+  label: string; // 관리 콘솔 표시용
+  keywords: string[]; // 소문자 정규화, 1개 이상 포함 시 매칭
+  reply: string;
+  escalate: boolean; // true면 상담원 접수 흐름으로 연결
+  enabled: boolean;
+  createdAt: string; // ISO
+}
+
+let customRules: CustomRule[] = [];
+
+function cloneCustomRule(r: CustomRule): CustomRule {
+  return { ...r, keywords: [...r.keywords] };
+}
+
+export function listCustomRules(): CustomRule[] {
+  return customRules.map(cloneCustomRule);
+}
+
+export interface CustomRuleInput {
+  intent?: string;
+  label?: string;
+  keywords?: string[] | string; // 배열 또는 콤마 구분 문자열
+  reply?: string;
+  escalate?: boolean;
+  enabled?: boolean;
+}
+
+export type CustomRuleResult = { ok: true; rule: CustomRule; created: boolean } | { ok: false; error: string };
+
+export function upsertCustomRule(input: CustomRuleInput): CustomRuleResult {
+  const intent = (input.intent || '').trim() || `cr_${Date.now().toString(36)}`;
+  const keywords = normalizeKeywords(input.keywords);
+  const existing = customRules.find((r) => r.intent === intent);
+
+  if (!existing) {
+    const label = (input.label || '').trim();
+    const reply = (input.reply || '').trim();
+    if (!label || !reply || keywords.length === 0) {
+      return { ok: false, error: 'label, reply, keywords(1개 이상)는 필수입니다.' };
+    }
+    const rule: CustomRule = {
+      intent,
+      label,
+      keywords,
+      reply,
+      escalate: input.escalate === true,
+      enabled: input.enabled !== false,
+      createdAt: new Date().toISOString(),
+    };
+    customRules.push(rule);
+    return { ok: true, rule: cloneCustomRule(rule), created: true };
+  }
+
+  if (input.label !== undefined) existing.label = String(input.label).trim() || existing.label;
+  if (input.reply !== undefined) existing.reply = String(input.reply).trim() || existing.reply;
+  if (input.keywords !== undefined && keywords.length > 0) existing.keywords = keywords;
+  if (input.escalate !== undefined) existing.escalate = input.escalate === true;
+  if (input.enabled !== undefined) existing.enabled = input.enabled !== false;
+  return { ok: true, rule: cloneCustomRule(existing), created: false };
+}
+
+export function deleteCustomRule(intent: string): boolean {
+  const before = customRules.length;
+  customRules = customRules.filter((r) => r.intent !== intent);
+  return customRules.length < before;
+}
+
+/** 활성 커스텀 룰 중 키워드가 포함된 첫 항목(등록순). 없으면 null. 띄어쓰기 무시 비교 포함. */
+export function matchCustomRule(text: string): CustomRule | null {
+  const lower = text.toLowerCase();
+  const compact = lower.replace(/\s+/g, '');
+  for (const r of customRules) {
+    if (!r.enabled) continue;
+    const hit = r.keywords.some((k) => {
+      const kw = k.toLowerCase();
+      return lower.includes(kw) || compact.includes(kw.replace(/\s+/g, ''));
+    });
+    if (hit) return cloneCustomRule(r);
+  }
+  return null;
+}

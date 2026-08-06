@@ -36,6 +36,11 @@ export function listTurns(limit = 50): ChatTurnLog[] {
   return logs.slice(-limit).reverse().map((l) => ({ ...l }));
 }
 
+/** 전체 로그(시간순, 메모리 보존분 최대 500건) — CSV 내보내기용. */
+export function listAllTurns(): ChatTurnLog[] {
+  return logs.map((l) => ({ ...l }));
+}
+
 export interface ConvStats {
   totalTurns: number;
   sessions: number;
