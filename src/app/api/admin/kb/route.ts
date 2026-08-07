@@ -2,8 +2,13 @@
 // ADMIN_TOKEN 환경변수가 설정된 경우 x-admin-token 헤더 필수(시크릿은 Vercel 환경변수로만).
 import { NextRequest, NextResponse } from 'next/server';
 import { listKB, upsertKB, deleteKB, resetKB } from '@/lib/adminStore';
+import { logAudit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
+
+function authed(req: NextRequest): boolean {
+  return Boolean(process.env.ADMIN_TOKEN) && req.headers.get('x-admin-token') === process.env.ADMIN_TOKEN;
+}
 
 function unauthorized(req: NextRequest): NextResponse | null {
   const token = process.env.ADMIN_TOKEN;
@@ -30,10 +35,17 @@ export async function POST(req: NextRequest) {
   }
   if (body.reset === true) {
     resetKB();
+    logAudit({ action: 'kb.reset', detail: '기본 KB로 초기화', authed: authed(req) });
     return NextResponse.json({ ok: true, entries: listKB() });
   }
   const result = upsertKB(body);
   if (!result.ok) return NextResponse.json(result, { status: 400 });
+  logAudit({
+    action: 'kb.upsert',
+    target: result.entry.id,
+    detail: `${result.created ? '생성' : '수정'}: ${result.entry.question.slice(0, 60)}`,
+    authed: authed(req),
+  });
   return NextResponse.json(result, { status: result.created ? 201 : 200 });
 }
 
@@ -44,5 +56,6 @@ export async function DELETE(req: NextRequest) {
   if (!id) return NextResponse.json({ ok: false, error: 'id가 필요합니다.' }, { status: 400 });
   const removed = deleteKB(id);
   if (!removed) return NextResponse.json({ ok: false, error: '해당 id가 없습니다.' }, { status: 404 });
+  logAudit({ action: 'kb.delete', target: id, authed: authed(req) });
   return NextResponse.json({ ok: true });
 }

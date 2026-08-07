@@ -87,6 +87,26 @@ const TICKET_STATUS_LABELS: Record<TicketView['status'], string> = {
   canceled: '취소',
 };
 
+interface AuditView {
+  id: string;
+  at: string;
+  action: string;
+  target: string;
+  detail: string;
+  authed: boolean;
+}
+
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  'kb.upsert': 'KB 등록/수정',
+  'kb.delete': 'KB 삭제',
+  'kb.reset': 'KB 초기화',
+  'rule.override': '내장 룰 변경',
+  'rule.custom.upsert': '커스텀 룰 등록/수정',
+  'rule.custom.delete': '커스텀 룰 삭제',
+  'escalation.update': '티켓 변경',
+  'backup.restore': '백업 복원',
+};
+
 interface KBForm {
   id: string;
   category: string;
@@ -107,7 +127,7 @@ const S = {
 };
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<'dash' | 'kb' | 'rules' | 'esc' | 'test'>('dash');
+  const [tab, setTab] = useState<'dash' | 'kb' | 'rules' | 'esc' | 'test' | 'audit'>('dash');
   const [notice, setNotice] = useState('');
 
   // ---- 관리 토큰(ADMIN_TOKEN 설정 시 x-admin-token 필수) ----
@@ -177,11 +197,20 @@ export default function AdminPage() {
     }
   }, []);
 
+  // ---- Audit ----
+  const [auditEvents, setAuditEvents] = useState<AuditView[]>([]);
+  const loadAudit = useCallback(async () => {
+    const res = await fetch('/api/admin/audit?limit=100', { headers: authHeaders() });
+    const data = await res.json();
+    if (data.ok) setAuditEvents(data.events || []);
+  }, []);
+
   useEffect(() => {
     loadKB();
     loadRules();
     loadEsc();
-  }, [loadKB, loadRules, loadEsc]);
+    loadAudit();
+  }, [loadKB, loadRules, loadEsc, loadAudit]);
 
   const flash = (msg: string) => {
     setNotice(msg);
@@ -384,6 +413,7 @@ export default function AdminPage() {
             ['rules', '시나리오 룰'],
             ['esc', '상담원 요청'],
             ['test', '응답 테스트'],
+            ['audit', '감사 로그'],
           ] as const
         ).map(([key, label]) => (
           <button key={key} style={tab === key ? S.btn : S.btnGhost} onClick={() => setTab(key)}>
@@ -402,6 +432,7 @@ export default function AdminPage() {
             loadKB();
             loadRules();
             loadEsc();
+            loadAudit();
           }}
         />
       </div>
@@ -682,6 +713,47 @@ export default function AdminPage() {
                     <button style={S.btnGhost} onClick={() => patchTicket(t.id, 'open')}>다시 열기</button>
                   )}
                 </div>
+              </div>
+            </section>
+          ))}
+        </>
+      )}
+
+      {tab === 'audit' && (
+        <>
+          <section style={S.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <h2 style={{ fontSize: 16 }}>관리 작업 감사 로그</h2>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={S.btnGhost} onClick={loadAudit}>새로고침</button>
+                <a
+                  style={{ ...S.btnGhost, textDecoration: 'none' }}
+                  href={`/api/admin/audit?format=csv${adminToken ? `&token=${encodeURIComponent(adminToken)}` : ''}`}
+                >
+                  CSV 다운로드
+                </a>
+              </div>
+            </div>
+            <p style={{ ...S.tag, marginTop: 8 }}>
+              KB·룰 편집, 티켓 상태 변경, 백업 복원 이력(최근 500건)입니다. 서버 메모리에만 저장되며(재시작 시 초기화) 토큰 값은 기록하지 않습니다.
+            </p>
+          </section>
+          {auditEvents.length === 0 && (
+            <section style={S.card}>
+              <p style={{ fontSize: 14, color: 'var(--sub)' }}>기록된 관리 작업이 없습니다. 지식베이스나 룰을 수정하면 이곳에 이력이 남아요.</p>
+            </section>
+          )}
+          {auditEvents.map((e) => (
+            <section key={e.id} style={{ ...S.card, padding: '12px 20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                <div style={{ fontSize: 14 }}>
+                  <strong>{AUDIT_ACTION_LABELS[e.action] || e.action}</strong>
+                  {e.target && <span style={{ color: 'var(--sub)' }}> · {e.target}</span>}
+                  {e.detail && <span style={{ color: 'var(--sub)' }}> — {e.detail}</span>}
+                </div>
+                <span style={S.tag}>
+                  {new Date(e.at).toLocaleString()} · {e.authed ? '토큰 인증' : '미인증(토큰 미설정)'}
+                </span>
               </div>
             </section>
           ))}

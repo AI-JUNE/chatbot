@@ -3,6 +3,7 @@
 // POST: 스냅샷 업로드로 전체 교체(무효 항목은 건너뜀). ADMIN_TOKEN 미설정 시 개방.
 import { NextRequest, NextResponse } from 'next/server';
 import { exportSnapshot, importSnapshot } from '@/lib/adminStore';
+import { logAudit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,5 +36,10 @@ export async function POST(req: NextRequest) {
   }
   const result = importSnapshot(body);
   if (!result.ok) return NextResponse.json(result, { status: 400 });
+  logAudit({
+    action: 'backup.restore',
+    detail: `스냅샷 복원(kb ${result.kb} · 오버라이드 ${result.overrides} · 커스텀룰 ${result.customRules})`,
+    authed: Boolean(process.env.ADMIN_TOKEN) && (req.headers.get('x-admin-token') || req.nextUrl.searchParams.get('token')) === process.env.ADMIN_TOKEN,
+  });
   return NextResponse.json(result);
 }

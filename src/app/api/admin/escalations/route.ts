@@ -3,8 +3,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { listTickets, updateTicket, escalationStats, ESCALATION_STATUSES, EscalationStatus } from '@/lib/escalation';
 import { convStats, listTurns } from '@/lib/convlog';
+import { logAudit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
+
+function authed(req: NextRequest): boolean {
+  return Boolean(process.env.ADMIN_TOKEN) && req.headers.get('x-admin-token') === process.env.ADMIN_TOKEN;
+}
 
 function unauthorized(req: NextRequest): NextResponse | null {
   const token = process.env.ADMIN_TOKEN;
@@ -42,5 +47,9 @@ export async function PATCH(req: NextRequest) {
   }
   const result = updateTicket(id, { status: body.status as EscalationStatus | undefined, note: body.note });
   if (!result.ok) return NextResponse.json(result, { status: 404 });
+  const parts: string[] = [];
+  if (body.status !== undefined) parts.push(`상태→${body.status}`);
+  if (body.note !== undefined) parts.push('메모 변경');
+  logAudit({ action: 'escalation.update', target: id, detail: parts.join(', '), authed: authed(req) });
   return NextResponse.json(result);
 }

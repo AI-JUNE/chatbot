@@ -3,8 +3,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { RULES } from '@/lib/rules';
 import { getRuleOverride, setRuleOverride, listCustomRules, upsertCustomRule, deleteCustomRule, CustomRuleInput } from '@/lib/adminStore';
+import { logAudit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
+
+function authed(req: NextRequest): boolean {
+  return Boolean(process.env.ADMIN_TOKEN) && req.headers.get('x-admin-token') === process.env.ADMIN_TOKEN;
+}
 
 function unauthorized(req: NextRequest): NextResponse | null {
   const token = process.env.ADMIN_TOKEN;
@@ -51,6 +56,12 @@ export async function POST(req: NextRequest) {
   }
   const result = upsertCustomRule(body);
   if (!result.ok) return NextResponse.json(result, { status: 400 });
+  logAudit({
+    action: 'rule.custom.upsert',
+    target: result.rule.intent,
+    detail: `${result.created ? '생성' : '수정'}: ${result.rule.label.slice(0, 60)}`,
+    authed: authed(req),
+  });
   return NextResponse.json(result);
 }
 
@@ -63,6 +74,7 @@ export async function DELETE(req: NextRequest) {
   if (!deleteCustomRule(intent)) {
     return NextResponse.json({ ok: false, error: '존재하지 않는 커스텀 룰입니다.' }, { status: 404 });
   }
+  logAudit({ action: 'rule.custom.delete', target: intent, authed: authed(req) });
   return NextResponse.json({ ok: true });
 }
 
@@ -80,5 +92,9 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ ok: false, error: '존재하지 않는 intent입니다.' }, { status: 404 });
   }
   setRuleOverride(intent, { enabled: body.enabled, reply: body.reply });
+  const parts: string[] = [];
+  if (body.enabled !== undefined) parts.push(body.enabled ? '활성화' : '비활성화');
+  if (body.reply !== undefined) parts.push(body.reply === null ? '응답문 기본값 복원' : '응답문 변경');
+  logAudit({ action: 'rule.override', target: intent, detail: parts.join(', '), authed: authed(req) });
   return NextResponse.json({ ok: true, rule: ruleView(intent) });
 }
