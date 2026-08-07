@@ -308,6 +308,36 @@ export default function AdminPage() {
     window.open('/api/admin/logs/export' + (t ? `?token=${encodeURIComponent(t)}` : ''), '_blank');
   };
 
+  // ---- 관리 콘텐츠 백업·복원(KB·룰 — 개인정보 없음) ----
+  const restoreInputRef = useRef<HTMLInputElement | null>(null);
+
+  const downloadBackup = () => {
+    const t = tokenRef.current;
+    window.open('/api/admin/backup' + (t ? `?token=${encodeURIComponent(t)}` : ''), '_blank');
+  };
+
+  const restoreBackup = async (file: File) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      flash('복원 실패: JSON 파일이 아닙니다.');
+      return;
+    }
+    const res = await fetch('/api/admin/backup', {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify(parsed),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      flash(`복원 실패: ${data.error}`);
+      return;
+    }
+    await Promise.all([loadKB(), loadRules()]);
+    flash(`복원 완료: KB ${data.kb} · 커스텀 룰 ${data.customRules} · 오버라이드 ${data.overrides}`);
+  };
+
   const patchTicket = async (id: string, status: TicketView['status']) => {
     const res = await fetch('/api/admin/escalations', {
       method: 'PATCH',
@@ -344,7 +374,7 @@ export default function AdminPage() {
     <main style={S.page}>
       <h1 style={{ fontSize: 24, marginBottom: 4 }}>관리 콘솔</h1>
       <p style={{ color: 'var(--sub)', fontSize: 14, marginBottom: 16 }}>
-        지식베이스·시나리오 편집은 서버 메모리에만 반영됩니다(재시작 시 초기화 · 영구 저장은 준비 중).
+        지식베이스·시나리오 편집은 서버에 저장됩니다(로컬: data/admin-store.json 자동 저장 · 서버리스는 대시보드의 백업 JSON/복원 사용). 대화 로그·통계는 메모리 유지.
       </p>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 16 }}>
         {(
@@ -383,6 +413,19 @@ export default function AdminPage() {
               <h2 style={{ fontSize: 16 }}>운영 대시보드</h2>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button style={S.btnGhost} onClick={downloadLogsCsv}>로그 CSV</button>
+                <button style={S.btnGhost} onClick={downloadBackup}>백업 JSON</button>
+                <button style={S.btnGhost} onClick={() => restoreInputRef.current?.click()}>복원</button>
+                <input
+                  ref={restoreInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) restoreBackup(f);
+                    e.target.value = '';
+                  }}
+                />
                 <button style={S.btnGhost} onClick={loadEsc}>새로고침</button>
               </div>
             </div>
