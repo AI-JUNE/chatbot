@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { replyTo } from '@/lib/chat';
 import { logTurn } from '@/lib/convlog';
+import { checkRate, rateLimitBody } from '@/lib/ratelimit';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
+  const rate = checkRate('chat', req.headers, 60);
+  if (!rate.allowed) return NextResponse.json(rateLimitBody(rate), { status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } });
   let body: { message?: string; sessionId?: string };
   try {
     body = await req.json();

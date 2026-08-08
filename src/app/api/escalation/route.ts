@@ -2,10 +2,13 @@
 // 인메모리 스텁 — [승인 필요] 실제 상담원 알림·DB 영구 저장.
 import { NextRequest, NextResponse } from 'next/server';
 import { createTicket, getTicket, STATUS_LABELS } from '@/lib/escalation';
+import { checkRate, rateLimitBody } from '@/lib/ratelimit';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
+  const rate = checkRate('escalation', req.headers, 20);
+  if (!rate.allowed) return NextResponse.json(rateLimitBody(rate), { status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } });
   let body: { sessionId?: string; reason?: string; message?: string; contact?: string };
   try {
     body = await req.json();

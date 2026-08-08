@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { replyTo } from '@/lib/chat';
 import { logTurn } from '@/lib/convlog';
 import { KAKAO_LIVE, parseKakaoPayload, toKakaoResponse, kakaoErrorResponse } from '@/lib/kakao';
+import { checkRate, rateLimitBody } from '@/lib/ratelimit';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +15,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const rate = checkRate('kakao', req.headers, 120);
+  if (!rate.allowed) return NextResponse.json(rateLimitBody(rate), { status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } });
   const token = process.env.KAKAO_SKILL_TOKEN;
   if (token && req.headers.get('x-skill-token') !== token) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
