@@ -2,6 +2,9 @@
 // 인스턴스 단위 스텁(서버리스는 인스턴스별 카운트). 전역 저장소(Redis 등) 연동은 [승인 필요].
 // 순수 로직(rateCheck)은 주입식 now로 테스트 가능.
 
+import { NextResponse } from 'next/server';
+import { errorBody, fail } from '@/lib/http';
+
 type Bucket = { count: number; resetAt: number };
 
 const buckets = new Map<string, Bucket>();
@@ -52,7 +55,19 @@ export function checkRate(scope: string, headers: Headers, limit = 60, windowMs 
   return rateCheck(buckets, `${scope}:${clientIp(headers)}`, limit, windowMs, now);
 }
 
-/** 표준 429 응답 본문 — 기존 {ok:false,error} 포맷과 호환. */
+/** 표준 429 응답 본문 — lib/http 표준 오류 포맷(code/error/message) 사용. */
 export function rateLimitBody(r: RateResult) {
-  return { ok: false as const, error: 'rate_limited', message: '요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요.', retryAfterSec: r.retryAfterSec };
+  return errorBody('rate_limited', undefined, { retryAfterSec: r.retryAfterSec });
+}
+
+/**
+ * 라우트 가드: 제한 초과 시 표준 429 응답(Retry-After 포함), 통과하면 null.
+ * 사용: `const limited = rateGuard('chat', req.headers, 60); if (limited) return limited;`
+ */
+export function rateGuard(scope: string, headers: Headers, limit = 60, windowMs = 60_000): NextResponse | null {
+  const r = checkRate(scope, headers, limit, windowMs);
+  if (r.allowed) return null;
+  return fail('rate_limited', undefined, { retryAfterSec: r.retryAfterSec }, {
+    headers: { 'Retry-After': String(r.retryAfterSec) },
+  });
 }

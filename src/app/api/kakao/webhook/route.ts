@@ -5,34 +5,31 @@ import { NextRequest, NextResponse } from 'next/server';
 import { replyTo } from '@/lib/chat';
 import { logTurn } from '@/lib/convlog';
 import { KAKAO_LIVE, parseKakaoPayload, toKakaoResponse, kakaoErrorResponse } from '@/lib/kakao';
-import { checkRate, rateLimitBody } from '@/lib/ratelimit';
+import { rateGuard } from '@/lib/ratelimit';
+import { ok, fail, readJson } from '@/lib/http';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   // 헬스체크·상태 확인용(민감정보 없음)
-  return NextResponse.json({ ok: true, channel: 'kakao', live: KAKAO_LIVE, mode: KAKAO_LIVE ? 'live' : 'stub' });
+  return ok({ channel: 'kakao', live: KAKAO_LIVE, mode: KAKAO_LIVE ? 'live' : 'stub' });
 }
 
 export async function POST(req: NextRequest) {
-  const rate = checkRate('kakao', req.headers, 120);
-  if (!rate.allowed) return NextResponse.json(rateLimitBody(rate), { status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } });
+  const limited = rateGuard('kakao', req.headers, 120);
+  if (limited) return limited;
+
   const token = process.env.KAKAO_SKILL_TOKEN;
   if (token && req.headers.get('x-skill-token') !== token) {
-    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+    return fail('unauthorized', '스킬 토큰이 올바르지 않습니다.');
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json(kakaoErrorResponse('잘못된 요청 형식입니다.'));
-  }
+  // 카카오는 4xx를 재시도/오류로 처리하므로, 본문 문제는 200 + 안내 말풍선으로 응답한다.
+  const parsedBody = await readJson<Record<string, unknown>>(req);
+  if (!parsedBody.ok) return NextResponse.json(kakaoErrorResponse('잘못된 요청 형식입니다.'));
 
-  const parsed = parseKakaoPayload(body);
-  if (!parsed) {
-    return NextResponse.json(kakaoErrorResponse('발화를 확인하지 못했어요.'));
-  }
+  const parsed = parseKakaoPayload(parsedBody.data);
+  if (!parsed) return NextResponse.json(kakaoErrorResponse('발화를 확인하지 못했어요.'));
 
   const result = replyTo(parsed.utterance, `kakao:${parsed.userId}`);
 

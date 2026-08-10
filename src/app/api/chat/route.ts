@@ -1,21 +1,28 @@
-import { NextRequest, NextResponse } from 'next/server';
+// 웹 챗 대화 API. 표준 오류 포맷·입력 검증은 lib/http, 유량 제한은 lib/ratelimit.
+import { NextRequest } from 'next/server';
 import { replyTo } from '@/lib/chat';
 import { logTurn } from '@/lib/convlog';
-import { checkRate, rateLimitBody } from '@/lib/ratelimit';
+import { rateGuard } from '@/lib/ratelimit';
+import { ok, readJson, optStr } from '@/lib/http';
 
 export const dynamic = 'force-dynamic';
 
+export const MAX_MESSAGE_LEN = 2000;
+
 export async function POST(req: NextRequest) {
-  const rate = checkRate('chat', req.headers, 60);
-  if (!rate.allowed) return NextResponse.json(rateLimitBody(rate), { status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } });
-  let body: { message?: string; sessionId?: string };
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ ok: false, error: 'invalid json' }, { status: 400 });
-  }
-  const message = body.message ?? '';
-  const sessionId = (body.sessionId || 'anon').trim().slice(0, 60) || 'anon';
+  const limited = rateGuard('chat', req.headers, 60);
+  if (limited) return limited;
+
+  const parsed = await readJson<{ message?: unknown; sessionId?: unknown }>(req);
+  if (!parsed.ok) return parsed.res;
+
+  const msg = optStr(parsed.data.message, 'message', MAX_MESSAGE_LEN);
+  if (!msg.ok) return msg.res;
+  const sid = optStr(parsed.data.sessionId, 'sessionId', 60, 'anon');
+  if (!sid.ok) return sid.res;
+
+  const message = msg.value;
+  const sessionId = sid.value || 'anon';
   const result = replyTo(message, sessionId);
 
   // 대화 로그(인메모리 스텁) — 영구 저장은 [승인 필요]
@@ -30,5 +37,5 @@ export async function POST(req: NextRequest) {
       escalate: result.escalate,
     });
   }
-  return NextResponse.json({ ok: true, sessionId, ...result });
+  return ok({ sessionId, ...result });
 }

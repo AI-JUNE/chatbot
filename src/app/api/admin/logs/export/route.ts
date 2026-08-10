@@ -1,8 +1,9 @@
 // 대화 로그 CSV 내보내기(관리 콘솔 다운로드용).
 // 인메모리 로그(최근 500건)만 포함 — 영구 저장·전체 이력은 [승인 필요].
-// 인증: x-admin-token 헤더 또는 ?token= 쿼리(브라우저 다운로드 링크 지원). ADMIN_TOKEN 미설정 시 개방.
+// 인증: x-admin-token 헤더 또는 ?token= 쿼리(브라우저 다운로드 링크 지원).
 import { NextRequest, NextResponse } from 'next/server';
 import { listAllTurns } from '@/lib/convlog';
+import { requireAdmin } from '@/lib/http';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,13 +14,8 @@ function csvCell(v: string | boolean): string {
 }
 
 export async function GET(req: NextRequest) {
-  const token = process.env.ADMIN_TOKEN;
-  if (token) {
-    const given = req.headers.get('x-admin-token') || req.nextUrl.searchParams.get('token');
-    if (given !== token) {
-      return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
-    }
-  }
+  const denied = requireAdmin(req, { allowQueryToken: true });
+  if (denied) return denied;
 
   const header = ['id', 'at', 'channel', 'sessionId', 'intent', 'source', 'escalate', 'message', 'reply'];
   const rows = listAllTurns().map((l) =>
