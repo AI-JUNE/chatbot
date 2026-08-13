@@ -158,6 +158,25 @@ export default function AdminPage() {
     ...(tokenRef.current ? { 'x-admin-token': tokenRef.current } : {}),
   });
 
+  // ---- 인증 상태(잠금 화면·토큰 검증 피드백) ----
+  interface AuthInfo {
+    authRequired: boolean;
+    tokenConfigured: boolean;
+    allowed: boolean;
+    authed: boolean;
+  }
+  const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authMsg, setAuthMsg] = useState('');
+
+  /** 데이터 API가 401을 돌려주면 잠금 화면으로 전환한다. true = 401 처리됨. */
+  const on401 = (res: Response): boolean => {
+    if (res.status !== 401) return false;
+    setAuthInfo((p) => (p ? { ...p, allowed: false, authed: false } : { authRequired: true, tokenConfigured: true, allowed: false, authed: false }));
+    setAuthMsg('인증이 만료되었거나 토큰이 올바르지 않습니다.');
+    return true;
+  };
+
   // ---- KB ----
   const [entries, setEntries] = useState<KBEntryView[]>([]);
   const [form, setForm] = useState<KBForm>(EMPTY_FORM);
@@ -165,6 +184,7 @@ export default function AdminPage() {
 
   const loadKB = useCallback(async () => {
     const res = await fetch('/api/admin/kb', { headers: authHeaders() });
+    if (on401(res)) return;
     const data = await res.json();
     if (data.ok) setEntries(data.entries);
   }, []);
@@ -176,6 +196,7 @@ export default function AdminPage() {
   const [crEditing, setCrEditing] = useState<string | null>(null);
   const loadRules = useCallback(async () => {
     const res = await fetch('/api/admin/rules', { headers: authHeaders() });
+    if (on401(res)) return;
     const data = await res.json();
     if (data.ok) {
       setRules(data.rules);
@@ -189,6 +210,7 @@ export default function AdminPage() {
   const [recentTurns, setRecentTurns] = useState<TurnView[]>([]);
   const loadEsc = useCallback(async () => {
     const res = await fetch('/api/admin/escalations?logs=true', { headers: authHeaders() });
+    if (on401(res)) return;
     const data = await res.json();
     if (data.ok) {
       setTickets(data.tickets);
@@ -201,16 +223,43 @@ export default function AdminPage() {
   const [auditEvents, setAuditEvents] = useState<AuditView[]>([]);
   const loadAudit = useCallback(async () => {
     const res = await fetch('/api/admin/audit?limit=100', { headers: authHeaders() });
+    if (on401(res)) return;
     const data = await res.json();
     if (data.ok) setAuditEvents(data.events || []);
   }, []);
 
-  useEffect(() => {
-    loadKB();
-    loadRules();
-    loadEsc();
-    loadAudit();
+  /** 토큰 검증(/api/admin/auth) 후 통과 시 데이터 로드. 실패 시 잠금 화면 + 사유 표시. */
+  const verifyAuth = useCallback(async () => {
+    setAuthBusy(true);
+    try {
+      const res = await fetch('/api/admin/auth', { headers: authHeaders() });
+      const data = await res.json();
+      if (data.ok) {
+        setAuthInfo({ authRequired: data.authRequired, tokenConfigured: data.tokenConfigured, allowed: data.allowed, authed: data.authed });
+        if (data.allowed) {
+          setAuthMsg('');
+          loadKB();
+          loadRules();
+          loadEsc();
+          loadAudit();
+        } else {
+          setAuthMsg(data.reason || '관리 토큰을 확인해 주세요.');
+        }
+      } else if (data.code === 'rate_limited') {
+        setAuthMsg(`시도가 너무 잦습니다. ${data.retryAfterSec ?? 60}초 후 다시 시도해 주세요.`);
+      } else {
+        setAuthMsg(data.message || data.error || '인증 상태를 확인하지 못했습니다.');
+      }
+    } catch {
+      setAuthMsg('네트워크 오류로 인증 상태를 확인하지 못했습니다.');
+    } finally {
+      setAuthBusy(false);
+    }
   }, [loadKB, loadRules, loadEsc, loadAudit]);
+
+  useEffect(() => {
+    verifyAuth();
+  }, [verifyAuth]);
 
   const flash = (msg: string) => {
     setNotice(msg);
@@ -399,6 +448,38 @@ export default function AdminPage() {
     setTestLog((prev) => [{ q, reply: data.reply ?? '(오류)', intent: data.intent ?? '-', source: data.source ?? '-' }, ...prev].slice(0, 20));
   };
 
+  // ---- 잠금 화면: 인증 게이트에 막힌 경우 콘솔 대신 토큰 입력 화면을 보여준다 ----
+  if (authInfo && !authInfo.allowed) {
+    return (
+      <main style={S.page}>
+        <h1 style={{ fontSize: 24, marginBottom: 4 }}>관리 콘솔</h1>
+        <section style={{ ...S.card, maxWidth: 420, margin: '48px auto 0' }} aria-label="관리 콘솔 잠금">
+          <h2 style={{ fontSize: 17, marginBottom: 6 }}>🔒 잠금 상태</h2>
+          <p style={{ fontSize: 14, color: 'var(--sub)', marginBottom: 12 }}>관리 토큰을 입력하면 콘솔이 열립니다.</p>
+          <input
+            style={S.input}
+            type="password"
+            placeholder="관리 토큰"
+            aria-label="관리 토큰"
+            autoFocus
+            value={adminToken}
+            onChange={(e) => applyToken(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !authBusy) verifyAuth();
+            }}
+          />
+          <button style={{ ...S.btn, width: '100%', opacity: authBusy ? 0.6 : 1 }} onClick={() => verifyAuth()} disabled={authBusy}>
+            {authBusy ? '확인 중…' : '확인'}
+          </button>
+          {authMsg && (
+            <p role="alert" style={{ fontSize: 13, color: '#c0392b', marginTop: 10 }}>{authMsg}</p>
+          )}
+          <p style={{ ...S.tag, marginTop: 12 }}>토큰은 이 브라우저(localStorage)에만 저장되며 서버로는 요청 헤더로만 전송됩니다.</p>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main style={S.page}>
       <h1 style={{ fontSize: 24, marginBottom: 4 }}>관리 콘솔</h1>
@@ -421,20 +502,28 @@ export default function AdminPage() {
           </button>
         ))}
         {notice && <span style={{ alignSelf: 'center', fontSize: 13, color: 'var(--brand-600)' }}>{notice}</span>}
-        <input
-          style={{ marginLeft: 'auto', border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '6px 10px', fontSize: 13, width: 170 }}
-          type="password"
-          placeholder="관리 토큰(설정 시)"
-          aria-label="관리 토큰"
-          value={adminToken}
-          onChange={(e) => applyToken(e.target.value)}
-          onBlur={() => {
-            loadKB();
-            loadRules();
-            loadEsc();
-            loadAudit();
-          }}
-        />
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {authInfo && (
+            <span
+              style={{ fontSize: 12, color: authInfo.authed ? 'var(--brand-600)' : 'var(--mut)' }}
+              title={authInfo.authed ? '관리 토큰 인증됨' : authInfo.tokenConfigured ? '토큰 미인증' : '토큰 미설정(개방 모드)'}
+            >
+              {authInfo.authed ? '🔒 인증됨' : authInfo.tokenConfigured ? '미인증' : '개방 모드'}
+            </span>
+          )}
+          <input
+            style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '6px 10px', fontSize: 13, width: 170 }}
+            type="password"
+            placeholder="관리 토큰(설정 시)"
+            aria-label="관리 토큰"
+            value={adminToken}
+            onChange={(e) => applyToken(e.target.value)}
+            onBlur={() => verifyAuth()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !authBusy) verifyAuth();
+            }}
+          />
+        </span>
       </div>
 
       {tab === 'dash' && (

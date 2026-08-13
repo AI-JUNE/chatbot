@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { replyTo } from '@/lib/chat';
 import { logTurn } from '@/lib/convlog';
 import { KAKAO_LIVE, parseKakaoPayload, toKakaoResponse, kakaoErrorResponse } from '@/lib/kakao';
-import { rateGuard } from '@/lib/ratelimit';
+import { checkRate } from '@/lib/ratelimit';
 import { ok, fail, readJson } from '@/lib/http';
 
 export const dynamic = 'force-dynamic';
@@ -16,8 +16,12 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const limited = rateGuard('kakao', req.headers, 120);
-  if (limited) return limited;
+  // 카카오는 4xx/5xx를 스킬 오류로 처리해 사용자에게 실패 화면을 보여주므로,
+  // rate limit 초과도 429 대신 200 + 안내 말풍선으로 응답한다(처리 스킵으로 부하는 동일하게 차단).
+  const rate = checkRate('kakao', req.headers, 120);
+  if (!rate.allowed) {
+    return NextResponse.json(kakaoErrorResponse('요청이 많아 잠시 쉬고 있어요. 잠시 후 다시 말씀해 주세요.'));
+  }
 
   const token = process.env.KAKAO_SKILL_TOKEN;
   if (token && req.headers.get('x-skill-token') !== token) {
