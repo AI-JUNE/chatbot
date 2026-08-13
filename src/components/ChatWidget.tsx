@@ -4,6 +4,25 @@ import { useEffect, useRef, useState } from 'react';
 interface Suggestion { id: string; question: string }
 interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean; suggestions?: Suggestion[]; ticketId?: string }
 
+// 표준 오류 응답(lib/http fail()) 소비 — code 기반 사용자 친화 문구.
+interface ApiErrorLike { ok?: boolean; code?: string; message?: string; error?: string }
+const ERROR_TEXT: Record<string, string> = {
+  rate_limited: '메시지를 너무 빠르게 보내고 있어요.',
+  payload_too_large: '메시지가 너무 길어요. 조금 줄여서 다시 보내주세요.',
+  invalid_input: '메시지를 처리하지 못했어요. 내용을 바꿔 다시 보내주세요.',
+  invalid_json: '요청 처리에 문제가 있었어요. 잠시 후 다시 시도해 주세요.',
+  internal: '일시적인 오류가 발생했어요. 잠시 후 다시 시도해 주세요.',
+};
+function errorText(d: ApiErrorLike, res?: Response): string {
+  const code = typeof d?.code === 'string' ? d.code : '';
+  if (code === 'rate_limited') {
+    const ra = Number(res?.headers.get('retry-after'));
+    const wait = Number.isFinite(ra) && ra > 0 ? `약 ${Math.ceil(ra)}초 후` : '잠시 후';
+    return `${ERROR_TEXT.rate_limited} ${wait} 다시 시도해 주세요.`;
+  }
+  return ERROR_TEXT[code] || d?.message || d?.error || '오류가 발생했어요. 잠시 후 다시 시도해 주세요.';
+}
+
 export default function ChatWidget() {
   const [open, setOpen] = useState(true);
   const [input, setInput] = useState('');
@@ -32,9 +51,13 @@ export default function ChatWidget() {
         body: JSON.stringify({ message: text, sessionId }),
       });
       const data = await r.json();
+      if (!r.ok || data?.ok === false || typeof data?.reply !== 'string') {
+        setMsgs((m) => [...m, { role: 'bot', text: errorText(data, r) }]);
+        return;
+      }
       setMsgs((m) => [...m, {
         role: 'bot',
-        text: data.reply ?? '오류가 발생했어요.',
+        text: data.reply,
         escalate: data.escalate,
         suggestions: Array.isArray(data.suggestions) ? data.suggestions : undefined,
         ticketId: typeof data.ticketId === 'string' ? data.ticketId : undefined,
@@ -65,7 +88,7 @@ export default function ChatWidget() {
             : `이미 접수된 요청이 있어요. 접수번호 ${d.ticket.id} (${d.ticket.statusLabel}) — 잠시만 기다려 주세요.`,
         }]);
       } else {
-        setMsgs((x) => [...x, { role: 'bot', text: '접수 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요.' }]);
+        setMsgs((x) => [...x, { role: 'bot', text: `상담원 연결 접수에 실패했어요. ${errorText(d, r)}` }]);
       }
     } catch {
       setMsgs((x) => [...x, { role: 'bot', text: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' }]);

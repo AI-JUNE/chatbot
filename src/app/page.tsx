@@ -28,6 +28,11 @@ export default function Home() {
           </pre>
         </div>
       </section>
+      <footer style={{ maxWidth: 880, margin: '0 auto', padding: '0 24px 40px', textAlign: 'center', fontSize: 12.5, color: 'var(--mut)' }}>
+        <a href="/terms" style={{ color: 'var(--mut)', fontWeight: 600, marginRight: 14 }}>이용약관</a>
+        <a href="/privacy" style={{ color: 'var(--mut)', fontWeight: 600 }}>개인정보처리방침</a>
+        <span style={{ display: 'block', marginTop: 8 }}>© 고원 챗봇 (데모) — 약관·방침은 초안이며 법률 검토 전입니다.</span>
+      </footer>
       <ChatWidget />
     </main>
   );
