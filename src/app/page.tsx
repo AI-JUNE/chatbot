@@ -21,11 +21,14 @@ export default function Home() {
         <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, padding: '22px 24px' }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--brand-600)', marginBottom: 6 }}>내 사이트에 붙이기</div>
           <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.6, margin: '0 0 12px' }}>
-            아래 한 줄을 사이트 <code>&lt;body&gt;</code> 끝에 넣으면 이 챗봇이 그대로 나타납니다.
+            아래 한 줄을 사이트 <code>&lt;body&gt;</code> 끝에 넣으면 이 챗봇이 그대로 나타납니다. 닫혀 있을 때는 버블만 차지하므로 기존 페이지 클릭을 방해하지 않습니다.
           </p>
           <pre style={{ background: '#2b2220', color: '#f3ede4', fontSize: 12.5, borderRadius: 10, padding: '13px 15px', overflowX: 'auto', margin: 0 }}>
             <code>{'<script src="https://<배포도메인>/embed.js" async></script>'}</code>
           </pre>
+          <p style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.6, margin: '10px 0 0' }}>
+            선택 옵션: <code>data-position=&quot;left&quot;</code>(왼쪽 배치) · <code>data-offset=&quot;24&quot;</code>(가장자리 여백) · <code>data-z</code>(z-index)
+          </p>
         </div>
       </section>
       <footer style={{ maxWidth: 880, margin: '0 auto', padding: '0 24px 40px', textAlign: 'center', fontSize: 12.5, color: 'var(--mut)' }}>

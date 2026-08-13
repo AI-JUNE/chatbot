@@ -8,7 +8,7 @@ export default function WidgetPage() {
   return (
     <main style={{ minHeight: '100vh', background: 'transparent' }}>
       <style>{'html,body{background:transparent!important}'}</style>
-      <ChatWidget />
+      <ChatWidget embedded />
     </main>
   );
 }

@@ -23,8 +23,12 @@ function errorText(d: ApiErrorLike, res?: Response): string {
   return ERROR_TEXT[code] || d?.message || d?.error || '오류가 발생했어요. 잠시 후 다시 시도해 주세요.';
 }
 
-export default function ChatWidget() {
-  const [open, setOpen] = useState(true);
+// embedded=true: embed.js가 iframe으로 띄우는 모드. 처음엔 버블만 보이고,
+// 열림/닫힘 상태를 부모 페이지에 postMessage로 알려 iframe 크기를 맞춘다.
+export const EMBED_SIZE = { open: { w: 400, h: 660 }, closed: { w: 104, h: 104 } };
+
+export default function ChatWidget({ embedded = false }: { embedded?: boolean }) {
+  const [open, setOpen] = useState(!embedded);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([
@@ -35,6 +39,13 @@ export default function ChatWidget() {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, open]);
+
+  // 임베드 모드: 부모(embed.js)에 iframe 크기 변경 요청.
+  useEffect(() => {
+    if (!embedded || typeof window === 'undefined' || window.parent === window) return;
+    const size = open ? EMBED_SIZE.open : EMBED_SIZE.closed;
+    window.parent.postMessage({ source: 'gowon-chat', type: 'resize', open, width: size.w, height: size.h }, '*');
+  }, [embedded, open]);
 
   // 메시지 전송(입력창·연관질문 칩 공용)
   async function sendText(raw: string) {
@@ -130,7 +141,7 @@ export default function ChatWidget() {
           </div>
         </div>
       )}
-      <button onClick={() => setOpen((o) => !o)} aria-label="상담 챗봇 열기" style={{ width: 58, height: 58, borderRadius: '50%', background: 'var(--brand)', color: '#fff', fontSize: 24, boxShadow: '0 10px 24px rgba(190,85,53,.4)', marginLeft: 'auto', display: 'block' }}>{open ? '×' : '💬'}</button>
+      <button onClick={() => setOpen((o) => !o)} aria-label={open ? '상담 챗봇 닫기' : '상담 챗봇 열기'} aria-expanded={open} style={{ width: 58, height: 58, borderRadius: '50%', background: 'var(--brand)', color: '#fff', fontSize: 24, boxShadow: '0 10px 24px rgba(190,85,53,.4)', marginLeft: 'auto', display: 'block' }}>{open ? '×' : '💬'}</button>
     </div>
   );
 }
