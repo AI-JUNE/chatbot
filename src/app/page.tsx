@@ -11,6 +11,9 @@ export default function Home() {
         <p style={{ fontSize: 17, color: 'var(--sub)', maxWidth: 520, margin: '0 auto', lineHeight: 1.6 }}>
           웹·카카오 채널에서 24시간 자동 응대하고, 복잡한 문의만 상담원으로 연결합니다. 오른쪽 아래 챗봇으로 바로 체험해 보세요.
         </p>
+        <div style={{ marginTop: 22, display: 'inline-flex', alignItems: 'center', gap: 8, background: 'var(--brand-50)', border: '1px solid #f0ddd4', color: 'var(--brand-600)', borderRadius: 999, padding: '9px 16px', fontSize: 13, fontWeight: 700 }}>
+          <span aria-hidden="true">🤖</span><span>본 서비스는 인공지능(AI)이 응대합니다</span>
+        </div>
         <div style={{ marginTop: 26, display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--sub)', background: 'var(--surface)', border: '1px solid var(--line)', padding: '8px 14px', borderRadius: 999 }}>💬 웹·카톡 멀티채널</span>
           <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--sub)', background: 'var(--surface)', border: '1px solid var(--line)', padding: '8px 14px', borderRadius: 999 }}>🙋 상담원 폴백</span>

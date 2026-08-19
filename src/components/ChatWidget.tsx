@@ -32,7 +32,7 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([
-    { role: 'bot', text: '안녕하세요! 고원 상담 챗봇이에요. 무엇을 도와드릴까요?' },
+    { role: 'bot', text: '안녕하세요! 저는 인공지능(AI) 상담 챗봇입니다. 무엇을 도와드릴까요?' },
   ]);
   const [sessionId] = useState(() => `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
   const lastUserRef = useRef('');
@@ -114,7 +114,7 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
             <span style={{ width: 30, height: 30, borderRadius: 9, background: 'rgba(255,255,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>고</span>
             <div style={{ lineHeight: 1.2 }}>
               <div style={{ fontWeight: 800, fontSize: 14 }}>고원 상담 챗봇</div>
-              <div style={{ fontSize: 10.5, opacity: .9 }}>24시간 · AI 1차 응대</div>
+              <div style={{ fontSize: 10.5, opacity: .9 }}>24시간 · AI가 응대합니다</div>
             </div>
           </div>
           <div style={{ flex: 1, overflowY: 'auto', padding: '14px 12px', background: '#f6f2ec', display: 'flex', flexDirection: 'column', gap: 8 }}>
