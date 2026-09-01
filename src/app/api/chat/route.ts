@@ -7,7 +7,8 @@ import { ok, readJson, optStr } from '@/lib/http';
 
 export const dynamic = 'force-dynamic';
 
-export const MAX_MESSAGE_LEN = 2000;
+// Next.js route 파일은 HTTP 메서드 외 export를 허용하지 않는다(빌드 실패 원인). 모듈 내부 상수로 유지.
+const MAX_MESSAGE_LEN = 2000;
 
 export async function POST(req: NextRequest) {
   const limited = rateGuard('chat', req.headers, 60);
