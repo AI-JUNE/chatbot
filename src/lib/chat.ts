@@ -2,8 +2,10 @@
 // LLM 실키는 CHAT_LLM_LIVE=true 승인 후에만 사용. [승인 필요] 전까지 스텁 유지.
 // 멀티턴: 세션 문맥(src/lib/session.ts)으로 폴백 제안 번호 선택("1"/"2번")과
 // 에스컬레이션 접수 후 연락처 수집을 지원한다(웹·카카오 공통, 서버 측 처리).
-import { matchKnowledge, searchKnowledge } from '@/lib/knowledge';
-import { RULES } from '@/lib/rules';
+// 표기 흔들림(동의어·띄어쓰기·오타)은 src/lib/normalize 에서 흡수한다 — 룰은 원문과 압축형 양쪽에 시도.
+import { matchKnowledge, searchKnowledge, buildCitation, type Citation, type KBEntry } from '@/lib/knowledge';
+import { RULES, type Rule } from '@/lib/rules';
+import { prepare } from '@/lib/normalize';
 import { listKB, getRuleOverride, matchCustomRule } from '@/lib/adminStore';
 import { getSession, updateSession } from '@/lib/session';
 import { createTicket } from '@/lib/escalation';
@@ -26,6 +28,28 @@ export interface ChatReply {
   kbId?: string; // 지식베이스 매칭 시 항목 id(로그·품질 분석용)
   suggestions?: ChatSuggestion[]; // 폴백 시 연관 FAQ 제안(최대 3)
   ticketId?: string; // 이 턴에서 접수(또는 재사용)된 에스컬레이션 티켓 id
+  citation?: Citation; // KB 답변의 근거(출처 항목 + 원문 문장) — 생성 요약이 아니라 원문 인용
+}
+
+/** KB 항목으로 응답을 만들 때 근거 인용을 함께 붙인다. */
+function kbReply(entry: KBEntry, query: string, matched: { keyword: string }[] = []): ChatReply {
+  return {
+    reply: entry.answer,
+    intent: `kb:${entry.category}`,
+    escalate: false,
+    source: 'kb',
+    kbId: entry.id,
+    citation: buildCitation(entry, query, matched),
+  };
+}
+
+/**
+ * 룰 매칭 — 원문과 압축형(공백·구두점 제거) 양쪽에 시도해 "상 담원" 같은 표기도 잡는다.
+ * deny 패턴이 걸리면 매칭하지 않는다(예: '환불 얼마'가 요금 인텐트로 새는 것 방지).
+ */
+export function matchRule(rule: Rule, text: string, compactText: string): boolean {
+  if (rule.deny && (rule.deny.test(text) || rule.deny.test(compactText))) return false;
+  return rule.test.test(text) || rule.test.test(compactText);
 }
 
 // ---- 연락처 수집(에스컬레이션 후속 턴) ----
@@ -92,9 +116,7 @@ export function replyTo(message: string, sessionId = 'anon'): ChatReply {
       const chosen = pending[pick - 1];
       const entry = listKB().find((e) => e.id === chosen.id);
       updateSession(sessionId, { pendingSuggestions: undefined });
-      if (entry) {
-        return { reply: entry.answer, intent: `kb:${entry.category}`, escalate: false, source: 'kb', kbId: entry.id };
-      }
+      if (entry) return kbReply(entry, chosen.question);
       // 편집으로 항목이 사라진 경우 — 원래 질문 문구로 재처리
       return replyTo(chosen.question, sessionId);
     }
@@ -112,10 +134,11 @@ export function replyTo(message: string, sessionId = 'anon'): ChatReply {
   };
 
   // 1) 인텐트 룰(관리 콘솔 오버라이드 반영: 비활성화 스킵·응답문 교체)
+  const pre = prepare(text);
   for (const r of RULES) {
     const ov = getRuleOverride(r.intent);
     if (ov && ov.enabled === false) continue;
-    if (r.test.test(text)) {
+    if (matchRule(r, text, pre.compact)) {
       const baseReply = ov?.reply || r.reply;
       if (r.escalate === true) return escalateWith(baseReply, r.intent);
       updateSession(sessionId, { pendingSuggestions: undefined });
@@ -136,7 +159,7 @@ export function replyTo(message: string, sessionId = 'anon'): ChatReply {
   const kb = matchKnowledge(text, 2, entries);
   if (kb) {
     updateSession(sessionId, { pendingSuggestions: undefined });
-    return { reply: kb.entry.answer, intent: `kb:${kb.entry.category}`, escalate: false, source: 'kb', kbId: kb.entry.id };
+    return kbReply(kb.entry, text, kb.matched);
   }
 
   // 정답 확신은 없지만 근접한 FAQ가 있으면 후보로 제안(확신 매칭보다 낮은 문턱)

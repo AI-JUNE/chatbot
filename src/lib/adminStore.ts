@@ -3,6 +3,7 @@
 import fs from 'fs';
 import path from 'path';
 import { KB, KBEntry } from '@/lib/knowledge';
+import { keywordHit, prepare } from '@/lib/normalize';
 
 function cloneEntry(e: KBEntry): KBEntry {
   return { ...e, keywords: [...e.keywords] };
@@ -20,6 +21,7 @@ export interface KBUpsertInput {
   question?: string;
   keywords?: string[] | string; // 배열 또는 콤마 구분 문자열
   answer?: string;
+  source?: string; // 출처 라벨(업로드 문서명 등)
 }
 
 function normalizeKeywords(kw: KBUpsertInput['keywords']): string[] {
@@ -41,7 +43,15 @@ export function upsertKB(input: KBUpsertInput): UpsertResult {
     if (!question || !answer || keywords.length === 0) {
       return { ok: false, error: 'question, answer, keywords(1개 이상)는 필수입니다.' };
     }
-    const entry: KBEntry = { id, category: (input.category || '일반').trim() || '일반', question, keywords, answer };
+    const source = (input.source || '').trim();
+    const entry: KBEntry = {
+      id,
+      category: (input.category || '일반').trim() || '일반',
+      question,
+      keywords,
+      answer,
+      ...(source ? { source } : {}),
+    };
     kbEntries.push(entry);
     schedulePersist();
     return { ok: true, entry: cloneEntry(entry), created: true };
@@ -51,8 +61,27 @@ export function upsertKB(input: KBUpsertInput): UpsertResult {
   if (input.question !== undefined) existing.question = String(input.question).trim() || existing.question;
   if (input.answer !== undefined) existing.answer = String(input.answer).trim() || existing.answer;
   if (input.keywords !== undefined && keywords.length > 0) existing.keywords = keywords;
+  if (input.source !== undefined) {
+    const src = String(input.source).trim();
+    if (src) existing.source = src;
+    else delete existing.source;
+  }
   schedulePersist();
   return { ok: true, entry: cloneEntry(existing), created: false };
+}
+
+/** 여러 항목을 한 번에 등록(문서 업로드 등). 실패 항목은 사유와 함께 돌려준다. */
+export function bulkUpsertKB(inputs: KBUpsertInput[]): { created: KBEntry[]; updated: KBEntry[]; errors: string[] } {
+  const created: KBEntry[] = [];
+  const updated: KBEntry[] = [];
+  const errors: string[] = [];
+  for (const input of inputs) {
+    const r = upsertKB(input);
+    if (!r.ok) errors.push(r.error);
+    else if (r.created) created.push(r.entry);
+    else updated.push(r.entry);
+  }
+  return { created, updated, errors };
 }
 
 export function deleteKB(id: string): boolean {
@@ -168,16 +197,14 @@ export function deleteCustomRule(intent: string): boolean {
   return customRules.length < before;
 }
 
-/** 활성 커스텀 룰 중 키워드가 포함된 첫 항목(등록순). 없으면 null. 띄어쓰기 무시 비교 포함. */
+/** 활성 커스텀 룰 중 키워드가 걸린 첫 항목(등록순). 없으면 null.
+ *  띄어쓰기 무시 + 동의어 + 자모 오타 보정(src/lib/normalize)을 함께 적용한다. */
 export function matchCustomRule(text: string): CustomRule | null {
-  const lower = text.toLowerCase();
-  const compact = lower.replace(/\s+/g, '');
+  const pre = prepare(text);
+  if (!pre.compact) return null;
   for (const r of customRules) {
     if (!r.enabled) continue;
-    const hit = r.keywords.some((k) => {
-      const kw = k.toLowerCase();
-      return lower.includes(kw) || compact.includes(kw.replace(/\s+/g, ''));
-    });
+    const hit = r.keywords.some((k) => keywordHit(pre.compact, pre.jamo, k).kind !== 'none');
     if (hit) return cloneCustomRule(r);
   }
   return null;
@@ -251,12 +278,14 @@ export function importSnapshot(input: unknown, opts: { persist?: boolean } = {})
     if (typeof id !== 'string' || !id.trim()) continue;
     if (typeof question !== 'string' || !question.trim() || typeof answer !== 'string' || !answer.trim()) continue;
     if (!isStrArray(keywords) || keywords.length === 0) continue;
+    const src = (e as KBEntry).source;
     kb.push({
       id: id.trim(),
       category: typeof category === 'string' && category.trim() ? category.trim() : '일반',
       question: question.trim(),
       keywords: keywords.map((k) => k.trim().toLowerCase()).filter(Boolean),
       answer: answer.trim(),
+      ...(typeof src === 'string' && src.trim() ? { source: src.trim() } : {}),
     });
   }
 

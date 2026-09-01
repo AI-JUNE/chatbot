@@ -1,5 +1,7 @@
 // 지식베이스(FAQ). 키워드 스코어링 매칭 — LLM 없이 동작(폴백 전 단계).
 // 추후 관리 콘솔에서 편집 가능하도록 순수 데이터 + 순수 함수로 유지.
+// 매칭은 src/lib/normalize 의 동의어 확장·자모 오타 보정을 거친다(정확 일치 가중치가 가장 높다).
+import { MATCH_WEIGHT, keywordHit, prepare, type PreparedText, type MatchKind } from '@/lib/normalize';
 
 export interface KBEntry {
   id: string;
@@ -7,6 +9,8 @@ export interface KBEntry {
   question: string;
   keywords: string[]; // 소문자 키워드(부분 일치)
   answer: string;
+  /** 출처 표시용(문서 업로드로 생성된 항목 등). 없으면 대표 질문을 출처로 쓴다. */
+  source?: string;
 }
 
 export const KB: KBEntry[] = [
@@ -111,6 +115,8 @@ export const KB: KBEntry[] = [
 export interface KBMatch {
   entry: KBEntry;
   score: number;
+  /** 매칭에 기여한 키워드와 매칭 종류(근거 표시·품질 분석용). */
+  matched: { keyword: string; kind: MatchKind }[];
 }
 
 /** 한글 비교용 정규화 — 소문자화 + 공백 제거(띄어쓰기 차이 흡수). */
@@ -118,41 +124,124 @@ function normalize(s: string): string {
   return (s || '').toLowerCase().replace(/\s+/g, '');
 }
 
-/** 키워드 포함 여부 — 원문 또는 공백 제거본 기준("상담 원" ↔ "상담원" 등). */
-function hasKeyword(text: string, compact: string, kw: string): boolean {
-  const k = kw.toLowerCase();
-  return text.includes(k) || compact.includes(k.replace(/\s+/g, ''));
+/** 키워드 1건의 기여 점수. 2자 이상은 2점, 1자는 1점을 매칭 종류 가중치로 감산한다. */
+function keywordScore(keyword: string, kind: MatchKind): number {
+  const base = normalize(keyword).length >= 2 ? 2 : 1;
+  return base * MATCH_WEIGHT[kind];
 }
 
-/** 키워드 부분일치 스코어링(띄어쓰기 무시). minScore 미만이면 null(폴백으로 넘어감). */
+/** 항목 1건을 준비된 질의에 대해 채점한다. */
+function scoreEntry(pre: PreparedText, entry: KBEntry, allowFuzzy: boolean): KBMatch {
+  let score = 0;
+  const matched: { keyword: string; kind: MatchKind }[] = [];
+  for (const kw of entry.keywords) {
+    if (!kw) continue;
+    const hit = keywordHit(pre.compact, pre.jamo, kw, allowFuzzy);
+    if (hit.kind === 'none') continue;
+    score += keywordScore(kw, hit.kind);
+    matched.push({ keyword: kw, kind: hit.kind });
+  }
+  return { entry, score, matched };
+}
+
+/**
+ * 키워드 부분일치 스코어링(띄어쓰기 무시 + 동의어 + 자모 오타 보정).
+ * minScore 미만이면 null(폴백으로 넘어감).
+ */
 export function matchKnowledge(message: string, minScore = 2, entries: KBEntry[] = KB): KBMatch | null {
-  const text = (message || '').toLowerCase();
-  if (!text) return null;
-  const compact = normalize(message);
+  if (!message || !message.trim()) return null;
+  const pre = prepare(message);
+  if (!pre.compact) return null;
   let best: KBMatch | null = null;
   for (const entry of entries) {
-    let score = 0;
-    for (const kw of entry.keywords) {
-      if (kw && hasKeyword(text, compact, kw)) score += kw.length >= 2 ? 2 : 1;
-    }
-    if (score > 0 && (!best || score > best.score)) best = { entry, score };
+    const m = scoreEntry(pre, entry, true);
+    if (m.score > 0 && (!best || m.score > best.score)) best = m;
   }
   return best && best.score >= minScore ? best : null;
 }
 
-/** 간단 검색(관리 콘솔·연관질문 노출용). 띄어쓰기 무시 매칭 포함. */
+/** 간단 검색(관리 콘솔·연관질문 노출용). 동의어·오타 보정 포함. */
 export function searchKnowledge(query: string, limit = 3, entries: KBEntry[] = KB): KBEntry[] {
-  const text = (query || '').toLowerCase();
-  if (!text) return [];
-  const compact = normalize(query);
-  return entries.map((entry) => {
-    let score = 0;
-    for (const kw of entry.keywords) if (kw && hasKeyword(text, compact, kw)) score += 1;
-    if (entry.question.toLowerCase().includes(text) || normalize(entry.question).includes(compact)) score += 2;
-    return { entry, score };
-  })
+  if (!query || !query.trim()) return [];
+  const pre = prepare(query);
+  if (!pre.compact) return [];
+  return entries
+    .map((entry) => {
+      const m = scoreEntry(pre, entry, true);
+      let score = m.matched.reduce((acc, x) => acc + MATCH_WEIGHT[x.kind], 0);
+      const q = normalize(entry.question);
+      if (q.includes(pre.compact) || pre.compact.includes(q)) score += 2;
+      return { entry, score };
+    })
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((x) => x.entry);
+}
+
+// ---- 근거 문장 인용 ----
+
+export interface Citation {
+  kbId: string;
+  /** 출처 라벨 — 업로드 문서명 또는 대표 질문. */
+  source: string;
+  category: string;
+  /** 답변 중 질의와 가장 관련 높은 문장(그대로 인용). */
+  snippet: string;
+  /** 근거로 삼은 키워드(최대 3개). */
+  keywords: string[];
+}
+
+const MAX_SNIPPET = 140;
+
+/** 답변 텍스트를 문장 단위로 자른다(한국어 종결·구두점·줄바꿈 기준). */
+export function splitSentences(text: string): string[] {
+  const out: string[] = [];
+  let buf = '';
+  for (const ch of text || '') {
+    if (ch === '\n') {
+      if (buf.trim()) out.push(buf.trim());
+      buf = '';
+      continue;
+    }
+    buf += ch;
+    if (ch === '.' || ch === '!' || ch === '?' || ch === '。') {
+      if (buf.trim()) out.push(buf.trim());
+      buf = '';
+    }
+  }
+  if (buf.trim()) out.push(buf.trim());
+  return out;
+}
+
+/**
+ * 답변에서 질의와 가장 관련 있는 문장을 골라 인용 근거를 만든다.
+ * LLM 생성 요약이 아니라 원문 문장을 그대로 쓰므로 사실 왜곡 위험이 없다.
+ */
+export function buildCitation(entry: KBEntry, query: string, matched: { keyword: string }[] = []): Citation {
+  const sentences = splitSentences(entry.answer);
+  const pre = prepare(query);
+  let bestSentence = sentences[0] ?? entry.answer;
+  let bestScore = -1;
+  for (const sentence of sentences) {
+    const sPre = prepare(sentence);
+    let score = 0;
+    for (const kw of entry.keywords) {
+      if (keywordHit(sPre.compact, sPre.jamo, kw, false).kind !== 'none') score += 1;
+    }
+    // 질의 자체와 겹치는 부분이 있으면 가산
+    if (pre.compact && sPre.compact.includes(pre.compact)) score += 2;
+    if (score > bestScore) {
+      bestScore = score;
+      bestSentence = sentence;
+    }
+  }
+  const snippet = bestSentence.length > MAX_SNIPPET ? `${bestSentence.slice(0, MAX_SNIPPET - 1)}…` : bestSentence;
+  return {
+    kbId: entry.id,
+    source: entry.source?.trim() || entry.question,
+    category: entry.category,
+    snippet,
+    keywords: matched.slice(0, 3).map((m) => m.keyword),
+  };
 }
