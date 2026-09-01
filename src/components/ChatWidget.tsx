@@ -2,7 +2,15 @@
 import { useEffect, useRef, useState } from 'react';
 
 interface Suggestion { id: string; question: string }
-interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean; suggestions?: Suggestion[]; ticketId?: string }
+// 근거 인용 — 서버가 KB 원문에서 그대로 뽑은 문장(생성 요약 아님).
+interface Citation { kbId: string; source: string; category: string; snippet: string }
+interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean; suggestions?: Suggestion[]; ticketId?: string; citation?: Citation }
+
+function isCitation(v: unknown): v is Citation {
+  if (!v || typeof v !== 'object') return false;
+  const c = v as Partial<Citation>;
+  return typeof c.source === 'string' && typeof c.snippet === 'string' && !!c.source && !!c.snippet;
+}
 
 // 표준 오류 응답(lib/http fail()) 소비 — code 기반 사용자 친화 문구.
 interface ApiErrorLike { ok?: boolean; code?: string; message?: string; error?: string }
@@ -72,6 +80,7 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
         escalate: data.escalate,
         suggestions: Array.isArray(data.suggestions) ? data.suggestions : undefined,
         ticketId: typeof data.ticketId === 'string' ? data.ticketId : undefined,
+        citation: isCitation(data.citation) ? data.citation : undefined,
       }]);
     } catch {
       setMsgs((m) => [...m, { role: 'bot', text: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' }]);
@@ -121,6 +130,12 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
             {msgs.map((m, i) => (
               <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
                 <div style={{ background: m.role === 'user' ? 'var(--brand)' : '#fff', color: m.role === 'user' ? '#fff' : 'var(--ink)', border: m.role === 'user' ? 'none' : '1px solid var(--line)', borderRadius: 13, padding: '9px 12px', fontSize: 13.3, lineHeight: 1.5 }}>{m.text}</div>
+                {m.citation && (
+                  <div style={{ marginTop: 5, fontSize: 11, lineHeight: 1.45, color: 'var(--mut, #8a7f75)', background: '#fff', border: '1px dashed var(--line)', borderRadius: 10, padding: '6px 9px' }}>
+                    <span style={{ fontWeight: 700 }}>근거</span> · {m.citation.source}
+                    <div style={{ marginTop: 2 }}>“{m.citation.snippet}”</div>
+                  </div>
+                )}
                 {m.suggestions && m.suggestions.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
                     {m.suggestions.map((s) => (

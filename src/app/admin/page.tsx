@@ -10,7 +10,22 @@ interface KBEntryView {
   question: string;
   keywords: string[];
   answer: string;
+  source?: string;
 }
+
+/** 문서 업로드 미리보기 항목(등록 전 후보). */
+interface KBCandidateView extends KBEntryView {
+  chunkIndex: number;
+}
+
+interface ImportForm {
+  title: string;
+  category: string;
+  maxChars: string;
+  text: string;
+}
+
+const EMPTY_IMPORT: ImportForm = { title: '', category: '문서', maxChars: '500', text: '' };
 
 interface RuleView {
   intent: string;
@@ -100,6 +115,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   'kb.upsert': 'KB 등록/수정',
   'kb.delete': 'KB 삭제',
   'kb.reset': 'KB 초기화',
+  'kb.import': '문서 업로드 등록',
   'rule.override': '내장 룰 변경',
   'rule.custom.upsert': '커스텀 룰 등록/수정',
   'rule.custom.delete': '커스텀 룰 삭제',
@@ -188,6 +204,49 @@ export default function AdminPage() {
     const data = await res.json();
     if (data.ok) setEntries(data.entries);
   }, []);
+
+  // ---- 문서 업로드(청킹 → KB 후보) ----
+  const [imp, setImp] = useState<ImportForm>(EMPTY_IMPORT);
+  const [candidates, setCandidates] = useState<KBCandidateView[] | null>(null);
+  const [impBusy, setImpBusy] = useState(false);
+
+  const runImport = async (commit: boolean) => {
+    if (!imp.title.trim() || !imp.text.trim()) {
+      flash('문서명과 본문을 입력해 주세요.');
+      return;
+    }
+    setImpBusy(true);
+    try {
+      const res = await fetch('/api/admin/kb/import', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({
+          title: imp.title.trim(),
+          category: imp.category.trim() || '문서',
+          maxChars: Number(imp.maxChars) || 500,
+          text: imp.text,
+          commit,
+        }),
+      });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (!data.ok) {
+        flash(data.error || '문서를 처리하지 못했습니다.');
+        return;
+      }
+      if (commit) {
+        setCandidates(null);
+        setImp(EMPTY_IMPORT);
+        await loadKB();
+        flash(`문서 등록 완료: 신규 ${data.created} · 갱신 ${data.updated}${data.errors?.length ? ` · 실패 ${data.errors.length}` : ''}`);
+      } else {
+        setCandidates(data.candidates as KBCandidateView[]);
+        flash(`미리보기 ${data.count}개 — 확인 후 "등록"을 눌러주세요.`);
+      }
+    } finally {
+      setImpBusy(false);
+    }
+  };
 
   // ---- Rules ----
   const [rules, setRules] = useState<RuleView[]>([]);
@@ -433,7 +492,9 @@ export default function AdminPage() {
 
   // ---- Test ----
   const [testInput, setTestInput] = useState('');
-  const [testLog, setTestLog] = useState<{ q: string; reply: string; intent: string; source: string }[]>([]);
+  const [testLog, setTestLog] = useState<
+    { q: string; reply: string; intent: string; source: string; citation?: { source: string; snippet: string } }[]
+  >([]);
 
   const runTest = async () => {
     const q = testInput.trim();
@@ -445,7 +506,12 @@ export default function AdminPage() {
       body: JSON.stringify({ message: q }),
     });
     const data = await res.json();
-    setTestLog((prev) => [{ q, reply: data.reply ?? '(오류)', intent: data.intent ?? '-', source: data.source ?? '-' }, ...prev].slice(0, 20));
+    const cite = data.citation && typeof data.citation.source === 'string' && typeof data.citation.snippet === 'string'
+      ? { source: data.citation.source as string, snippet: data.citation.snippet as string }
+      : undefined;
+    setTestLog((prev) =>
+      [{ q, reply: data.reply ?? '(오류)', intent: data.intent ?? '-', source: data.source ?? '-', citation: cite }, ...prev].slice(0, 20),
+    );
   };
 
   // ---- 잠금 화면: 인증 게이트에 막힌 경우 콘솔 대신 토큰 입력 화면을 보여준다 ----
@@ -642,6 +708,45 @@ export default function AdminPage() {
               </button>
             </div>
           </section>
+          <section style={S.card}>
+            <h2 style={{ fontSize: 16, marginBottom: 6 }}>문서로 FAQ 만들기</h2>
+            <p style={{ fontSize: 12.5, color: 'var(--mut)', marginBottom: 10 }}>
+              안내문·약관·매뉴얼 텍스트를 붙여넣으면 제목·문단 단위로 잘라 FAQ 후보를 만듭니다. 미리보기로 확인한 뒤 등록하세요.
+              등록된 항목은 답변에 <strong>출처(근거)</strong>가 함께 표시됩니다. 키워드는 자동 추출값이므로 등록 후 보정하는 것을 권장합니다.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8 }}>
+              <input style={S.input} placeholder="문서명(출처로 표시됨, 예: 2026 이용안내)" value={imp.title} onChange={(e) => setImp({ ...imp, title: e.target.value })} />
+              <input style={S.input} placeholder="카테고리" value={imp.category} onChange={(e) => setImp({ ...imp, category: e.target.value })} />
+              <input style={S.input} placeholder="청크 길이(120~2000)" value={imp.maxChars} onChange={(e) => setImp({ ...imp, maxChars: e.target.value })} />
+            </div>
+            <textarea
+              style={{ ...S.input, minHeight: 150, fontFamily: 'inherit' }}
+              placeholder={'문서 본문을 붙여넣으세요.\n# 제목, ## 소제목, "1. 항목", "제1조" 형식을 구분 기준으로 인식합니다.'}
+              value={imp.text}
+              onChange={(e) => setImp({ ...imp, text: e.target.value })}
+            />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button style={S.btnGhost} disabled={impBusy} onClick={() => runImport(false)}>미리보기</button>
+              <button style={S.btn} disabled={impBusy || !candidates} onClick={() => runImport(true)}>등록</button>
+              {candidates && (
+                <button style={S.btnGhost} onClick={() => setCandidates(null)}>미리보기 지우기</button>
+              )}
+              <span style={{ ...S.tag, marginLeft: 'auto' }}>{imp.text.length.toLocaleString()}자</span>
+            </div>
+            {candidates && (
+              <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+                <div style={{ ...S.tag, marginBottom: 6 }}>후보 {candidates.length}개</div>
+                {candidates.map((c) => (
+                  <div key={c.id} style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-sm)', padding: 10, marginBottom: 8 }}>
+                    <div style={S.tag}>#{c.chunkIndex} · {c.id} · 출처: {c.source}</div>
+                    <strong style={{ fontSize: 14 }}>{c.question}</strong>
+                    <p style={{ fontSize: 13, color: 'var(--sub)', margin: '5px 0', whiteSpace: 'pre-wrap' }}>{c.answer}</p>
+                    <div style={S.tag}>키워드: {c.keywords.join(', ')}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
           {entries.map((e) => (
             <section key={e.id} style={S.card}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
@@ -652,6 +757,7 @@ export default function AdminPage() {
                   <strong>{e.question}</strong>
                   <p style={{ fontSize: 14, color: 'var(--sub)', margin: '6px 0' }}>{e.answer}</p>
                   <div style={S.tag}>키워드: {e.keywords.join(', ')}</div>
+                  {e.source && <div style={S.tag}>출처: {e.source}</div>}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   <button style={S.btnGhost} onClick={() => editKB(e)}>
@@ -871,6 +977,11 @@ export default function AdminPage() {
               <div style={{ fontSize: 14, color: 'var(--sub)' }}>
                 <strong>A.</strong> {t.reply}
               </div>
+              {t.citation && (
+                <div style={{ ...S.tag, marginTop: 4 }}>
+                  근거: {t.citation.source} — “{t.citation.snippet}”
+                </div>
+              )}
               <div style={S.tag}>
                 intent: {t.intent} · source: {t.source}
               </div>

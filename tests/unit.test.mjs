@@ -115,3 +115,58 @@ test('랜딩에 근거 없는 성과 수치를 넣지 않는다', () => {
   assert.equal(/300ms/.test(s), false, '300ms 표기는 금지');
   assert.equal(/99\.9\s*%/.test(s), false, '99.9% 가용성 표기는 금지');
 });
+
+/* ── 대화 품질: 동의어·오타 보정 ── */
+test('정규화 모듈이 자모 분해와 동의어 그룹을 제공한다', () => {
+  const s = read('src/lib/normalize.ts');
+  assert.match(s, /export function decomposeJamo/, '자모 분해 함수가 있어야 한다');
+  assert.match(s, /export function approxIncludes/, '근사 부분문자열 매칭이 있어야 한다');
+  assert.match(s, /SYNONYM_GROUPS/, '동의어 그룹이 있어야 한다');
+  assert.match(s, /카톡/, '카카오톡 표기 흔들림이 동의어에 포함되어야 한다');
+});
+
+test('정확 일치 가중치가 오타 보정보다 높다', () => {
+  const s = read('src/lib/normalize.ts');
+  const m = s.match(/MATCH_WEIGHT[^=]*=\s*{([^}]*)}/);
+  assert.ok(m, 'MATCH_WEIGHT 정의가 있어야 한다');
+  const exact = Number(m[1].match(/exact:\s*([\d.]+)/)[1]);
+  const fuzzy = Number(m[1].match(/fuzzy:\s*([\d.]+)/)[1]);
+  assert.ok(exact > fuzzy, '오타 보정 매칭이 정확 일치를 밀어내면 안 된다');
+});
+
+test('KB·커스텀 룰 매칭이 정규화 모듈을 사용한다', () => {
+  assert.match(read('src/lib/knowledge.ts'), /from '@\/lib\/normalize'/);
+  assert.match(read('src/lib/adminStore.ts'), /from '@\/lib\/normalize'/);
+});
+
+/* ── 근거 문장 인용 ── */
+test('KB 답변에 근거 인용이 붙는다', () => {
+  const k = read('src/lib/knowledge.ts');
+  assert.match(k, /export function buildCitation/, '인용 생성 함수가 있어야 한다');
+  assert.match(k, /export interface Citation/);
+  assert.match(read('src/lib/chat.ts'), /citation\?: Citation/, 'ChatReply에 citation이 있어야 한다');
+  assert.match(read('src/components/ChatWidget.tsx'), /근거/, '위젯이 근거를 표시해야 한다');
+});
+
+test('근거 문장은 원문에서 그대로 뽑는다(생성 요약 금지)', () => {
+  const k = read('src/lib/knowledge.ts');
+  assert.match(k, /splitSentences/, '답변을 문장 단위로 잘라 고른다');
+  assert.equal(/CHAT_LLM_LIVE|fetch\(/.test(k), false, '지식 매칭 계층은 외부 호출을 하지 않아야 한다');
+});
+
+/* ── 문서 업로드·청킹 ── */
+test('문서 인제스트가 상한과 승인 게이트를 지킨다', () => {
+  assert.ok(has('src/lib/ingest.ts'), 'ingest 모듈이 있어야 한다');
+  const s = read('src/lib/ingest.ts');
+  assert.match(s, /MAX_DOC_CHARS/, '문서 크기 상한이 있어야 한다');
+  assert.match(s, /\[승인 필요\]/, '임베딩·외부 스토리지는 승인 대상으로 표시되어야 한다');
+});
+
+test('문서 등록 API는 기본이 미리보기(dry-run)다', () => {
+  const p = 'src/app/api/admin/kb/import/route.ts';
+  assert.ok(has(p), '문서 등록 라우트가 있어야 한다');
+  const s = read(p);
+  assert.match(s, /requireAdmin/, '관리자 게이트를 거쳐야 한다');
+  assert.match(s, /body\.commit !== true/, 'commit=true 가 아니면 저장하지 않아야 한다');
+  assert.match(s, /committed: false/, '미리보기 응답이 있어야 한다');
+});

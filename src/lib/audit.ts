@@ -6,6 +6,7 @@ export type AuditAction =
   | 'kb.upsert'
   | 'kb.delete'
   | 'kb.reset'
+  | 'kb.import'
   | 'rule.override'
   | 'rule.custom.upsert'
   | 'rule.custom.delete'

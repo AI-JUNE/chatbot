@@ -39,11 +39,14 @@ export interface KakaoSkillResponse {
 }
 
 /** 대화엔진 결과를 오픈빌더 v2 simpleText 응답으로 변환.
- *  연관 FAQ 제안(suggestions)은 quickReplies로, escalate 시 상담원 연결 quickReply 추가(최대 10개). */
+ *  연관 FAQ 제안(suggestions)은 quickReplies로, escalate 시 상담원 연결 quickReply 추가(최대 10개).
+ *  KB 답변이면 출처(근거) 한 줄을 덧붙인다 — 카카오는 말풍선 서식이 없어 텍스트로만 표기. */
 export function toKakaoResponse(result: ChatReply): KakaoSkillResponse {
+  const cite = result.citation ? `\n\n근거: ${result.citation.source}` : '';
+  const body = `${result.reply}${cite}`;
   const res: KakaoSkillResponse = {
     version: '2.0',
-    template: { outputs: [{ simpleText: { text: result.reply.slice(0, 1000) } }] },
+    template: { outputs: [{ simpleText: { text: body.slice(0, 1000) } }] },
   };
   const quickReplies: KakaoQuickReply[] = [];
   for (const s of result.suggestions ?? []) {
