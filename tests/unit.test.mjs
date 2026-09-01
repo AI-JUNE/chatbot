@@ -170,3 +170,38 @@ test('문서 등록 API는 기본이 미리보기(dry-run)다', () => {
   assert.match(s, /body\.commit !== true/, 'commit=true 가 아니면 저장하지 않아야 한다');
   assert.match(s, /committed: false/, '미리보기 응답이 있어야 한다');
 });
+
+/* ── 오류 모니터링 (상용 필수) ── */
+test('모니터링은 DSN 미설정 시 no-op 이다', () => {
+  const s = read('src/lib/monitoring.ts');
+  assert.match(s, /MONITORING_ENABLED/);
+  assert.match(s, /if \(!TARGET\) return;/, 'DSN 없으면 즉시 반환해야 한다');
+});
+
+test('모니터링 전송 전 PII를 마스킹한다', () => {
+  const s = read('src/lib/monitoring.ts');
+  assert.match(s, /export function scrub/);
+  for (const k of ['주민등록번호', '카드', '휴대전화', '이메일', '계좌']) {
+    assert.match(s, new RegExp(k), `${k} 마스킹 규칙이 있어야 한다`);
+  }
+});
+
+test('모니터링 실패가 서비스에 영향을 주지 않는다', () => {
+  const s = read('src/lib/monitoring.ts');
+  // captureError 본문만 검사한다(withMonitoring은 의도적으로 재던짐).
+  const body = (s.split('export async function captureError')[1] ?? '').split('export async function withMonitoring')[0];
+  assert.notEqual(body, '', 'captureError 정의를 찾지 못했다');
+  assert.equal(/throw/.test(body), false, 'captureError는 예외를 밖으로 던지지 않아야 한다');
+  assert.match(body, /catch/, '전송 예외를 흡수해야 한다');
+});
+
+test('DSN이 소스에 하드코딩되어 있지 않다', () => {
+  const s = read('src/lib/monitoring.ts');
+  assert.equal(/ingest\.[a-z]*\.?sentry\.io/.test(s), false, 'DSN은 환경변수로만 주입해야 한다');
+  assert.match(s, /process\.env\.SENTRY_DSN/);
+});
+
+test('대화 API가 엔진 오류를 모니터링에 보고한다', () => {
+  const s = read('src/app/api/chat/route.ts');
+  assert.match(s, /captureError/);
+});

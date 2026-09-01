@@ -4,6 +4,7 @@ import { replyTo } from '@/lib/chat';
 import { logTurn } from '@/lib/convlog';
 import { rateGuard } from '@/lib/ratelimit';
 import { ok, readJson, optStr } from '@/lib/http';
+import { captureError } from '@/lib/monitoring';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +25,21 @@ export async function POST(req: NextRequest) {
 
   const message = msg.value;
   const sessionId = sid.value || 'anon';
-  const result = replyTo(message, sessionId);
+
+  let result;
+  try {
+    result = replyTo(message, sessionId);
+  } catch (e) {
+    // 대화 엔진 오류는 모니터링에 보고하되, 고객에게는 안전한 안내로 응답한다.
+    await captureError(e, { route: '/api/chat', method: 'POST', sessionId });
+    return ok({
+      sessionId,
+      reply: '일시적인 오류가 발생했어요. 잠시 후 다시 시도해 주시거나 "상담원"이라고 입력해 주세요.',
+      intent: 'error',
+      escalate: true,
+      source: 'fallback' as const,
+    });
+  }
 
   // 대화 로그(인메모리 스텁) — 영구 저장은 [승인 필요]
   if (result.source !== 'empty') {
