@@ -4,7 +4,15 @@ import { useEffect, useRef, useState } from 'react';
 interface Suggestion { id: string; question: string }
 // 근거 인용 — 서버가 KB 원문에서 그대로 뽑은 문장(생성 요약 아님).
 interface Citation { kbId: string; source: string; category: string; snippet: string }
-interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean; suggestions?: Suggestion[]; ticketId?: string; citation?: Citation }
+// 접수 대기 상태 — 접수순 표시용(예상 대기시간을 계산하지 않는다).
+interface QueueInfo { position: number; waiting: number }
+interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean; suggestions?: Suggestion[]; ticketId?: string; citation?: Citation; queue?: QueueInfo }
+
+function isQueue(v: unknown): v is QueueInfo {
+  if (!v || typeof v !== 'object') return false;
+  const q = v as Partial<QueueInfo>;
+  return typeof q.position === 'number' && typeof q.waiting === 'number';
+}
 
 function isCitation(v: unknown): v is Citation {
   if (!v || typeof v !== 'object') return false;
@@ -81,6 +89,7 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
         suggestions: Array.isArray(data.suggestions) ? data.suggestions : undefined,
         ticketId: typeof data.ticketId === 'string' ? data.ticketId : undefined,
         citation: isCitation(data.citation) ? data.citation : undefined,
+        queue: isQueue(data.queue) ? data.queue : undefined,
       }]);
     } catch {
       setMsgs((m) => [...m, { role: 'bot', text: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' }]);
@@ -104,8 +113,10 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
         setMsgs((x) => [...x, {
           role: 'bot',
           text: d.created
-            ? `상담원 연결 요청이 접수됐어요. 접수번호 ${d.ticket.id} — 순서대로 도와드릴게요. (데모: 실제 연결은 준비 중)`
+            ? `상담원 연결 요청이 접수됐어요. 접수번호 ${d.ticket.id} — 지금까지 나눈 대화가 상담원에게 함께 전달됩니다. (데모: 실제 연결은 준비 중)`
             : `이미 접수된 요청이 있어요. 접수번호 ${d.ticket.id} (${d.ticket.statusLabel}) — 잠시만 기다려 주세요.`,
+          ticketId: typeof d.ticket?.id === 'string' ? d.ticket.id : undefined,
+          queue: isQueue(d.queue) ? d.queue : undefined,
         }]);
       } else {
         setMsgs((x) => [...x, { role: 'bot', text: `상담원 연결 접수에 실패했어요. ${errorText(d, r)}` }]);
@@ -130,6 +141,12 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
             {msgs.map((m, i) => (
               <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
                 <div style={{ background: m.role === 'user' ? 'var(--brand)' : '#fff', color: m.role === 'user' ? '#fff' : 'var(--ink)', border: m.role === 'user' ? 'none' : '1px solid var(--line)', borderRadius: 13, padding: '9px 12px', fontSize: 13.3, lineHeight: 1.5 }}>{m.text}</div>
+                {m.queue && (
+                  <div style={{ marginTop: 5, fontSize: 11.5, fontWeight: 600, color: 'var(--brand-600)', background: 'var(--brand-50)', borderRadius: 8, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span aria-hidden="true">⏳</span>
+                    <span>상담 접수 대기 중 · 접수 순번 {m.queue.position}번 (대기 {m.queue.waiting}건)</span>
+                  </div>
+                )}
                 {m.citation && (
                   <div style={{ marginTop: 5, fontSize: 11, lineHeight: 1.45, color: 'var(--mut, #8a7f75)', background: '#fff', border: '1px dashed var(--line)', borderRadius: 10, padding: '6px 9px' }}>
                     <span style={{ fontWeight: 700 }}>근거</span> · {m.citation.source}

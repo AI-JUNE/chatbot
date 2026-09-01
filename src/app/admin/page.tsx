@@ -57,10 +57,20 @@ interface CustomRuleForm {
 
 const EMPTY_CR_FORM: CustomRuleForm = { label: '', keywords: '', reply: '', escalate: false };
 
+const HANDOFF_REASON_LABELS: Record<string, string> = {
+  low_confidence: '인식 신뢰도 부족',
+  customer_request: '고객 요청',
+  policy: '정책상 상담원 처리',
+  error: '시스템 오류',
+  max_retry: '재시도 한도 초과',
+};
+
 interface TicketView {
   id: string;
   sessionId: string;
   reason: string;
+  reasonCode?: string;
+  summary?: string;
   message: string;
   contact?: string;
   status: 'open' | 'in_progress' | 'resolved' | 'canceled';
@@ -70,7 +80,14 @@ interface TicketView {
 }
 
 interface OpsStats {
-  escalation: { total: number; open: number; inProgress: number; resolved: number; canceled: number };
+  escalation: {
+    total: number;
+    open: number;
+    inProgress: number;
+    resolved: number;
+    canceled: number;
+    byReason?: Record<string, number>;
+  };
   conversation: {
     totalTurns: number;
     sessions: number;
@@ -874,6 +891,15 @@ export default function AdminPage() {
                 <span>대화 <strong>{stats.conversation.totalTurns}</strong>턴 · 세션 <strong>{stats.conversation.sessions}</strong></span>
                 <span>자동처리율 <strong>{Math.round(stats.conversation.autoRate * 100)}%</strong> (룰/KB {stats.conversation.autoHandled}턴)</span>
                 <span>상담원 요청 <strong>{stats.escalation.total}</strong>건 (대기 {stats.escalation.open} · 상담 중 {stats.escalation.inProgress} · 완료 {stats.escalation.resolved})</span>
+                {stats.escalation.byReason && (
+                  <span style={S.tag}>
+                    이관 사유:{' '}
+                    {Object.entries(stats.escalation.byReason)
+                      .filter(([, n]) => n > 0)
+                      .map(([code, n]) => `${HANDOFF_REASON_LABELS[code] ?? code} ${n}`)
+                      .join(' · ') || '없음'}
+                  </span>
+                )}
               </div>
             )}
             <p style={{ ...S.tag, marginTop: 8 }}>로그·티켓은 서버 메모리에만 저장됩니다(재시작 시 초기화 · 영구 저장은 준비 중).</p>
@@ -889,9 +915,30 @@ export default function AdminPage() {
                 <div>
                   <strong>{t.id}</strong>{' '}
                   <span style={S.tag}>
-                    {TICKET_STATUS_LABELS[t.status]} · 세션 {t.sessionId} · 사유 {t.reason}
+                    {TICKET_STATUS_LABELS[t.status]} · 세션 {t.sessionId} · 사유{' '}
+                    {t.reasonCode ? `${HANDOFF_REASON_LABELS[t.reasonCode] ?? t.reasonCode} (${t.reason})` : t.reason}
                   </span>
                   {t.message && <p style={{ fontSize: 14, color: 'var(--sub)', margin: '6px 0' }}>마지막 메시지: {t.message}</p>}
+                  {t.summary && (
+                    <details style={{ marginTop: 6 }}>
+                      <summary style={{ ...S.tag, cursor: 'pointer', fontWeight: 700 }}>이관 요약 보기(개인정보 마스킹 적용)</summary>
+                      <pre
+                        style={{
+                          whiteSpace: 'pre-wrap',
+                          fontSize: 12.5,
+                          lineHeight: 1.55,
+                          background: '#faf7f3',
+                          border: '1px solid var(--line)',
+                          borderRadius: 'var(--r-sm)',
+                          padding: 10,
+                          marginTop: 6,
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        {t.summary}
+                      </pre>
+                    </details>
+                  )}
                   <div style={S.tag}>접수 {new Date(t.createdAt).toLocaleString()} · 갱신 {new Date(t.updatedAt).toLocaleString()}</div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
