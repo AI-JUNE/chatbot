@@ -510,7 +510,14 @@ export default function AdminPage() {
   // ---- Test ----
   const [testInput, setTestInput] = useState('');
   const [testLog, setTestLog] = useState<
-    { q: string; reply: string; intent: string; source: string; citation?: { source: string; snippet: string } }[]
+    {
+      q: string;
+      reply: string;
+      intent: string;
+      source: string;
+      confidence?: number;
+      citation?: { source: string; snippet: string };
+    }[]
   >([]);
 
   const runTest = async () => {
@@ -527,7 +534,17 @@ export default function AdminPage() {
       ? { source: data.citation.source as string, snippet: data.citation.snippet as string }
       : undefined;
     setTestLog((prev) =>
-      [{ q, reply: data.reply ?? '(오류)', intent: data.intent ?? '-', source: data.source ?? '-', citation: cite }, ...prev].slice(0, 20),
+      [
+        {
+          q,
+          reply: data.reply ?? '(오류)',
+          intent: data.intent ?? '-',
+          source: data.source ?? '-',
+          confidence: typeof data.confidence === 'number' ? data.confidence : undefined,
+          citation: cite,
+        },
+        ...prev,
+      ].slice(0, 20),
     );
   };
 
@@ -1031,6 +1048,7 @@ export default function AdminPage() {
               )}
               <div style={S.tag}>
                 intent: {t.intent} · source: {t.source}
+                {t.confidence !== undefined && ` · 신뢰도(엔진 내부 판정값) ${t.confidence}`}
               </div>
             </div>
           ))}

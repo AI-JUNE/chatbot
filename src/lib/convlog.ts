@@ -11,6 +11,8 @@ export interface ChatTurnLog {
   intent: string;
   source: ReplySource;
   escalate: boolean;
+  /** 엔진 내부 신뢰도(0~1). 자동 전환 판정 근거이며 측정된 정확도 지표가 아니다. */
+  confidence?: number;
   at: string; // ISO
 }
 

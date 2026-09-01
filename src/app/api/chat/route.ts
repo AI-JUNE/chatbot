@@ -51,6 +51,7 @@ export async function POST(req: NextRequest) {
       intent: result.intent,
       source: result.source,
       escalate: result.escalate,
+      confidence: result.confidence,
     });
   }
   return ok({ sessionId, ...result });

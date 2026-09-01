@@ -213,3 +213,62 @@ test('헬스체크가 모니터링 상태와 빌드 정보를 노출한다', () 
   // DSN 값 자체는 절대 노출하지 않는다
   assert.equal(/SENTRY_DSN\s*[,}]/.test(s.replace(/process\.env\.SENTRY_DSN/g, '')), false);
 });
+
+/* ── 신뢰도 임계 기반 상담원 자동 전환 ── */
+test('신뢰도 임계·연속 한도가 정책 상수로 노출된다', () => {
+  const s = read('src/lib/chat.ts');
+  assert.match(s, /export const CONFIDENCE_THRESHOLD/);
+  assert.match(s, /export const LOW_CONFIDENCE_STREAK_LIMIT/);
+  assert.match(s, /CHAT_CONFIDENCE_THRESHOLD/, '환경변수로 조정 가능해야 한다');
+});
+
+test('신뢰도는 성능 지표가 아님을 코드가 명시한다', () => {
+  const s = read('src/lib/chat.ts');
+  assert.match(s, /측정된 정확도·성능 지표가 아니다|측정된 품질 지표가 아니다/);
+});
+
+test('대기 순번은 접수순 표시일 뿐 예상 대기시간을 만들지 않는다', () => {
+  const s = read('src/lib/escalation.ts');
+  assert.match(s, /export function queuePosition/);
+  assert.match(s, /예상 대기시간을 계산하지 않는다/);
+  assert.equal(/예상 대기\s*(시간)?\s*[:=]\s*\d/.test(s), false, '임의 대기시간 수치를 넣으면 안 된다');
+});
+
+/* ── 이관 요약·마스킹 ── */
+test('이관 요약은 규칙 기반이며 LLM을 부르지 않는다', () => {
+  const s = read('src/lib/handoff.ts');
+  assert.match(s, /export function buildHandoffSummary/);
+  assert.match(s, /generator: 'rule'/);
+  assert.equal(/fetch\(|CHAT_LLM_LIVE/.test(s), false, '요약 경로에 외부 호출이 있으면 안 된다');
+});
+
+test('요약 본문이 개인정보 마스킹을 통과한다', () => {
+  const s = read('src/lib/handoff.ts');
+  assert.match(s, /export function maskPii/);
+  for (const kind of ['rrn', 'card', 'phone', 'email', 'account']) {
+    assert.match(s, new RegExp(`name: '${kind}'`), `${kind} 마스킹 규칙이 있어야 한다`);
+  }
+  assert.match(read('src/lib/escalation.ts'), /summary\?: string/, '티켓이 요약을 보관해야 한다');
+});
+
+/* ── AICC-Core 정합 (§5.3 Flow · 채널 계약) ── */
+test('Core Flow 노드 6종을 그대로 미러링한다', () => {
+  const s = read('src/lib/sharedSchema.ts');
+  assert.match(s, /CORE_FLOW_NODE_KINDS = \['Say', 'Collect', 'Choice', 'Confirm', 'Transfer', 'Api'\]/);
+  assert.match(s, /export function renderSharedNode/, '채널 렌더러가 있어야 한다');
+  assert.match(s, /export function validateFlow/);
+});
+
+test('이관 사유 어휘가 Core Handoff와 같다', () => {
+  const s = read('src/lib/handoff.ts');
+  assert.match(s, /'low_confidence' \| 'customer_request' \| 'policy' \| 'error' \| 'max_retry'/);
+  assert.match(read('src/lib/escalation.ts'), /reasonCode: HandoffReason/);
+});
+
+test('공용 번들이 Core 계약 메타를 실어 드리프트를 감지한다', () => {
+  const s = read('src/lib/sharedSchema.ts');
+  assert.match(s, /coreContract\?: SharedCoreContract/);
+  assert.match(s, /채널 계약 버전 불일치/, '버전 불일치를 검증해야 한다');
+  assert.match(s, /flows\?: SharedFlow\[\]/, 'v1 소비자 호환을 위해 옵셔널이어야 한다');
+  assert.match(s, /SHARED_SCHEMA_VERSION = 1/, '기존 소비자를 깨지 않도록 버전은 유지한다');
+});

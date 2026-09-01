@@ -307,8 +307,10 @@ export function replyTo(message: string, sessionId = 'anon'): ChatReply {
 
 /** 신뢰도가 임계 미만인 응답이 연속되면 상담원 접수로 전환한다. 이미 접수 흐름이면 건드리지 않는다. */
 function maybeAutoEscalate(text: string, sessionId: string, result: ChatReply): ChatReply {
-  if (result.source === 'empty' || result.escalate || result.ticketId) {
-    if (result.source !== 'empty' && !result.escalate) updateSession(sessionId, { lowConfidenceStreak: 0 });
+  // escalate=true 는 "상담원 연결을 제안했다"는 뜻이지 접수가 끝났다는 뜻이 아니다.
+  // 실제 접수(ticketId)가 생긴 턴만 판정에서 제외한다.
+  if (result.source === 'empty' || result.ticketId) {
+    if (result.source !== 'empty') updateSession(sessionId, { lowConfidenceStreak: 0 });
     return result;
   }
 
