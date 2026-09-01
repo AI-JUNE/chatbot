@@ -205,3 +205,11 @@ test('대화 API가 엔진 오류를 모니터링에 보고한다', () => {
   const s = read('src/app/api/chat/route.ts');
   assert.match(s, /captureError/);
 });
+
+test('헬스체크가 모니터링 상태와 빌드 정보를 노출한다', () => {
+  const s = read('src/app/api/health/route.ts');
+  assert.match(s, /MONITORING_ENABLED/);
+  assert.match(s, /commit:/);
+  // DSN 값 자체는 절대 노출하지 않는다
+  assert.equal(/SENTRY_DSN\s*[,}]/.test(s.replace(/process\.env\.SENTRY_DSN/g, '')), false);
+});
