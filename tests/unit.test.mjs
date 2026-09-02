@@ -10,6 +10,23 @@ import { readFileSync, existsSync } from 'node:fs';
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const has = (p) => existsSync(new URL(`../${p}`, import.meta.url));
 
+/** 전체 API 라우트 목록(라우트 규칙 검사용). */
+const ROUTES = [
+  'src/app/api/chat/route.ts',
+  'src/app/api/health/route.ts',
+  'src/app/api/escalation/route.ts',
+  'src/app/api/kakao/webhook/route.ts',
+  'src/app/api/shared/scenario/route.ts',
+  'src/app/api/admin/auth/route.ts',
+  'src/app/api/admin/audit/route.ts',
+  'src/app/api/admin/backup/route.ts',
+  'src/app/api/admin/escalations/route.ts',
+  'src/app/api/admin/kb/route.ts',
+  'src/app/api/admin/kb/import/route.ts',
+  'src/app/api/admin/logs/export/route.ts',
+  'src/app/api/admin/rules/route.ts',
+].filter(has);
+
 /* ── 안전 플래그: build now, activate on approval ── */
 test('LLM 실연동은 플래그로 차단되어 있다', () => {
   const s = read('src/lib/chat.ts');
@@ -271,4 +288,47 @@ test('공용 번들이 Core 계약 메타를 실어 드리프트를 감지한다
   assert.match(s, /채널 계약 버전 불일치/, '버전 불일치를 검증해야 한다');
   assert.match(s, /flows\?: SharedFlow\[\]/, 'v1 소비자 호환을 위해 옵셔널이어야 한다');
   assert.match(s, /SHARED_SCHEMA_VERSION = 1/, '기존 소비자를 깨지 않도록 버전은 유지한다');
+});
+
+/* ── 구조화 로깅 (상용 필수) ── */
+test('로그 화이트리스트에 대화 본문·연락처·세션ID 원문이 없다', () => {
+  const s = read('src/lib/logger.ts');
+  assert.match(s, /export const ALLOWED_FIELDS/);
+  const list = (s.split('ALLOWED_FIELDS = [')[1] ?? '').split(']')[0];
+  assert.notEqual(list, '', 'ALLOWED_FIELDS 정의를 찾지 못했다');
+  for (const banned of ['message', 'reply', 'contact', 'sessionId', 'summary']) {
+    assert.equal(new RegExp(`'${banned}'`).test(list), false, `${banned}는 로그에 허용하면 안 된다`);
+  }
+  assert.match(list, /'requestId'|'route'/, '요청 추적 필드는 허용되어야 한다');
+  assert.match(s, /scrub/, '허용 필드도 마스킹을 거쳐야 한다');
+});
+
+test('공개 API가 요청 로그와 x-request-id 응답 헤더를 남긴다', () => {
+  for (const f of ['src/app/api/chat/route.ts', 'src/app/api/escalation/route.ts']) {
+    const s = read(f);
+    assert.match(s, /startRequest\(/, `${f}에 요청 로거가 없다`);
+    assert.match(s, /withRequestId\(/, `${f}가 요청 ID를 응답에 싣지 않는다`);
+    // rl.end({...}) 인자에 본문·연락처 필드를 그대로 넘기지 않는지(속성 접근 e.message 는 제외)
+    for (const call of s.match(/rl\.end\(\{[\s\S]*?\}\)/g) ?? []) {
+      for (const banned of ['message', 'contact', 'reply', 'summary', 'sessionId']) {
+        assert.equal(
+          new RegExp(`(?<![.\\w])${banned}\\s*[,:}]`).test(call),
+          false,
+          `${f}가 ${banned}를 로그에 넘긴다`,
+        );
+      }
+    }
+  }
+  assert.match(read('src/app/api/chat/route.ts'), /sessionHash/, '세션은 해시로만 남겨야 한다');
+});
+
+test('요청 로그는 라우트 파일 export 규칙을 깨지 않는다', () => {
+  // route.ts에 HTTP 메서드·설정 외 export가 있으면 Next 빌드가 실패한다.
+  const allowed = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'dynamic', 'revalidate', 'runtime', 'maxDuration']);
+  for (const f of ROUTES) {
+    const s = read(f);
+    for (const m of s.matchAll(/^export (?:const|function|async function) ([A-Za-z_]+)/gm)) {
+      assert.ok(allowed.has(m[1]), `${f}에 허용되지 않은 export가 있다: ${m[1]}`);
+    }
+  }
 });

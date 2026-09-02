@@ -1,0 +1,57 @@
+# CI — push·PR마다 타입 검증 → 테스트 → 빌드. 하나라도 실패하면 머지·배포하지 않는다.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: 의존성 설치
+        run: npm ci
+
+      - name: 타입 검증
+        run: npm run typecheck
+
+      - name: 테스트 (정적 계약 + 런타임 동작)
+        run: npm test
+        env:
+          ADMIN_PERSIST: 'false'
+
+      - name: 빌드
+        run: npm run build
+        env:
+          # 실키·실연동은 CI에서 활성화하지 않는다(build now, activate on approval).
+          CHAT_LLM_LIVE: 'false'
+          ADMIN_AUTH_REQUIRED: 'false'
+
+      - name: 라우트 export 규칙 검사
+        # route.ts에 HTTP 메서드·설정 외 export가 있으면 Next 빌드가 깨진다. 빌드가 통과해도 재확인한다.
+        run: |
+          set -e
+          fail=0
+          for f in $(find src/app -name route.ts); do
+            for name in $(grep -oE "^export (const|function|async function) [A-Za-z_]+" "$f" | awk '{print $NF}'); do
+              case "$name" in
+                GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|dynamic|revalidate|runtime|maxDuration) ;;
+                *) echo "::error file=$f::허용되지 않은 export: $name"; fail=1 ;;
+              esac
+            done
+          done
+          exit $fail

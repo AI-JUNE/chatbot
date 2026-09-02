@@ -72,6 +72,19 @@ export function ok<T extends Record<string, unknown>>(data: T, status = 200): Ne
   return NextResponse.json({ ok: true, ...data }, { status });
 }
 
+/**
+ * 응답에 요청 ID를 붙인다(구조화 로그와 고객 문의를 대조하기 위한 상관관계 키).
+ * 값은 서버가 만든 무작위 ID이며 개인정보를 담지 않는다.
+ */
+export function withRequestId(res: NextResponse, requestId: string): NextResponse {
+  try {
+    res.headers.set('x-request-id', requestId);
+  } catch {
+    // 헤더가 불변인 응답이라도 본문 전달을 막지 않는다
+  }
+  return res;
+}
+
 // ---- 본문 파싱 ----
 
 export const MAX_BODY_BYTES = 32 * 1024; // 일반 API 기본 상한(32KB)
