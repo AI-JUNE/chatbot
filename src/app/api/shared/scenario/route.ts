@@ -4,10 +4,15 @@
 import { NextRequest } from 'next/server';
 import { exportScenarioBundle } from '@/lib/sharedSchema';
 import { ok, requireAdmin, optStr } from '@/lib/http';
+import { rateGuard } from '@/lib/ratelimit';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
+  // 번들은 응답이 크다. 토큰 미설정(개발) 상태에서도 남용되지 않도록 유량을 제한한다.
+  const limited = rateGuard('shared-scenario', req.headers, 30);
+  if (limited) return limited;
+
   const denied = requireAdmin(req);
   if (denied) return denied;
   const sid = optStr(req.nextUrl.searchParams.get('scenarioId') ?? undefined, 'scenarioId', 60, 'gowon-cc');

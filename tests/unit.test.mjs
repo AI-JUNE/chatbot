@@ -1,7 +1,7 @@
 /**
  * 챗봇 순수 로직 불변식 테스트 (의존성 0, 빌드 불필요).
  * TypeScript 소스를 텍스트로 읽어 계약·규정 준수를 검증한다.
- * 런타임 동작 테스트는 tsx 도입 시 확장한다.
+ * 실제 실행 동작 검증은 tests/runtime.test.mjs(컴파일 후 import)가 담당한다.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
