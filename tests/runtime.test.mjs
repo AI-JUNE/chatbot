@@ -221,3 +221,165 @@ test('복구 시 무효 항목은 건너뛰고 유효 항목만 반영한다', o
   assert.equal(r.kb, 1, '유효 항목 1건만 반영되어야 한다');
   assert.equal(store.listKB().length, 1);
 });
+
+/* ══════════ 저장소 어댑터 (영속화) ══════════ */
+
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import nodePath from 'node:path';
+
+/** 테스트용 임시 저장 디렉터리로 storage를 초기화한다. */
+async function freshStorage(env = {}) {
+  const st = await importLib('storage', ['logger', 'monitoring']);
+  const dir = mkdtempSync(nodePath.join(tmpdir(), 'cb-st-'));
+  process.env.LOG_SILENT = 'true';
+  delete process.env.ADMIN_PERSIST;
+  delete process.env.ADMIN_PERSIST_FILE;
+  delete process.env.PERSIST_PII;
+  process.env.STORAGE_DIR = dir;
+  for (const [k, v] of Object.entries(env)) process.env[k] = v;
+  st.resetStorageState();
+  st.setDriver('file');
+  return { st, dir };
+}
+
+test('저장소 정상 경로: 파일 드라이버로 저장·복원되고 상태에 남는다', opts, async () => {
+  const { st, dir } = await freshStorage();
+
+  const saved = st.saveJson('admin', { version: 1, kb: [{ id: 'a' }] });
+  assert.equal(saved.ok, true);
+  assert.ok(saved.bytes > 0);
+  assert.ok(existsSync(nodePath.join(dir, 'admin.json')), '파일이 만들어지지 않았다');
+
+  const loaded = st.loadJson('admin');
+  assert.equal(loaded.ok, true);
+  assert.deepEqual(loaded.data.kb, [{ id: 'a' }]);
+
+  const s = st.storageStatus();
+  assert.equal(s.driver, 'file');
+  const ns = s.namespaces.find((n) => n.ns === 'admin');
+  assert.equal(ns.health, 'ok');
+  assert.equal(ns.persisted, true);
+  assert.equal(ns.lastError, null);
+  assert.match(ns.lastSavedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test('저장소 실패 경로: 쓸 수 없는 경로여도 throw하지 않고 오류를 상태에 남긴다', opts, async () => {
+  const { st, dir } = await freshStorage();
+  // 디렉터리가 되어야 할 자리에 파일을 둔다 → mkdir 시 ENOTDIR
+  const blocker = nodePath.join(dir, 'blocked');
+  writeFileSync(blocker, 'not a directory', 'utf8');
+  process.env.STORAGE_DIR = nodePath.join(blocker, 'sub');
+
+  let threw = false;
+  let res;
+  try {
+    res = st.saveJson('admin', { version: 1 });
+  } catch {
+    threw = true;
+  }
+  assert.equal(threw, false, '저장 실패가 애플리케이션으로 새어나가면 안 된다');
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'error');
+
+  const ns = st.storageStatus().namespaces.find((n) => n.ns === 'admin');
+  assert.equal(ns.health, 'error', '실패를 조용히 넘기면 안 된다');
+  assert.equal(ns.persisted, false);
+  assert.ok(ns.lastError && ns.lastError.length > 0, '실패 사유가 기록되어야 한다');
+  assert.match(ns.lastErrorAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test('읽기전용 파일시스템은 오류가 아니라 readonly 상태로 구분한다', opts, async () => {
+  const { st } = await freshStorage();
+  st.setDriver({
+    name: 'file',
+    read: () => null,
+    write: () => {
+      const e = new Error('EROFS: read-only file system, open /var/task/data/admin.json');
+      e.code = 'EROFS';
+      throw e;
+    },
+    remove: () => {},
+  });
+
+  const res = st.saveJson('admin', { version: 1 });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'readonly', 'Vercel 등 읽기전용 환경은 장애 알림 대상이 아니다');
+  const ns = st.storageStatus().namespaces.find((n) => n.ns === 'admin');
+  assert.equal(ns.health, 'readonly');
+  assert.ok(ns.lastError.includes('EROFS'));
+  assert.equal(/\/var\/task/.test(ns.lastError), false, '오류 요약에 전체 경로가 남으면 안 된다');
+});
+
+test('손상된 저장 파일은 기본값으로 넘어가고 사유를 남긴다', opts, async () => {
+  const { st, dir } = await freshStorage();
+  writeFileSync(nodePath.join(dir, 'admin.json'), '{ 깨진 JSON', 'utf8');
+
+  const r = st.loadJson('admin');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'error');
+  const ns = st.storageStatus().namespaces.find((n) => n.ns === 'admin');
+  assert.equal(ns.health, 'error');
+  assert.ok(ns.lastError);
+});
+
+test('개인정보 네임스페이스는 승인 전까지 디스크에 쓰지 않는다', opts, async () => {
+  const { st, dir } = await freshStorage();
+
+  const blocked = st.saveJson('tickets', { version: 1, tickets: [{ contact: '010-1234-5678' }] });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.reason, 'awaiting_approval');
+  assert.equal(existsSync(nodePath.join(dir, 'tickets.json')), false, '승인 전 개인정보가 디스크에 남으면 안 된다');
+  assert.equal(st.isPersistEnabled('tickets'), false);
+  assert.equal(st.isPersistEnabled('audit'), true, '개인정보가 없는 감사 로그는 저장 대상이다');
+
+  const ns = st.storageStatus().namespaces.find((n) => n.ns === 'tickets');
+  assert.equal(ns.health, 'awaiting_approval');
+
+  // 승인 후에는 같은 코드 경로로 저장된다
+  process.env.PERSIST_PII = 'true';
+  const approved = st.saveJson('tickets', { version: 1, tickets: [] });
+  assert.equal(approved.ok, true);
+  assert.ok(existsSync(nodePath.join(dir, 'tickets.json')));
+  delete process.env.PERSIST_PII;
+});
+
+test('ADMIN_PERSIST=false 면 어떤 네임스페이스도 저장하지 않는다', opts, async () => {
+  const { st, dir } = await freshStorage({ ADMIN_PERSIST: 'false' });
+  const r = st.saveJson('admin', { version: 1 });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'disabled');
+  assert.equal(existsSync(nodePath.join(dir, 'admin.json')), false);
+  delete process.env.ADMIN_PERSIST;
+});
+
+test('flushSaves는 대기 중인 저장을 버리지 않고 즉시 기록한다', opts, async () => {
+  const { st, dir } = await freshStorage();
+  st.scheduleSave('admin', () => ({ version: 1, mark: 'flushed' }));
+  assert.equal(existsSync(nodePath.join(dir, 'admin.json')), false, '디바운스 전에는 아직 쓰지 않는다');
+
+  st.flushSaves();
+  const raw = JSON.parse(readFileSync(nodePath.join(dir, 'admin.json'), 'utf8'));
+  assert.equal(raw.mark, 'flushed', '대기 중이던 마지막 변경이 사라지면 안 된다');
+});
+
+test('관리 콘텐츠가 저장소를 거쳐 재기동 후에도 복원된다', opts, async () => {
+  const { st, dir } = await freshStorage();
+  const store = await importLib('adminStore', ['knowledge', 'normalize', 'storage', 'logger', 'monitoring']);
+
+  store.upsertKB({ id: 'persist-1', category: '영속화', question: '저장되나요?', keywords: ['저장'], answer: '네, 저장됩니다.' });
+  store.flushAdminPersist();
+
+  const file = nodePath.join(dir, 'admin.json');
+  assert.ok(existsSync(file), '관리 콘텐츠가 저장되지 않았다');
+  const snap = JSON.parse(readFileSync(file, 'utf8'));
+  assert.ok(snap.kb.some((e) => e.id === 'persist-1'));
+
+  // 재기동을 흉내낸다 — 메모리를 비우고 저장분으로 복원
+  store.importSnapshot({ version: 1, savedAt: new Date().toISOString(), kb: [], ruleOverrides: {}, customRules: [] }, { persist: false });
+  assert.equal(store.listKB().length, 0);
+  const loaded = st.loadJson('admin');
+  assert.equal(loaded.ok, true);
+  store.importSnapshot(loaded.data, { persist: false });
+  assert.ok(store.listKB().some((e) => e.id === 'persist-1'), '재기동 복원이 되지 않았다');
+});

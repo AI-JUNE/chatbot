@@ -1,9 +1,9 @@
-// 관리 콘솔 런타임 스토어(인메모리 스텁).
-// [승인 필요] DB/파일 영구 저장 — 전까지 서버 재시작 시 기본값으로 복귀.
-import fs from 'fs';
-import path from 'path';
+// 관리 콘솔 런타임 스토어.
+// 영속화는 `@/lib/storage` 어댑터(memory|file)에 위임한다 — 여기서는 도메인 로직만 다룬다.
+// KB·룰 오버라이드·커스텀 룰은 개인정보가 아니므로 승인 없이 저장한다(파일 드라이버 기본).
 import { KB, KBEntry } from '@/lib/knowledge';
 import { keywordHit, prepare } from '@/lib/normalize';
+import { flushSaves, loadJson, saveJson, scheduleSave } from '@/lib/storage';
 
 function cloneEntry(e: KBEntry): KBEntry {
   return { ...e, keywords: [...e.keywords] };
@@ -210,11 +210,9 @@ export function matchCustomRule(text: string): CustomRule | null {
   return null;
 }
 
-// ---- 파일 영속화·백업(관리 콘텐츠 한정: KB·룰 오버라이드·커스텀 룰) ----
-// 대화 로그·티켓 등 개인정보성 데이터는 포함하지 않는다(그쪽 영구 저장은 [승인 필요]).
-// 로컬/단일 서버: data/admin-store.json 에 자동 저장·기동 시 복원.
-// Vercel 등 읽기전용·휘발성 FS: 쓰기 실패를 조용히 무시 — /api/admin/backup 으로 수동 백업·복원.
-// ADMIN_PERSIST=false 로 비활성화, ADMIN_PERSIST_FILE 로 경로 변경.
+// ---- 영속화·백업(관리 콘텐츠 한정: KB·룰 오버라이드·커스텀 룰) ----
+// 대화 로그·티켓 등 개인정보성 데이터는 이 스냅샷에 포함하지 않는다(각자 네임스페이스에서 관리).
+// 저장 위치·드라이버·실패 사유는 `@/lib/storage`가 관리하고 /api/health·관리 콘솔에 노출된다.
 
 export interface AdminSnapshot {
   version: 1;
@@ -224,10 +222,7 @@ export interface AdminSnapshot {
   customRules: CustomRule[];
 }
 
-const PERSIST_ENABLED = process.env.ADMIN_PERSIST !== 'false';
-const PERSIST_FILE = process.env.ADMIN_PERSIST_FILE || path.join(process.cwd(), 'data', 'admin-store.json');
-
-let persistTimer: ReturnType<typeof setTimeout> | null = null;
+export const ADMIN_NS = 'admin';
 
 export function exportSnapshot(): AdminSnapshot {
   return {
@@ -239,20 +234,13 @@ export function exportSnapshot(): AdminSnapshot {
   };
 }
 
-function persistNow(): void {
-  if (!PERSIST_ENABLED) return;
-  try {
-    fs.mkdirSync(path.dirname(PERSIST_FILE), { recursive: true });
-    fs.writeFileSync(PERSIST_FILE, JSON.stringify(exportSnapshot(), null, 2), 'utf8');
-  } catch {
-    // 읽기전용 FS(Vercel 런타임 등) — 저장 생략, 백업 API로 대체
-  }
+function schedulePersist(): void {
+  scheduleSave(ADMIN_NS, exportSnapshot);
 }
 
-function schedulePersist(): void {
-  if (!PERSIST_ENABLED) return;
-  if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(persistNow, 300);
+/** 대기 중인 저장을 즉시 반영(백업 내려받기·종료 직전). */
+export function flushAdminPersist(): void {
+  flushSaves();
 }
 
 function isStrArray(v: unknown): v is string[] {
@@ -322,17 +310,13 @@ export function importSnapshot(input: unknown, opts: { persist?: boolean } = {})
   ruleOverrides.clear();
   for (const [k, v] of overrides) ruleOverrides.set(k, v);
 
-  if (opts.persist !== false) persistNow();
+  if (opts.persist !== false) saveJson(ADMIN_NS, exportSnapshot());
   return { ok: true, kb: kb.length, overrides: overrides.size, customRules: rules.length };
 }
 
-// 모듈 초기화 시 저장된 스냅샷 복원(없거나 실패하면 코드 기본값 유지).
+// 모듈 초기화 시 저장된 스냅샷 복원(없거나 손상되면 코드 기본값 유지 — 실패 사유는 storage 상태에 남는다).
 (function loadPersisted() {
-  if (!PERSIST_ENABLED) return;
-  try {
-    const raw = fs.readFileSync(PERSIST_FILE, 'utf8');
-    importSnapshot(JSON.parse(raw), { persist: false });
-  } catch {
-    // 파일 없음·파싱 실패 — 기본값 유지
-  }
+  const r = loadJson(ADMIN_NS);
+  if (!r.ok) return; // empty/disabled/error — storageStatus()에서 확인 가능
+  importSnapshot(r.data, { persist: false });
 })();

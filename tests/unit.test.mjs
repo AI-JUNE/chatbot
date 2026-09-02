@@ -332,3 +332,55 @@ test('요청 로그는 라우트 파일 export 규칙을 깨지 않는다', () =
     }
   }
 });
+
+/* ── 저장소 어댑터 (영속화) ── */
+test('개인정보 포함 네임스페이스는 승인 플래그 없이 저장되지 않는다', () => {
+  const s = read('src/lib/storage.ts');
+  assert.match(s, /process\.env\.PERSIST_PII === 'true'/, '기본값은 비활성이어야 한다');
+  // 티켓·대화로그는 pii:true 로 등록되어야 한다
+  const nsBlock = (s.split('export const NAMESPACES')[1] ?? '').split('};')[0];
+  for (const ns of ['tickets', 'convlog']) {
+    assert.ok(new RegExp(`${ns}:[^\\n]*pii: true`).test(nsBlock), `${ns}는 pii:true 로 등록되어야 한다`);
+  }
+  for (const ns of ['admin', 'audit']) {
+    assert.ok(new RegExp(`${ns}:[^\\n]*pii: false`).test(nsBlock), `${ns}는 개인정보 없음(pii:false)으로 등록되어야 한다`);
+  }
+});
+
+test('저장 실패를 조용히 삼키지 않는다(상태·로그에 남긴다)', () => {
+  const s = read('src/lib/storage.ts');
+  assert.match(s, /function recordFailure/, '실패 기록 경로가 있어야 한다');
+  assert.match(s, /log\(/, '실패는 로그로 나가야 한다');
+  assert.match(s, /captureError/, '예기치 못한 실패는 모니터링으로 보고해야 한다');
+  assert.match(s, /export function storageStatus/, '운영자가 상태를 볼 수 있어야 한다');
+  // 원자적 쓰기(tmp → rename)로 반쪽 파일을 남기지 않는다
+  assert.match(s, /renameSync/, '원자적 쓰기여야 한다');
+});
+
+test('영속화가 필요한 스토어가 저장소 어댑터에 연결되어 있다', () => {
+  for (const f of ['src/lib/adminStore.ts', 'src/lib/audit.ts', 'src/lib/escalation.ts', 'src/lib/convlog.ts']) {
+    const s = read(f);
+    assert.match(s, /from '@\/lib\/storage'/, `${f}가 저장소 어댑터를 쓰지 않는다`);
+    assert.match(s, /loadJson\(/, `${f}에 복원 경로가 없다`);
+  }
+  // 직접 fs 접근은 저장소 어댑터에만 있어야 한다(드라이버 교체 가능성 유지)
+  for (const f of ['src/lib/adminStore.ts', 'src/lib/audit.ts', 'src/lib/escalation.ts', 'src/lib/convlog.ts']) {
+    assert.equal(/from 'fs'/.test(read(f)), false, `${f}가 파일시스템을 직접 다룬다`);
+  }
+});
+
+test('/health가 저장소 의존성 상태를 노출한다(민감정보 제외)', () => {
+  const s = read('src/app/api/health/route.ts');
+  assert.match(s, /storageStatus\(\)/);
+  assert.match(s, /dependencies/);
+  assert.match(s, /driver/);
+  assert.equal(/STORAGE_DIR|ADMIN_PERSIST_FILE|filePathFor/.test(s), false, '저장 경로는 노출하지 않는다');
+});
+
+test('관리 콘솔에 저장소 상태(빈 상태·오류 상태 포함) 화면이 있다', () => {
+  const s = read('src/app/admin/page.tsx');
+  assert.match(s, /저장소 상태/);
+  assert.match(s, /awaiting_approval/, '승인 대기 상태를 설명해야 한다');
+  assert.match(s, /다시 시도/, '오류 상태에 복구 행동이 있어야 한다');
+  assert.match(s, /aria-labelledby="storage-h"|aria-live/, '스크린리더 안내가 있어야 한다');
+});

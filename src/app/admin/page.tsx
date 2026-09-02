@@ -140,6 +140,36 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   'backup.restore': '백업 복원',
 };
 
+interface StorageNsView {
+  ns: string;
+  persisted: boolean;
+  health: 'ok' | 'empty' | 'disabled' | 'awaiting_approval' | 'readonly' | 'error';
+  lastSavedAt: string | null;
+  lastError: string | null;
+}
+
+interface StorageView {
+  driver: 'memory' | 'file';
+  piiApproved: boolean;
+  namespaces: StorageNsView[];
+}
+
+const STORAGE_NS_LABELS: Record<string, string> = {
+  admin: '관리 콘텐츠(KB·룰)',
+  audit: '감사 로그',
+  tickets: '상담 티켓(개인정보)',
+  convlog: '대화 로그(개인정보)',
+};
+
+const STORAGE_HEALTH: Record<StorageNsView['health'], { label: string; hint: string }> = {
+  ok: { label: '저장됨', hint: '디스크에 반영되었습니다.' },
+  empty: { label: '저장분 없음', hint: '아직 저장된 내용이 없습니다. 편집하면 자동 저장됩니다.' },
+  disabled: { label: '영속화 꺼짐', hint: 'ADMIN_PERSIST=false 로 저장이 꺼져 있습니다(메모리만 사용).' },
+  awaiting_approval: { label: '승인 대기', hint: '개인정보 포함 데이터입니다. PERSIST_PII 승인 전까지 저장하지 않습니다.' },
+  readonly: { label: '읽기전용 환경', hint: '배포 환경의 파일시스템이 읽기전용입니다. 백업 API로 내보내 주세요.' },
+  error: { label: '저장 실패', hint: '아래 오류를 확인해 주세요. 데이터는 메모리에 남아 있습니다.' },
+};
+
 interface KBForm {
   id: string;
   category: string;
@@ -304,6 +334,31 @@ export default function AdminPage() {
     if (data.ok) setAuditEvents(data.events || []);
   }, []);
 
+  // ---- 저장소 상태(/api/health) ----
+  const [storage, setStorage] = useState<StorageView | null>(null);
+  const [storageErr, setStorageErr] = useState('');
+  const [storageBusy, setStorageBusy] = useState(false);
+  const loadStorage = useCallback(async () => {
+    setStorageBusy(true);
+    setStorageErr('');
+    try {
+      const res = await fetch('/api/health', { cache: 'no-store' });
+      const data = await res.json();
+      const st = data?.dependencies?.storage;
+      if (!res.ok || !st) {
+        setStorage(null);
+        setStorageErr('저장소 상태를 확인하지 못했습니다. 잠시 후 새로고침해 주세요.');
+        return;
+      }
+      setStorage(st as StorageView);
+    } catch {
+      setStorage(null);
+      setStorageErr('네트워크 오류로 저장소 상태를 확인하지 못했습니다.');
+    } finally {
+      setStorageBusy(false);
+    }
+  }, []);
+
   /** 토큰 검증(/api/admin/auth) 후 통과 시 데이터 로드. 실패 시 잠금 화면 + 사유 표시. */
   const verifyAuth = useCallback(async () => {
     setAuthBusy(true);
@@ -318,6 +373,7 @@ export default function AdminPage() {
           loadRules();
           loadEsc();
           loadAudit();
+          loadStorage();
         } else {
           setAuthMsg(data.reason || '관리 토큰을 확인해 주세요.');
         }
@@ -331,7 +387,7 @@ export default function AdminPage() {
     } finally {
       setAuthBusy(false);
     }
-  }, [loadKB, loadRules, loadEsc, loadAudit]);
+  }, [loadKB, loadRules, loadEsc, loadAudit, loadStorage]);
 
   useEffect(() => {
     verifyAuth();
@@ -994,8 +1050,63 @@ export default function AdminPage() {
               </div>
             </div>
             <p style={{ ...S.tag, marginTop: 8 }}>
-              KB·룰 편집, 티켓 상태 변경, 백업 복원 이력(최근 500건)입니다. 서버 메모리에만 저장되며(재시작 시 초기화) 토큰 값은 기록하지 않습니다.
+              KB·룰 편집, 티켓 상태 변경, 백업 복원 이력(최근 500건)입니다. 토큰 값은 기록하지 않습니다.
             </p>
+          </section>
+
+          <section style={S.card} aria-labelledby="storage-h">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <h2 id="storage-h" style={{ fontSize: 16 }}>저장소 상태</h2>
+              <button style={S.btnGhost} onClick={loadStorage} disabled={storageBusy} aria-busy={storageBusy}>
+                {storageBusy ? '확인 중…' : '새로고침'}
+              </button>
+            </div>
+            <p style={{ ...S.tag, marginTop: 8 }}>
+              데이터가 어디에 저장되는지와 최근 저장 결과입니다. 저장이 막히면 서비스는 메모리로 계속 동작하며, 그 사유가 여기에 표시됩니다.
+            </p>
+
+            <div role="status" aria-live="polite">
+              {storageErr && (
+                <p style={{ fontSize: 14, color: 'var(--danger, #c0392b)', marginTop: 10 }}>
+                  {storageErr} <button style={{ ...S.btnGhost, marginLeft: 6 }} onClick={loadStorage}>다시 시도</button>
+                </p>
+              )}
+              {!storageErr && storageBusy && !storage && (
+                <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10 }}>저장소 상태를 확인하는 중입니다…</p>
+              )}
+              {!storageErr && !storageBusy && !storage && (
+                <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10 }}>표시할 저장소 정보가 없습니다.</p>
+              )}
+            </div>
+
+            {storage && (
+              <>
+                <p style={{ ...S.tag, marginTop: 10 }}>
+                  드라이버: <strong>{storage.driver === 'file' ? '파일(file)' : '메모리(memory)'}</strong>
+                  {' · '}개인정보 저장 승인: <strong>{storage.piiApproved ? '승인됨' : '미승인 [승인 필요]'}</strong>
+                </p>
+                <ul style={{ listStyle: 'none', marginTop: 10, display: 'grid', gap: 8 }}>
+                  {storage.namespaces.map((n) => {
+                    const meta = STORAGE_HEALTH[n.health] ?? STORAGE_HEALTH.empty;
+                    return (
+                      <li key={n.ns} style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-sm)', padding: '10px 12px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                          <strong style={{ fontSize: 14 }}>{STORAGE_NS_LABELS[n.ns] || n.ns}</strong>
+                          <span style={S.tag}>
+                            {meta.label}
+                            {n.lastSavedAt ? ` · 최근 저장 ${new Date(n.lastSavedAt).toLocaleString()}` : ''}
+                          </span>
+                        </div>
+                        <p style={{ ...S.tag, marginTop: 4 }}>{meta.hint}</p>
+                        {n.lastError && (
+                          <p style={{ fontSize: 12, color: 'var(--danger, #c0392b)', marginTop: 4 }}>오류: {n.lastError}</p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
           </section>
           {auditEvents.length === 0 && (
             <section style={S.card}>

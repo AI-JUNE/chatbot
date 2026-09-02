@@ -49,6 +49,10 @@ export const ALLOWED_FIELDS = [
   'retryAfterSec',
   'env',
   'commit',
+  // 저장소(storage) — 모두 코드가 정한 상수·요약 문자열이며 사용자 데이터가 아니다
+  'ns',
+  'op',
+  'driver',
 ] as const;
 
 const ALLOWED = new Set<string>(ALLOWED_FIELDS as readonly string[]);
