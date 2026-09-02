@@ -14,7 +14,7 @@
 - [x] **구조화 로깅** — 요청 ID·소요시간·에러코드. PII 미기록
   - 근거: `src/lib/logger.ts`(한 줄 JSON, 필드 화이트리스트 — 대화 본문·연락처·세션ID 원문 기록 불가, 세션은 해시), `/api/chat`·`/api/escalation` 연동 + 응답 `x-request-id`, 런타임 테스트 10건(허용 목록 밖 필드 차단·마스킹·5xx 레벨·중복 기록 방지 포함)
 - [x] **/health 확장** — 의존성(DB·외부API) 상태와 버전·커밋 해시 노출(민감정보 제외)
-  - 근거: `/api/health`가 flags(kakaoLive·llm·adminAuthRequired·adminTokenConfigured·monitoring)·env·commit 7자리 노출. **현재 외부 DB·외부 API 의존성이 없음**(인메모리 스텁) — 영속화 도입 시 의존성 항목을 추가한다
+  - 근거: `/api/health`가 flags(kakaoLive·llm·adminAuthRequired·adminTokenConfigured·monitoring)·env·commit 7자리·`dependencies.storage`(드라이버·네임스페이스별 저장 상태·마지막 오류 요약) 노출. 저장 실패 시 `status: 'degraded'`. 외부 DB·외부 API 의존성은 아직 없다 — 도입 시 dependencies에 추가한다
 - [x] **표준 에러 응답** 전 API 통일 + 입력검증
   - 근거: `src/lib/http.ts`(code/error/message 3필드·본문 크기 상한·optStr/reqStr 검증). 전 13개 라우트가 `@/lib/http` 사용(카카오 웹훅만 채널 규격상 별도 응답 포맷 유지)
 - [x] **rate limit** 공개 API 적용
@@ -28,7 +28,9 @@
   - 근거: `.github/workflows/ci.yml`(npm ci → typecheck → test → build → route export 규칙 검사), 테스트 53건(정적 계약 40 + 런타임 동작 13). 런타임 테스트는 `tests/_compile.mjs`가 TS를 실제 컴파일해 실행
 
 ## 챗봇 전용 (준비도 ~45%)
-- [ ] 데이터 영속화 — 현재 인메모리. KB·룰·티켓·대화로그 저장소 연결 (파일/DB 어댑터)
+- [x] **데이터 영속화** — 저장소 어댑터로 KB·룰·티켓·대화로그 연결
+  - 근거: `src/lib/storage.ts`(드라이버 memory|file·원자적 쓰기(tmp→rename)·디바운스·flushSaves·실패 시 상태+로그+모니터링 기록, 읽기전용 FS는 오류와 구분), 4개 네임스페이스 연결(`adminStore`·`audit`·`escalation`·`convlog`), `/api/health`의 `dependencies.storage`와 관리 콘솔 "저장소 상태" 패널(빈 상태·승인 대기·읽기전용·오류 화면)에 노출. 테스트 13건(정상 저장·복원, 쓰기 실패, 읽기전용 분류, 손상 파일, PII 게이트, 비활성, flush, 재기동 복원)
+  - 개인정보 포함(`tickets`·`convlog`)은 `PERSIST_PII=true` **[승인 필요]** 전까지 디스크에 쓰지 않는다(코드 완성·스위치 잠금). DB 드라이버는 `StorageDriver` 인터페이스만 준비 — 도입은 인프라 확정 후
 - [ ] LLM 어댑터 완성 — 프로바이더 인터페이스, 실패 폴백, 토큰 상한 **[CHAT_LLM_LIVE는 승인]**
 - [ ] 관리자 인증 실전환 준비 **[ADMIN_AUTH_REQUIRED는 승인]**
 - [ ] 카카오 채널 웹훅 서명 검증·재시도 처리 **[실연동은 승인]**

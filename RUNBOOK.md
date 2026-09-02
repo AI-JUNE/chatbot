@@ -17,6 +17,9 @@ curl -s https://chatbot-gowon.vercel.app/api/health | jq
 | `flags.monitoring` | 운영 `true` | `false`면 `SENTRY_DSN` 미설정 → §3 |
 | `flags.adminAuthRequired` | 현재 `false`(승인 전) | 승인 후 `true` 여야 함 |
 | `build.commit` | 배포하려던 커밋 앞 7자리 | 다르면 배포 미반영 |
+| `status` | `ok` | `degraded`면 저장소 오류 → §1-1 |
+| `dependencies.storage.driver` | `file`(단일서버) / `memory` | 예상과 다르면 `STORAGE_DRIVER` 확인 |
+| `dependencies.storage.namespaces[].health` | `ok` 또는 `empty` | `error`면 `lastError` 확인, `readonly`면 Vercel 정상(백업 API 사용) |
 
 응답 헤더/로그 상관관계 키는 `x-request-id`. 고객 문의 시 이 값을 받아 로그에서 바로 찾는다.
 
@@ -24,13 +27,28 @@ curl -s https://chatbot-gowon.vercel.app/api/health | jq
 
 ## 1. 무엇을 백업하는가
 
-| 데이터 | 저장 위치 | 백업 방법 | 개인정보 |
-|---|---|---|---|
-| KB(지식), 룰 오버라이드, 커스텀 룰 | 인메모리 + `data/admin-store.json`(로컬/단일서버만) | `/api/admin/backup` GET | 없음 |
-| 대화 로그·티켓·감사 로그 | 인메모리(재시작 시 소실) | **현재 백업 대상 아님** | 있음 → 영구 저장은 **[승인 필요]** |
+저장은 `src/lib/storage.ts` 어댑터가 담당한다(드라이버 `memory` | `file`, 네임스페이스별 파일 `<STORAGE_DIR>/<ns>.json`).
 
-> Vercel 런타임은 파일시스템이 읽기전용·휘발성이다. `ADMIN_PERSIST` 파일 저장은 실패해도 조용히 무시되므로,
-> **운영 환경의 유일한 백업 수단은 `/api/admin/backup` 스냅샷이다.**
+| 데이터 | 네임스페이스 | 저장 여부 | 백업 방법 | 개인정보 |
+|---|---|---|---|---|
+| KB(지식), 룰 오버라이드, 커스텀 룰 | `admin` | 저장(파일 드라이버) | `/api/admin/backup` GET | 없음 |
+| 감사 로그 | `audit` | 저장(파일 드라이버) | `/api/admin/audit?format=csv` | 없음 |
+| 상담 티켓 | `tickets` | **미저장 — `PERSIST_PII=true` [승인 필요]** | 승인 전 없음(메모리) | 있음 |
+| 대화 로그 | `convlog` | **미저장 — `PERSIST_PII=true` [승인 필요]** | 승인 전 없음(메모리) | 있음 |
+
+관련 환경변수: `STORAGE_DRIVER`(기본 `file`) · `STORAGE_DIR`(기본 `<cwd>/data`) · `PERSIST_PII`(기본 미설정=차단) ·
+`ADMIN_PERSIST=false`(전체 저장 끄기) · `ADMIN_PERSIST_FILE`(admin 경로 지정, 하위 호환).
+
+> Vercel 런타임은 파일시스템이 읽기전용·휘발성이다. 이 경우 저장은 실패하지만 **조용히 넘어가지 않는다** —
+> 상태가 `readonly`로 표시되고(`/api/health`, `/admin` → 감사 로그 탭 → 저장소 상태) 서비스는 메모리로 계속 동작한다.
+> **Vercel 환경의 유일한 백업 수단은 `/api/admin/backup` 스냅샷이다.**
+
+### 1-1. 저장소가 `error` 상태일 때
+
+1. `/api/health` → `dependencies.storage.namespaces[].lastError` 에서 코드 확인(`ENOTDIR`·`ENOENT` 등).
+2. `EROFS`·`EACCES`는 `readonly`로 분류되며 Vercel에서는 정상이다(조치 불필요, 백업 API 사용).
+3. 그 외 코드면 `STORAGE_DIR` 경로·권한을 확인한다. 데이터는 메모리에 남아 있으므로 **먼저 `/api/admin/backup`으로 내보낸 뒤** 조치한다.
+4. 급하면 `ADMIN_PERSIST=false`로 저장을 끄고(메모리 운영) 백업 API로 콘텐츠를 보존한다.
 
 ---
 
