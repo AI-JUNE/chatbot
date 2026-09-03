@@ -383,3 +383,397 @@ test('관리 콘텐츠가 저장소를 거쳐 재기동 후에도 복원된다',
   store.importSnapshot(loaded.data, { persist: false });
   assert.ok(store.listKB().some((e) => e.id === 'persist-1'), '재기동 복원이 되지 않았다');
 });
+
+/* ══════════ LLM 어댑터 ══════════ */
+
+/** 호출 기록을 남기는 가짜 fetch. status/body/throw 를 시나리오로 준다. */
+function fakeFetch(steps) {
+  const calls = [];
+  const queue = [...steps];
+  const fn = async (url, init) => {
+    calls.push({ url, init, body: init?.body ? JSON.parse(init.body) : null });
+    const step = queue.length > 1 ? queue.shift() : queue[0];
+    if (step.throws) {
+      const e = new Error(step.throws === 'abort' ? 'aborted' : 'boom');
+      if (step.throws === 'abort') e.name = 'AbortError';
+      throw e;
+    }
+    return {
+      ok: step.status >= 200 && step.status < 300,
+      status: step.status,
+      json: async () => step.json ?? {},
+    };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+function llmCfg(over = {}) {
+  return {
+    live: true,
+    provider: 'anthropic',
+    model: 'test-model',
+    apiKey: 'sk-test',
+    baseUrl: 'https://example.invalid',
+    maxInputChars: 6000,
+    maxOutputTokens: 200,
+    timeoutMs: 500,
+    retries: 1,
+    maxCallsPerMinute: 60,
+    ...over,
+  };
+}
+
+const noSleep = async () => {};
+
+test('LLM 게이트가 꺼져 있으면 네트워크 호출을 하지 않는다 [승인 필요 기본값]', opts, async () => {
+  const llm = await importLib('llm', ['monitoring']);
+  llm.resetLLMState();
+  const f = fakeFetch([{ status: 200 }]);
+  const r = await llm.complete({ system: 's', messages: [{ role: 'user', content: '안녕' }] }, {
+    config: llmCfg({ live: false }),
+    fetchImpl: f,
+    sleep: noSleep,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'disabled');
+  assert.equal(f.calls.length, 0, '게이트 OFF에서 외부 호출이 나가면 안 된다');
+});
+
+test('정상 경로 — 근거 자료로 답변을 생성하고 개인정보는 마스킹해 보낸다', opts, async () => {
+  const llm = await importLib('llm', ['monitoring']);
+  llm.resetLLMState();
+  const f = fakeFetch([{ status: 200, json: { content: [{ type: 'text', text: '영업시간은 09시~18시입니다.' }] } }]);
+
+  const r = await llm.generateGroundedAnswer(
+    {
+      question: '제 번호는 010-1234-5678인데 영업시간 알려주세요',
+      docs: [{ id: 'kb-1', question: '영업시간', answer: '평일 09시~18시' }],
+    },
+    { config: llmCfg(), fetchImpl: f, sleep: noSleep },
+  );
+
+  assert.equal(r.failed, undefined);
+  assert.equal(r.text, '영업시간은 09시~18시입니다.');
+  assert.equal(f.calls.length, 1);
+
+  const sent = JSON.stringify(f.calls[0].body);
+  assert.equal(sent.includes('010-1234-5678'), false, '전화번호 원문이 외부로 나가면 안 된다');
+  assert.match(sent, /01\*-\*\*\*\*-\*\*\*\*/);
+  assert.match(f.calls[0].body.system, /자료/, '근거 자료가 시스템 프롬프트에 담겨야 한다');
+  assert.equal(f.calls[0].body.max_tokens, 200, '출력 토큰 상한이 적용되어야 한다');
+  assert.equal(f.calls[0].init.headers['x-api-key'], 'sk-test');
+});
+
+test('실패 경로 — 5xx는 재시도하고, 끝내 실패하면 사유만 남기고 throw 하지 않는다', opts, async () => {
+  const llm = await importLib('llm', ['monitoring']);
+  llm.resetLLMState();
+  const f = fakeFetch([{ status: 503 }]);
+  const r = await llm.complete({ system: 's', messages: [{ role: 'user', content: '질문' }] }, {
+    config: llmCfg({ retries: 2 }),
+    fetchImpl: f,
+    sleep: noSleep,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'upstream_error');
+  assert.equal(r.attempts, 3, 'retries=2 → 총 3회 시도');
+  assert.equal(f.calls.length, 3);
+});
+
+test('실패 경로 — 4xx는 재시도하지 않는다(무의미한 재호출 금지)', opts, async () => {
+  const llm = await importLib('llm', ['monitoring']);
+  llm.resetLLMState();
+  const f = fakeFetch([{ status: 400 }]);
+  const r = await llm.complete({ system: 's', messages: [{ role: 'user', content: '질문' }] }, {
+    config: llmCfg({ retries: 2 }),
+    fetchImpl: f,
+    sleep: noSleep,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(f.calls.length, 1);
+});
+
+test('실패 경로 — 타임아웃/네트워크 오류를 사유로 구분한다', opts, async () => {
+  const llm = await importLib('llm', ['monitoring']);
+  llm.resetLLMState();
+  const t = await llm.complete({ system: 's', messages: [{ role: 'user', content: 'q' }] }, {
+    config: llmCfg({ retries: 0 }),
+    fetchImpl: fakeFetch([{ throws: 'abort' }]),
+    sleep: noSleep,
+  });
+  assert.equal(t.reason, 'timeout');
+
+  llm.resetLLMState();
+  const n = await llm.complete({ system: 's', messages: [{ role: 'user', content: 'q' }] }, {
+    config: llmCfg({ retries: 0 }),
+    fetchImpl: fakeFetch([{ throws: 'net' }]),
+    sleep: noSleep,
+  });
+  assert.equal(n.reason, 'network');
+});
+
+test('키가 없으면 호출 없이 not_configured (시크릿 하드코딩 금지 전제)', opts, async () => {
+  const llm = await importLib('llm', ['monitoring']);
+  llm.resetLLMState();
+  const f = fakeFetch([{ status: 200 }]);
+  const r = await llm.complete({ system: 's', messages: [{ role: 'user', content: 'q' }] }, {
+    config: llmCfg({ apiKey: '' }),
+    fetchImpl: f,
+    sleep: noSleep,
+  });
+  assert.equal(r.reason, 'not_configured');
+  assert.equal(f.calls.length, 0);
+});
+
+test('분당 호출 상한을 넘기면 비용이 새기 전에 막는다', opts, async () => {
+  const llm = await importLib('llm', ['monitoring']);
+  llm.resetLLMState();
+  const f = fakeFetch([{ status: 200, json: { content: [{ type: 'text', text: '답' }] } }]);
+  const cfg = llmCfg({ maxCallsPerMinute: 2, retries: 0 });
+  const run = () => llm.complete({ system: 's', messages: [{ role: 'user', content: 'q' }] }, { config: cfg, fetchImpl: f, sleep: noSleep });
+
+  assert.equal((await run()).ok, true);
+  assert.equal((await run()).ok, true);
+  const third = await run();
+  assert.equal(third.ok, false);
+  assert.equal(third.reason, 'budget_exceeded');
+  assert.equal(f.calls.length, 2, '상한 초과분은 호출 자체가 나가지 않아야 한다');
+});
+
+test('연속 실패가 쌓이면 서킷을 열어 장애 중인 업스트림을 두들기지 않는다', opts, async () => {
+  const llm = await importLib('llm', ['monitoring']);
+  llm.resetLLMState();
+  const f = fakeFetch([{ status: 500 }]);
+  const cfg = llmCfg({ retries: 0 });
+  for (let i = 0; i < llm.CIRCUIT_FAILURE_LIMIT; i += 1) {
+    await llm.complete({ system: 's', messages: [{ role: 'user', content: 'q' }] }, { config: cfg, fetchImpl: f, sleep: noSleep });
+  }
+  const before = f.calls.length;
+  const blocked = await llm.complete({ system: 's', messages: [{ role: 'user', content: 'q' }] }, { config: cfg, fetchImpl: f, sleep: noSleep });
+  assert.equal(blocked.reason, 'circuit_open');
+  assert.equal(f.calls.length, before, '서킷이 열린 동안 추가 호출이 나가면 안 된다');
+  assert.equal(llm.llmState().circuitOpen, true);
+  llm.resetLLMState();
+});
+
+test('입력 상한 — 오래된 턴부터 버리고 마지막 질문은 반드시 남긴다', opts, async () => {
+  const llm = await importLib('llm', ['monitoring']);
+  const msgs = [
+    { role: 'user', content: 'A'.repeat(400) },
+    { role: 'assistant', content: 'B'.repeat(400) },
+    { role: 'user', content: '마지막 질문' },
+  ];
+  const c = llm.clampMessages('시스템', msgs, 500);
+  assert.ok(c.dropped > 0, '오래된 턴이 버려져야 한다');
+  assert.equal(c.messages[c.messages.length - 1].content, '마지막 질문');
+  assert.ok(c.chars <= 500);
+  assert.ok(llm.estimateTokens('안녕하세요') > llm.estimateTokens('hello'), '한국어 토큰 추정이 더 커야 한다');
+});
+
+/* ══════════ 대화 엔진 × LLM 폴백 ══════════ */
+
+// 대화 엔진 모듈들은 **한 번의 컴파일 결과를 공유**해야 상태(KB·세션)가 통한다.
+// importLib의 캐시 키는 [이름, ...deps] 이므로, 자기 자신을 뺀 같은 집합을 넘겨 키를 일치시킨다.
+const ENGINE = [
+  'chat', 'adminStore', 'knowledge', 'rules', 'normalize', 'session',
+  'escalation', 'handoff', 'llm', 'monitoring', 'storage', 'logger', 'convlog',
+];
+const eng = (name) => importLib(name, ENGINE.filter((n) => n !== name));
+
+/** 확신 매칭은 안 되지만 연관 제안(근거 자료)은 걸리는 질문을 만들어 LLM 경로를 태운다. */
+async function seedLLMFixture() {
+  process.env.ADMIN_PERSIST = 'false';
+  const chat = await eng('chat');
+  const store = await eng('adminStore');
+  const session = await eng('session');
+  const llm = await eng('llm');
+  store.upsertKB({
+    id: 'rt-llm-kb',
+    category: '테스트',
+    question: '핀번호 확인 방법',
+    keywords: ['zzzzq'],
+    answer: '마이페이지 > 내 정보에서 확인하실 수 있습니다.',
+  });
+  session.resetSessions();
+  llm.resetLLMState();
+  return { chat, store, session, llm, question: '핀번호' };
+}
+
+test('LLM 경로에 진입하려면 근거 자료(연관 FAQ)가 있어야 한다', opts, async () => {
+  const { chat, question } = await seedLLMFixture();
+  delete process.env.CHAT_LLM_LIVE;
+  const base = chat.replyTo(question, 'rt-llm-base');
+  assert.equal(base.source, 'fallback');
+  assert.equal(base.suggestions?.length > 0, true, '연관 제안이 있어야 LLM에 줄 근거가 생긴다');
+});
+
+test('LLM이 실패해도 결정적 폴백 답변이 그대로 나간다(빈 화면 금지)', opts, async () => {
+  const { chat, question } = await seedLLMFixture();
+  process.env.CHAT_LLM_LIVE = 'true';
+  try {
+    const r = await chat.replyToAsync(question, 'rt-llm-fail', {
+      config: llmCfg({ retries: 0 }),
+      fetchImpl: fakeFetch([{ status: 500 }]),
+      sleep: noSleep,
+    });
+    assert.equal(r.source, 'fallback', '실패했는데 생성 답변인 척하면 안 된다');
+    assert.equal(r.llmFailure, 'upstream_error', '실패 사유가 로그용으로 남아야 한다');
+    assert.ok(r.reply.length > 0, '사용자에게 보여줄 안내가 반드시 있어야 한다');
+    assert.equal(r.reply.includes('undefined'), false);
+    assert.match(r.reply, /상담원/, '막혔을 때 다음 행동을 제시해야 한다');
+  } finally {
+    delete process.env.CHAT_LLM_LIVE;
+  }
+});
+
+test('LLM 성공 시 근거 자료를 넘기고 AI 생성 고지를 붙인다', opts, async () => {
+  const { chat, question } = await seedLLMFixture();
+  process.env.CHAT_LLM_LIVE = 'true';
+  const f = fakeFetch([{ status: 200, json: { content: [{ type: 'text', text: '마이페이지에서 확인하실 수 있어요.' }] } }]);
+  try {
+    const r = await chat.replyToAsync(question, 'rt-llm-ok', {
+      config: llmCfg({ retries: 0 }),
+      fetchImpl: f,
+      sleep: noSleep,
+    });
+    assert.equal(r.source, 'llm');
+    assert.match(r.reply, /마이페이지에서 확인하실 수 있어요/);
+    assert.match(r.reply, /AI가 등록된 자료를 근거로/, 'AI 생성 고지가 빠지면 안 된다');
+    assert.equal(f.calls.length, 1);
+    assert.match(f.calls[0].body.system, /핀번호 확인 방법/, '근거 자료가 프롬프트에 담겨야 한다');
+  } finally {
+    delete process.env.CHAT_LLM_LIVE;
+  }
+});
+
+test('게이트가 꺼져 있으면 replyToAsync는 replyTo와 같은 답을 준다', opts, async () => {
+  delete process.env.CHAT_LLM_LIVE;
+  const chat = await eng('chat');
+  const session = await eng('session');
+
+  session.resetSessions();
+  const sync = chat.replyTo('영업시간 알려주세요', 'rt-same-1');
+  session.resetSessions();
+  const asyncReply = await chat.replyToAsync('영업시간 알려주세요', 'rt-same-2');
+
+  assert.equal(asyncReply.reply, sync.reply);
+  assert.equal(asyncReply.source, sync.source);
+});
+
+/* ══════════ 웹훅 서명 검증 · 재시도 ══════════ */
+
+test('정상 경로 — 올바른 서명은 통과한다', opts, async () => {
+  const wa = await importLib('webhookAuth', []);
+  const now = 1_700_000_000_000;
+  const ts = String(Math.floor(now / 1000));
+  const body = JSON.stringify({ userRequest: { utterance: '영업시간' } });
+  const sig = wa.signPayload('secret-1', ts, body);
+
+  assert.deepEqual(wa.verifySignature({ secret: 'secret-1', signature: sig, timestamp: ts, rawBody: body, nowMs: now }), { ok: true });
+  assert.deepEqual(wa.verifySignature({ secret: 'secret-1', signature: `v1=${sig}`, timestamp: ts, rawBody: body, nowMs: now }), { ok: true });
+});
+
+test('실패 경로 — 본문 변조·시크릿 불일치·리플레이·누락을 각각 거절한다', opts, async () => {
+  const wa = await importLib('webhookAuth', []);
+  const now = 1_700_000_000_000;
+  const ts = String(Math.floor(now / 1000));
+  const body = JSON.stringify({ a: 1 });
+  const sig = wa.signPayload('secret-1', ts, body);
+  const base = { secret: 'secret-1', signature: sig, timestamp: ts, rawBody: body, nowMs: now };
+
+  assert.equal(wa.verifySignature({ ...base, rawBody: JSON.stringify({ a: 2 }) }).reason, 'mismatch');
+  assert.equal(wa.verifySignature({ ...base, secret: 'secret-2' }).reason, 'mismatch');
+  assert.equal(wa.verifySignature({ ...base, nowMs: now + 10 * 60_000 }).reason, 'expired', '오래된 요청 재전송은 막아야 한다');
+  assert.equal(wa.verifySignature({ ...base, signature: '' }).reason, 'missing_signature');
+  assert.equal(wa.verifySignature({ ...base, timestamp: '' }).reason, 'missing_timestamp');
+  assert.equal(wa.verifySignature({ ...base, timestamp: 'abc' }).reason, 'bad_timestamp');
+  assert.equal(wa.verifySignature({ ...base, secret: '' }).reason, 'no_secret');
+});
+
+test('서명 비교는 값을 그대로 비교하지 않는다(상수 시간)', opts, async () => {
+  const wa = await importLib('webhookAuth', []);
+  assert.equal(wa.safeEqual('abc', 'abc'), true);
+  assert.equal(wa.safeEqual('abc', 'abd'), false);
+  assert.equal(wa.safeEqual('abc', 'abcdefghijk'), false, '길이가 달라도 예외 없이 false여야 한다');
+  assert.equal(wa.safeEqual('', ''), true);
+});
+
+test('재시도(중복 전달)는 엔진을 다시 돌리지 않고 이전 응답을 돌려준다', opts, async () => {
+  const wa = await importLib('webhookAuth', []);
+  wa.resetDedupe();
+  const now = 1_700_000_000_000;
+  const key = wa.eventKey(['evt', 'delivery-1']);
+
+  assert.equal(wa.dedupeCheck(key, { now }).duplicate, false, '첫 전달은 처리해야 한다');
+  wa.dedupeRemember(key, { version: '2.0' }, { now });
+
+  const again = wa.dedupeCheck(key, { now: now + 1000 });
+  assert.equal(again.duplicate, true);
+  assert.deepEqual(again.response, { version: '2.0' });
+
+  // TTL이 지나면 다시 새 이벤트로 본다
+  assert.equal(wa.dedupeCheck(key, { now: now + 120_000, ttlMs: 60_000 }).duplicate, false);
+  wa.resetDedupe();
+});
+
+test('카카오 웹훅 인증 — 시크릿 미설정 시 정책(선택/필수)에 따라 갈린다', opts, async () => {
+  const kakao = await importLib('kakao', ['webhookAuth']);
+  const body = '{"userRequest":{"utterance":"안녕"}}';
+  const h = (o = {}) => new Headers(o);
+
+  assert.equal(kakao.authenticateKakao(h(), body, {}).ok, true, '미설정 + 선택 → 통과(현행 유지)');
+  assert.equal(
+    kakao.authenticateKakao(h(), body, { KAKAO_SIGNATURE_REQUIRED: 'true' }).reason,
+    'no_secret',
+    '필수인데 시크릿이 없으면 조용히 열지 말고 차단해야 한다',
+  );
+  assert.equal(kakao.authenticateKakao(h({ 'x-skill-token': 'wrong' }), body, { KAKAO_SKILL_TOKEN: 'right' }).reason, 'bad_token');
+  assert.equal(kakao.authenticateKakao(h({ 'x-skill-token': 'right' }), body, { KAKAO_SKILL_TOKEN: 'right' }).ok, true);
+});
+
+test('카카오 웹훅 인증 — 시크릿이 있으면 서명이 맞아야만 통과한다', opts, async () => {
+  const kakao = await importLib('kakao', ['webhookAuth']);
+  const wa = await importLib('webhookAuth', []);
+  const now = 1_700_000_000_000;
+  const ts = String(Math.floor(now / 1000));
+  const body = '{"userRequest":{"utterance":"안녕"}}';
+  const env = { KAKAO_WEBHOOK_SECRET: 's3cr3t' };
+  const sig = wa.signPayload('s3cr3t', ts, body);
+
+  assert.equal(
+    kakao.authenticateKakao(new Headers({ 'x-kakao-signature': sig, 'x-kakao-timestamp': ts }), body, env, now).ok,
+    true,
+  );
+  assert.equal(
+    kakao.authenticateKakao(new Headers({ 'x-kakao-signature': 'deadbeef', 'x-kakao-timestamp': ts }), body, env, now).reason,
+    'mismatch',
+  );
+  assert.equal(kakao.authenticateKakao(new Headers(), body, env, now).reason, 'missing_signature');
+});
+
+/* ══════════ 관리자 인증 잠금 ══════════ */
+
+test('토큰 대입이 반복되면 잠근다(성공하면 즉시 해제)', opts, async () => {
+  const aa = await importLib('adminAuth', []);
+  aa.resetLockouts();
+  const now = 1_700_000_000_000;
+  const threshold = aa.lockThreshold();
+
+  let st;
+  for (let i = 1; i <= threshold; i += 1) st = aa.recordAttempt('1.2.3.4', false, now + i);
+  assert.equal(st.locked, true, `${threshold}회 실패하면 잠겨야 한다`);
+  assert.ok(st.retryAfterSec > 0);
+
+  // 잠긴 동안은 실패를 더 세지 않는다(잠금 무한 연장 방지)
+  const during = aa.recordAttempt('1.2.3.4', false, now + 1000);
+  assert.equal(during.failures, st.failures);
+
+  // 다른 IP는 영향 없음
+  assert.equal(aa.lockoutStatus('9.9.9.9', now).locked, false);
+
+  // 잠금 시간이 지나면 다시 시도할 수 있고, 성공하면 카운트가 비워진다
+  const after = now + aa.lockDurationMs() + 1000;
+  assert.equal(aa.lockoutStatus('1.2.3.4', after).locked, false);
+  assert.equal(aa.recordAttempt('1.2.3.4', true, after).failures, 0);
+  aa.resetLockouts();
+});

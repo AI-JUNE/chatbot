@@ -147,3 +147,66 @@ node --test "tests/*.test.mjs"
 | 고객 문의(특정 대화) | `x-request-id` 확보 → 로그 조회. 대화 본문은 로그에 없으므로 고객 동의 후 별도 확인 |
 
 > 담당자·연락처·근무시간은 계약 확정 후 사람이 채운다(임의 기재 금지).
+
+---
+
+## 승인 대기 스위치 (build now, activate on approval)
+
+코드는 완성되어 있고 **환경변수만 켜면 동작**한다. 켜기 전 확인 사항을 함께 적는다.
+모든 값은 Vercel 환경변수로만 설정한다(코드·저장소에 시크릿을 두지 않는다).
+
+### 1. LLM 생성 답변 — `CHAT_LLM_LIVE`
+
+| 변수 | 기본값 | 설명 |
+| --- | --- | --- |
+| `CHAT_LLM_LIVE` | `false` | **[승인 필요]** `true` 여야 생성 모델을 호출한다. `false`면 네트워크 호출 자체가 없다 |
+| `CHAT_LLM_PROVIDER` | `anthropic` | `anthropic` 또는 `openai`(OpenAI 호환 엔드포인트 포함) |
+| `CHAT_LLM_MODEL` | 프로바이더 기본값 | 모델 식별자 |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | 없음 | 없으면 호출 없이 `not_configured` 로 실패 → 결정적 폴백 |
+| `CHAT_LLM_BASE_URL` | 프로바이더 기본값 | 사설 게이트웨이 사용 시 |
+| `CHAT_LLM_MAX_INPUT_CHARS` | `6000` | 초과분은 **오래된 턴부터** 버린다(마지막 질문은 보존) |
+| `CHAT_LLM_MAX_OUTPUT_TOKENS` | `400` | 생성 상한 |
+| `CHAT_LLM_TIMEOUT_MS` | `8000` | 초과 시 `timeout` 처리 |
+| `CHAT_LLM_RETRIES` | `1` | 429·5xx·네트워크 오류에만 재시도(4xx는 재시도 안 함) |
+| `CHAT_LLM_MAX_CALLS_PER_MINUTE` | `60` | 인스턴스당 비용 안전장치 |
+
+동작 보장:
+
+- 근거 자료(연관 FAQ)가 없으면 **생성하지 않는다**(환각 방지). 룰·KB 답변은 LLM을 거치지 않는다.
+- 실패하면 LLM이 꺼져 있을 때와 **동일한 결정적 폴백 답변**이 나가고, 사유는 구조화 로그에 `llm_<사유>` 로 남는다.
+- 성공한 답변에는 AI 생성 고지가 붙는다.
+- 연속 실패가 쌓이면 30초간 호출을 차단한다(서킷). `/api/health` 로 상태 확인.
+
+켜기 전 점검: ① 키가 환경변수에만 있는가 ② 월 비용 상한을 프로바이더 콘솔에서 걸었는가
+③ `CHAT_LLM_MAX_CALLS_PER_MINUTE` 가 예상 트래픽에 맞는가 ④ 개인정보 마스킹 동작을 스테이징에서 눈으로 확인했는가.
+
+### 2. 카카오 채널 웹훅 — `KAKAO_CHANNEL_LIVE` · 서명
+
+| 변수 | 기본값 | 설명 |
+| --- | --- | --- |
+| `KAKAO_CHANNEL_LIVE` | `false` | **[승인 필요]** 채널 실연동 표시 |
+| `KAKAO_SKILL_TOKEN` | 없음 | 설정 시 `x-skill-token` 일치 필수(상수 시간 비교) |
+| `KAKAO_WEBHOOK_SECRET` | 없음 | 설정 시 HMAC 서명 검증 필수 |
+| `KAKAO_SIGNATURE_REQUIRED` | `false` | `true` + 시크릿 없음 → **전면 차단**(설정 누락을 조용한 무방비로 두지 않는다) |
+
+서명 규격: `HMAC-SHA256(secret, "v1:" + timestamp + ":" + 원문본문)` 의 hex.
+헤더는 `x-kakao-signature`(`v1=` 접두 허용) · `x-kakao-timestamp`(초 또는 밀리초). 허용 시간창 ±5분.
+
+재시도(중복 전달): 같은 이벤트가 다시 오면 대화 엔진을 **다시 돌리지 않고** 이전 응답을 그대로 반환한다
+(티켓 중복 접수·대화 로그 중복 방지). 판정 캐시는 인스턴스 단위 60초 — 전역 멱등은 공유 저장소 도입 후 **[승인 필요]**.
+
+상태 확인: `GET /api/kakao/webhook` → `live`, `signature.configured`, `signature.required` (시크릿 값은 노출하지 않는다).
+
+### 3. 관리자 인증 — `ADMIN_AUTH_REQUIRED`
+
+| 변수 | 기본값 | 설명 |
+| --- | --- | --- |
+| `ADMIN_AUTH_REQUIRED` | `false` | **[승인 필요]** `true` 면 모든 관리 API에 토큰 요구. `ADMIN_TOKEN` 미설정 시 전면 차단 |
+| `ADMIN_TOKEN` | 없음 | 관리 토큰. 비교는 상수 시간 |
+| `ADMIN_LOCK_THRESHOLD` | `5` | 연속 실패 이 횟수에서 잠금 |
+| `ADMIN_LOCK_MINUTES` | `10` | 잠금 지속 시간(분) |
+
+잠금은 **토큰을 실제로 제시한 실패**만 센다. 성공하면 즉시 해제되고, 잠긴 동안 추가 실패는 잠금을 연장하지 않는다.
+잠금 범위는 인스턴스 단위(IP 기준) — 전역 공유는 공유 저장소 도입 후 **[승인 필요]**.
+
+운영자가 잠금에 걸렸을 때: 잠금 시간이 지나면 자동 해제된다. 즉시 해제가 필요하면 재배포(인스턴스 교체)로 초기화된다.

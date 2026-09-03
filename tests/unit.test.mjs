@@ -384,3 +384,83 @@ test('관리 콘솔에 저장소 상태(빈 상태·오류 상태 포함) 화면
   assert.match(s, /다시 시도/, '오류 상태에 복구 행동이 있어야 한다');
   assert.match(s, /aria-labelledby="storage-h"|aria-live/, '스크린리더 안내가 있어야 한다');
 });
+
+/* ══════════ LLM 어댑터 · 웹훅 인증 · 관리자 잠금 (계약 검사) ══════════ */
+
+test('LLM 실키는 승인 플래그 뒤에 있고 시크릿이 하드코딩되지 않았다', () => {
+  const s = read('src/lib/llm.ts');
+  assert.match(s, /CHAT_LLM_LIVE/, '승인 게이트가 있어야 한다');
+  assert.match(s, /if \(!cfg\.live\) return fail\('disabled'/, '게이트 OFF면 호출 전에 즉시 반환해야 한다');
+  // 키는 환경변수에서만 읽는다 — 소스에 키처럼 보이는 리터럴이 없어야 한다
+  assert.equal(/sk-[A-Za-z0-9]{16,}/.test(s), false, 'API 키가 소스에 있으면 안 된다');
+  assert.match(s, /env\.ANTHROPIC_API_KEY/);
+  assert.match(s, /env\.OPENAI_API_KEY/);
+});
+
+test('LLM 어댑터는 상한(입력·출력·호출)을 모두 강제한다', () => {
+  const s = read('src/lib/llm.ts');
+  assert.match(s, /maxInputChars/, '입력 문자 상한');
+  assert.match(s, /maxOutputTokens/, '출력 토큰 상한');
+  assert.match(s, /maxCallsPerMinute/, '분당 호출 상한');
+  assert.match(s, /export function clampMessages/, '상한 초과 시 잘라내는 경로가 있어야 한다');
+  assert.match(s, /CIRCUIT_FAILURE_LIMIT/, '연속 실패 차단(서킷)이 있어야 한다');
+});
+
+test('LLM 어댑터는 개인정보를 마스킹해 보내고, 실패를 삼키지 않는다', () => {
+  const s = read('src/lib/llm.ts');
+  assert.match(s, /import \{ scrub \} from '@\/lib\/monitoring'/, '전송 전 마스킹');
+  assert.match(s, /scrub\(m\.content\)/, '대화 본문이 마스킹을 거쳐야 한다');
+  // 호출부가 사유를 알 수 있도록 실패를 값으로 돌려준다(throw 금지)
+  assert.match(s, /reason: LLMFailureReason/);
+  assert.equal(/^\s*throw /m.test(s), false, 'LLM 어댑터는 throw 하지 않아야 한다');
+});
+
+test('대화 엔진은 LLM 실패 시 결정적 폴백으로 되돌아간다', () => {
+  const s = read('src/lib/chat.ts');
+  assert.match(s, /if \('failed' in res\) return \{ \.\.\.base, source: 'fallback'/, '실패 시 폴백 복귀');
+  assert.match(s, /if \(!docs\.length\)/, '근거 자료가 없으면 생성하지 않는다(환각 방지)');
+  assert.match(s, /AI_ANSWER_NOTICE/, 'AI 생성 고지가 있어야 한다');
+  assert.match(s, /llmFailure/, '실패 사유가 로그로 전달되어야 한다');
+});
+
+test('웹훅 서명 검증은 상수 시간 비교 + 리플레이 차단을 한다', () => {
+  const s = read('src/lib/webhookAuth.ts');
+  assert.match(s, /timingSafeEqual/, '상수 시간 비교여야 한다');
+  assert.equal(/presented === expected|sig === expected/.test(s), false, '단순 문자열 비교가 있으면 안 된다');
+  assert.match(s, /toleranceSec/, '타임스탬프 허용 시간창(리플레이 차단)');
+  assert.match(s, /signingBase/, '서명 대상에 타임스탬프가 포함되어야 한다');
+  assert.equal(/console\.(log|error)\([^)]*secret/i.test(s), false, '시크릿을 로그에 남기면 안 된다');
+});
+
+test('카카오 웹훅이 서명 검증과 중복 전달 처리를 실제로 사용한다', () => {
+  const s = read('src/app/api/kakao/webhook/route.ts');
+  assert.match(s, /authenticateKakao\(req\.headers, parsedBody\.raw\)/, '원문 기준으로 서명을 검증해야 한다');
+  assert.match(s, /return fail\('unauthorized'/, '검증 실패는 401로 거절해야 한다');
+  assert.equal(/auth\.reason.*fail\('unauthorized'|unauthorized',\s*`.*\$\{auth\.reason\}/.test(s), false, '실패 사유를 응답에 담으면 안 된다');
+  assert.match(s, /kakaoDedupe\(key\)/, '재시도(중복 전달) 판정이 있어야 한다');
+  assert.match(s, /rememberKakaoResponse\(key/, '같은 이벤트에 같은 응답을 돌려줘야 한다');
+  assert.match(s, /captureError/, '엔진 오류를 삼키지 않아야 한다');
+});
+
+test('시크릿 미설정 시 조용히 열지 않는다(필수 설정이면 차단)', () => {
+  const s = read('src/lib/kakao.ts');
+  assert.match(s, /KAKAO_SIGNATURE_REQUIRED/, '필수화 스위치가 있어야 한다');
+  assert.match(s, /return required \? \{ ok: false, reason: 'no_secret' \} : \{ ok: true \}/, '설정 누락을 사고로 만든다');
+  assert.equal(/KAKAO_WEBHOOK_SECRET\s*=\s*['"][^'"]+['"]/.test(s), false, '시크릿 하드코딩 금지');
+});
+
+test('관리 토큰 비교가 상수 시간이고 실패 누적 잠금이 있다', () => {
+  const h = read('src/lib/http.ts');
+  assert.match(h, /safeEqual\(presentedToken/, '토큰 비교는 상수 시간이어야 한다');
+  assert.equal(/presentedToken\(req, allowQueryToken\) !== token/.test(h), false, '단순 비교가 남아 있으면 안 된다');
+
+  const a = read('src/lib/adminAuth.ts');
+  assert.match(a, /export function recordAttempt/);
+  assert.match(a, /if \(before\.locked\) return before;/, '잠긴 동안 카운트를 더 올리지 않아야 한다');
+  assert.equal(/ADMIN_TOKEN/.test(a), false, '잠금 모듈은 토큰 값을 다루지 않는다');
+
+  const r = read('src/app/api/admin/auth/route.ts');
+  assert.match(r, /lockoutStatus\(key\)/);
+  assert.match(r, /recordAttempt\(key, !denied\)/);
+  assert.match(r, /남은 시도/, '사용자에게 남은 시도를 알려줘야 한다');
+});
