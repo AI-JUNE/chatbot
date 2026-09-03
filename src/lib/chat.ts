@@ -12,8 +12,14 @@ import { listKB, getRuleOverride, matchCustomRule } from '@/lib/adminStore';
 import { appendTurn, getSession, setSlot, updateSession } from '@/lib/session';
 import { createTicket, queuePosition } from '@/lib/escalation';
 import { buildHandoffSummary, type HandoffReason } from '@/lib/handoff';
+import { generateGroundedAnswer, type CompleteOptions, type GroundingDoc, type LLMFailureReason, type LLMMessage } from '@/lib/llm';
 
 export const LLM_LIVE = process.env.CHAT_LLM_LIVE === 'true';
+
+/** 실행 시점에 게이트를 다시 읽는다(모듈 로드 후 환경이 바뀌는 테스트·재구성 대응). [승인 필요] */
+function llmEnabled(): boolean {
+  return process.env.CHAT_LLM_LIVE === 'true';
+}
 
 export type ReplySource = 'rule' | 'kb' | 'llm' | 'fallback' | 'empty' | 'context';
 
@@ -41,6 +47,8 @@ export interface ChatReply {
   queue?: { position: number; waiting: number };
   /** 이관 사유 코드(AICC-Core Handoff 어휘). 에스컬레이션이 일어난 턴에만 채워진다. */
   handoffReason?: HandoffReason;
+  /** LLM 경로가 실패해 결정적 폴백으로 되돌아간 사유(로그·모니터링용, 고객에게 노출하지 않는다). */
+  llmFailure?: LLMFailureReason;
 }
 
 // ---- 신뢰도·자동 전환 정책 ----
@@ -260,28 +268,69 @@ function computeReply(message: string, sessionId = 'anon'): ChatReply {
   const suggestions: ChatSuggestion[] = searchKnowledge(text, 3, entries).map((e) => ({ id: e.id, question: e.question }));
   updateSession(sessionId, { pendingSuggestions: suggestions.length ? suggestions : undefined });
 
-  // 3) LLM 폴백(스텁). [승인 필요] 실키 연동 전까지 안전 응답만.
-  if (LLM_LIVE) {
+  // 결정적 폴백 문구 — LLM이 없거나 실패해도 이 답변이 항상 남는다(빈 화면·무반응 금지).
+  const fallbackReply = suggestions.length
+    ? '정확한 답을 찾지 못했어요. 혹시 아래 질문 중 찾으시는 내용이 있나요? 번호(1~' + suggestions.length + ')로 답하셔도 돼요. 없다면 "상담원"이라고 입력해 주세요.'
+    : '아직 제가 정확히 이해하지 못했어요. 조금 더 구체적으로 말씀해 주시거나, 상담원 연결을 원하시면 "상담원"이라고 입력해 주세요.';
+  const fallbackConfidence = suggestions.length ? 0.25 : SOURCE_CONFIDENCE.fallback;
+
+  // 3) LLM 경로 — 실제 생성은 비동기 진입점(replyToAsync)에서 수행한다.
+  //    여기서는 "LLM을 시도할 자리"임을 source로만 표시하고, reply에는 실패 시 그대로 쓸 결정적 폴백을 담는다.
+  //    [승인 필요] CHAT_LLM_LIVE=true 전까지 이 분기는 실행되지 않는다.
+  if (llmEnabled()) {
     return {
-      reply: '(LLM 준비 중) 질문을 확인했어요. 조금 더 자세히 말씀해 주시겠어요?',
-      intent: 'llm_pending',
-      escalate: false,
+      reply: fallbackReply,
+      intent: 'fallback',
+      escalate: true,
       source: 'llm',
-      confidence: SOURCE_CONFIDENCE.llm,
+      confidence: fallbackConfidence,
       ...(suggestions.length ? { suggestions } : {}),
     };
   }
 
   // 4) 최종 폴백 + 연관질문 제안(번호로도 선택 가능) + 상담원 제안
   return {
-    reply: suggestions.length
-      ? '정확한 답을 찾지 못했어요. 혹시 아래 질문 중 찾으시는 내용이 있나요? 번호(1~' + suggestions.length + ')로 답하셔도 돼요. 없다면 "상담원"이라고 입력해 주세요.'
-      : '아직 제가 정확히 이해하지 못했어요. 조금 더 구체적으로 말씀해 주시거나, 상담원 연결을 원하시면 "상담원"이라고 입력해 주세요.',
+    reply: fallbackReply,
     intent: 'fallback',
     escalate: true,
     source: 'fallback',
-    confidence: suggestions.length ? 0.25 : SOURCE_CONFIDENCE.fallback,
+    confidence: fallbackConfidence,
     ...(suggestions.length ? { suggestions } : {}),
+  };
+}
+
+/** AI 생성 답변임을 알리는 고지 — 화면·채널 공통으로 답변 끝에 붙인다. */
+export const AI_ANSWER_NOTICE = '(AI가 등록된 자료를 근거로 만든 답변이에요. 정확한 확인이 필요하시면 "상담원"이라고 입력해 주세요.)';
+
+/**
+ * LLM 보강 — 근거 자료(KB 후보)가 있을 때만 생성하고, 실패하면 결정적 폴백을 그대로 유지한다.
+ * 자료가 없으면 아예 호출하지 않는다(환각 방지). 실패 사유는 llmFailure로 남겨 라우트가 로그에 기록한다.
+ */
+async function augmentWithLLM(text: string, sessionId: string, base: ChatReply, opts: CompleteOptions): Promise<ChatReply> {
+  const entries = listKB();
+  const docs: GroundingDoc[] = (base.suggestions ?? [])
+    .map((s) => entries.find((e) => e.id === s.id))
+    .filter((e): e is KBEntry => Boolean(e))
+    .map((e) => ({ id: e.id, question: e.question, answer: e.answer }));
+
+  if (!docs.length) return { ...base, source: 'fallback', llmFailure: 'not_configured' };
+
+  // 직전 대화 문맥(현재 질문 턴은 이미 버퍼에 들어가 있으므로 제외)
+  const turns = (getSession(sessionId).turns ?? []).slice(0, -1).slice(-6);
+  const history: LLMMessage[] = turns
+    .filter((t) => Boolean(t.text))
+    .map((t) => ({ role: t.speaker === 'customer' ? ('user' as const) : ('assistant' as const), content: t.text }));
+
+  const res = await generateGroundedAnswer({ question: text, docs, history }, opts);
+  if ('failed' in res) return { ...base, source: 'fallback', llmFailure: res.failed };
+
+  return {
+    ...base,
+    reply: `${res.text}\n\n${AI_ANSWER_NOTICE}`,
+    intent: 'llm',
+    source: 'llm',
+    escalate: false,
+    confidence: 0.55,
   };
 }
 
@@ -295,10 +344,25 @@ function computeReply(message: string, sessionId = 'anon'): ChatReply {
 export function replyTo(message: string, sessionId = 'anon'): ChatReply {
   const text = (message || '').trim();
   if (text) appendTurn(sessionId, { at: new Date().toISOString(), speaker: 'customer', text });
+  return finalize(text, sessionId, computeReply(message, sessionId));
+}
 
-  const result = computeReply(message, sessionId);
+/**
+ * 비동기 진입점 — 룰·KB로 답이 나오지 않고 LLM 게이트가 켜져 있을 때만 생성 모델을 호출한다.
+ * LLM이 꺼져 있거나 실패하면 replyTo와 완전히 동일한 결정적 답변을 돌려준다(라우트는 항상 이 함수를 쓴다).
+ */
+export async function replyToAsync(message: string, sessionId = 'anon', opts: CompleteOptions = {}): Promise<ChatReply> {
+  const text = (message || '').trim();
+  if (text) appendTurn(sessionId, { at: new Date().toISOString(), speaker: 'customer', text });
+
+  let result = computeReply(message, sessionId);
+  if (result.source === 'llm') result = await augmentWithLLM(text, sessionId, result, opts);
+  return finalize(text, sessionId, result);
+}
+
+/** 공통 마무리 — 신뢰도 기반 자동 전환 판정 후 봇 턴을 문맥 버퍼에 적재한다. */
+function finalize(text: string, sessionId: string, result: ChatReply): ChatReply {
   const auto = maybeAutoEscalate(text, sessionId, result);
-
   if (auto.source !== 'empty') {
     appendTurn(sessionId, { at: new Date().toISOString(), speaker: 'bot', text: auto.reply, intent: auto.intent });
   }

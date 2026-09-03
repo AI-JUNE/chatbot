@@ -1,6 +1,6 @@
 // 웹 챗 대화 API. 표준 오류 포맷·입력 검증은 lib/http, 유량 제한은 lib/ratelimit, 구조화 로깅은 lib/logger.
 import { NextRequest } from 'next/server';
-import { replyTo } from '@/lib/chat';
+import { replyToAsync } from '@/lib/chat';
 import { logTurn } from '@/lib/convlog';
 import { rateGuard } from '@/lib/ratelimit';
 import { ok, readJson, optStr, withRequestId } from '@/lib/http';
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
   let result;
   try {
-    result = replyTo(message, sessionId);
+    result = await replyToAsync(message, sessionId);
   } catch (e) {
     // 대화 엔진 오류는 모니터링·로그에 남기되, 고객에게는 안전한 안내로 응답한다(오류를 삼키지 않는다).
     await captureError(e, { route: '/api/chat', method: 'POST', requestId: rl.requestId });
@@ -91,6 +91,8 @@ export async function POST(req: NextRequest) {
     source: result.source,
     escalate: result.escalate,
     confidence: result.confidence,
+    // LLM 경로가 실패해 결정적 폴백으로 되돌아갔으면 사유를 남긴다(오류를 삼키지 않는다).
+    ...(result.llmFailure ? { code: `llm_${result.llmFailure}` } : {}),
   });
   return withRequestId(ok({ sessionId, ...result }), rl.requestId);
 }

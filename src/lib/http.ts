@@ -7,6 +7,7 @@
 //   - error   : 기존 소비자(관리 콘솔 등)가 그대로 표시하던 필드 → 한국어 메시지 유지
 //   - message : error와 동일(신규 소비자용 명시적 필드)
 import { NextRequest, NextResponse } from 'next/server';
+import { safeEqual } from '@/lib/webhookAuth';
 
 export type ErrorCode =
   | 'invalid_json'
@@ -91,12 +92,17 @@ export const MAX_BODY_BYTES = 32 * 1024; // 일반 API 기본 상한(32KB)
 export const MAX_IMPORT_BYTES = 1024 * 1024; // 백업 복원 등 대용량 업로드(1MB)
 
 export type Parsed<T> = { ok: true; data: T } | { ok: false; res: NextResponse };
+export type ParsedRaw<T> = { ok: true; data: T; raw: string } | { ok: false; res: NextResponse };
 
-/** JSON 본문을 크기 제한과 함께 안전하게 파싱한다. 객체가 아니면 invalid_input. */
-export async function readJson<T extends Record<string, unknown>>(
+/**
+ * JSON 본문 파싱 + **원문 문자열 동시 반환**.
+ * 웹훅 HMAC 서명은 파싱 전 원문에 대해 계산되므로, 본문을 두 번 읽지 않고 한 번에 얻어야 한다
+ * (Request 본문은 한 번만 읽을 수 있다).
+ */
+export async function readJsonWithRaw<T extends Record<string, unknown>>(
   req: NextRequest,
   maxBytes: number = MAX_BODY_BYTES,
-): Promise<Parsed<T>> {
+): Promise<ParsedRaw<T>> {
   const declared = Number(req.headers.get('content-length') || 0);
   const tooBig = (n: number) =>
     fail('payload_too_large', `요청 본문이 너무 큽니다(최대 ${Math.floor(maxBytes / 1024)}KB).`);
@@ -119,7 +125,16 @@ export async function readJson<T extends Record<string, unknown>>(
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { ok: false, res: fail('invalid_input', 'JSON 객체 형식의 본문이 필요합니다.') };
   }
-  return { ok: true, data: parsed as T };
+  return { ok: true, data: parsed as T, raw };
+}
+
+/** JSON 본문을 크기 제한과 함께 안전하게 파싱한다. 객체가 아니면 invalid_input. */
+export async function readJson<T extends Record<string, unknown>>(
+  req: NextRequest,
+  maxBytes: number = MAX_BODY_BYTES,
+): Promise<Parsed<T>> {
+  const r = await readJsonWithRaw<T>(req, maxBytes);
+  return r.ok ? { ok: true, data: r.data } : r;
 }
 
 // ---- 입력 검증 헬퍼 ----
@@ -171,7 +186,8 @@ function presentedToken(req: NextRequest, allowQueryToken: boolean): string | nu
 /** 토큰이 설정되어 있고 실제로 일치했는지(감사 로그 authed 표기용). */
 export function isAdminAuthed(req: NextRequest, allowQueryToken = false): boolean {
   const token = process.env.ADMIN_TOKEN;
-  return Boolean(token) && presentedToken(req, allowQueryToken) === token;
+  if (!token) return false;
+  return safeEqual(presentedToken(req, allowQueryToken) ?? '', token);
 }
 
 /**
@@ -186,7 +202,8 @@ export function requireAdmin(req: NextRequest, opts?: { allowQueryToken?: boolea
     if (!ADMIN_AUTH_REQUIRED) return null;
     return fail('unauthorized', '관리자 인증이 활성화되었으나 ADMIN_TOKEN이 설정되지 않았습니다.');
   }
-  if (presentedToken(req, allowQueryToken) !== token) {
+  // 토큰 비교는 상수 시간으로 한다(문자 단위 비교는 타이밍으로 값이 새어 나갈 수 있다).
+  if (!safeEqual(presentedToken(req, allowQueryToken) ?? '', token)) {
     return fail('unauthorized', '관리자 토큰이 필요합니다.');
   }
   return null;
