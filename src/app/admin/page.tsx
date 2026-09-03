@@ -180,6 +180,70 @@ interface KBForm {
 
 const EMPTY_FORM: KBForm = { id: '', category: '', question: '', keywords: '', answer: '' };
 
+// ---- 파트너(채널)·고객사 귀속 ----
+interface PartnerView {
+  id: string;
+  name: string;
+  status: 'active' | 'paused';
+  managerName?: string;
+  feeRateBp: number | null;
+  memo?: string;
+}
+interface AttributionView {
+  at: string;
+  fromPartnerId: string | null;
+  toPartnerId: string | null;
+  source: string;
+  note: string;
+  authed: boolean;
+}
+interface AccountView {
+  id: string;
+  name: string;
+  partnerId: string | null;
+  source: string;
+  status: 'prospect' | 'contracted' | 'churned';
+  contractedAt?: string;
+  ownerName?: string;
+  memo?: string;
+  attribution: AttributionView[];
+}
+interface RollupView {
+  partnerId: string | null;
+  partnerName: string;
+  feeRateBp: number | null;
+  total: number;
+  contracted: number;
+  prospect: number;
+  churned: number;
+}
+const SOURCE_LABELS: Record<string, string> = {
+  direct: '직접 영업',
+  partner: '파트너 유치',
+  referral: '고객 소개',
+  inbound: '인바운드 문의',
+  unknown: '미확인',
+};
+const ACCOUNT_STATUS_LABELS: Record<AccountView['status'], string> = {
+  prospect: '검토 중',
+  contracted: '계약',
+  churned: '해지',
+};
+interface PartnerForm { id: string; name: string; managerName: string; feeRateBp: string; status: 'active' | 'paused'; memo: string }
+const EMPTY_PARTNER_FORM: PartnerForm = { id: '', name: '', managerName: '', feeRateBp: '', status: 'active', memo: '' };
+interface AccountForm {
+  id: string; name: string; partnerId: string; source: string;
+  status: AccountView['status']; contractedAt: string; ownerName: string; attributionNote: string;
+}
+const EMPTY_ACCOUNT_FORM: AccountForm = {
+  id: '', name: '', partnerId: '', source: 'unknown', status: 'prospect', contractedAt: '', ownerName: '', attributionNote: '',
+};
+
+/** 베이시스포인트 → 사람이 읽는 수수료율. 미설정이면 임의 수치를 만들지 않는다. */
+function feeLabel(bp: number | null): string {
+  return bp === null || bp === undefined ? '미설정' : `${(bp / 100).toFixed(2).replace(/\.?0+$/, '')}%`;
+}
+
 const S = {
   page: { maxWidth: 960, margin: '0 auto', padding: '32px 20px 80px' } as const,
   card: { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--r)', padding: 20, marginBottom: 16 } as const,
@@ -190,7 +254,7 @@ const S = {
 };
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<'dash' | 'kb' | 'rules' | 'esc' | 'test' | 'audit'>('dash');
+  const [tab, setTab] = useState<'dash' | 'kb' | 'rules' | 'esc' | 'partner' | 'test' | 'audit'>('dash');
   const [notice, setNotice] = useState('');
 
   // ---- 관리 토큰(ADMIN_TOKEN 설정 시 x-admin-token 필수) ----
@@ -325,6 +389,93 @@ export default function AdminPage() {
     }
   }, []);
 
+  // ---- 파트너(채널)·고객사 귀속 ----
+  const [partners, setPartners] = useState<PartnerView[]>([]);
+  const [accounts, setAccounts] = useState<AccountView[]>([]);
+  const [rollup, setRollup] = useState<RollupView[]>([]);
+  const [partnerFilter, setPartnerFilter] = useState('');
+  const [partnerErr, setPartnerErr] = useState('');
+  const [partnerBusy, setPartnerBusy] = useState(false);
+  const [partnerLoaded, setPartnerLoaded] = useState(false);
+  const [pForm, setPForm] = useState<PartnerForm>(EMPTY_PARTNER_FORM);
+  const [aForm, setAForm] = useState<AccountForm>(EMPTY_ACCOUNT_FORM);
+
+  const loadPartners = useCallback(async (filter = '') => {
+    setPartnerBusy(true);
+    setPartnerErr('');
+    try {
+      const qs = filter ? `?partnerId=${encodeURIComponent(filter)}` : '';
+      const res = await fetch(`/api/admin/partners${qs}`, { headers: authHeaders(), cache: 'no-store' });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        setPartnerErr(data?.message || data?.error || '파트너 정보를 불러오지 못했습니다.');
+        return;
+      }
+      setPartners(data.partners || []);
+      setAccounts(data.accounts || []);
+      setRollup(data.rollup || []);
+      setPartnerLoaded(true);
+    } catch {
+      setPartnerErr('네트워크 오류로 파트너 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setPartnerBusy(false);
+    }
+  }, []);
+
+  const submitPartner = async () => {
+    setPartnerErr('');
+    const res = await fetch('/api/admin/partners', {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({ kind: 'partner', ...pForm, feeRateBp: pForm.feeRateBp === '' ? null : pForm.feeRateBp }),
+    });
+    if (on401(res)) return;
+    const data = await res.json();
+    if (!data.ok) {
+      setPartnerErr(data.message || data.error || '저장하지 못했습니다.');
+      return;
+    }
+    setPForm(EMPTY_PARTNER_FORM);
+    await loadPartners(partnerFilter);
+    flash(data.created ? '파트너를 등록했습니다.' : '파트너를 수정했습니다.');
+  };
+
+  const submitAccount = async () => {
+    setPartnerErr('');
+    const res = await fetch('/api/admin/partners', {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({ kind: 'account', ...aForm }),
+    });
+    if (on401(res)) return;
+    const data = await res.json();
+    if (!data.ok) {
+      setPartnerErr(data.message || data.error || '저장하지 못했습니다.');
+      return;
+    }
+    setAForm(EMPTY_ACCOUNT_FORM);
+    await loadPartners(partnerFilter);
+    flash(data.created ? '고객사를 등록했습니다.' : '고객사를 수정했습니다.');
+  };
+
+  const removePartner = async (p: PartnerView) => {
+    // 되돌릴 수 없는 동작 — 확인 절차를 거친다(연결 고객사가 있으면 서버가 거절한다).
+    if (!window.confirm(`파트너 "${p.name}"을(를) 삭제할까요? 되돌릴 수 없습니다.`)) return;
+    const res = await fetch(`/api/admin/partners?partnerId=${encodeURIComponent(p.id)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (on401(res)) return;
+    const data = await res.json();
+    if (!data.ok) {
+      setPartnerErr(data.message || data.error || '삭제하지 못했습니다.');
+      return;
+    }
+    await loadPartners(partnerFilter);
+    flash('파트너를 삭제했습니다.');
+  };
+
   // ---- Audit ----
   const [auditEvents, setAuditEvents] = useState<AuditView[]>([]);
   const loadAudit = useCallback(async () => {
@@ -392,6 +543,11 @@ export default function AdminPage() {
   useEffect(() => {
     verifyAuth();
   }, [verifyAuth]);
+
+  // 파트너 탭은 열었을 때만 불러온다(불필요한 관리 API 호출을 만들지 않는다).
+  useEffect(() => {
+    if (tab === 'partner' && !partnerLoaded && !partnerBusy) loadPartners(partnerFilter);
+  }, [tab, partnerLoaded, partnerBusy, loadPartners, partnerFilter]);
 
   const flash = (msg: string) => {
     setNotice(msg);
@@ -649,6 +805,7 @@ export default function AdminPage() {
             ['kb', '지식베이스'],
             ['rules', '시나리오 룰'],
             ['esc', '상담원 요청'],
+            ['partner', '파트너·귀속'],
             ['test', '응답 테스트'],
             ['audit', '감사 로그'],
           ] as const
@@ -1031,6 +1188,196 @@ export default function AdminPage() {
               </div>
             </section>
           ))}
+        </>
+      )}
+
+      {tab === 'partner' && (
+        <>
+          <section style={S.card} aria-labelledby="partner-h">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <h2 id="partner-h" style={{ fontSize: 16 }}>파트너·매출 귀속</h2>
+              <button style={S.btnGhost} onClick={() => loadPartners(partnerFilter)} disabled={partnerBusy}>
+                {partnerBusy ? '불러오는 중…' : '새로고침'}
+              </button>
+            </div>
+            <p style={{ ...S.tag, marginTop: 6 }}>
+              계약 주체는 고원이며, 파트너는 유치·운영을 담당합니다. 여기서는 <b>어느 고객사를 누가 데려왔는지</b>만 기록합니다.
+              담당자는 이름만 저장하고 연락처는 저장하지 않습니다. 실제 정산·청구는 계약서 확정 후 <b>[승인 필요]</b>.
+            </p>
+            {partnerErr && (
+              <p role="alert" style={{ fontSize: 13, color: '#c0392b', marginTop: 10 }}>{partnerErr}</p>
+            )}
+          </section>
+
+          <section style={S.card} aria-labelledby="rollup-h">
+            <h3 id="rollup-h" style={{ fontSize: 15, marginBottom: 8 }}>귀속 집계</h3>
+            {rollup.length === 0 ? (
+              <p style={S.tag}>{partnerBusy ? '불러오는 중…' : '집계할 계약이 아직 없습니다.'}</p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <caption style={{ ...S.tag, textAlign: 'left', marginBottom: 6 }}>
+                    건수만 집계합니다(금액·성과 수치는 실적 연동 후 표시).
+                  </caption>
+                  <thead>
+                    <tr style={{ textAlign: 'left', color: 'var(--mut)' }}>
+                      <th scope="col" style={{ padding: '6px 8px' }}>귀속</th>
+                      <th scope="col" style={{ padding: '6px 8px' }}>수수료율</th>
+                      <th scope="col" style={{ padding: '6px 8px' }}>전체</th>
+                      <th scope="col" style={{ padding: '6px 8px' }}>계약</th>
+                      <th scope="col" style={{ padding: '6px 8px' }}>검토 중</th>
+                      <th scope="col" style={{ padding: '6px 8px' }}>해지</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rollup.map((r) => (
+                      <tr key={r.partnerId ?? 'direct'} style={{ borderTop: '1px solid var(--line)' }}>
+                        <th scope="row" style={{ padding: '6px 8px', fontWeight: 600, textAlign: 'left' }}>{r.partnerName}</th>
+                        <td style={{ padding: '6px 8px' }}>{r.partnerId ? feeLabel(r.feeRateBp) : '—'}</td>
+                        <td style={{ padding: '6px 8px' }}>{r.total}</td>
+                        <td style={{ padding: '6px 8px' }}>{r.contracted}</td>
+                        <td style={{ padding: '6px 8px' }}>{r.prospect}</td>
+                        <td style={{ padding: '6px 8px' }}>{r.churned}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          <section style={S.card} aria-labelledby="partner-form-h">
+            <h3 id="partner-form-h" style={{ fontSize: 15, marginBottom: 8 }}>{pForm.id ? '파트너 수정' : '파트너 등록'}</h3>
+            <label htmlFor="p-name" style={S.tag}>파트너명</label>
+            <input id="p-name" style={S.input} value={pForm.name} onChange={(e) => setPForm({ ...pForm, name: e.target.value })} placeholder="예: 제이투모로우원" />
+            <label htmlFor="p-manager" style={S.tag}>담당자 이름(연락처는 저장하지 않습니다)</label>
+            <input id="p-manager" style={S.input} value={pForm.managerName} onChange={(e) => setPForm({ ...pForm, managerName: e.target.value })} placeholder="예: 김담당" />
+            <label htmlFor="p-fee" style={S.tag}>수수료율(bp · 100bp = 1%, 비우면 미설정)</label>
+            <input id="p-fee" style={S.input} inputMode="numeric" value={pForm.feeRateBp} onChange={(e) => setPForm({ ...pForm, feeRateBp: e.target.value })} placeholder="예: 1500 (=15%)" />
+            <label htmlFor="p-status" style={S.tag}>상태</label>
+            <select id="p-status" style={S.input} value={pForm.status} onChange={(e) => setPForm({ ...pForm, status: e.target.value as PartnerForm['status'] })}>
+              <option value="active">운영 중</option>
+              <option value="paused">중지</option>
+            </select>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={S.btn} onClick={submitPartner}>{pForm.id ? '수정 저장' : '등록'}</button>
+              {pForm.id && <button style={S.btnGhost} onClick={() => setPForm(EMPTY_PARTNER_FORM)}>취소</button>}
+            </div>
+          </section>
+
+          <section style={S.card} aria-labelledby="partner-list-h">
+            <h3 id="partner-list-h" style={{ fontSize: 15, marginBottom: 8 }}>파트너 ({partners.length})</h3>
+            {partners.length === 0 ? (
+              <p style={S.tag}>
+                {partnerBusy ? '불러오는 중…' : '등록된 파트너가 없습니다. 위 양식에서 첫 파트너를 등록하면 고객사 귀속을 지정할 수 있습니다.'}
+              </p>
+            ) : (
+              partners.map((p) => (
+                <div key={p.id} style={{ borderTop: '1px solid var(--line)', padding: '10px 0', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <b style={{ fontSize: 14 }}>{p.name}</b>
+                  <span style={S.tag}>{p.id} · {p.status === 'active' ? '운영 중' : '중지'} · 수수료 {feeLabel(p.feeRateBp)}{p.managerName ? ` · 담당 ${p.managerName}` : ''}</span>
+                  <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                    <button style={S.btnGhost} onClick={() => setPForm({ id: p.id, name: p.name, managerName: p.managerName ?? '', feeRateBp: p.feeRateBp === null ? '' : String(p.feeRateBp), status: p.status, memo: p.memo ?? '' })}>수정</button>
+                    <button style={S.btnGhost} onClick={() => removePartner(p)}>삭제</button>
+                  </span>
+                </div>
+              ))
+            )}
+          </section>
+
+          <section style={S.card} aria-labelledby="account-form-h">
+            <h3 id="account-form-h" style={{ fontSize: 15, marginBottom: 8 }}>{aForm.id ? '고객사 수정' : '고객사 등록'}</h3>
+            <label htmlFor="a-name" style={S.tag}>고객사명</label>
+            <input id="a-name" style={S.input} value={aForm.name} onChange={(e) => setAForm({ ...aForm, name: e.target.value })} placeholder="예: OO의원" />
+            <label htmlFor="a-partner" style={S.tag}>귀속 파트너(비우면 직접 계약)</label>
+            <select id="a-partner" style={S.input} value={aForm.partnerId} onChange={(e) => setAForm({ ...aForm, partnerId: e.target.value })}>
+              <option value="">직접 계약</option>
+              {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <label htmlFor="a-source" style={S.tag}>유입 경로</label>
+            <select id="a-source" style={S.input} value={aForm.source} onChange={(e) => setAForm({ ...aForm, source: e.target.value })}>
+              {Object.entries(SOURCE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            <label htmlFor="a-status" style={S.tag}>계약 상태</label>
+            <select id="a-status" style={S.input} value={aForm.status} onChange={(e) => setAForm({ ...aForm, status: e.target.value as AccountView['status'] })}>
+              {Object.entries(ACCOUNT_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            <label htmlFor="a-date" style={S.tag}>계약일(YYYY-MM-DD · 계약 상태면 필수)</label>
+            <input id="a-date" style={S.input} value={aForm.contractedAt} onChange={(e) => setAForm({ ...aForm, contractedAt: e.target.value })} placeholder="2026-09-01" />
+            <label htmlFor="a-owner" style={S.tag}>고원 담당자 이름</label>
+            <input id="a-owner" style={S.input} value={aForm.ownerName} onChange={(e) => setAForm({ ...aForm, ownerName: e.target.value })} placeholder="예: 이담당" />
+            <label htmlFor="a-note" style={S.tag}>귀속 근거(변경 시 이력에 남습니다)</label>
+            <input id="a-note" style={S.input} value={aForm.attributionNote} onChange={(e) => setAForm({ ...aForm, attributionNote: e.target.value })} placeholder="예: 파트너 소개로 최초 미팅(2026-08-20)" />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={S.btn} onClick={submitAccount}>{aForm.id ? '수정 저장' : '등록'}</button>
+              {aForm.id && <button style={S.btnGhost} onClick={() => setAForm(EMPTY_ACCOUNT_FORM)}>취소</button>}
+            </div>
+          </section>
+
+          <section style={S.card} aria-labelledby="account-list-h">
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <h3 id="account-list-h" style={{ fontSize: 15 }}>고객사 ({accounts.length})</h3>
+              <span>
+                <label htmlFor="a-filter" style={{ ...S.tag, marginRight: 6 }}>귀속 필터</label>
+                <select
+                  id="a-filter"
+                  style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '6px 10px', fontSize: 13 }}
+                  value={partnerFilter}
+                  onChange={(e) => { setPartnerFilter(e.target.value); loadPartners(e.target.value); }}
+                >
+                  <option value="">전체</option>
+                  <option value="direct">직접 계약</option>
+                  {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </span>
+            </div>
+            {accounts.length === 0 ? (
+              <p style={{ ...S.tag, marginTop: 10 }}>
+                {partnerBusy
+                  ? '불러오는 중…'
+                  : partnerFilter
+                    ? '이 조건에 해당하는 고객사가 없습니다. 필터를 "전체"로 바꿔 보세요.'
+                    : '등록된 고객사가 없습니다. 위 양식에서 첫 고객사를 등록하면 유입 경로와 귀속 이력이 함께 기록됩니다.'}
+              </p>
+            ) : (
+              accounts.map((a) => {
+                const last = a.attribution[a.attribution.length - 1];
+                const partnerName = a.partnerId ? partners.find((p) => p.id === a.partnerId)?.name ?? a.partnerId : '직접 계약';
+                return (
+                  <div key={a.id} style={{ borderTop: '1px solid var(--line)', padding: '10px 0' }}>
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <b style={{ fontSize: 14 }}>{a.name}</b>
+                      <span style={S.tag}>
+                        {a.id} · {partnerName} · {SOURCE_LABELS[a.source] ?? a.source} · {ACCOUNT_STATUS_LABELS[a.status]}
+                        {a.contractedAt ? ` · 계약일 ${a.contractedAt}` : ''}
+                        {a.ownerName ? ` · 담당 ${a.ownerName}` : ''}
+                      </span>
+                      <span style={{ marginLeft: 'auto' }}>
+                        <button
+                          style={S.btnGhost}
+                          onClick={() => setAForm({
+                            id: a.id, name: a.name, partnerId: a.partnerId ?? '', source: a.source,
+                            status: a.status, contractedAt: a.contractedAt ?? '', ownerName: a.ownerName ?? '', attributionNote: '',
+                          })}
+                        >수정</button>
+                      </span>
+                    </div>
+                    <details style={{ marginTop: 6 }}>
+                      <summary style={{ ...S.tag, cursor: 'pointer' }}>귀속 이력 {a.attribution.length}건{last ? ` · 최근: ${last.note}` : ''}</summary>
+                      <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 12.5, color: 'var(--sub)' }}>
+                        {a.attribution.map((h, idx) => (
+                          <li key={idx} style={{ marginBottom: 3 }}>
+                            {h.at.slice(0, 10)} · {h.fromPartnerId ?? '직접'} → {h.toPartnerId ?? '직접'} · {SOURCE_LABELS[h.source] ?? h.source} · {h.note}
+                            {h.authed ? ' · 인증됨' : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  </div>
+                );
+              })
+            )}
+          </section>
         </>
       )}
 

@@ -25,6 +25,7 @@ const ROUTES = [
   'src/app/api/admin/kb/import/route.ts',
   'src/app/api/admin/logs/export/route.ts',
   'src/app/api/admin/rules/route.ts',
+  'src/app/api/admin/partners/route.ts',
 ].filter(has);
 
 /* ── 안전 플래그: build now, activate on approval ── */
@@ -464,3 +465,40 @@ test('관리 토큰 비교가 상수 시간이고 실패 누적 잠금이 있다
   assert.match(r, /recordAttempt\(key, !denied\)/);
   assert.match(r, /남은 시도/, '사용자에게 남은 시도를 알려줘야 한다');
 });
+
+/* ── 파트너(채널)·매출 귀속 ── */
+test('파트너 API는 모든 메서드에서 관리자 게이트를 거친다', () => {
+  const s = read('src/app/api/admin/partners/route.ts');
+  const methods = [...s.matchAll(/export async function (GET|POST|DELETE|PATCH|PUT)\(/g)].map((m) => m[1]);
+  assert.ok(methods.length >= 3, '조회·등록·삭제가 있어야 한다');
+  assert.equal((s.match(/requireAdmin\(req\)/g) || []).length, methods.length, '메서드마다 requireAdmin이 필요하다');
+});
+
+test('파트너 데이터는 연락처를 저장하지 않는다(개인정보 최소화)', () => {
+  const s = read('src/lib/partners.ts');
+  for (const field of ['phone', 'email', 'mobile', 'tel']) {
+    assert.equal(new RegExp(`^\\s*${field}\\??:`, 'mi').test(s), false, `${field} 필드를 두면 개인정보 네임스페이스가 된다`);
+  }
+  // 담당자는 이름만 받는다
+  assert.match(s, /managerName\??:/);
+  assert.match(s, /ownerName\??:/);
+});
+
+test('수수료율은 하드코딩하지 않고 설정값으로 분리한다', () => {
+  const s = read('src/lib/partners.ts');
+  assert.match(s, /PARTNER_DEFAULT_FEE_RATE_BP/, '기본 수수료율은 환경변수여야 한다');
+  assert.match(s, /feeRateBp: number \| null/, '미설정을 null로 표현해야 임의 수치가 생기지 않는다');
+});
+
+test('고객사 삭제 API는 존재하지 않는다(귀속 근거 보존)', () => {
+  const s = read('src/app/api/admin/partners/route.ts');
+  assert.equal(/deleteAccount/.test(s), false, '해지는 status로 표현하고 기록은 지우지 않는다');
+});
+
+test('백업에 파트너·귀속 데이터가 포함되고, 없는 백업도 복원된다(하위 호환)', () => {
+  const s = read('src/app/api/admin/backup/route.ts');
+  assert.match(s, /exportPartners\(\)/, '백업에 파트너 스냅샷이 들어가야 한다');
+  assert.match(s, /if \(raw && typeof raw === 'object'\)/, 'partners 키가 없으면 건드리지 않아야 한다');
+  assert.match(s, /partnersError/, '복원 실패를 삼키지 않고 응답에 알려야 한다');
+});
+

@@ -986,3 +986,150 @@ test('마스킹이 날짜를 계좌번호로 오인하지 않는다(회귀)', op
   assert.match(maskPii('계좌 110-234-567890').text, /\*\*\*-\*\*\*\*-\*\*\*\*/);
 });
 
+/* ══════════ 파트너(채널) · 매출 귀속 ══════════ */
+
+async function partnersLib() {
+  process.env.ADMIN_PERSIST = 'false'; // 테스트는 디스크에 쓰지 않는다
+  const lib = await importLib('partners', ['storage', 'logger', 'monitoring']);
+  lib.resetPartners();
+  return lib;
+}
+
+test('고객사는 파트너 없이도 등록된다(직접 계약이 기본)', opts, async () => {
+  const P = await partnersLib();
+  const r = P.upsertAccount({ name: 'OO의원' });
+  assert.equal(r.ok, true);
+  assert.equal(r.account.partnerId, null, 'partnerId는 nullable — 없으면 직접 계약');
+  assert.equal(r.account.source, 'unknown');
+  assert.equal(r.account.attribution.length, 1, '최초 등록도 귀속 근거로 남는다');
+  assert.equal(r.account.attribution[0].note, '최초 등록');
+});
+
+test('귀속을 바꾸면 이전 값·사유가 이력으로 남는다(정산 근거)', opts, async () => {
+  const P = await partnersLib();
+  const p = P.upsertPartner({ name: '제이투모로우원', feeRateBp: 1500 });
+  assert.equal(p.ok, true);
+  const created = P.upsertAccount({ name: 'AA치과' });
+
+  const moved = P.upsertAccount({
+    id: created.account.id,
+    name: 'AA치과',
+    partnerId: p.partner.id,
+    source: 'partner',
+    attributionNote: '파트너 소개로 최초 미팅(2026-08-20)',
+    authed: true,
+  });
+  assert.equal(moved.ok, true);
+  assert.equal(moved.account.partnerId, p.partner.id);
+  assert.equal(moved.account.attribution.length, 2);
+  const last = moved.account.attribution[1];
+  assert.equal(last.fromPartnerId, null);
+  assert.equal(last.toPartnerId, p.partner.id);
+  assert.match(last.note, /파트너 소개/);
+  assert.equal(last.authed, true, '인증 여부가 남아야 분쟁 시 근거가 된다');
+
+  // 귀속이 바뀌지 않는 단순 수정은 이력을 늘리지 않는다(노이즈 방지)
+  const renamed = P.upsertAccount({ id: created.account.id, name: 'AA치과의원', partnerId: p.partner.id, source: 'partner' });
+  assert.equal(renamed.account.attribution.length, 2);
+});
+
+test('잘못된 입력은 거절하고 이유를 돌려준다(실패 경로)', opts, async () => {
+  const P = await partnersLib();
+  assert.equal(P.upsertAccount({ name: '  ' }).error, '고객사명을 입력해 주세요.');
+  assert.match(P.upsertAccount({ name: 'BB', partnerId: 'PTR-9999' }).error, /존재하지 않는 파트너/);
+  assert.match(P.upsertAccount({ name: 'BB', source: 'partner' }).error, /파트너를 지정/);
+  assert.match(P.upsertAccount({ name: 'BB', contractedAt: '2026-02-31' }).error, /실제 날짜/);
+  assert.match(P.upsertAccount({ name: 'BB', status: 'contracted' }).error, /계약일이 필요/);
+  assert.match(P.upsertPartner({ name: 'X', feeRateBp: 99999 }).error, /0~10000bp/);
+  assert.match(P.upsertPartner({ name: '' }).error, /파트너명/);
+});
+
+test('연결된 고객사가 있는 파트너는 삭제되지 않는다(되돌릴 수 없는 동작 보호)', opts, async () => {
+  const P = await partnersLib();
+  const p = P.upsertPartner({ name: '테스트파트너' });
+  P.upsertAccount({ name: 'CC사', partnerId: p.partner.id, source: 'partner' });
+  const blocked = P.deletePartner(p.partner.id);
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.error, /연결된 고객사가 1곳/);
+
+  // 귀속을 직접 계약으로 옮기면 삭제할 수 있다
+  const acc = P.queryAccounts({ partnerId: p.partner.id })[0];
+  P.upsertAccount({ id: acc.id, name: acc.name, partnerId: '', source: 'direct', attributionNote: '직접 계약으로 전환' });
+  assert.equal(P.deletePartner(p.partner.id).ok, true);
+});
+
+test('조회는 queryAccounts 한 곳을 지난다(2계층 확장 지점)', opts, async () => {
+  const P = await partnersLib();
+  const p1 = P.upsertPartner({ name: '파트너1' }).partner;
+  const p2 = P.upsertPartner({ name: '파트너2' }).partner;
+  P.upsertAccount({ name: '가나사', partnerId: p1.id, source: 'partner', status: 'contracted', contractedAt: '2026-09-01' });
+  P.upsertAccount({ name: '다라사', partnerId: p2.id, source: 'partner' });
+  P.upsertAccount({ name: '마바사', source: 'direct' });
+
+  assert.equal(P.queryAccounts().length, 3);
+  assert.equal(P.queryAccounts({ partnerId: p1.id }).length, 1);
+  assert.equal(P.queryAccounts({ partnerId: 'direct' }).length, 1, '직접 계약만 걸러낼 수 있어야 한다');
+  assert.equal(P.queryAccounts({ status: 'contracted' })[0].name, '가나사');
+  assert.equal(P.queryAccounts({ q: '다라' }).length, 1);
+  assert.equal(P.queryAccounts({ q: '없는회사' }).length, 0);
+});
+
+test('수수료율은 설정값이며, 미설정이면 임의 수치를 만들지 않는다', opts, async () => {
+  const P = await partnersLib();
+  delete process.env.PARTNER_DEFAULT_FEE_RATE_BP;
+  const noFee = P.upsertPartner({ name: '수수료미정' }).partner;
+  assert.equal(noFee.feeRateBp, null);
+  assert.equal(P.effectiveFeeRateBp(noFee), null, '기본값이 없으면 null이어야 한다(임의 KPI 금지)');
+  process.env.PARTNER_DEFAULT_FEE_RATE_BP = '1000';
+  try {
+    assert.equal(P.effectiveFeeRateBp(noFee), 1000, '설정값이 있으면 그것을 쓴다');
+    assert.equal(P.effectiveFeeRateBp({ feeRateBp: 2000 }), 2000, '파트너 개별 설정이 우선');
+  } finally {
+    delete process.env.PARTNER_DEFAULT_FEE_RATE_BP;
+  }
+});
+
+test('집계는 건수만 센다(금액·성과 수치를 지어내지 않는다)', opts, async () => {
+  const P = await partnersLib();
+  const p = P.upsertPartner({ name: '집계파트너' }).partner;
+  P.upsertAccount({ name: 'A', partnerId: p.id, source: 'partner', status: 'contracted', contractedAt: '2026-09-01' });
+  P.upsertAccount({ name: 'B', partnerId: p.id, source: 'partner' });
+  P.upsertAccount({ name: 'C', source: 'direct' });
+
+  const rows = P.rollupByPartner();
+  const row = rows.find((r) => r.partnerId === p.id);
+  assert.equal(row.total, 2);
+  assert.equal(row.contracted, 1);
+  assert.equal(row.prospect, 1);
+  const direct = rows.find((r) => r.partnerId === null);
+  assert.equal(direct.total, 1);
+  assert.equal(Object.keys(row).some((k) => /revenue|amount|매출/.test(k)), false, '금액 필드는 아직 없다');
+});
+
+test('스냅샷 복원: 손상 항목은 건너뛰고 고아 귀속은 직접 계약으로 되돌린다', opts, async () => {
+  const P = await partnersLib();
+  const bad = P.importPartners({ partners: 'nope' });
+  assert.equal(bad.ok, false, '형식이 어긋나면 실패를 알린다');
+
+  const r = P.importPartners({
+    version: 1,
+    partners: [
+      { id: 'PTR-0003', name: '복원파트너', status: 'active', feeRateBp: 1200 },
+      { id: '', name: '이름없는id' },
+    ],
+    accounts: [
+      { id: 'ACC-0007', name: '정상사', partnerId: 'PTR-0003', source: 'partner', status: 'contracted', contractedAt: '2026-01-02', attribution: [] },
+      { id: 'ACC-0008', name: '고아사', partnerId: 'PTR-9999', source: 'partner' },
+      { id: 'ACC-0009' },
+    ],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.partners, 1, '무효 파트너는 건너뛴다');
+  assert.equal(r.accounts, 2, '무효 고객사는 건너뛴다');
+  assert.equal(P.getAccount('ACC-0008').partnerId, null, '없는 파트너를 가리키면 직접 계약으로 되돌린다');
+  // 복원 후 새로 만든 id가 기존 id와 충돌하지 않는다
+  const next = P.upsertAccount({ name: '신규사' });
+  assert.equal(next.account.id, 'ACC-0010');
+  assert.equal(P.upsertPartner({ name: '신규파트너' }).partner.id, 'PTR-0004');
+});
+

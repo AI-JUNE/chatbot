@@ -46,6 +46,7 @@ export interface Namespace {
 export const NAMESPACES: Record<string, Namespace> = {
   admin: { id: 'admin', label: '관리 콘텐츠(KB·룰)', pii: false },
   audit: { id: 'audit', label: '감사 로그', pii: false },
+  partners: { id: 'partners', label: '파트너·계약 귀속', pii: false },
   tickets: { id: 'tickets', label: '상담 티켓', pii: true },
   convlog: { id: 'convlog', label: '대화 로그', pii: true },
 };

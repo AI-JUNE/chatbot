@@ -33,6 +33,7 @@ curl -s https://chatbot-gowon.vercel.app/api/health | jq
 |---|---|---|---|---|
 | KB(지식), 룰 오버라이드, 커스텀 룰 | `admin` | 저장(파일 드라이버) | `/api/admin/backup` GET | 없음 |
 | 감사 로그 | `audit` | 저장(파일 드라이버) | `/api/admin/audit?format=csv` | 없음 |
+| 파트너·고객사 계약 귀속 | `partners` | 저장(파일 드라이버) | `/api/admin/backup` GET(`partners` 키) | 없음(담당자 이름만, 연락처 미저장) |
 | 상담 티켓 | `tickets` | **미저장 — `PERSIST_PII=true` [승인 필요]** | 승인 전 없음(메모리) | 있음 |
 | 대화 로그 | `convlog` | **미저장 — `PERSIST_PII=true` [승인 필요]** | 승인 전 없음(메모리) | 있음 |
 
@@ -83,13 +84,15 @@ curl -s -H "x-admin-token: $ADMIN_TOKEN" .../api/admin/backup -o pre-restore.jso
 curl -s -X POST -H "x-admin-token: $ADMIN_TOKEN" -H 'Content-Type: application/json' \
   --data @backup-YYYYMMDD-HHMM.json .../api/admin/backup
 
-# 3) 응답의 kb/overrides/customRules 건수가 백업본과 같은지 확인
-jq '{kb:(.kb|length), rules:(.customRules|length)}' backup-YYYYMMDD-HHMM.json
+# 3) 응답의 kb/overrides/customRules(및 partners/accounts) 건수가 백업본과 같은지 확인
+jq '{kb:(.kb|length), rules:(.customRules|length), partners:(.partners.partners|length), accounts:(.partners.accounts|length)}' backup-YYYYMMDD-HHMM.json
 ```
 
 - 복원은 **되돌릴 수 없는 전체 교체**다. 1단계(pre-restore)를 건너뛰지 않는다.
 - 본문 상한 1MB(`MAX_IMPORT_BYTES`). 초과 시 `payload_too_large` 로 거부된다.
 - 복원 이력은 감사 로그(`backup.restore`)에 남는다 → `/api/admin/audit`.
+- `partners` 키가 없는 예전 백업도 그대로 복원되며, 이때 기존 파트너·귀속 데이터는 **지워지지 않는다**.
+  파트너 스냅샷만 형식이 어긋난 경우 응답의 `partnersError`에 사유가 담긴다(조용히 넘어가지 않는다).
 
 ### 3-2. 모니터링이 꺼져 있음 (`flags.monitoring:false`)
 
