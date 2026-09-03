@@ -2,6 +2,7 @@
 // [승인 필요] 세션 영구 저장(DB/Redis) — 전까지 서버 메모리(TTL 30분, 최대 2000세션)만 유지.
 import type { ChatSuggestion } from '@/lib/chat';
 import type { HandoffReason, Speaker } from '@/lib/handoff';
+import type { FormState } from '@/lib/slots';
 
 /** 이관 요약용 최근 대화 버퍼 1턴. 원문 그대로 두고 요약 생성 시점에 마스킹한다. */
 export interface SessionTurn {
@@ -29,6 +30,8 @@ export interface SessionContext {
   turns?: SessionTurn[];
   /** 수집한 슬롯(연락처 등) — 요약 생성 시 마스킹된다. 영구 저장은 [승인 필요] */
   slots?: Record<string, string>;
+  /** 진행 중인 멀티턴 슬롯 수집 상태(예약 접수·장애 신고 등). 완료·취소 시 비운다. */
+  form?: FormState;
   updatedAt: number;
 }
 

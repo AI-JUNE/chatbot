@@ -46,10 +46,24 @@ export interface MaskResult {
   hits: string[];
 }
 
+/**
+ * 마스킹 전에 보호할 패턴 — 개인정보가 아닌데 넓은 규칙(계좌)에 걸리는 표기.
+ * 예: '2026-09-04'는 계좌번호 패턴(\d{2,3}-?\d{2,6}-?\d{2,6})과 겹친다.
+ * 예약 일시가 '***-****-****'로 뭉개지면 상담원이 언제 방문인지 알 수 없다.
+ */
+const PROTECT_RULES: RegExp[] = [/\b20\d{2}[-./]\d{1,2}[-./]\d{1,2}\b/g];
+
 export function maskPii(input: string): MaskResult {
   let out = input || '';
   const hits: string[] = [];
   const vault: string[] = [];
+  // 보호 구간을 먼저 자리표시자로 빼둔다(원문 그대로 되돌아온다 — 마스킹 종류에도 집계하지 않는다).
+  for (const re of PROTECT_RULES) {
+    out = out.replace(new RegExp(re.source, 'g'), (m) => {
+      vault.push(m);
+      return PLACEHOLDER(vault.length - 1);
+    });
+  }
   for (const rule of MASK_RULES) {
     const re = new RegExp(rule.re.source, 'g');
     let hit = false;
@@ -99,6 +113,8 @@ export interface HandoffSummary {
   lastIntent?: string;
   collectedSlots: SummarySlot[];
   pendingSlots: string[];
+  /** 미수집 슬롯의 한국어 라벨(pendingSlots와 같은 순서). */
+  pendingSlotLabels: string[];
   recentTurns: SummaryLine[];
   piiMasked: boolean;
   piiKinds: string[];
@@ -116,6 +132,8 @@ export interface SummaryInput {
   slots?: Record<string, string>;
   /** 시나리오상 받아야 하지만 아직 없는 슬롯 키. */
   pendingSlots?: string[];
+  /** 슬롯 키 → 한국어 라벨 재정의(폼 정의가 주는 라벨을 그대로 쓰기 위함). */
+  slotLabels?: Record<string, string>;
   /** 표시할 최근 턴 수 — 화면 설정값이며 성능 지표가 아니다. */
   recentTurns?: number;
   now?: () => string;
@@ -127,10 +145,14 @@ const SLOT_LABELS: Record<string, string> = {
   contact: '연락처',
   name: '성함',
   orderId: '주문번호',
+  datetime: '희망 일시',
+  symptom: '증상',
+  channel: '발생 채널',
+  company: '회사명',
 };
 
-function labelOf(key: string): string {
-  return SLOT_LABELS[key] ?? key;
+function labelOf(key: string, overrides?: Record<string, string>): string {
+  return overrides?.[key] ?? SLOT_LABELS[key] ?? key;
 }
 
 /** 규칙 기반 이관 요약. 모든 본문이 maskPii를 통과한다. */
@@ -142,7 +164,7 @@ export function buildHandoffSummary(input: SummaryInput): HandoffSummary {
     .map(([key, value]) => {
       const m = maskPii(String(value));
       for (const k of m.hits) kinds.add(k);
-      return { key, label: labelOf(key), value: m.text, masked: m.masked };
+      return { key, label: labelOf(key, input.slotLabels), value: m.text, masked: m.masked };
     });
 
   const collected = new Set(collectedSlots.map((s) => s.key));
@@ -168,6 +190,7 @@ export function buildHandoffSummary(input: SummaryInput): HandoffSummary {
     turnCount: input.turns.length,
     collectedSlots,
     pendingSlots,
+    pendingSlotLabels: pendingSlots.map((k) => labelOf(k, input.slotLabels)),
     recentTurns,
     piiMasked: kinds.size > 0,
     piiKinds: [...kinds].sort(),
@@ -193,7 +216,7 @@ export function renderSummaryText(s: HandoffSummary): string {
 
   if (s.pendingSlots.length > 0) {
     L.push('미수집 정보');
-    for (const p of s.pendingSlots) L.push(`  - ${labelOf(p)}`);
+    s.pendingSlots.forEach((p, i) => L.push(`  - ${s.pendingSlotLabels[i] ?? labelOf(p)}`));
   }
 
   L.push('직전 대화');

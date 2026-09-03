@@ -13,6 +13,19 @@ import { appendTurn, getSession, setSlot, updateSession } from '@/lib/session';
 import { createTicket, queuePosition } from '@/lib/escalation';
 import { buildHandoffSummary, type HandoffReason } from '@/lib/handoff';
 import { generateGroundedAnswer, type CompleteOptions, type GroundingDoc, type LLMFailureReason, type LLMMessage } from '@/lib/llm';
+import {
+  AGENT_REQUEST_RE,
+  applyInput,
+  collectedSlots,
+  formForIntent,
+  getForm,
+  promptFor,
+  renderCollected,
+  startForm,
+  stepInfo,
+  type FormSpec,
+  type SlotSpec,
+} from '@/lib/slots';
 
 export const LLM_LIVE = process.env.CHAT_LLM_LIVE === 'true';
 
@@ -27,6 +40,18 @@ export type ReplySource = 'rule' | 'kb' | 'llm' | 'fallback' | 'empty' | 'contex
 export interface ChatSuggestion {
   id: string; // KB 항목 id
   question: string; // 그대로 재전송하면 KB가 답하는 질문 문구
+}
+
+/** 진행 중인 슬롯 수집 단계 — 위젯 진행 표시용(성능 지표가 아니라 화면 상태값이다). */
+export interface FormProgress {
+  id: string;
+  title: string;
+  step: number;
+  total: number;
+  /** 지금 묻고 있는 항목 라벨 */
+  label: string;
+  /** 이 항목을 "건너뛰기"로 넘길 수 있는지 */
+  canSkip: boolean;
 }
 
 export interface ChatReply {
@@ -49,6 +74,8 @@ export interface ChatReply {
   handoffReason?: HandoffReason;
   /** LLM 경로가 실패해 결정적 폴백으로 되돌아간 사유(로그·모니터링용, 고객에게 노출하지 않는다). */
   llmFailure?: LLMFailureReason;
+  /** 멀티턴 슬롯 수집이 진행 중일 때의 단계 정보(완료·취소 턴에는 없다). */
+  form?: FormProgress;
 }
 
 // ---- 신뢰도·자동 전환 정책 ----
@@ -130,17 +157,40 @@ function parsePick(text: string, max: number): number | null {
 }
 
 /** 세션 문맥 + 현재 티켓 상태로 규칙 기반 이관 요약을 만든다(마스킹 완료 평문). */
-function summaryFor(sessionId: string, reason: HandoffReason, ticketId?: string): string {
+function summaryFor(
+  sessionId: string,
+  reason: HandoffReason,
+  opts: { ticketId?: string; pendingSlots?: string[]; slotLabels?: Record<string, string> } = {},
+): string {
   const ctx = getSession(sessionId);
+  const pending = opts.pendingSlots ?? (ctx.slots?.contact ? [] : ['contact']);
   return buildHandoffSummary({
     sessionId,
     channel: 'web',
     reason,
     turns: ctx.turns ?? [],
     slots: ctx.slots ?? {},
-    pendingSlots: ctx.slots?.contact ? [] : ['contact'],
-    ...(ticketId ? { ticketId } : {}),
+    pendingSlots: pending,
+    ...(opts.slotLabels ? { slotLabels: opts.slotLabels } : {}),
+    ...(opts.ticketId ? { ticketId: opts.ticketId } : {}),
   }).text;
+}
+
+/** 슬롯 수집 기능 게이트. 기본 ON, `CHAT_SLOT_FORMS=false`로 끌 수 있다(운영 중 즉시 회피용). */
+function slotFormsEnabled(): boolean {
+  return process.env.CHAT_SLOT_FORMS !== 'false';
+}
+
+/** 폼 정의의 라벨을 이관 요약에 그대로 쓰기 위한 맵. */
+function labelsOf(form: FormSpec): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const s of form.slots) out[s.key] = s.label;
+  return out;
+}
+
+function progressOf(form: FormSpec, slot: SlotSpec): FormProgress {
+  const { step, total } = stepInfo(form, slot.key);
+  return { id: form.id, title: form.title, step, total, label: slot.label, canSkip: slot.required === false };
 }
 
 function computeReply(message: string, sessionId = 'anon'): ChatReply {
@@ -148,6 +198,130 @@ function computeReply(message: string, sessionId = 'anon'): ChatReply {
   if (!text) return { reply: '메시지를 입력해 주세요.', intent: 'empty', escalate: false, source: 'empty', confidence: 1 };
 
   const ctx = getSession(sessionId);
+
+  // 0-0) 멀티턴 슬롯 수집 진행 중 — 이번 턴을 해당 항목의 답변으로 우선 해석한다.
+  //      (번호 선택·연락처 수집보다 앞선다. 폼 안에서 번호·연락처를 물어보는 단계가 있기 때문이다.)
+  if (ctx.form && slotFormsEnabled()) {
+    const form = getForm(ctx.form.formId);
+    if (!form) {
+      // 코드에서 폼 정의가 사라진 경우(배포 중 변경) — 상태를 정리하고 일반 흐름으로 계속한다.
+      updateSession(sessionId, { form: undefined });
+    } else if (AGENT_REQUEST_RE.test(text)) {
+      // 고객이 사람을 원하면 수집을 즉시 중단하고 일반 흐름(상담원 룰)으로 넘긴다.
+      updateSession(sessionId, { form: undefined });
+    } else {
+      const res = applyInput(form, ctx.form, text);
+
+      if (res.kind === 'cancelled') {
+        updateSession(sessionId, { form: undefined, pendingSuggestions: undefined });
+        return {
+          reply: `${form.title}를 중단했어요. 입력하신 내용은 저장하지 않았습니다. 다시 필요하시면 언제든 말씀해 주세요.`,
+          intent: `form:${form.id}:cancelled`,
+          escalate: false,
+          source: 'context',
+          confidence: SOURCE_CONFIDENCE.context,
+        };
+      }
+
+      if (res.kind === 'invalid') {
+        updateSession(sessionId, { form: res.state });
+        return {
+          reply: promptFor(form, res.slot, { retryMessage: res.message }),
+          intent: `form:${form.id}:${res.slot.key}:retry`,
+          escalate: false,
+          source: 'context',
+          confidence: SOURCE_CONFIDENCE.context,
+          form: progressOf(form, res.slot),
+        };
+      }
+
+      if (res.kind === 'max_retry') {
+        // 같은 항목에서 계속 못 알아들으면 고객을 붙잡아 두지 않고 상담원에게 넘긴다.
+        for (const [k, v] of Object.entries(res.state.values)) setSlot(sessionId, k, v);
+        const pending = form.slots.filter((sl) => !(sl.key in res.state.values)).map((sl) => sl.key);
+        const { ticket } = createTicket({
+          sessionId,
+          reason: 'max_retry',
+          reasonCode: 'max_retry',
+          message: text,
+          summary: summaryFor(sessionId, 'max_retry', { pendingSlots: pending, slotLabels: labelsOf(form) }),
+        });
+        const hasContact = Boolean(res.state.values.contact || getSession(sessionId).slots?.contact);
+        updateSession(sessionId, {
+          form: undefined,
+          ticketId: ticket.id,
+          handoffReason: 'max_retry',
+          awaitingContact: !hasContact,
+          lowConfidenceStreak: 0,
+        });
+        const q = queuePosition(ticket.id);
+        return {
+          reply:
+            `제가 ${res.slot.label}을(를) 계속 알아듣지 못해서 상담원에게 연결해 드릴게요. 접수번호는 ${ticket.id}입니다.` +
+            (q ? ` 현재 접수 순번은 ${q.position}번입니다.` : '') +
+            ' 지금까지 입력하신 내용은 상담원에게 함께 전달됩니다.' +
+            (hasContact ? '' : ' 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기")'),
+          intent: `form:${form.id}:max_retry`,
+          escalate: true,
+          source: 'context',
+          ticketId: ticket.id,
+          handoffReason: 'max_retry',
+          confidence: SOURCE_CONFIDENCE.context,
+          ...(q ? { queue: q } : {}),
+        };
+      }
+
+      if (res.kind === 'progress') {
+        updateSession(sessionId, { form: res.state });
+        const lead = res.back ? '앞 항목으로 돌아갈게요.' : res.skipped ? '이 항목은 건너뛸게요.' : '';
+        return {
+          reply: promptFor(form, res.slot, lead ? { retryMessage: lead } : {}),
+          intent: `form:${form.id}:${res.slot.key}`,
+          escalate: false,
+          source: 'context',
+          confidence: SOURCE_CONFIDENCE.context,
+          form: progressOf(form, res.slot),
+        };
+      }
+
+      // 수집 완료 — 접수 티켓을 만들고 수집 내용을 요약에 싣는다(연락처는 마스킹되어 표시).
+      const values = collectedSlots(form, res.values);
+      for (const [k, v] of Object.entries(values)) setSlot(sessionId, k, v);
+      const pending = form.slots.filter((sl) => !(sl.key in values)).map((sl) => sl.key);
+      const { ticket, created } = createTicket({
+        sessionId,
+        reason: `form:${form.id}`,
+        reasonCode: form.handoffReason,
+        message: text,
+        ...(values.contact ? { contact: values.contact } : {}),
+        summary: summaryFor(sessionId, form.handoffReason, { pendingSlots: pending, slotLabels: labelsOf(form) }),
+      });
+      updateSession(sessionId, {
+        form: undefined,
+        ticketId: ticket.id,
+        handoffReason: form.handoffReason,
+        awaitingContact: false,
+        pendingSuggestions: undefined,
+        lowConfidenceStreak: 0,
+      });
+      const q = queuePosition(ticket.id);
+      return {
+        reply:
+          `${form.doneLead} 접수번호는 ${ticket.id}입니다.` +
+          (q ? ` 현재 접수 순번은 ${q.position}번입니다.` : '') +
+          `\n${renderCollected(form, values)}\n` +
+          (created ? '' : '이미 접수된 요청에 이어서 기록했어요. ') +
+          '상담원이 확인 후 순서대로 연락드릴게요. 내용을 고치시려면 "상담원"이라고 입력해 주세요.',
+        intent: `form:${form.id}:complete`,
+        escalate: false,
+        source: 'context',
+        ticketId: ticket.id,
+        handoffReason: form.handoffReason,
+        confidence: SOURCE_CONFIDENCE.context,
+        ...(q ? { queue: q } : {}),
+      };
+    }
+  }
 
   // 0-a) 연락처 수집 대기 중이면 이번 턴을 연락처/건너뛰기로 우선 해석
   if (ctx.awaitingContact) {
@@ -243,6 +417,22 @@ function computeReply(message: string, sessionId = 'anon'): ChatReply {
     if (matchRule(r, text, pre.compact)) {
       const baseReply = ov?.reply || r.reply;
       if (r.escalate === true) return escalateWith(baseReply, r.intent, POLICY_INTENTS.has(r.intent) ? 'policy' : 'customer_request');
+
+      // 이 인텐트에 접수 폼이 연결돼 있으면 안내에 이어 첫 항목을 물어본다(안내 → 접수로 이어지게).
+      const form = slotFormsEnabled() ? formForIntent(r.intent) : null;
+      if (form) {
+        const started = startForm(form);
+        updateSession(sessionId, { form: started.state, pendingSuggestions: undefined });
+        return {
+          reply: `${baseReply}\n\n${promptFor(form, started.slot)}`,
+          intent: `form:${form.id}:start`,
+          escalate: false,
+          source: 'context',
+          confidence: SOURCE_CONFIDENCE.context,
+          form: progressOf(form, started.slot),
+        };
+      }
+
       updateSession(sessionId, { pendingSuggestions: undefined });
       return { reply: baseReply, intent: r.intent, escalate: false, source: 'rule', confidence: SOURCE_CONFIDENCE.rule };
     }

@@ -1,12 +1,21 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 
 interface Suggestion { id: string; question: string }
 // 근거 인용 — 서버가 KB 원문에서 그대로 뽑은 문장(생성 요약 아님).
 interface Citation { kbId: string; source: string; category: string; snippet: string }
 // 접수 대기 상태 — 접수순 표시용(예상 대기시간을 계산하지 않는다).
 interface QueueInfo { position: number; waiting: number }
-interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean; suggestions?: Suggestion[]; ticketId?: string; citation?: Citation; queue?: QueueInfo }
+// 멀티턴 접수(예약·장애 신고) 진행 단계 — 서버가 알려주는 화면 상태값.
+interface FormProgress { id: string; title: string; step: number; total: number; label: string; canSkip: boolean }
+interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean; suggestions?: Suggestion[]; ticketId?: string; citation?: Citation; queue?: QueueInfo; form?: FormProgress }
+
+function isForm(v: unknown): v is FormProgress {
+  if (!v || typeof v !== 'object') return false;
+  const f = v as Partial<FormProgress>;
+  return typeof f.title === 'string' && typeof f.label === 'string'
+    && typeof f.step === 'number' && typeof f.total === 'number' && f.total > 0;
+}
 
 function isQueue(v: unknown): v is QueueInfo {
   if (!v || typeof v !== 'object') return false;
@@ -42,6 +51,12 @@ function errorText(d: ApiErrorLike, res?: Response): string {
 // embedded=true: embed.js가 iframe으로 띄우는 모드. 처음엔 버블만 보이고,
 // 열림/닫힘 상태를 부모 페이지에 postMessage로 알려 iframe 크기를 맞춘다.
 export const EMBED_SIZE = { open: { w: 400, h: 660 }, closed: { w: 104, h: 104 } };
+
+// 접수 진행 중 보조 동작(이전·건너뛰기·취소) 칩. 입력창을 쓰지 않아도 같은 조작이 가능하다.
+const chipStyle: CSSProperties = {
+  fontSize: 11.5, fontWeight: 600, color: 'var(--brand-600)', background: '#fff',
+  border: '1px solid var(--line)', borderRadius: 999, padding: '4px 10px', cursor: 'pointer',
+};
 
 export default function ChatWidget({ embedded = false }: { embedded?: boolean }) {
   const [open, setOpen] = useState(!embedded);
@@ -90,6 +105,7 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
         ticketId: typeof data.ticketId === 'string' ? data.ticketId : undefined,
         citation: isCitation(data.citation) ? data.citation : undefined,
         queue: isQueue(data.queue) ? data.queue : undefined,
+        form: isForm(data.form) ? data.form : undefined,
       }]);
     } catch {
       setMsgs((m) => [...m, { role: 'bot', text: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' }]);
@@ -141,6 +157,33 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
             {msgs.map((m, i) => (
               <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
                 <div style={{ background: m.role === 'user' ? 'var(--brand)' : '#fff', color: m.role === 'user' ? '#fff' : 'var(--ink)', border: m.role === 'user' ? 'none' : '1px solid var(--line)', borderRadius: 13, padding: '9px 12px', fontSize: 13.3, lineHeight: 1.5 }}>{m.text}</div>
+                {m.form && (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    aria-label={`${m.form.title} 진행 상황: 총 ${m.form.total}단계 중 ${m.form.step}단계, 현재 입력 항목 ${m.form.label}`}
+                    style={{ marginTop: 5, background: '#fff', border: '1px solid var(--line)', borderRadius: 10, padding: '7px 9px' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11.5, fontWeight: 700, color: 'var(--brand-600)' }}>
+                      <span>{m.form.title}</span>
+                      <span>{m.form.step}/{m.form.total} 단계</span>
+                    </div>
+                    <div aria-hidden="true" style={{ marginTop: 5, height: 4, borderRadius: 999, background: 'var(--brand-50)', overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.round((m.form.step / m.form.total) * 100)}%`, height: '100%', background: 'var(--brand)' }} />
+                    </div>
+                    {i === msgs.length - 1 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 7 }}>
+                        {m.form.step > 1 && (
+                          <button onClick={() => sendText('이전')} disabled={busy} aria-label="이전 항목으로 돌아가기" style={chipStyle}>이전</button>
+                        )}
+                        {m.form.canSkip && (
+                          <button onClick={() => sendText('건너뛰기')} disabled={busy} aria-label="이 항목 건너뛰기" style={chipStyle}>건너뛰기</button>
+                        )}
+                        <button onClick={() => sendText('취소')} disabled={busy} aria-label={`${m.form.title} 중단하기`} style={chipStyle}>취소</button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {m.queue && (
                   <div style={{ marginTop: 5, fontSize: 11.5, fontWeight: 600, color: 'var(--brand-600)', background: 'var(--brand-50)', borderRadius: 8, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span aria-hidden="true">⏳</span>

@@ -104,6 +104,8 @@ export function importTickets(input: unknown): { ok: true; count: number } | { o
 export function createTicket(input: {
   sessionId?: string;
   reason?: string;
+  /** 호출자가 사유 코드를 이미 알고 있을 때 지정(예: 슬롯 수집 폼). 없으면 reason 문자열로 추론한다. */
+  reasonCode?: HandoffReason;
   message?: string;
   contact?: string;
   summary?: string;
@@ -127,7 +129,7 @@ export function createTicket(input: {
     id: `ESC-${String(seq).padStart(4, '0')}`,
     sessionId,
     reason,
-    reasonCode: toReasonCode(reason),
+    reasonCode: input.reasonCode ?? toReasonCode(reason),
     message: String(input.message || '').trim().slice(0, 300),
     summary: input.summary ? String(input.summary).slice(0, 4000) : undefined,
     contact: input.contact ? String(input.contact).trim().slice(0, 100) : undefined,

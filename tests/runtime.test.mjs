@@ -576,7 +576,7 @@ test('입력 상한 — 오래된 턴부터 버리고 마지막 질문은 반드
 // importLib의 캐시 키는 [이름, ...deps] 이므로, 자기 자신을 뺀 같은 집합을 넘겨 키를 일치시킨다.
 const ENGINE = [
   'chat', 'adminStore', 'knowledge', 'rules', 'normalize', 'session',
-  'escalation', 'handoff', 'llm', 'monitoring', 'storage', 'logger', 'convlog',
+  'escalation', 'handoff', 'llm', 'monitoring', 'storage', 'logger', 'convlog', 'slots',
 ];
 const eng = (name) => importLib(name, ENGINE.filter((n) => n !== name));
 
@@ -777,3 +777,212 @@ test('토큰 대입이 반복되면 잠근다(성공하면 즉시 해제)', opts
   assert.equal(aa.recordAttempt('1.2.3.4', true, after).failures, 0);
   aa.resetLockouts();
 });
+
+/* ══════════ 멀티턴 슬롯 수집 — 순수 엔진 ══════════ */
+
+const FIXED_NOW = new Date(2026, 8, 3, 10, 0, 0); // 2026-09-03(목) 10:00 — 상대 날짜 계산 기준 고정
+
+test('날짜·시간 표현을 파싱한다(상대·절대·오전오후)', opts, async () => {
+  const { parseDateTime } = await eng('slots');
+  assert.equal(parseDateTime('내일 오후 2시', FIXED_NOW).value, '2026-09-04 14:00');
+  assert.equal(parseDateTime('오늘 09:30', FIXED_NOW).value, '2026-09-03 09:30');
+  assert.equal(parseDateTime('2026-09-10 14:30', FIXED_NOW).value, '2026-09-10 14:30');
+  assert.equal(parseDateTime('9월 10일 14시', FIXED_NOW).value, '2026-09-10 14:00');
+  // 연도 미기재이고 이미 지난 날짜면 내년으로 본다(예약은 미래가 기본)
+  assert.equal(parseDateTime('1월 5일', FIXED_NOW).value, '2027-01-05 (시간 미정)');
+});
+
+test('알아볼 수 없는 날짜 입력은 null(실패 경로)', opts, async () => {
+  const { parseDateTime } = await eng('slots');
+  assert.equal(parseDateTime('아무때나요', FIXED_NOW), null);
+  assert.equal(parseDateTime('', FIXED_NOW), null);
+});
+
+test('선택지는 번호·동의어 양쪽으로 고를 수 있다', opts, async () => {
+  const { matchChoice } = await eng('slots');
+  const choices = ['웹 챗봇', '카카오톡', '전화 콜봇', '기타'];
+  assert.equal(matchChoice(choices, '2'), '카카오톡');
+  assert.equal(matchChoice(choices, '2번'), '카카오톡');
+  assert.equal(matchChoice(choices, '카톡'), '카카오톡', '동의어 사전이 적용돼야 한다');
+  assert.equal(matchChoice(choices, '9'), null, '범위 밖 번호는 거절');
+  assert.equal(matchChoice(choices, '몰라요'), null);
+});
+
+test('잘못된 입력은 어느 항목이 왜 틀렸는지 + 예시를 돌려준다', opts, async () => {
+  const { validateSlot, getForm, slotOf } = await eng('slots');
+  const form = getForm('reservation');
+  const contact = slotOf(form, 'contact');
+  const bad = validateSlot(contact, '그냥 아무거나', FIXED_NOW);
+  assert.equal(bad.ok, false);
+  assert.match(bad.message, /연락처/);
+  assert.match(bad.message, /010-1234-5678/, '입력 예시를 함께 줘야 한다');
+  const good = validateSlot(contact, '연락처는 010-1234-5678 입니다', FIXED_NOW);
+  assert.equal(good.ok, true);
+  assert.equal(good.value, '010-1234-5678');
+});
+
+test('필수 항목은 건너뛸 수 없고, 선택 항목은 건너뛴다', opts, async () => {
+  const slots = await eng('slots');
+  const reservation = slots.getForm('reservation');
+  const started = slots.startForm(reservation);
+  const skipRequired = slots.applyInput(reservation, started.state, '건너뛰기', FIXED_NOW);
+  assert.equal(skipRequired.kind, 'invalid');
+  assert.match(skipRequired.message, /꼭 필요/);
+
+  const trouble = slots.getForm('trouble');
+  let st = slots.startForm(trouble).state;
+  st = slots.applyInput(trouble, st, '위젯이 열리지 않아요', FIXED_NOW).state;
+  st = slots.applyInput(trouble, st, '1', FIXED_NOW).state;
+  const done = slots.applyInput(trouble, st, '건너뛰기', FIXED_NOW);
+  assert.equal(done.kind, 'complete', '선택 항목(연락처)은 건너뛰면 바로 완료');
+  assert.equal('contact' in done.values, false, '건너뛴 값은 저장하지 않는다');
+  assert.equal(done.values.channel, '웹 챗봇');
+});
+
+test('"이전"은 직전 항목을 지우고 다시 묻는다', opts, async () => {
+  const slots = await eng('slots');
+  const form = slots.getForm('reservation');
+  let st = slots.startForm(form).state;
+  st = slots.applyInput(form, st, '홍길동', FIXED_NOW).state;
+  assert.equal(st.values.name, '홍길동');
+  const back = slots.applyInput(form, st, '이전', FIXED_NOW);
+  assert.equal(back.kind, 'progress');
+  assert.equal(back.slot.key, 'name');
+  assert.equal('name' in back.state.values, false, '되돌린 항목의 값은 비워야 한다');
+  // 첫 항목에서 "이전"은 되돌릴 곳이 없다고 안내한다(무반응 금지)
+  const noBack = slots.applyInput(form, back.state, '이전', FIXED_NOW);
+  assert.equal(noBack.kind, 'invalid');
+  assert.match(noBack.message, /취소/);
+});
+
+/* ══════════ 멀티턴 슬롯 수집 — 대화 엔진 통합 ══════════ */
+
+async function freshEngine() {
+  delete process.env.CHAT_SLOT_FORMS;
+  delete process.env.CHAT_LLM_LIVE;
+  process.env.ADMIN_PERSIST = 'false';
+  const chat = await eng('chat');
+  const session = await eng('session');
+  const esc = await eng('escalation');
+  session.resetSessions();
+  return { chat, session, esc };
+}
+
+test('예약 접수: 안내 → 3단계 수집 → 티켓 접수(정상 경로)', opts, async () => {
+  const { chat, esc } = await freshEngine();
+  const sid = 'rt-form-ok';
+
+  const start = chat.replyTo('예약하고 싶어요', sid);
+  assert.equal(start.form.id, 'reservation');
+  assert.equal(start.form.step, 1);
+  assert.equal(start.form.total, 3);
+  assert.match(start.reply, /성함/);
+
+  const s2 = chat.replyTo('홍길동', sid);
+  assert.equal(s2.form.step, 2);
+  assert.match(s2.reply, /날짜/);
+
+  const s3 = chat.replyTo('내일 오후 2시', sid);
+  assert.equal(s3.form.step, 3);
+  assert.match(s3.reply, /연락처|전화번호/);
+
+  const done = chat.replyTo('010-1234-5678', sid);
+  assert.equal(done.form, undefined, '완료 턴에는 진행 표시가 없다');
+  assert.ok(done.ticketId, '접수 티켓이 생겨야 한다');
+  assert.match(done.reply, /접수번호/);
+  assert.equal(done.reply.includes('010-1234-5678'), false, '원문 연락처를 화면에 그대로 노출하지 않는다');
+  assert.match(done.reply, /010-\*\*\*\*-5678/, '마스킹된 형태로 확인시켜 준다');
+
+  const ticket = esc.listTickets().find((t) => t.id === done.ticketId);
+  assert.equal(ticket.reasonCode, 'customer_request');
+  assert.match(ticket.summary, /예약자 성함: 홍길동/);
+  assert.match(ticket.summary, /희망 일시/);
+  assert.equal(ticket.summary.includes('010-1234-5678'), false, '이관 요약에도 원문 연락처가 남으면 안 된다');
+});
+
+test('같은 항목을 3번 못 알아들으면 상담원으로 넘긴다(실패 경로)', opts, async () => {
+  const { chat, esc } = await freshEngine();
+  const sid = 'rt-form-retry';
+  chat.replyTo('예약하고 싶어요', sid);
+  chat.replyTo('홍길동', sid);
+
+  const r1 = chat.replyTo('아무때나요', sid);
+  assert.match(r1.reply, /알아보지 못했어요/, '무엇이 왜 틀렸는지 알려야 한다');
+  assert.equal(r1.form.step, 2, '같은 항목을 다시 묻는다');
+  const r2 = chat.replyTo('그냥 편한 시간', sid);
+  assert.equal(r2.form.step, 2);
+  const r3 = chat.replyTo('알아서 해주세요', sid);
+  assert.equal(r3.escalate, true);
+  assert.ok(r3.ticketId);
+  assert.equal(r3.handoffReason, 'max_retry');
+  const ticket = esc.listTickets().find((t) => t.id === r3.ticketId);
+  assert.equal(ticket.reasonCode, 'max_retry');
+  assert.match(ticket.summary, /미수집 정보/, '무엇을 못 받았는지 상담원에게 알려야 한다');
+});
+
+test('"취소"로 수집을 중단하면 다음 질문은 정상 처리된다', opts, async () => {
+  const { chat } = await freshEngine();
+  const sid = 'rt-form-cancel';
+  chat.replyTo('예약하고 싶어요', sid);
+  const cancelled = chat.replyTo('취소', sid);
+  assert.equal(cancelled.form, undefined);
+  assert.match(cancelled.reply, /중단/);
+  assert.equal(cancelled.ticketId, undefined, '취소는 접수를 만들지 않는다');
+
+  const after = chat.replyTo('영업시간 알려주세요', sid);
+  assert.equal(after.intent, 'hours', '취소 후 일반 대화로 즉시 복귀한다');
+});
+
+test('수집 중 상담원을 요청하면 즉시 이관한다', opts, async () => {
+  const { chat } = await freshEngine();
+  const sid = 'rt-form-agent';
+  chat.replyTo('예약하고 싶어요', sid);
+  const r = chat.replyTo('상담원 연결해 주세요', sid);
+  assert.equal(r.escalate, true);
+  assert.ok(r.ticketId);
+  assert.equal(r.form, undefined);
+
+  // 반대로 '연결이 안 돼요' 같은 증상 설명은 이관으로 새면 안 된다
+  const sid2 = 'rt-form-agent-2';
+  chat.replyTo('오류가 났어요', sid2);
+  const symptom = chat.replyTo('연결이 안 돼요', sid2);
+  assert.equal(symptom.form.id, 'trouble');
+  assert.equal(symptom.form.step, 2, '증상으로 받아들이고 다음 항목으로 진행해야 한다');
+});
+
+test('게이트를 끄면(CHAT_SLOT_FORMS=false) 기존 룰 응답만 나간다', opts, async () => {
+  const { chat } = await freshEngine();
+  process.env.CHAT_SLOT_FORMS = 'false';
+  try {
+    const r = chat.replyTo('예약하고 싶어요', 'rt-form-off');
+    assert.equal(r.form, undefined);
+    assert.equal(r.intent, 'reservation');
+    assert.equal(r.source, 'rule');
+  } finally {
+    delete process.env.CHAT_SLOT_FORMS;
+  }
+});
+
+test('모든 폼 정의에 라벨·질문·예시가 채워져 있다(빈 화면 방지)', opts, async () => {
+  const { FORMS } = await eng('slots');
+  assert.ok(FORMS.length > 0);
+  for (const form of FORMS) {
+    assert.ok(form.title && form.slots.length > 0, `${form.id}: 제목·슬롯 필요`);
+    for (const slot of form.slots) {
+      assert.ok(slot.label && slot.prompt && slot.hint, `${form.id}.${slot.key}: 라벨·질문·예시 필요`);
+      if (slot.kind === 'choice') assert.ok(slot.choices?.length >= 2, `${form.id}.${slot.key}: 선택지 필요`);
+    }
+  }
+});
+
+test('마스킹이 날짜를 계좌번호로 오인하지 않는다(회귀)', opts, async () => {
+  const { maskPii } = await eng('handoff');
+  const r = maskPii('예약 일시 2026-09-04 14:00, 연락처 010-1234-5678');
+  assert.match(r.text, /2026-09-04 14:00/, '날짜는 원문 그대로 남아야 상담원이 일정을 안다');
+  assert.match(r.text, /010-\*\*\*\*-5678/, '연락처는 마스킹돼야 한다');
+  assert.equal(r.hits.includes('phone'), true);
+  assert.equal(r.hits.includes('account'), false, '날짜를 계좌로 집계하면 통계가 틀어진다');
+  // 진짜 계좌번호는 여전히 마스킹한다
+  assert.match(maskPii('계좌 110-234-567890').text, /\*\*\*-\*\*\*\*-\*\*\*\*/);
+});
+
