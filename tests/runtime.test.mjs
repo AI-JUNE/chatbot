@@ -1133,3 +1133,234 @@ test('스냅샷 복원: 손상 항목은 건너뛰고 고아 귀속은 직접 �
   assert.equal(P.upsertPartner({ name: '신규파트너' }).partner.id, 'PTR-0004');
 });
 
+/* ══════════ RBAC — 파트너 담당자 권한 ══════════ */
+
+const ADMIN_TOK = 'admin-token-0123456789';
+const PTR_TOK = 'partner-token-abcdefghij';
+
+async function rbacLib(env = {}) {
+  const lib = await importLib('rbac', ['webhookAuth']);
+  delete process.env.ADMIN_TOKEN;
+  delete process.env.PARTNER_TOKENS;
+  delete process.env.PARTNER_PORTAL_ENABLED;
+  Object.assign(process.env, env);
+  return lib;
+}
+
+function clearRbacEnv() {
+  delete process.env.ADMIN_TOKEN;
+  delete process.env.PARTNER_TOKENS;
+  delete process.env.PARTNER_PORTAL_ENABLED;
+}
+
+test('관리자 토큰이 일치하면 admin 주체가 된다', opts, async () => {
+  const R = await rbacLib({ ADMIN_TOKEN: ADMIN_TOK });
+  const p = R.resolvePrincipal(ADMIN_TOK, { adminAuthRequired: true });
+  assert.ok(p, '관리자 토큰은 통과해야 한다');
+  assert.equal(p.role, 'admin');
+  assert.equal(p.partnerId, null);
+  assert.equal(p.authed, true);
+  clearRbacEnv();
+});
+
+test('틀린 토큰은 주체를 얻지 못한다(실패 경로)', opts, async () => {
+  const R = await rbacLib({ ADMIN_TOKEN: ADMIN_TOK });
+  assert.equal(R.resolvePrincipal('wrong-token-value-xxxx', { adminAuthRequired: true }), null);
+  assert.equal(R.resolvePrincipal('', { adminAuthRequired: true }), null);
+  assert.equal(R.resolvePrincipal(null, { adminAuthRequired: true }), null);
+  clearRbacEnv();
+});
+
+test('파트너 포털이 꺼져 있으면 파트너 토큰은 통하지 않는다(기본 OFF)', opts, async () => {
+  const R = await rbacLib({ ADMIN_TOKEN: ADMIN_TOK, PARTNER_TOKENS: `PTR-0001:${PTR_TOK}` });
+  assert.equal(R.partnerPortalEnabled(), false, '기본값은 비활성이어야 한다');
+  assert.equal(R.resolvePrincipal(PTR_TOK, { adminAuthRequired: true }), null, '게이트 OFF면 거절');
+  clearRbacEnv();
+});
+
+test('포털이 켜지면 파트너 토큰이 자기 파트너 범위의 주체가 된다', opts, async () => {
+  const R = await rbacLib({
+    ADMIN_TOKEN: ADMIN_TOK,
+    PARTNER_TOKENS: `PTR-0001:${PTR_TOK},PTR-0002:another-token-1234567`,
+    PARTNER_PORTAL_ENABLED: 'true',
+  });
+  const p = R.resolvePrincipal(PTR_TOK, { adminAuthRequired: true });
+  assert.ok(p);
+  assert.equal(p.role, 'partner_admin');
+  assert.equal(p.partnerId, 'PTR-0001');
+  assert.equal(R.canWrite(p), false, '파트너 담당자는 읽기 전용이어야 한다');
+  assert.equal(R.canWrite({ role: 'admin', partnerId: null, authed: true }), true);
+  clearRbacEnv();
+});
+
+test('짧은 파트너 토큰·형식 오류 항목은 버려진다', opts, async () => {
+  const R = await rbacLib({ PARTNER_PORTAL_ENABLED: 'true' });
+  const creds = R.parsePartnerTokens('PTR-0001:short,PTR-0002:proper-token-abcdefgh,badline,PTR-0002:dup-token-abcdefghij');
+  assert.equal(creds.length, 1, '유효 항목만 남아야 한다');
+  assert.equal(creds[0].partnerId, 'PTR-0002');
+  assert.equal(creds[0].token, 'proper-token-abcdefgh');
+  clearRbacEnv();
+});
+
+test('ADMIN_TOKEN 미설정 + 게이트 ON 이면 전면 차단된다', opts, async () => {
+  const R = await rbacLib({ PARTNER_PORTAL_ENABLED: 'true', PARTNER_TOKENS: `PTR-0001:${PTR_TOK}` });
+  assert.equal(R.resolvePrincipal(PTR_TOK, { adminAuthRequired: true }), null);
+  // 게이트 OFF면 기존 개방 동작(관리자·미인증)
+  const open = R.resolvePrincipal(null, { adminAuthRequired: false });
+  assert.equal(open.role, 'admin');
+  assert.equal(open.authed, false, '개방 모드는 인증된 것으로 기록하지 않는다');
+  clearRbacEnv();
+});
+
+test('파트너 담당자의 조회 범위는 요청값과 무관하게 자기 파트너로 고정된다', opts, async () => {
+  const R = await rbacLib();
+  const partner = { role: 'partner_admin', partnerId: 'PTR-0001', authed: true };
+  // 남의 파트너를 조회하려 해도 자기 것으로 덮어써진다
+  assert.equal(R.scopeAccountFilter(partner, { partnerId: 'PTR-0002' }).partnerId, 'PTR-0001');
+  assert.equal(R.scopeAccountFilter(partner, {}).partnerId, 'PTR-0001');
+  // 상태 등 다른 필터는 보존된다
+  assert.equal(R.scopeAccountFilter(partner, { status: 'contracted' }).status, 'contracted');
+  // 관리자는 요청한 필터 그대로
+  const admin = { role: 'admin', partnerId: null, authed: true };
+  assert.equal(R.scopeAccountFilter(admin, { partnerId: 'PTR-0002' }).partnerId, 'PTR-0002');
+  // 파트너 목록도 자기 것만
+  const list = [{ id: 'PTR-0001' }, { id: 'PTR-0002' }];
+  assert.deepEqual(R.scopePartners(partner, list).map((p) => p.id), ['PTR-0001']);
+  assert.equal(R.scopePartners(admin, list).length, 2);
+  clearRbacEnv();
+});
+
+/* ══════════ 정산 리포트 ══════════ */
+
+async function settlementLib() {
+  process.env.ADMIN_PERSIST = 'false';
+  delete process.env.PARTNER_DEFAULT_FEE_RATE_BP;
+  // 두 모듈이 **같은 인스턴스**를 공유해야 한다(컴파일 캐시 키가 같도록 의존 목록을 동일하게 준다).
+  // (자기 이름을 deps에 넣으면 캐시 키가 어긋나 서로 다른 인스턴스가 된다)
+  const rest = ['storage', 'logger', 'monitoring'];
+  const P = await importLib('partners', ['settlement', ...rest]);
+  const S = await importLib('settlement', ['partners', ...rest]);
+  P.resetPartners();
+  return { P, S };
+}
+
+test('정산 리포트가 월 이용료 × 수수료율로 수수료를 산출한다', opts, async () => {
+  const { P, S } = await settlementLib();
+  const ptr = P.upsertPartner({ name: '제이투모로우원', feeRateBp: 1500 });
+  assert.equal(ptr.ok, true);
+  const acc = P.upsertAccount({
+    name: 'OO의원', partnerId: ptr.partner.id, source: 'partner',
+    status: 'contracted', contractedAt: '2026-08-01', monthlyFeeKrw: 300000,
+  });
+  assert.equal(acc.ok, true);
+
+  const r = S.buildSettlement({ month: '2026-09' });
+  assert.equal(r.ok, true);
+  assert.equal(r.report.periodEnd, '2026-09-30');
+  assert.equal(r.report.rows.length, 1);
+  const row = r.report.rows[0];
+  assert.equal(row.baseAmountKrw, 300000);
+  assert.equal(row.feeRateBp, 1500);
+  assert.equal(row.feeAmountKrw, 45000, '300000 × 15% = 45000');
+  assert.equal(row.issue, 'none');
+  assert.equal(r.report.totals.feeAmountKrw, 45000);
+  assert.equal(r.report.totals.partial, false);
+  P.resetPartners();
+});
+
+test('수수료는 원 단위로 절사한다(반올림으로 부풀리지 않는다)', opts, async () => {
+  const { P, S } = await settlementLib();
+  const ptr = P.upsertPartner({ name: 'A파트너', feeRateBp: 333 });
+  P.upsertAccount({ name: 'B고객', partnerId: ptr.partner.id, source: 'partner', status: 'contracted', contractedAt: '2026-01-01', monthlyFeeKrw: 99999 });
+  const r = S.buildSettlement({ month: '2026-09' });
+  // 99999 * 333 / 10000 = 3329.9667 → 3329
+  assert.equal(r.report.rows[0].feeAmountKrw, 3329);
+  P.resetPartners();
+});
+
+test('근거가 없는 항목은 0원이 아니라 미산출로 남고 합계에서 빠진다(실패 경로)', opts, async () => {
+  const { P, S } = await settlementLib();
+  const withRate = P.upsertPartner({ name: '요율있음', feeRateBp: 1000 });
+  const noRate = P.upsertPartner({ name: '요율없음' }); // feeRateBp 미설정
+  P.upsertAccount({ name: '금액있음', partnerId: withRate.partner.id, source: 'partner', status: 'contracted', contractedAt: '2026-05-01', monthlyFeeKrw: 100000 });
+  P.upsertAccount({ name: '금액없음', partnerId: withRate.partner.id, source: 'partner', status: 'contracted', contractedAt: '2026-05-01' });
+  P.upsertAccount({ name: '요율없는고객', partnerId: noRate.partner.id, source: 'partner', status: 'contracted', contractedAt: '2026-05-01', monthlyFeeKrw: 50000 });
+
+  const r = S.buildSettlement({ month: '2026-09' });
+  assert.equal(r.report.rows.length, 3);
+  const byName = Object.fromEntries(r.report.rows.map((x) => [x.accountName, x]));
+  assert.equal(byName['금액있음'].feeAmountKrw, 10000);
+  assert.equal(byName['금액없음'].feeAmountKrw, null, '0원으로 계산하면 안 된다');
+  assert.equal(byName['금액없음'].issue, 'no_base_amount');
+  assert.equal(byName['요율없는고객'].feeAmountKrw, null);
+  assert.equal(byName['요율없는고객'].issue, 'no_fee_rate');
+
+  assert.equal(r.report.totals.billable, 1);
+  assert.equal(r.report.totals.incomplete, 2);
+  assert.equal(r.report.totals.feeAmountKrw, 10000, '미산출분은 합계에 섞이지 않는다');
+  assert.equal(r.report.totals.partial, true);
+  assert.ok(r.report.notes.some((n) => n.includes('합계에서 제외')), '왜 빠졌는지 알려야 한다');
+  P.resetPartners();
+});
+
+test('기간 밖·직접 계약·미계약은 정산 대상에서 제외되고 사유가 남는다', opts, async () => {
+  const { P, S } = await settlementLib();
+  const ptr = P.upsertPartner({ name: 'A파트너', feeRateBp: 1000 });
+  P.upsertAccount({ name: '기간후계약', partnerId: ptr.partner.id, source: 'partner', status: 'contracted', contractedAt: '2026-12-01', monthlyFeeKrw: 10000 });
+  P.upsertAccount({ name: '검토중', partnerId: ptr.partner.id, source: 'partner', status: 'prospect', monthlyFeeKrw: 10000 });
+  P.upsertAccount({ name: '직접고객', partnerId: '', source: 'direct', status: 'contracted', contractedAt: '2026-01-01', monthlyFeeKrw: 10000 });
+
+  const r = S.buildSettlement({ month: '2026-09' });
+  assert.equal(r.report.rows.length, 0, '대상이 없어야 한다');
+  assert.ok(r.report.notes.some((n) => n.includes('직접 계약')), '직접 계약 제외 사유');
+  assert.ok(r.report.notes.some((n) => n.includes('계약일이 기간 이후')), '기간 밖 제외 사유');
+  P.resetPartners();
+});
+
+test('기준월 형식이 틀리면 이유와 함께 거절한다(실패 경로)', opts, async () => {
+  const { S } = await settlementLib();
+  for (const bad of ['2026-13', '2026/09', '2026', '', 'abcd-ef']) {
+    const r = S.buildSettlement({ month: bad });
+    assert.equal(r.ok, false, `${bad} 는 거절되어야 한다`);
+    assert.match(r.error, /YYYY-MM/);
+  }
+  assert.equal(S.isValidMonth('2026-09'), true);
+  assert.equal(S.monthEnd('2026-02'), '2026-02-28');
+});
+
+test('정산 CSV는 미산출 값을 빈 칸으로 두고 사유·주석을 함께 싣는다', opts, async () => {
+  const { P, S } = await settlementLib();
+  const ptr = P.upsertPartner({ name: '쉼표,파트너', feeRateBp: 1000 });
+  P.upsertAccount({ name: '정상고객', partnerId: ptr.partner.id, source: 'partner', status: 'contracted', contractedAt: '2026-03-01', monthlyFeeKrw: 200000 });
+  P.upsertAccount({ name: '금액미입력', partnerId: ptr.partner.id, source: 'partner', status: 'contracted', contractedAt: '2026-03-01' });
+
+  const csv = S.settlementToCsv(S.buildSettlement({ month: '2026-09' }).report);
+  const lines = csv.split('\r\n');
+  assert.match(lines[0], /^기준월,파트너ID/);
+  const normal = lines.find((l) => l.includes('정상고객'));
+  const missing = lines.find((l) => l.includes('금액미입력'));
+  assert.ok(normal.includes('200000') && normal.includes('20000'), '정상 행은 금액이 있어야 한다');
+  assert.ok(missing.includes(',,'), '미산출 금액은 빈 칸이어야 한다');
+  assert.ok(!/,0,/.test(missing), '미산출을 0으로 채우면 안 된다');
+  assert.ok(missing.includes('월 이용료 미입력'), '사유가 있어야 한다');
+  assert.ok(csv.includes('"쉼표,파트너"'), '쉼표는 CSV 이스케이프되어야 한다');
+  assert.ok(csv.includes('# '), '산출 근거 주석이 포함되어야 한다');
+  assert.ok(csv.includes('청구서가 아닙니다'), '청구서로 오인되지 않게 명시해야 한다');
+  P.resetPartners();
+});
+
+test('월 이용료는 검증된 값만 저장되고 미입력과 0원을 구분한다', opts, async () => {
+  const { P } = await settlementLib();
+  assert.equal(P.parseMonthlyFee('').value, undefined, '빈 값은 미입력');
+  assert.equal(P.parseMonthlyFee(0).value, 0, '0원 계약은 0으로 남는다');
+  assert.equal(P.parseMonthlyFee('300,000').value, 300000, '천 단위 구분 기호 허용');
+  assert.equal(P.parseMonthlyFee(-1).ok, false);
+  assert.equal(P.parseMonthlyFee('abc').ok, false);
+  assert.equal(P.parseMonthlyFee(2_000_000_000).ok, false, '자릿수 오타 방어');
+
+  const ptr = P.upsertPartner({ name: 'A', feeRateBp: 100 });
+  const bad = P.upsertAccount({ name: 'X', partnerId: ptr.partner.id, source: 'partner', monthlyFeeKrw: -5 });
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /월 이용료/);
+  P.resetPartners();
+});

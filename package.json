@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"tests/*.test.mjs\""
+    "test": "node --test \"tests/*.test.mjs\"",
+    "conformance:aicc": "node scripts/aicc-conformance.mjs"
   },
   "dependencies": {
     "next": "14.2.18",

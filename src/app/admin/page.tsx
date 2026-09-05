@@ -205,8 +205,45 @@ interface AccountView {
   status: 'prospect' | 'contracted' | 'churned';
   contractedAt?: string;
   ownerName?: string;
+  monthlyFeeKrw?: number;
   memo?: string;
   attribution: AttributionView[];
+}
+
+// ---- 정산 리포트 ----
+interface SettlementRowView {
+  partnerId: string;
+  partnerName: string;
+  accountId: string;
+  accountName: string;
+  contractedAt: string;
+  baseAmountKrw: number | null;
+  feeRateBp: number | null;
+  feeAmountKrw: number | null;
+  issue: 'none' | 'no_fee_rate' | 'no_base_amount' | 'no_fee_rate_and_base';
+}
+interface SettlementPartnerTotalView {
+  partnerId: string; partnerName: string; accounts: number; billable: number;
+  baseAmountKrw: number; feeAmountKrw: number; incomplete: number;
+}
+interface SettlementReportView {
+  month: string;
+  periodStart: string;
+  periodEnd: string;
+  rows: SettlementRowView[];
+  partnerTotals: SettlementPartnerTotalView[];
+  totals: { accounts: number; billable: number; incomplete: number; baseAmountKrw: number; feeAmountKrw: number; partial: boolean };
+  notes: string[];
+}
+const ISSUE_LABELS: Record<SettlementRowView['issue'], string> = {
+  none: '',
+  no_fee_rate: '수수료율 미설정',
+  no_base_amount: '월 이용료 미입력',
+  no_fee_rate_and_base: '월 이용료·수수료율 미설정',
+};
+/** 금액 표시 — 값이 없으면 임의로 0을 쓰지 않고 "미입력"이라고 밝힌다. */
+function wonLabel(v: number | null | undefined): string {
+  return typeof v === 'number' ? `${v.toLocaleString('ko-KR')}원` : '미입력';
 }
 interface RollupView {
   partnerId: string | null;
@@ -233,10 +270,10 @@ interface PartnerForm { id: string; name: string; managerName: string; feeRateBp
 const EMPTY_PARTNER_FORM: PartnerForm = { id: '', name: '', managerName: '', feeRateBp: '', status: 'active', memo: '' };
 interface AccountForm {
   id: string; name: string; partnerId: string; source: string;
-  status: AccountView['status']; contractedAt: string; ownerName: string; attributionNote: string;
+  status: AccountView['status']; contractedAt: string; ownerName: string; monthlyFeeKrw: string; attributionNote: string;
 }
 const EMPTY_ACCOUNT_FORM: AccountForm = {
-  id: '', name: '', partnerId: '', source: 'unknown', status: 'prospect', contractedAt: '', ownerName: '', attributionNote: '',
+  id: '', name: '', partnerId: '', source: 'unknown', status: 'prospect', contractedAt: '', ownerName: '', monthlyFeeKrw: '', attributionNote: '',
 };
 
 /** 베이시스포인트 → 사람이 읽는 수수료율. 미설정이면 임의 수치를 만들지 않는다. */
@@ -254,7 +291,7 @@ const S = {
 };
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<'dash' | 'kb' | 'rules' | 'esc' | 'partner' | 'test' | 'audit'>('dash');
+  const [tab, setTab] = useState<'dash' | 'kb' | 'rules' | 'esc' | 'partner' | 'settle' | 'test' | 'audit'>('dash');
   const [notice, setNotice] = useState('');
 
   // ---- 관리 토큰(ADMIN_TOKEN 설정 시 x-admin-token 필수) ----
@@ -399,6 +436,8 @@ export default function AdminPage() {
   const [partnerLoaded, setPartnerLoaded] = useState(false);
   const [pForm, setPForm] = useState<PartnerForm>(EMPTY_PARTNER_FORM);
   const [aForm, setAForm] = useState<AccountForm>(EMPTY_ACCOUNT_FORM);
+  // 파트너 담당자 계정은 읽기 전용이다 — 서버가 403으로 막지만, 화면에서도 쓰기 UI를 감춘다.
+  const [canWrite, setCanWrite] = useState(true);
 
   const loadPartners = useCallback(async (filter = '') => {
     setPartnerBusy(true);
@@ -415,6 +454,7 @@ export default function AdminPage() {
       setPartners(data.partners || []);
       setAccounts(data.accounts || []);
       setRollup(data.rollup || []);
+      setCanWrite(data.canWrite !== false);
       setPartnerLoaded(true);
     } catch {
       setPartnerErr('네트워크 오류로 파트너 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
@@ -474,6 +514,44 @@ export default function AdminPage() {
     }
     await loadPartners(partnerFilter);
     flash('파트너를 삭제했습니다.');
+  };
+
+  // ---- 정산 리포트 ----
+  const [settleMonth, setSettleMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [settlePartner, setSettlePartner] = useState('');
+  const [settleReport, setSettleReport] = useState<SettlementReportView | null>(null);
+  const [settleErr, setSettleErr] = useState('');
+  const [settleBusy, setSettleBusy] = useState(false);
+
+  const loadSettlement = useCallback(async (month: string, partnerId: string) => {
+    setSettleBusy(true);
+    setSettleErr('');
+    try {
+      const qs = new URLSearchParams({ month });
+      if (partnerId) qs.set('partnerId', partnerId);
+      const res = await fetch(`/api/admin/settlement?${qs.toString()}`, { headers: authHeaders(), cache: 'no-store' });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        setSettleReport(null);
+        setSettleErr(data?.message || data?.error || '정산 리포트를 불러오지 못했습니다.');
+        return;
+      }
+      setSettleReport(data.report as SettlementReportView);
+    } catch {
+      setSettleReport(null);
+      setSettleErr('네트워크 오류로 정산 리포트를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setSettleBusy(false);
+    }
+  }, []);
+
+  const downloadSettlementCsv = () => {
+    const t = tokenRef.current;
+    const qs = new URLSearchParams({ month: settleMonth, format: 'csv' });
+    if (settlePartner) qs.set('partnerId', settlePartner);
+    if (t) qs.set('token', t);
+    window.open(`/api/admin/settlement?${qs.toString()}`, '_blank');
   };
 
   // ---- Audit ----
@@ -547,7 +625,12 @@ export default function AdminPage() {
   // 파트너 탭은 열었을 때만 불러온다(불필요한 관리 API 호출을 만들지 않는다).
   useEffect(() => {
     if (tab === 'partner' && !partnerLoaded && !partnerBusy) loadPartners(partnerFilter);
-  }, [tab, partnerLoaded, partnerBusy, loadPartners, partnerFilter]);
+    // 정산 탭은 파트너 목록(필터 선택지)이 필요하므로 함께 채운다.
+    if (tab === 'settle') {
+      if (!partnerLoaded && !partnerBusy) loadPartners('');
+      if (!settleReport && !settleBusy && !settleErr) loadSettlement(settleMonth, settlePartner);
+    }
+  }, [tab, partnerLoaded, partnerBusy, loadPartners, partnerFilter, settleReport, settleBusy, settleErr, loadSettlement, settleMonth, settlePartner]);
 
   const flash = (msg: string) => {
     setNotice(msg);
@@ -806,6 +889,7 @@ export default function AdminPage() {
             ['rules', '시나리오 룰'],
             ['esc', '상담원 요청'],
             ['partner', '파트너·귀속'],
+            ['settle', '정산 리포트'],
             ['test', '응답 테스트'],
             ['audit', '감사 로그'],
           ] as const
@@ -1246,6 +1330,15 @@ export default function AdminPage() {
             )}
           </section>
 
+          {!canWrite && (
+            <section style={S.card} role="note">
+              <p style={{ fontSize: 13 }}>
+                <b>조회 전용 계정</b>입니다. 파트너 담당자 계정은 자기 파트너에 귀속된 고객사만 볼 수 있고,
+                등록·수정은 할 수 없습니다. 변경이 필요하면 고원 관리자에게 요청해 주세요.
+              </p>
+            </section>
+          )}
+          {canWrite && (
           <section style={S.card} aria-labelledby="partner-form-h">
             <h3 id="partner-form-h" style={{ fontSize: 15, marginBottom: 8 }}>{pForm.id ? '파트너 수정' : '파트너 등록'}</h3>
             <label htmlFor="p-name" style={S.tag}>파트너명</label>
@@ -1265,6 +1358,8 @@ export default function AdminPage() {
             </div>
           </section>
 
+          )}
+
           <section style={S.card} aria-labelledby="partner-list-h">
             <h3 id="partner-list-h" style={{ fontSize: 15, marginBottom: 8 }}>파트너 ({partners.length})</h3>
             {partners.length === 0 ? (
@@ -1277,14 +1372,15 @@ export default function AdminPage() {
                   <b style={{ fontSize: 14 }}>{p.name}</b>
                   <span style={S.tag}>{p.id} · {p.status === 'active' ? '운영 중' : '중지'} · 수수료 {feeLabel(p.feeRateBp)}{p.managerName ? ` · 담당 ${p.managerName}` : ''}</span>
                   <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-                    <button style={S.btnGhost} onClick={() => setPForm({ id: p.id, name: p.name, managerName: p.managerName ?? '', feeRateBp: p.feeRateBp === null ? '' : String(p.feeRateBp), status: p.status, memo: p.memo ?? '' })}>수정</button>
-                    <button style={S.btnGhost} onClick={() => removePartner(p)}>삭제</button>
+                    {canWrite && <button style={S.btnGhost} onClick={() => setPForm({ id: p.id, name: p.name, managerName: p.managerName ?? '', feeRateBp: p.feeRateBp === null ? '' : String(p.feeRateBp), status: p.status, memo: p.memo ?? '' })}>수정</button>}
+                    {canWrite && <button style={S.btnGhost} onClick={() => removePartner(p)}>삭제</button>}
                   </span>
                 </div>
               ))
             )}
           </section>
 
+          {canWrite && (
           <section style={S.card} aria-labelledby="account-form-h">
             <h3 id="account-form-h" style={{ fontSize: 15, marginBottom: 8 }}>{aForm.id ? '고객사 수정' : '고객사 등록'}</h3>
             <label htmlFor="a-name" style={S.tag}>고객사명</label>
@@ -1304,6 +1400,8 @@ export default function AdminPage() {
             </select>
             <label htmlFor="a-date" style={S.tag}>계약일(YYYY-MM-DD · 계약 상태면 필수)</label>
             <input id="a-date" style={S.input} value={aForm.contractedAt} onChange={(e) => setAForm({ ...aForm, contractedAt: e.target.value })} placeholder="2026-09-01" />
+            <label htmlFor="a-fee" style={S.tag}>월 이용료(원 · 계약서 금액. 비우면 미입력 — 정산 합계에서 제외됩니다)</label>
+            <input id="a-fee" style={S.input} inputMode="numeric" value={aForm.monthlyFeeKrw} onChange={(e) => setAForm({ ...aForm, monthlyFeeKrw: e.target.value })} placeholder="예: 300000" />
             <label htmlFor="a-owner" style={S.tag}>고원 담당자 이름</label>
             <input id="a-owner" style={S.input} value={aForm.ownerName} onChange={(e) => setAForm({ ...aForm, ownerName: e.target.value })} placeholder="예: 이담당" />
             <label htmlFor="a-note" style={S.tag}>귀속 근거(변경 시 이력에 남습니다)</label>
@@ -1313,6 +1411,8 @@ export default function AdminPage() {
               {aForm.id && <button style={S.btnGhost} onClick={() => setAForm(EMPTY_ACCOUNT_FORM)}>취소</button>}
             </div>
           </section>
+
+          )}
 
           <section style={S.card} aria-labelledby="account-list-h">
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1351,15 +1451,17 @@ export default function AdminPage() {
                         {a.id} · {partnerName} · {SOURCE_LABELS[a.source] ?? a.source} · {ACCOUNT_STATUS_LABELS[a.status]}
                         {a.contractedAt ? ` · 계약일 ${a.contractedAt}` : ''}
                         {a.ownerName ? ` · 담당 ${a.ownerName}` : ''}
+                        {` · 월 ${wonLabel(a.monthlyFeeKrw)}`}
                       </span>
                       <span style={{ marginLeft: 'auto' }}>
-                        <button
+                        {canWrite && <button
                           style={S.btnGhost}
                           onClick={() => setAForm({
                             id: a.id, name: a.name, partnerId: a.partnerId ?? '', source: a.source,
-                            status: a.status, contractedAt: a.contractedAt ?? '', ownerName: a.ownerName ?? '', attributionNote: '',
+                            status: a.status, contractedAt: a.contractedAt ?? '', ownerName: a.ownerName ?? '',
+                            monthlyFeeKrw: typeof a.monthlyFeeKrw === 'number' ? String(a.monthlyFeeKrw) : '', attributionNote: '',
                           })}
-                        >수정</button>
+                        >수정</button>}
                       </span>
                     </div>
                     <details style={{ marginTop: 6 }}>
@@ -1378,6 +1480,146 @@ export default function AdminPage() {
               })
             )}
           </section>
+        </>
+      )}
+
+      {tab === 'settle' && (
+        <>
+          <section style={S.card} aria-labelledby="settle-h">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <h2 id="settle-h" style={{ fontSize: 16 }}>파트너 정산 리포트</h2>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={S.btnGhost} onClick={() => loadSettlement(settleMonth, settlePartner)} disabled={settleBusy}>
+                  {settleBusy ? '불러오는 중…' : '다시 계산'}
+                </button>
+                <button style={S.btnGhost} onClick={downloadSettlementCsv} disabled={!settleReport || settleReport.rows.length === 0}>
+                  CSV 내려받기
+                </button>
+              </div>
+            </div>
+            <p style={{ ...S.tag, marginTop: 6 }}>
+              월 이용료(계약서 입력값) × 수수료율로 <b>산출 근거</b>를 만듭니다. 값이 없는 항목은 0으로 채우지 않고 <b>합계에서 제외</b>하고 사유를 표시합니다.
+              실제 청구·지급은 계약서 확정 후 <b>[승인 필요]</b>.
+            </p>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
+              <span>
+                <label htmlFor="s-month" style={{ ...S.tag, display: 'block' }}>기준월</label>
+                <input
+                  id="s-month"
+                  type="month"
+                  style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '6px 10px', fontSize: 13 }}
+                  value={settleMonth}
+                  onChange={(e) => { setSettleMonth(e.target.value); loadSettlement(e.target.value, settlePartner); }}
+                />
+              </span>
+              <span>
+                <label htmlFor="s-partner" style={{ ...S.tag, display: 'block' }}>파트너</label>
+                <select
+                  id="s-partner"
+                  style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '6px 10px', fontSize: 13 }}
+                  value={settlePartner}
+                  onChange={(e) => { setSettlePartner(e.target.value); loadSettlement(settleMonth, e.target.value); }}
+                >
+                  <option value="">전체 파트너</option>
+                  {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </span>
+            </div>
+            {settleErr && <p role="alert" style={{ fontSize: 13, color: '#c0392b', marginTop: 10 }}>{settleErr}</p>}
+            <p role="status" aria-live="polite" style={{ ...S.tag, marginTop: 8 }}>
+              {settleBusy ? '정산 리포트를 계산하는 중입니다…' : ''}
+            </p>
+          </section>
+
+          {!settleErr && settleReport && (
+            <>
+              <section style={S.card} aria-labelledby="settle-sum-h">
+                <h3 id="settle-sum-h" style={{ fontSize: 15, marginBottom: 8 }}>
+                  {settleReport.month} 요약 ({settleReport.periodStart} ~ {settleReport.periodEnd})
+                </h3>
+                {settleReport.partnerTotals.length === 0 ? (
+                  <p style={S.tag}>
+                    이 기간에 정산 대상 고객사가 없습니다. 파트너 귀속 고객사를 <b>계약</b> 상태로 두고 계약일을 입력하면 여기에 나타납니다.
+                  </p>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <caption style={{ ...S.tag, textAlign: 'left', marginBottom: 6 }}>파트너별 합계(근거가 갖춰진 건만 합산)</caption>
+                      <thead>
+                        <tr style={{ textAlign: 'left', color: 'var(--mut)' }}>
+                          <th scope="col" style={{ padding: '6px 8px' }}>파트너</th>
+                          <th scope="col" style={{ padding: '6px 8px' }}>대상</th>
+                          <th scope="col" style={{ padding: '6px 8px' }}>산출</th>
+                          <th scope="col" style={{ padding: '6px 8px' }}>미산출</th>
+                          <th scope="col" style={{ padding: '6px 8px' }}>기준금액</th>
+                          <th scope="col" style={{ padding: '6px 8px' }}>수수료</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {settleReport.partnerTotals.map((t) => (
+                          <tr key={t.partnerId} style={{ borderTop: '1px solid var(--line)' }}>
+                            <th scope="row" style={{ padding: '6px 8px', fontWeight: 600, textAlign: 'left' }}>{t.partnerName}</th>
+                            <td style={{ padding: '6px 8px' }}>{t.accounts}</td>
+                            <td style={{ padding: '6px 8px' }}>{t.billable}</td>
+                            <td style={{ padding: '6px 8px' }}>{t.incomplete}</td>
+                            <td style={{ padding: '6px 8px' }}>{t.baseAmountKrw.toLocaleString('ko-KR')}원</td>
+                            <td style={{ padding: '6px 8px' }}>{t.feeAmountKrw.toLocaleString('ko-KR')}원</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {settleReport.totals.partial && (
+                  <p role="alert" style={{ fontSize: 13, color: '#b26a00', marginTop: 10 }}>
+                    근거가 부족한 {settleReport.totals.incomplete}건이 합계에서 빠져 있습니다. 이 합계는 <b>확정 금액이 아닙니다</b>.
+                  </p>
+                )}
+              </section>
+
+              <section style={S.card} aria-labelledby="settle-rows-h">
+                <h3 id="settle-rows-h" style={{ fontSize: 15, marginBottom: 8 }}>고객사별 산출 근거 ({settleReport.rows.length})</h3>
+                {settleReport.rows.length === 0 ? (
+                  <p style={S.tag}>표시할 항목이 없습니다.</p>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left', color: 'var(--mut)' }}>
+                          <th scope="col" style={{ padding: '6px 8px' }}>고객사</th>
+                          <th scope="col" style={{ padding: '6px 8px' }}>파트너</th>
+                          <th scope="col" style={{ padding: '6px 8px' }}>계약일</th>
+                          <th scope="col" style={{ padding: '6px 8px' }}>월 이용료</th>
+                          <th scope="col" style={{ padding: '6px 8px' }}>수수료율</th>
+                          <th scope="col" style={{ padding: '6px 8px' }}>수수료</th>
+                          <th scope="col" style={{ padding: '6px 8px' }}>비고</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {settleReport.rows.map((r) => (
+                          <tr key={r.accountId} style={{ borderTop: '1px solid var(--line)' }}>
+                            <th scope="row" style={{ padding: '6px 8px', fontWeight: 600, textAlign: 'left' }}>{r.accountName}</th>
+                            <td style={{ padding: '6px 8px' }}>{r.partnerName}</td>
+                            <td style={{ padding: '6px 8px' }}>{r.contractedAt}</td>
+                            <td style={{ padding: '6px 8px' }}>{wonLabel(r.baseAmountKrw)}</td>
+                            <td style={{ padding: '6px 8px' }}>{feeLabel(r.feeRateBp)}</td>
+                            <td style={{ padding: '6px 8px' }}>{r.feeAmountKrw === null ? '산출 불가' : `${r.feeAmountKrw.toLocaleString('ko-KR')}원`}</td>
+                            <td style={{ padding: '6px 8px', color: 'var(--mut)' }}>{ISSUE_LABELS[r.issue]}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <details style={{ marginTop: 12 }}>
+                  <summary style={{ ...S.tag, cursor: 'pointer' }}>산출 기준·한계 {settleReport.notes.length}건</summary>
+                  <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 12.5, color: 'var(--sub)' }}>
+                    {settleReport.notes.map((n, i) => <li key={i} style={{ marginBottom: 3 }}>{n}</li>)}
+                  </ul>
+                </details>
+              </section>
+            </>
+          )}
         </>
       )}
 

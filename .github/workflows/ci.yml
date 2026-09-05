@@ -15,6 +15,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Core 는 별도(비공개) 저장소다. 토큰이 없으면 계약 검사는 **건너뛰고**, 건너뛴 검사를
+    # 통과로 적지 않는다. 토큰 등록은 [승인 필요].
+    env:
+      AICC_CORE_TOKEN: ${{ secrets.AICC_CORE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -55,3 +59,21 @@ jobs:
             done
           done
           exit $fail
+
+      # ── AICC-Core 채널 계약 ──────────────────────────────────────────────
+      # 챗봇이 Core 를 실제로 소비하므로, Core 의 적합성 스위트를 이 저장소 포트에 대고 돌린다.
+      # 드라이런 전용이라 실메신저로 아무것도 나가지 않는다(ci/aicc-port.mjs 는 transport 미주입).
+      - name: AICC-Core 체크아웃 (채널 계약 검사용)
+        id: aicc_core
+        if: env.AICC_CORE_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          repository: AI-JUNE/aicc-core
+          path: .aicc-core
+          token: ${{ secrets.AICC_CORE_TOKEN }}
+
+      - name: 채널 계약 적합성 (드라이런 · 종료코드 0/1/2 그대로 게이트)
+        if: steps.aicc_core.outcome == 'success'
+        run: npm run conformance:aicc
+        env:
+          AICC_CORE: .aicc-core

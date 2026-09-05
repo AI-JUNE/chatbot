@@ -26,6 +26,7 @@ const ROUTES = [
   'src/app/api/admin/logs/export/route.ts',
   'src/app/api/admin/rules/route.ts',
   'src/app/api/admin/partners/route.ts',
+  'src/app/api/admin/settlement/route.ts',
 ].filter(has);
 
 /* ── 안전 플래그: build now, activate on approval ── */
@@ -471,7 +472,9 @@ test('파트너 API는 모든 메서드에서 관리자 게이트를 거친다',
   const s = read('src/app/api/admin/partners/route.ts');
   const methods = [...s.matchAll(/export async function (GET|POST|DELETE|PATCH|PUT)\(/g)].map((m) => m[1]);
   assert.ok(methods.length >= 3, '조회·등록·삭제가 있어야 한다');
-  assert.equal((s.match(/requireAdmin\(req\)/g) || []).length, methods.length, '메서드마다 requireAdmin이 필요하다');
+  // 인증 관문은 requireAdmin(관리자 전용) 또는 requirePrincipal(관리자+파트너 담당자) 중 하나여야 한다.
+  const gates = (s.match(/require(Admin|Principal)\(req[,)]/g) || []).length;
+  assert.equal(gates, methods.length, '메서드마다 인증 관문이 필요하다');
 });
 
 test('파트너 데이터는 연락처를 저장하지 않는다(개인정보 최소화)', () => {
@@ -502,3 +505,52 @@ test('백업에 파트너·귀속 데이터가 포함되고, 없는 백업도 �
   assert.match(s, /partnersError/, '복원 실패를 삼키지 않고 응답에 알려야 한다');
 });
 
+/* ── 파트너 역할 권한(RBAC) ── */
+test('파트너 포털(partner_admin 로그인)은 기본 OFF다', () => {
+  const s = read('src/lib/rbac.ts');
+  assert.match(s, /PARTNER_PORTAL_ENABLED === 'true'/, '명시적으로 true일 때만 켜져야 한다');
+  assert.match(s, /MIN_PARTNER_TOKEN_LENGTH/, '짧은 토큰을 거르는 하한이 있어야 한다');
+  assert.ok(!/console\.(log|error|warn)/.test(s), '토큰이 로그로 새지 않게 rbac은 로그를 찍지 않는다');
+});
+
+test('파트너 담당자는 읽기 전용이다(쓰기 라우트가 권한을 확인한다)', () => {
+  const s = read('src/app/api/admin/partners/route.ts');
+  const writeHandlers = s.split(/export async function /).filter((c) => /^(POST|PUT|PATCH|DELETE)\(/.test(c));
+  assert.ok(writeHandlers.length >= 2, '쓰기 핸들러가 있어야 한다');
+  for (const h of writeHandlers) {
+    assert.match(h, /requireWrite/, `쓰기 핸들러가 requireWrite를 거치지 않는다: ${h.slice(0, 12)}`);
+  }
+  assert.match(read('src/lib/rbac.ts'), /canWrite[\s\S]*?role === 'admin'/, 'canWrite는 관리자만 허용해야 한다');
+});
+
+test('고객사 조회는 모두 권한 스코프 필터를 통과한다', () => {
+  // 새 조회 화면이 생겨도 범위가 새지 않도록, queryAccounts를 쓰는 라우트는 scopeAccountFilter를 함께 써야 한다.
+  for (const r of ROUTES) {
+    const s = read(r);
+    if (!s.includes('queryAccounts')) continue;
+    assert.match(s, /scopeAccountFilter/, `${r} 가 조회 범위 필터를 거치지 않는다`);
+  }
+});
+
+/* ── 정산 리포트 ── */
+test('정산은 수수료율·금액을 하드코딩하지 않는다', () => {
+  const s = read('src/lib/settlement.ts');
+  assert.match(s, /effectiveFeeRateBp/, '수수료율은 파트너 설정·환경변수에서만 와야 한다');
+  assert.ok(!/feeRateBp\s*=\s*\d/.test(s), '수수료율 리터럴 대입이 있으면 안 된다');
+  assert.ok(!/(매출|성과|절감|만족도)\s*\d+%/.test(s), '근거 없는 성과 수치를 넣지 않는다');
+});
+
+test('근거가 없으면 0원이 아니라 미산출로 남긴다', () => {
+  const s = read('src/lib/settlement.ts');
+  assert.match(s, /issue === 'none'\s*\?/, '근거가 갖춰진 경우에만 금액을 계산해야 한다');
+  assert.match(s, /partial: incomplete > 0/, '일부만 산출된 합계는 partial로 표시해야 한다');
+  assert.match(s, /Math\.floor/, '수수료는 절사해야 한다(부풀림 금지)');
+  assert.match(s, /청구서가 아닙니다/, '리포트가 청구서로 오인되지 않게 명시해야 한다');
+});
+
+test('정산 리포트 접근은 인증·감사 로그를 거친다', () => {
+  const s = read('src/app/api/admin/settlement/route.ts');
+  assert.match(s, /requirePrincipal/, '인증 없이 열려 있으면 안 된다');
+  assert.match(s, /logAudit/, 'CSV 내보내기는 감사 로그에 남아야 한다');
+  assert.match(s, /scopeAccountFilter/, '파트너 담당자 범위가 강제되어야 한다');
+});
