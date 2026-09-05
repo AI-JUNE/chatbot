@@ -3,6 +3,7 @@ import { KAKAO_LIVE } from '@/lib/kakao';
 import { ok, ADMIN_AUTH_REQUIRED } from '@/lib/http';
 import { MONITORING_ENABLED } from '@/lib/monitoring';
 import { storageStatus } from '@/lib/storage';
+import { rbacStatus } from '@/lib/rbac';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,6 +38,9 @@ export async function GET() {
       adminAuthRequired: ADMIN_AUTH_REQUIRED, // [승인 필요] 전까지 false
       adminTokenConfigured: Boolean(process.env.ADMIN_TOKEN), // 값은 노출하지 않음
       monitoring: MONITORING_ENABLED, // SENTRY_DSN 설정 여부(값은 노출하지 않음)
+      // 파트너 담당자 로그인(partner_admin). [승인 필요] 전까지 false이며,
+      // 등록된 자격 "개수"만 노출한다(토큰 값·파트너 id는 노출하지 않음).
+      partnerPortal: rbacStatus(),
     },
     build: {
       env: process.env.VERCEL_ENV || 'local',

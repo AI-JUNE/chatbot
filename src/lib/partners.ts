@@ -84,6 +84,11 @@ export interface Account {
   contractedAt?: string;
   /** 고원 측 담당자 — 이름·호칭만. */
   ownerName?: string;
+  /**
+   * 월 이용료(원). **사람이 계약서를 보고 입력한 값만** 들어간다 — 추정·자동 산출을 하지 않는다.
+   * 미입력이면 undefined이며, 정산 리포트에서 "미입력"으로 표시되고 합계에서 제외된다.
+   */
+  monthlyFeeKrw?: number;
   memo?: string;
   /** 귀속 이력(최신이 뒤). 최소 1건(최초 등록)이 항상 존재한다. */
   attribution: AttributionEvent[];
@@ -94,6 +99,8 @@ export interface Account {
 const MAX_NAME = 80;
 const MAX_MEMO = 300;
 const MAX_ATTRIBUTION = 50;
+/** 월 이용료 상한(원) — 오타로 자릿수가 튄 값을 정산 근거로 받지 않는다. */
+const MAX_MONTHLY_FEE = 1_000_000_000;
 
 let partners: Partner[] = [];
 let accounts: Account[] = [];
@@ -227,6 +234,7 @@ export interface AccountInput {
   status?: unknown;
   contractedAt?: unknown;
   ownerName?: unknown;
+  monthlyFeeKrw?: unknown;
   memo?: unknown;
   /** 귀속이 바뀔 때 남길 근거 문구 */
   attributionNote?: unknown;
@@ -235,6 +243,18 @@ export interface AccountInput {
 }
 
 export type AccountResult = { ok: true; account: Account; created: boolean } | { ok: false; error: string };
+
+/**
+ * 월 이용료 파싱. 빈 값은 "미입력"(undefined)이며 0과 구분한다 —
+ * 0원 계약(무상 파일럿)과 "아직 안 적었음"을 섞으면 정산 근거가 흐려진다.
+ */
+export function parseMonthlyFee(v: unknown): { ok: true; value: number | undefined } | { ok: false; error: string } {
+  if (v === undefined || v === null || v === '') return { ok: true, value: undefined };
+  const n = typeof v === 'string' ? Number(v.replace(/[,\s]/g, '')) : Number(v);
+  if (!Number.isFinite(n) || n < 0) return { ok: false, error: '월 이용료는 0 이상의 숫자(원)여야 합니다.' };
+  if (n > MAX_MONTHLY_FEE) return { ok: false, error: `월 이용료는 ${MAX_MONTHLY_FEE.toLocaleString('ko-KR')}원 이하여야 합니다.` };
+  return { ok: true, value: Math.round(n) };
+}
 
 export function upsertAccount(input: AccountInput): AccountResult {
   const name = clean(input.name, MAX_NAME);
@@ -255,6 +275,9 @@ export function upsertAccount(input: AccountInput): AccountResult {
   if (contractedAt && !isValidDate(contractedAt)) {
     return { ok: false, error: '계약일은 YYYY-MM-DD 형식의 실제 날짜여야 합니다. (예: 2026-09-01)' };
   }
+
+  const fee = parseMonthlyFee(input.monthlyFeeKrw);
+  if (!fee.ok) return { ok: false, error: fee.error };
 
   const status: AccountStatus =
     input.status === 'contracted' || input.status === 'churned' ? input.status : 'prospect';
@@ -291,6 +314,7 @@ export function upsertAccount(input: AccountInput): AccountResult {
     existing.status = status;
     existing.contractedAt = contractedAt || undefined;
     existing.ownerName = clean(input.ownerName, MAX_NAME) || undefined;
+    existing.monthlyFeeKrw = fee.value;
     existing.memo = clean(input.memo, MAX_MEMO) || undefined;
     existing.updatedAt = now();
     persist();
@@ -306,6 +330,7 @@ export function upsertAccount(input: AccountInput): AccountResult {
     status,
     contractedAt: contractedAt || undefined,
     ownerName: clean(input.ownerName, MAX_NAME) || undefined,
+    monthlyFeeKrw: fee.value,
     memo: clean(input.memo, MAX_MEMO) || undefined,
     attribution: [
       {
@@ -469,6 +494,11 @@ export function importPartners(input: unknown): { ok: true; partners: number; ac
       status: st === 'contracted' || st === 'churned' ? st : 'prospect',
       contractedAt: typeof ca === 'string' && isValidDate(ca) ? ca : undefined,
       ownerName: clean((a as Account).ownerName, MAX_NAME) || undefined,
+      // 예전 백업에는 없는 필드 — 없으면 "미입력"으로 남긴다(임의값을 만들지 않는다).
+      monthlyFeeKrw: (() => {
+        const f = parseMonthlyFee((a as Account).monthlyFeeKrw);
+        return f.ok ? f.value : undefined;
+      })(),
       memo: clean((a as Account).memo, MAX_MEMO) || undefined,
       attribution: history
         .filter((e) => e && typeof e === 'object' && typeof e.at === 'string')

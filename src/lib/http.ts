@@ -8,6 +8,7 @@
 //   - message : error와 동일(신규 소비자용 명시적 필드)
 import { NextRequest, NextResponse } from 'next/server';
 import { safeEqual } from '@/lib/webhookAuth';
+import { resolvePrincipal, canWrite, type Principal } from '@/lib/rbac';
 
 export type ErrorCode =
   | 'invalid_json'
@@ -16,6 +17,7 @@ export type ErrorCode =
   | 'not_found'
   | 'payload_too_large'
   | 'rate_limited'
+  | 'forbidden'
   | 'conflict'
   | 'internal';
 
@@ -26,6 +28,7 @@ const STATUS: Record<ErrorCode, number> = {
   not_found: 404,
   payload_too_large: 413,
   rate_limited: 429,
+  forbidden: 403,
   conflict: 409,
   internal: 500,
 };
@@ -37,6 +40,7 @@ const DEFAULT_MESSAGE: Record<ErrorCode, string> = {
   not_found: '대상을 찾을 수 없습니다.',
   payload_too_large: '요청 본문이 너무 큽니다.',
   rate_limited: '요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요.',
+  forbidden: '이 작업을 수행할 권한이 없습니다.',
   conflict: '요청을 처리할 수 없는 상태입니다.',
   internal: '일시적인 오류가 발생했습니다.',
 };
@@ -207,4 +211,29 @@ export function requireAdmin(req: NextRequest, opts?: { allowQueryToken?: boolea
     return fail('unauthorized', '관리자 토큰이 필요합니다.');
   }
   return null;
+}
+
+
+// ---- 역할 기반 접근(관리자 / 파트너 담당자) ----
+
+export type PrincipalResult = { ok: true; principal: Principal } | { ok: false; res: NextResponse };
+
+/**
+ * 요청 주체를 판정한다. `requireAdmin`이 "관리자냐 아니냐"만 보는 데 비해,
+ * 이 함수는 파트너 담당자(`partner_admin`)까지 구분해 **조회 범위**를 좁힐 수 있게 한다.
+ * 파트너 포털이 꺼져 있으면(기본값) 파트너 토큰은 조회조차 하지 않으므로 기존 동작과 같다.
+ */
+export function requirePrincipal(req: NextRequest, opts?: { allowQueryToken?: boolean }): PrincipalResult {
+  const presented = presentedToken(req, opts?.allowQueryToken === true);
+  const principal = resolvePrincipal(presented, { adminAuthRequired: ADMIN_AUTH_REQUIRED });
+  if (!principal) {
+    return { ok: false, res: fail('unauthorized', '관리자 토큰이 필요합니다.') };
+  }
+  return { ok: true, principal };
+}
+
+/** 쓰기 권한 확인. 파트너 담당자는 읽기 전용이므로 403으로 막는다. */
+export function requireWrite(principal: Principal): NextResponse | null {
+  if (canWrite(principal)) return null;
+  return fail('forbidden', '파트너 담당자 계정은 조회만 가능합니다. 변경은 고원 관리자에게 요청해 주세요.');
 }

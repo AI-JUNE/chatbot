@@ -1,7 +1,9 @@
 // 파트너(채널)·고객사 귀속 관리 API. 조회·등록·수정만 제공한다.
 // 고객사는 삭제하지 않는다 — 귀속 근거가 사라지면 정산 분쟁을 막을 수 없다(해지는 status='churned').
 // 파트너 삭제는 연결된 고객사가 없을 때만 가능하다(lib/partners.deletePartner에서 판정).
-// [승인 필요] 실제 정산·청구, 파트너 계정 로그인(partner_admin 권한).
+// 접근 권한: 고원 관리자는 전체, 파트너 담당자(partner_admin)는 **자기 파트너 범위만 조회**하고 쓰기는 못 한다.
+// 범위 제한은 lib/rbac.scopeAccountFilter 한 곳에서만 걸린다(조회 화면이 늘어도 범위가 새지 않게).
+// [승인 필요] 실제 정산·청구, 파트너 계정 활성화(PARTNER_PORTAL_ENABLED).
 import { NextRequest } from 'next/server';
 import {
   deletePartner,
@@ -21,7 +23,8 @@ import {
   type LeadSource,
 } from '@/lib/partners';
 import { logAudit } from '@/lib/audit';
-import { ok, fail, readJson, reqQuery, requireAdmin, isAdminAuthed } from '@/lib/http';
+import { ok, fail, readJson, reqQuery, requirePrincipal, requireWrite } from '@/lib/http';
+import { scopeAccountFilter, scopePartners } from '@/lib/rbac';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,24 +43,35 @@ function parseQuery(req: NextRequest): AccountQuery {
 }
 
 export async function GET(req: NextRequest) {
-  const denied = requireAdmin(req);
-  if (denied) return denied;
+  const auth = requirePrincipal(req);
+  if (!auth.ok) return auth.res;
+  const { principal } = auth;
+  // 파트너 담당자는 요청한 partnerId와 무관하게 자기 파트너로 고정된다.
+  const filter = scopeAccountFilter(principal, parseQuery(req));
+  const rollup = rollupByPartner().filter(
+    (r) => principal.role === 'admin' || r.partnerId === principal.partnerId,
+  );
   return ok({
-    partners: listPartners(),
-    accounts: queryAccounts(parseQuery(req)),
-    rollup: rollupByPartner(),
+    role: principal.role,
+    scopePartnerId: principal.partnerId,
+    canWrite: principal.role === 'admin',
+    partners: scopePartners(principal, listPartners()),
+    accounts: queryAccounts(filter),
+    rollup,
     defaultFeeRateBp: defaultFeeRateBp(),
     labels: { source: LEAD_SOURCE_LABELS, accountStatus: ACCOUNT_STATUS_LABELS, partnerStatus: PARTNER_STATUS_LABELS },
   });
 }
 
 export async function POST(req: NextRequest) {
-  const denied = requireAdmin(req);
-  if (denied) return denied;
+  const auth = requirePrincipal(req);
+  if (!auth.ok) return auth.res;
+  const readOnly = requireWrite(auth.principal);
+  if (readOnly) return readOnly;
 
   const parsed = await readJson<{ kind?: unknown } & Record<string, unknown>>(req);
   if (!parsed.ok) return parsed.res;
-  const authed = isAdminAuthed(req);
+  const authed = auth.principal.authed;
   const kind = parsed.data.kind;
 
   if (kind === 'partner') {
@@ -90,12 +104,14 @@ export async function POST(req: NextRequest) {
 
 // 파트너 삭제: DELETE /api/admin/partners?partnerId=PTR-0001
 export async function DELETE(req: NextRequest) {
-  const denied = requireAdmin(req);
-  if (denied) return denied;
+  const auth = requirePrincipal(req);
+  if (!auth.ok) return auth.res;
+  const readOnly = requireWrite(auth.principal);
+  if (readOnly) return readOnly;
   const id = reqQuery(req, 'partnerId');
   if (!id.ok) return id.res;
   const r = deletePartner(id.value);
   if (!r.ok) return fail('conflict', r.error);
-  logAudit({ action: 'partner.delete', target: id.value, authed: isAdminAuthed(req) });
+  logAudit({ action: 'partner.delete', target: id.value, authed: auth.principal.authed });
   return ok({});
 }

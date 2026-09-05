@@ -17,7 +17,8 @@ export type AuditAction =
   | 'backup.restore'
   | 'partner.upsert'
   | 'partner.delete'
-  | 'account.upsert';
+  | 'account.upsert'
+  | 'settlement.export';
 
 export interface AuditEvent {
   id: string;
@@ -88,7 +89,7 @@ const ACTIONS = new Set<string>([
   'kb.upsert', 'kb.delete', 'kb.reset', 'kb.import',
   'rule.override', 'rule.custom.upsert', 'rule.custom.delete',
   'escalation.update', 'backup.restore',
-  'partner.upsert', 'partner.delete', 'account.upsert',
+  'partner.upsert', 'partner.delete', 'account.upsert', 'settlement.export',
 ]);
 
 /** 스냅샷 복원. 알 수 없는 action·형식 위반 항목은 건너뛴다. */
