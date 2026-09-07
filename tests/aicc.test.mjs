@@ -8,6 +8,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { importLib, tscPath } from './_compile.mjs';
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
@@ -168,4 +170,139 @@ test('승인·전송기가 모두 갖춰지면 live 옵션이 만들어진다', 
   assert.equal(o.approvalRef, 'TICKET-1');
   assert.equal(typeof o.transport.deliver, 'function');
   assert.equal(o.id, 'chatbot');
+});
+
+
+/* ── 스키마 정합(드리프트) 검출기 ───────────────────────────────────────────────
+ * 미러(src/lib/sharedSchema.ts)는 주석으로 지켜지지 않는다. Core 원본과 **실행 결과로** 대조한다.
+ * 아래는 검출기 자체가 제대로 잡는지 본다 — 검출기가 통과만 하면 드리프트는 조용히 쌓인다.
+ */
+
+const drift = await import('../scripts/aicc-schema-drift.mjs');
+
+/** 대조에 넣을 기준(정합 상태) 한 벌. 각 테스트는 여기서 한 가지만 어긋뜨린다. */
+function baseline() {
+  const kinds = ['Say', 'Collect', 'Choice', 'Confirm', 'Transfer', 'Api'];
+  const render = (node, channel) => ({ channel, nodeId: node.id, kind: node.kind, text: node.text ?? node.prompt ?? node.waitText ?? '' });
+  return {
+    core: { kinds: [...kinds], contractVersion: 1, adapterChannel: { callbot: 'voice', chatbot: 'chat', dars: 'visual' }, render, flowIssues: [] },
+    mirror: { kinds: [...kinds], contractVersion: 1, channelKind: { web: 'chat', kakao: 'chat', call: 'voice' }, render },
+  };
+}
+
+test('정합 상태에서는 사유가 하나도 나오지 않는다', () => {
+  const { core, mirror } = baseline();
+  assert.deepEqual(drift.compareContract(core, mirror), []);
+});
+
+test('노드 종류·순서가 갈라지면 잡는다', () => {
+  const { core, mirror } = baseline();
+  core.kinds = ['Say', 'Collect', 'Choice', 'Confirm', 'Transfer', 'Api', 'Handoff'];
+  const errs = drift.compareContract(core, mirror);
+  assert.ok(errs.some((e) => e.includes('NodeKind 불일치')), errs.join('\n'));
+  assert.ok(errs.some((e) => e.includes('대조 표본 누락')), '새 노드 종류를 검사하지 않는 것도 사유다');
+
+  const b = baseline();
+  b.mirror.kinds = ['Collect', 'Say', 'Choice', 'Confirm', 'Transfer', 'Api'];
+  assert.ok(drift.compareContract(b.core, b.mirror).some((e) => e.includes('NodeKind 불일치')), '순서도 계약이다');
+});
+
+test('채널 계약 버전 차이를 잡는다', () => {
+  const { core, mirror } = baseline();
+  core.contractVersion = 2;
+  assert.ok(drift.compareContract(core, mirror).some((e) => e.includes('채널 계약 버전 불일치')));
+});
+
+test('어댑터↔매체 매핑이 어긋나면 채널별로 잡는다', () => {
+  const { core, mirror } = baseline();
+  mirror.channelKind = { web: 'chat', kakao: 'voice', call: 'voice' };
+  const errs = drift.compareContract(core, mirror);
+  assert.equal(errs.filter((e) => e.includes('채널 매핑 불일치')).length, 1);
+  assert.ok(errs[0].includes("'kakao'"));
+
+  const b = baseline();
+  delete b.core.adapterChannel.callbot;
+  assert.ok(drift.compareContract(b.core, b.mirror).some((e) => e.includes("'callbot' 어댑터가 없습니다")));
+});
+
+test('렌더 문구가 한 글자만 달라도 잡는다 — 실제 회귀가 이 형태였다', () => {
+  const { core, mirror } = baseline();
+  mirror.render = (node, channel) => {
+    const r = { channel, nodeId: node.id, kind: node.kind, text: node.text ?? node.prompt ?? node.waitText ?? '' };
+    if (node.kind === 'Transfer') r.text = '상담원에게 연결해 드리겠습니다.';
+    return r;
+  };
+  const errs = drift.compareContract(core, mirror);
+  assert.equal(errs.length, drift.RENDER_CHANNELS.length, '채널마다 한 건씩 보고한다');
+  assert.ok(errs[0].includes('렌더 결과 불일치'));
+});
+
+test('한쪽 렌더가 터지면 통과로 넘기지 않는다', () => {
+  const { core, mirror } = baseline();
+  mirror.render = () => { throw new Error('알 수 없는 노드'); };
+  const errs = drift.compareContract(core, mirror);
+  assert.ok(errs.length > 0);
+  assert.ok(errs.every((e) => e.includes('미러 렌더 실패')));
+});
+
+test('키 순서·undefined 필드 차이는 드리프트가 아니다 — 거짓 경보를 내지 않는다', () => {
+  const { core, mirror } = baseline();
+  mirror.render = (node, channel) => ({ text: node.text ?? node.prompt ?? node.waitText ?? '', kind: node.kind, nodeId: node.id, channel, acceptDtmf: undefined });
+  assert.deepEqual(drift.compareContract(core, mirror), []);
+});
+
+test('챗 채널이 렌더할 수 없는 노드는 배포 전에 걸린다', () => {
+  const { core, mirror } = baseline();
+  core.flowIssues = [
+    { code: 'E_MISSING_CAPABILITY_IMPL', severity: 'error', messageKo: 'Choice 노드(n1)를 렌더할 입력 수단이 없습니다.' },
+    { code: 'W_NO_FALLBACK_PATH', severity: 'warning', messageKo: '경고는 막지 않는다' },
+  ];
+  const errs = drift.compareContract(core, mirror);
+  assert.equal(errs.length, 1, '경고까지 실패로 만들면 아무도 검사를 켜 두지 않는다');
+  assert.ok(errs[0].includes('렌더 불가한 노드'));
+});
+
+test('Core 의 NodeKind 정의를 읽고, 못 읽으면 빈 목록을 만들지 않는다', () => {
+  assert.deepEqual(
+    drift.parseNodeKinds("export type NodeKind = 'Say' | 'Collect' | 'Api';"),
+    ['Say', 'Collect', 'Api'],
+  );
+  assert.equal(drift.parseNodeKinds('export type Other = string;'), null, '형식이 바뀌면 판정보류여야 한다');
+  assert.equal(drift.parseNodeKinds('export type NodeKind = string;'), null, '값을 못 뽑으면 통과시키지 않는다');
+});
+
+test('표본은 모든 노드 종류를 덮는다', () => {
+  const covered = new Set(drift.NODE_FIXTURES.map((n) => n.kind));
+  for (const k of ['Say', 'Collect', 'Choice', 'Confirm', 'Transfer', 'Api']) {
+    assert.equal(covered.has(k), true, `${k} 표본이 없다`);
+  }
+  assert.equal(/01[016789]-?\d{3,4}-?\d{4}/.test(JSON.stringify(drift.NODE_FIXTURES)), false, '표본에 개인정보 금지(§10.3)');
+});
+
+test('Core 를 못 찾으면 판정보류(2)로 끝난다 — 통과(0)가 아니다', () => {
+  const r = spawnSync(process.execPath, ['scripts/aicc-schema-drift.mjs'], {
+    cwd: fileURLToPath(new URL('../', import.meta.url)),
+    env: { ...process.env, AICC_CORE: '../__no_such_core__' },
+    encoding: 'utf8',
+  });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /판정보류/);
+});
+
+test('Core 가 있으면 실제로 대조해 정합이어야 한다', () => {
+  const repo = fileURLToPath(new URL('../', import.meta.url));
+  const core = process.env.AICC_CORE ?? '../6. AICC-Core';
+  if (!existsSync(new URL(`../${core}/src/flow/types.ts`, import.meta.url)) && !existsSync(`${core}/src/flow/types.ts`)) {
+    return; // Core 없는 체크아웃 — 여기서 판정하지 않는다(CI 의 drift:aicc 단계가 판정보류로 남긴다)
+  }
+  const r = spawnSync(process.execPath, ['scripts/aicc-schema-drift.mjs'], { cwd: repo, encoding: 'utf8' });
+  if (r.status === 2) return; // 런타임이 TS 스트립을 못 하는 경우 — 판정보류지 실패가 아니다
+  assert.equal(r.status, 0, `드리프트 발견:\n${r.stderr}`);
+});
+
+test('드리프트 검사가 CI 와 package.json 에 배선돼 있다', () => {
+  const pkg = JSON.parse(read('package.json'));
+  assert.ok(pkg.scripts['drift:aicc'], '스크립트가 없으면 아무도 돌리지 않는다');
+  const ci = read('.github/workflows/ci.yml');
+  assert.match(ci, /drift:aicc/, 'CI 에 걸리지 않은 검사는 없는 검사다');
 });

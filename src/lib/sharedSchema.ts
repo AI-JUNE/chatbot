@@ -101,7 +101,10 @@ export function renderSharedNode(node: SharedFlowNode, channel: CoreChannelKind)
         ? { ...base, text: `${node.prompt} 맞으시면 1번을 눌러주세요.`, acceptDtmf: true }
         : { ...base, text: node.prompt, ui: { type: 'confirm' } };
     case 'Transfer':
-      return { ...base, text: '상담원에게 연결해 드리겠습니다.', transferTo: node.queue };
+      // 문구는 Core `renderNode` 와 **한 글자까지** 같아야 한다. 저장소마다 다른 문장을 내보내면
+      // 같은 Flow 를 돌려도 고객이 채널마다 다른 말을 듣는다(§2 이중관리 회귀).
+      // 드리프트는 `npm run drift:aicc` 가 매 CI 에서 잡는다.
+      return { ...base, text: '상담사에게 연결해 드리겠습니다.', transferTo: node.queue };
     case 'Api': {
       const text = node.waitText ?? '';
       return { ...base, text, silent: text.trim() === '', awaitConnectorId: node.connectorId };
