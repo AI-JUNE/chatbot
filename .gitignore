@@ -8,3 +8,5 @@ out
 next-env.d.ts
 .DS_Store
 data/
+# 테넌트 지식 원본은 런타임 저장물이 아니라 소스다(런타임 저장은 data/ 하위 다른 파일).
+!data/eum-faq.json

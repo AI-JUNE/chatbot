@@ -11,6 +11,8 @@ export const dynamic = 'force-dynamic';
 
 // Next.js route 파일은 HTTP 메서드 외 export를 허용하지 않는다(빌드 실패 원인). 모듈 내부 상수로 유지.
 const MAX_MESSAGE_LEN = 2000;
+// 테넌트 식별자 최대 길이(형식 검증은 lib/tenants 가 담당한다).
+const MAX_TENANT_LEN = 32;
 
 export async function POST(req: NextRequest) {
   // 요청 로그: 대화 본문·연락처는 기록하지 않는다(세션은 해시로만 남긴다).
@@ -22,7 +24,7 @@ export async function POST(req: NextRequest) {
     return withRequestId(limited, rl.requestId);
   }
 
-  const parsed = await readJson<{ message?: unknown; sessionId?: unknown }>(req);
+  const parsed = await readJson<{ message?: unknown; sessionId?: unknown; tenant?: unknown }>(req);
   if (!parsed.ok) {
     rl.end({ status: parsed.res.status, code: 'invalid_json' });
     return withRequestId(parsed.res, rl.requestId);
@@ -39,13 +41,21 @@ export async function POST(req: NextRequest) {
     return withRequestId(sid.res, rl.requestId);
   }
 
+  // 테넌트(예: 'eum') — 임베드 옵션에서 넘어온다. 알 수 없는 값이면 기본 동작으로 되돌아간다.
+  const ten = optStr(parsed.data.tenant, 'tenant', MAX_TENANT_LEN, '');
+  if (!ten.ok) {
+    rl.end({ status: 400, code: 'invalid_input' });
+    return withRequestId(ten.res, rl.requestId);
+  }
+
   const message = msg.value;
+  const tenantId = ten.value || null;
   const sessionId = sid.value || 'anon';
   const sessionHash = hashId(sessionId);
 
   let result;
   try {
-    result = await replyToAsync(message, sessionId);
+    result = await replyToAsync(message, sessionId, tenantId ? { tenantId } : {});
   } catch (e) {
     // 대화 엔진 오류는 모니터링·로그에 남기되, 고객에게는 안전한 안내로 응답한다(오류를 삼키지 않는다).
     await captureError(e, { route: '/api/chat', method: 'POST', requestId: rl.requestId });
@@ -87,6 +97,7 @@ export async function POST(req: NextRequest) {
     status: 200,
     sessionHash,
     channel: 'web',
+    ...(tenantId ? { tenant: tenantId } : {}),
     intent: result.intent,
     source: result.source,
     escalate: result.escalate,

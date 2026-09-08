@@ -38,6 +38,7 @@ export const ALLOWED_FIELDS = [
   'code',
   'error',
   'channel',
+  'tenant',
   'intent',
   'source',
   'escalate',

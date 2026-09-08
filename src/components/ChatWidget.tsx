@@ -8,7 +8,34 @@ interface Citation { kbId: string; source: string; category: string; snippet: st
 interface QueueInfo { position: number; waiting: number }
 // 멀티턴 접수(예약·장애 신고) 진행 단계 — 서버가 알려주는 화면 상태값.
 interface FormProgress { id: string; title: string; step: number; total: number; label: string; canSkip: boolean }
-interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean; suggestions?: Suggestion[]; ticketId?: string; citation?: Citation; queue?: QueueInfo; form?: FormProgress }
+// 테넌트 CTA — 서버가 내려준 신청 버튼(라벨·URL). 링크는 http(s)만 서버에서 통과시킨다.
+interface CTA { label: string; url: string; hint: string }
+interface Msg { role: 'bot' | 'user'; text: string; escalate?: boolean; suggestions?: Suggestion[]; ticketId?: string; citation?: Citation; queue?: QueueInfo; form?: FormProgress; cta?: CTA }
+
+// 테넌트 공개 설정(서버 @/lib/tenants publicTenant()와 같은 모양).
+export interface WidgetTenant {
+  id: string;
+  name: string;
+  brandColor: string;
+  badge: string;
+  headerTitle: string;
+  headerNote: string;
+  greeting: string;
+  aiNotice: string;
+  cta: CTA;
+}
+
+function isCTA(v: unknown): v is CTA {
+  if (!v || typeof v !== 'object') return false;
+  const c = v as Partial<CTA>;
+  return typeof c.label === 'string' && typeof c.url === 'string' && /^https?:\/\//.test(c.url);
+}
+
+/** 테넌트 색을 위젯 CSS 변수로 바꾼다(6자리 hex만 허용, 아니면 기본 팔레트 유지). */
+function brandVars(color?: string): CSSProperties {
+  if (!color || !/^#[0-9a-fA-F]{6}$/.test(color)) return {};
+  return { ['--brand' as string]: color, ['--brand-600' as string]: color, ['--brand-50' as string]: `${color}1a` } as CSSProperties;
+}
 
 function isForm(v: unknown): v is FormProgress {
   if (!v || typeof v !== 'object') return false;
@@ -58,12 +85,12 @@ const chipStyle: CSSProperties = {
   border: '1px solid var(--line)', borderRadius: 999, padding: '4px 10px', cursor: 'pointer',
 };
 
-export default function ChatWidget({ embedded = false }: { embedded?: boolean }) {
+export default function ChatWidget({ embedded = false, tenant }: { embedded?: boolean; tenant?: WidgetTenant }) {
   const [open, setOpen] = useState(!embedded);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([
-    { role: 'bot', text: '안녕하세요! 저는 인공지능(AI) 상담 챗봇입니다. 무엇을 도와드릴까요?' },
+    { role: 'bot', text: tenant?.greeting || '안녕하세요! 저는 인공지능(AI) 상담 챗봇입니다. 무엇을 도와드릴까요?' },
   ]);
   const [sessionId] = useState(() => `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
   const lastUserRef = useRef('');
@@ -90,7 +117,7 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
       const r = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, sessionId }),
+        body: JSON.stringify({ message: text, sessionId, ...(tenant ? { tenant: tenant.id } : {}) }),
       });
       const data = await r.json();
       if (!r.ok || data?.ok === false || typeof data?.reply !== 'string') {
@@ -106,6 +133,7 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
         citation: isCitation(data.citation) ? data.citation : undefined,
         queue: isQueue(data.queue) ? data.queue : undefined,
         form: isForm(data.form) ? data.form : undefined,
+        cta: isCTA(data.cta) ? data.cta : undefined,
       }]);
     } catch {
       setMsgs((m) => [...m, { role: 'bot', text: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' }]);
@@ -143,14 +171,14 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
   }
 
   return (
-    <div style={{ position: 'fixed', right: 22, bottom: 22, zIndex: 50, fontFamily: 'var(--font)' }}>
+    <div style={{ position: 'fixed', right: 22, bottom: 22, zIndex: 50, fontFamily: 'var(--font)', ...brandVars(tenant?.brandColor) }}>
       {open && (
         <div style={{ width: 340, height: 520, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, boxShadow: '0 20px 50px rgba(36,29,23,.18)', display: 'flex', flexDirection: 'column', overflow: 'hidden', marginBottom: 12 }}>
           <div style={{ background: 'var(--brand)', color: '#fff', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 9 }}>
-            <span style={{ width: 30, height: 30, borderRadius: 9, background: 'rgba(255,255,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>고</span>
+            <span style={{ width: 30, height: 30, borderRadius: 9, background: 'rgba(255,255,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>{tenant?.badge || '고'}</span>
             <div style={{ lineHeight: 1.2 }}>
-              <div style={{ fontWeight: 800, fontSize: 14 }}>고원 상담 챗봇</div>
-              <div style={{ fontSize: 10.5, opacity: .9 }}>24시간 · AI가 응대합니다</div>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>{tenant?.headerTitle || '고원 상담 챗봇'}</div>
+              <div style={{ fontSize: 10.5, opacity: .9 }}>{tenant?.headerNote || '24시간 · AI가 응대합니다'}</div>
             </div>
           </div>
           <div style={{ flex: 1, overflowY: 'auto', padding: '14px 12px', background: '#f6f2ec', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -196,6 +224,16 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
                     <div style={{ marginTop: 2 }}>“{m.citation.snippet}”</div>
                   </div>
                 )}
+                {m.cta && (
+                  <a
+                    href={m.cta.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ display: 'inline-block', marginTop: 6, fontSize: 12.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 10, padding: '8px 13px', textDecoration: 'none' }}
+                  >
+                    {m.cta.label} ↗
+                  </a>
+                )}
                 {m.suggestions && m.suggestions.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
                     {m.suggestions.map((s) => (
@@ -214,9 +252,12 @@ export default function ChatWidget({ embedded = false }: { embedded?: boolean })
             <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') send(); }} placeholder="메시지를 입력하세요" aria-label="메시지 입력" style={{ flex: 1, border: '1px solid var(--line-2)', borderRadius: 999, padding: '9px 14px', fontSize: 13, outline: 'none' }} />
             <button onClick={send} disabled={busy} aria-label="전송" style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--brand)', color: '#fff', fontWeight: 800, opacity: busy ? .6 : 1 }}>↑</button>
           </div>
+          <div style={{ padding: '0 12px 9px', background: '#fff', fontSize: 10.5, lineHeight: 1.4, color: 'var(--mut, #8a7f75)', textAlign: 'center' }}>
+            {tenant?.aiNotice || 'AI 자동응답 · 정확한 확인이 필요하면 상담원을 연결해 주세요'}
+          </div>
         </div>
       )}
-      <button onClick={() => setOpen((o) => !o)} aria-label={open ? '상담 챗봇 닫기' : '상담 챗봇 열기'} aria-expanded={open} style={{ width: 58, height: 58, borderRadius: '50%', background: 'var(--brand)', color: '#fff', fontSize: 24, boxShadow: '0 10px 24px rgba(190,85,53,.4)', marginLeft: 'auto', display: 'block' }}>{open ? '×' : '💬'}</button>
+      <button onClick={() => setOpen((o) => !o)} aria-label={open ? `${tenant?.headerTitle || '상담 챗봇'} 닫기` : `${tenant?.headerTitle || '상담 챗봇'} 열기`} aria-expanded={open} style={{ width: 58, height: 58, borderRadius: '50%', background: 'var(--brand)', color: '#fff', fontSize: 24, boxShadow: '0 10px 24px rgba(190,85,53,.4)', marginLeft: 'auto', display: 'block' }}>{open ? '×' : '💬'}</button>
     </div>
   );
 }

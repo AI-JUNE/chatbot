@@ -6,6 +6,8 @@
 // 상담원 전환은 (1) 고객 요청 (2) 정책 키워드(불만·긴급) (3) 신뢰도 임계 미만 연속 발생 세 경로로 일어나며,
 // 이관 시 규칙 기반 대화 요약(src/lib/handoff)을 티켓에 붙인다 — 사유 코드는 AICC-Core 어휘를 따른다.
 import { matchKnowledge, searchKnowledge, buildCitation, type Citation, type KBEntry } from '@/lib/knowledge';
+import { resolveTenant } from '@/lib/tenantKB';
+import { resolveCTA, type TenantPreset } from '@/lib/tenants';
 import { RULES, type Rule } from '@/lib/rules';
 import { prepare } from '@/lib/normalize';
 import { listKB, getRuleOverride, matchCustomRule } from '@/lib/adminStore';
@@ -76,6 +78,19 @@ export interface ChatReply {
   llmFailure?: LLMFailureReason;
   /** 멀티턴 슬롯 수집이 진행 중일 때의 단계 정보(완료·취소 턴에는 없다). */
   form?: FormProgress;
+  /** 테넌트 CTA(예: 이음 참여 신청) — 위젯이 버튼으로 렌더한다. 테넌트 대화에만 채워진다. */
+  cta?: { label: string; url: string; hint: string };
+}
+
+/** 테넌트 대화 문맥 — 프리셋(문구·CTA)과 그 테넌트 전용 지식. */
+export interface TenantContext {
+  preset: TenantPreset;
+  kb: KBEntry[];
+}
+
+/** tenantId 문자열을 문맥으로 바꾼다. 알 수 없는 값이면 null(기본 고원 동작). */
+export function tenantContext(tenantId?: string | null): TenantContext | null {
+  return tenantId ? resolveTenant(tenantId) : null;
 }
 
 // ---- 신뢰도·자동 전환 정책 ----
@@ -111,6 +126,11 @@ function kbConfidence(score: number, matched: { kind: string }[]): number {
   const base = Math.min(0.45 + score * 0.1, 0.95);
   const fuzzyOnly = matched.length > 0 && matched.every((m) => m.kind === 'fuzzy');
   return Math.round((fuzzyOnly ? base * 0.7 : base) * 100) / 100;
+}
+
+/** 이 대화가 참조할 지식 — 테넌트 대화는 해당 테넌트 FAQ만 본다(다른 고객사 답변 유출 방지). */
+function entriesFor(tenant: TenantContext | null): KBEntry[] {
+  return tenant ? tenant.kb : listKB();
 }
 
 /** KB 항목으로 응답을 만들 때 근거 인용을 함께 붙인다. */
@@ -193,7 +213,7 @@ function progressOf(form: FormSpec, slot: SlotSpec): FormProgress {
   return { id: form.id, title: form.title, step, total, label: slot.label, canSkip: slot.required === false };
 }
 
-function computeReply(message: string, sessionId = 'anon'): ChatReply {
+function computeReply(message: string, sessionId = 'anon', tenant: TenantContext | null = null): ChatReply {
   const text = (message || '').trim();
   if (!text) return { reply: '메시지를 입력해 주세요.', intent: 'empty', escalate: false, source: 'empty', confidence: 1 };
 
@@ -367,11 +387,11 @@ function computeReply(message: string, sessionId = 'anon'): ChatReply {
     const pick = parsePick(text, pending.length);
     if (pick !== null) {
       const chosen = pending[pick - 1];
-      const entry = listKB().find((e) => e.id === chosen.id);
+      const entry = entriesFor(tenant).find((e) => e.id === chosen.id);
       updateSession(sessionId, { pendingSuggestions: undefined });
       if (entry) return kbReply(entry, chosen.question);
       // 편집으로 항목이 사라진 경우 — 원래 질문 문구로 재처리
-      return computeReply(chosen.question, sessionId);
+      return computeReply(chosen.question, sessionId, tenant);
     }
   }
 
@@ -412,10 +432,13 @@ function computeReply(message: string, sessionId = 'anon'): ChatReply {
   // 1) 인텐트 룰(관리 콘솔 오버라이드 반영: 비활성화 스킵·응답문 교체)
   const pre = prepare(text);
   for (const r of RULES) {
+    // 테넌트 대화에서는 허용된 인텐트(인사·상담원 전환 등)만 쓴다.
+    // 나머지는 테넌트 FAQ가 답해야 한다 — 다른 브랜드의 안내 문구가 새어 나가지 않게.
+    if (tenant && !tenant.preset.allowedRuleIntents.includes(r.intent)) continue;
     const ov = getRuleOverride(r.intent);
     if (ov && ov.enabled === false) continue;
     if (matchRule(r, text, pre.compact)) {
-      const baseReply = ov?.reply || r.reply;
+      const baseReply = tenant?.preset.ruleReplies?.[r.intent] || ov?.reply || r.reply;
       if (r.escalate === true) return escalateWith(baseReply, r.intent, POLICY_INTENTS.has(r.intent) ? 'policy' : 'customer_request');
 
       // 이 인텐트에 접수 폼이 연결돼 있으면 안내에 이어 첫 항목을 물어본다(안내 → 접수로 이어지게).
@@ -438,8 +461,9 @@ function computeReply(message: string, sessionId = 'anon'): ChatReply {
     }
   }
 
-  // 1-b) 커스텀 시나리오 룰(관리 콘솔에서 키워드로 추가한 룰) — 내장 룰 다음, KB 이전
-  const cr = matchCustomRule(text);
+  // 1-b) 커스텀 시나리오 룰(관리 콘솔에서 키워드로 추가한 룰) — 내장 룰 다음, KB 이전.
+  //      테넌트 대화에는 적용하지 않는다(콘솔 룰은 기본 테넌트 소유).
+  const cr = tenant ? null : matchCustomRule(text);
   if (cr) {
     if (cr.escalate) return escalateWith(cr.reply, cr.intent, 'policy');
     updateSession(sessionId, { pendingSuggestions: undefined });
@@ -447,7 +471,7 @@ function computeReply(message: string, sessionId = 'anon'): ChatReply {
   }
 
   // 2) 지식베이스(FAQ) 매칭 — 관리 콘솔 편집분(런타임 스토어) 사용
-  const entries = listKB();
+  const entries = entriesFor(tenant);
   const kb = matchKnowledge(text, 2, entries);
   if (kb) {
     updateSession(sessionId, { pendingSuggestions: undefined });
@@ -459,7 +483,12 @@ function computeReply(message: string, sessionId = 'anon'): ChatReply {
   updateSession(sessionId, { pendingSuggestions: suggestions.length ? suggestions : undefined });
 
   // 결정적 폴백 문구 — LLM이 없거나 실패해도 이 답변이 항상 남는다(빈 화면·무반응 금지).
-  const fallbackReply = suggestions.length
+  const fallbackReply = tenant
+    ? tenant.preset.unknownReply +
+      (suggestions.length
+        ? `\n\n혹시 아래 질문 중 찾으시는 내용이 있나요? 번호(1~${suggestions.length})로 답하셔도 돼요.`
+        : '')
+    : suggestions.length
     ? '정확한 답을 찾지 못했어요. 혹시 아래 질문 중 찾으시는 내용이 있나요? 번호(1~' + suggestions.length + ')로 답하셔도 돼요. 없다면 "상담원"이라고 입력해 주세요.'
     : '아직 제가 정확히 이해하지 못했어요. 조금 더 구체적으로 말씀해 주시거나, 상담원 연결을 원하시면 "상담원"이라고 입력해 주세요.';
   const fallbackConfidence = suggestions.length ? 0.25 : SOURCE_CONFIDENCE.fallback;
@@ -496,8 +525,14 @@ export const AI_ANSWER_NOTICE = '(AI가 등록된 자료를 근거로 만든 답
  * LLM 보강 — 근거 자료(KB 후보)가 있을 때만 생성하고, 실패하면 결정적 폴백을 그대로 유지한다.
  * 자료가 없으면 아예 호출하지 않는다(환각 방지). 실패 사유는 llmFailure로 남겨 라우트가 로그에 기록한다.
  */
-async function augmentWithLLM(text: string, sessionId: string, base: ChatReply, opts: CompleteOptions): Promise<ChatReply> {
-  const entries = listKB();
+async function augmentWithLLM(
+  text: string,
+  sessionId: string,
+  base: ChatReply,
+  opts: CompleteOptions,
+  tenant: TenantContext | null = null,
+): Promise<ChatReply> {
+  const entries = entriesFor(tenant);
   const docs: GroundingDoc[] = (base.suggestions ?? [])
     .map((s) => entries.find((e) => e.id === s.id))
     .filter((e): e is KBEntry => Boolean(e))
@@ -531,28 +566,48 @@ async function augmentWithLLM(text: string, sessionId: string, base: ChatReply, 
  * 자동 전환은 "답을 못 찾은 상태로 고객을 계속 붙잡아 두지 않는다"는 §9.3 취지를 챗봇에 적용한 것이다.
  * 임계·연속 횟수는 정책 상수(CONFIDENCE_THRESHOLD·LOW_CONFIDENCE_STREAK_LIMIT)이며 측정 지표가 아니다.
  */
-export function replyTo(message: string, sessionId = 'anon'): ChatReply {
+export function replyTo(message: string, sessionId = 'anon', tenantId?: string | null): ChatReply {
   const text = (message || '').trim();
   if (text) appendTurn(sessionId, { at: new Date().toISOString(), speaker: 'customer', text });
-  return finalize(text, sessionId, computeReply(message, sessionId));
+  const tenant = tenantContext(tenantId);
+  return finalize(text, sessionId, computeReply(message, sessionId, tenant), tenant);
 }
 
 /**
  * 비동기 진입점 — 룰·KB로 답이 나오지 않고 LLM 게이트가 켜져 있을 때만 생성 모델을 호출한다.
  * LLM이 꺼져 있거나 실패하면 replyTo와 완전히 동일한 결정적 답변을 돌려준다(라우트는 항상 이 함수를 쓴다).
  */
-export async function replyToAsync(message: string, sessionId = 'anon', opts: CompleteOptions = {}): Promise<ChatReply> {
+export async function replyToAsync(
+  message: string,
+  sessionId = 'anon',
+  opts: CompleteOptions & { tenantId?: string | null } = {},
+): Promise<ChatReply> {
   const text = (message || '').trim();
   if (text) appendTurn(sessionId, { at: new Date().toISOString(), speaker: 'customer', text });
 
-  let result = computeReply(message, sessionId);
-  if (result.source === 'llm') result = await augmentWithLLM(text, sessionId, result, opts);
-  return finalize(text, sessionId, result);
+  const tenant = tenantContext(opts.tenantId);
+  let result = computeReply(message, sessionId, tenant);
+  if (result.source === 'llm') result = await augmentWithLLM(text, sessionId, result, opts, tenant);
+  return finalize(text, sessionId, result, tenant);
+}
+
+/** CTA를 본문 끝에 붙이는 응답 경로 — 안내성 답변에만 붙인다(접수 진행 중 턴에는 붙이지 않는다). */
+const CTA_SOURCES = new Set<ReplySource>(['kb', 'rule', 'llm', 'fallback']);
+
+/**
+ * 테넌트 CTA 부착 — 위젯은 cta 객체로 버튼을, 버튼이 없는 채널(카카오 등)은 본문 끝 문구를 쓴다.
+ * 접수가 일어난 턴(ticketId)에는 문구를 덧붙이지 않는다(접수 안내가 우선).
+ */
+function withTenantCTA(result: ChatReply, tenant: TenantContext | null): ChatReply {
+  if (!tenant || result.source === 'empty') return result;
+  const cta = resolveCTA(tenant.preset, process.env);
+  const inline = CTA_SOURCES.has(result.source) && !result.ticketId;
+  return { ...result, cta, ...(inline ? { reply: `${result.reply}\n\n${cta.hint}` } : {}) };
 }
 
 /** 공통 마무리 — 신뢰도 기반 자동 전환 판정 후 봇 턴을 문맥 버퍼에 적재한다. */
-function finalize(text: string, sessionId: string, result: ChatReply): ChatReply {
-  const auto = maybeAutoEscalate(text, sessionId, result);
+function finalize(text: string, sessionId: string, result: ChatReply, tenant: TenantContext | null = null): ChatReply {
+  const auto = withTenantCTA(maybeAutoEscalate(text, sessionId, result), tenant);
   if (auto.source !== 'empty') {
     appendTurn(sessionId, { at: new Date().toISOString(), speaker: 'bot', text: auto.reply, intent: auto.intent });
   }

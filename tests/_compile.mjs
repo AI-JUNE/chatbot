@@ -11,7 +11,7 @@
  * - typescript 미설치 등으로 컴파일이 불가하면 예외를 던진다(테스트에서 skip 처리).
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -79,11 +79,23 @@ export function compileLibs(names) {
   const libDir = path.join(outDir, 'lib');
   if (!existsSync(libDir)) throw new Error('컴파일 산출물이 없습니다.');
 
+  // 테넌트 FAQ 등 data/*.json 정적 import 대응 — 컴파일 산출물(out/lib)에서 '../../data/x.json'이
+  // 가리키는 <work>/data 위치에 원본을 그대로 복사한다.
+  const dataDir = path.join(REPO, 'data');
+  if (existsSync(dataDir)) cpSync(dataDir, path.join(work, 'data'), { recursive: true });
+
   for (const f of readdirSync(libDir).filter((f) => f.endsWith('.js'))) {
     const p = path.join(libDir, f);
     const src = readFileSync(p, 'utf8')
       .replace(/(from\s+['"])@\/lib\/([\w-]+)(['"])/g, '$1./$2.mjs$3')
-      .replace(/(import\s*\(\s*['"])@\/lib\/([\w-]+)(['"])/g, '$1./$2.mjs$3');
+      .replace(/(import\s*\(\s*['"])@\/lib\/([\w-]+)(['"])/g, '$1./$2.mjs$3')
+      // JSON 정적 import는 순수 ESM에서 import attribute가 필요하다 —
+      // 하네스에서는 파일 읽기로 바꿔 Node 버전에 상관없이 동작시킨다(런타임 의미는 동일).
+      .replace(
+        /import\s+(\w+)\s+from\s+['"](\.\.\/\.\.\/data\/[\w.-]+\.json)['"];?/g,
+        (_m, name, rel) =>
+          `import { readFileSync as __readJson } from 'node:fs';\nconst ${name} = JSON.parse(__readJson(new URL('${rel}', import.meta.url), 'utf8'));`,
+      );
     writeFileSync(p, src, 'utf8');
     renameSync(p, p.replace(/\.js$/, '.mjs'));
   }
