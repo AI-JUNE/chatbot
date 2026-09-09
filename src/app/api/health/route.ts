@@ -4,6 +4,7 @@ import { ok, ADMIN_AUTH_REQUIRED } from '@/lib/http';
 import { MONITORING_ENABLED } from '@/lib/monitoring';
 import { storageStatus } from '@/lib/storage';
 import { rbacStatus } from '@/lib/rbac';
+import { tenantStatus } from '@/lib/tenantKB';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,9 +15,12 @@ export async function GET() {
   // 의존성 상태: 현재 외부 DB·외부 API 의존성은 없고 저장소만 있다.
   // 저장이 막혔거나(승인 대기·비활성) 읽기전용이면 서비스는 계속 동작하므로 degraded로 본다.
   const failing = storage.namespaces.filter((n) => n.health === 'error');
+  // 테넌트 지식(이음 FAQ 등) 적재 상태. FAQ가 0건이면 답변 근거가 없다는 뜻이라 degraded로 본다.
+  const tenants = tenantStatus();
+  const brokenTenant = tenants.some((t) => t.entries === 0 || t.skipped > 0);
   return ok({
     service: 'chatbot',
-    status: failing.length ? 'degraded' : 'ok',
+    status: failing.length || brokenTenant ? 'degraded' : 'ok',
     uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
     now: new Date().toISOString(),
     dependencies: {
@@ -31,6 +35,8 @@ export async function GET() {
           lastError: n.lastError, // 경로·개인정보가 제거된 요약 문자열
         })),
       },
+      // 테넌트 지식 — 공개 가능한 값만(FAQ 본문·비밀값 없음).
+      tenants,
     },
     flags: {
       kakaoLive: KAKAO_LIVE, // [승인 필요] 전까지 false
