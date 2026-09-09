@@ -36,6 +36,8 @@ GPTs 대체. 이음 참여자 화면 우하단에 붙는 **FAQ·신청 안내 �
 | `src/app/api/chat/route.ts` | `tenant` 입력 검증 후 엔진 전달, 로그에 테넌트 기록 |
 | `src/app/widget/page.tsx` · `src/components/ChatWidget.tsx` | `?tenant=` 해석, 인사말·헤더·색·CTA 버튼·AI 고지 |
 | `public/embed.js` (v0.3) | `data-tenant` 옵션 |
+| `src/app/api/admin/tenants/route.ts` | 관리 콘솔용 **읽기 전용** 조회(GET만, `requireAdmin`) |
+| `scripts/smoke.mjs` (`npm run smoke`) | 배포본에 실제 요청을 보내는 E2E 스모크 |
 
 동작 규칙(품질 기준 반영)
 
@@ -45,13 +47,25 @@ GPTs 대체. 이음 참여자 화면 우하단에 붙는 **FAQ·신청 안내 �
 - **AI 고지**: 위젯 하단에 상시 노출(`AI 자동응답 · 등록된 안내 자료 기반 · 정확한 확인은 담당자 연결`).
 - **기관마다 다른 값**(자격·활동 시간·보상)은 수치를 쓰지 않고 담당자 확인으로 안내한다 — 테스트가 임의 수치 유입을 막는다.
 
+## 운영 점검 (심사 전 확인)
+
+- **적재 확인**: `GET /api/health` → `dependencies.tenants` 에 `{ id: 'eum', entries: 10, skipped: 0, ctaUrl, ctaFromEnv }`.
+  FAQ가 0건이거나 건너뛴 항목이 있으면 서비스 `status` 가 `degraded` 로 떨어진다 — 지식이 비어도 200을 돌려주는 상태를 정상으로 보지 않는다.
+- **관리 콘솔 → 테넌트 지식** 탭: 배포본이 근거로 쓰는 FAQ 10건과 근거 라벨·신청 버튼 주소·AI 고지를 눈으로 확인한다.
+  편집 기능은 없다(원본은 `data/eum-faq.json` 파일). 신청 주소가 "코드 기본값"으로 표시되면 `EUM_APPLY_URL` 미설정이다.
+- **E2E 스모크**: `npm run smoke`(대상 변경은 `SMOKE_BASE_URL`). 라이브에 실제 요청을 보내
+  health·embed.js·`/widget?tenant=eum`·이음 FAQ 답변(근거 번호·CTA)·모를 때 단정 금지·잘못된 입력 400 을 확인한다.
+  종료코드 0 통과 / 1 검사 실패 / 2 대상 접속 불가(판정보류 — 실패와 구분). `.github/workflows/smoke.yml` 이 매일 07:00 KST 에 돌린다.
+
 ## 검증
 
-- `node --test "tests/*.test.mjs"` — 184건 통과(이음 15건 신규: FAQ 계약·매칭 20개 질의·근거 표시·CTA URL 차단·형식 오류 실패 경로·배선).
-- `tsc --noEmit` 오류 0.
+- `node --test "tests/*.test.mjs"` — 213건 통과(이음 23건: FAQ 계약·매칭 20개 질의·근거 표시·CTA URL 차단·형식 오류 실패 경로·적재 상태·상세 조회·비밀값 미노출·배선 / 스모크 21건).
+- `tsc --noEmit` 오류 0. 전 라우트 export 규칙 검사 통과.
 
 ## 남은 것
 
 - 이음 실제 신청 URL 확정 시 `EUM_APPLY_URL` 설정 — 배포 환경변수 등록은 **[승인 필요]**.
 - 이음 운영 기준(자격·활동 시간·보상)이 확정되면 FAQ 2·3·10 답변을 기관 기준으로 구체화.
-- 관리 콘솔에서 테넌트 FAQ 편집(현재는 파일 기반, 콘솔 편집은 기본 테넌트 전용).
+- 관리 콘솔에서 테넌트 FAQ **편집**(현재는 조회만. 원본이 파일이라 편집은 저장소 도입 후).
+- 스모크의 라이브 실행 기록 — 이 저장소 환경에서는 외부 네트워크가 막혀 판정보류(종료코드 2)로 끝난다.
+  실제 라이브 판정은 GitHub Actions(`Smoke (live)`) 또는 사내망에서 `npm run smoke` 로 남긴다.

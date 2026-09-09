@@ -1,6 +1,6 @@
 # 운영 런북 (RUNBOOK) — 챗봇
 
-대상: 고원 챗봇(Next.js 14 / Vercel). 최종 갱신 2026-09-02.
+대상: 고원 챗봇(Next.js 14 / Vercel). 최종 갱신 2026-09-09.
 이 문서는 **장애·복구 상황에서 그대로 따라 하는 절차서**다. 추정이나 예시가 아니라 실제 동작하는 명령만 적는다.
 
 ---
@@ -20,8 +20,21 @@ curl -s https://chatbot-gowon.vercel.app/api/health | jq
 | `status` | `ok` | `degraded`면 저장소 오류 → §1-1 |
 | `dependencies.storage.driver` | `file`(단일서버) / `memory` | 예상과 다르면 `STORAGE_DRIVER` 확인 |
 | `dependencies.storage.namespaces[].health` | `ok` 또는 `empty` | `error`면 `lastError` 확인, `readonly`면 Vercel 정상(백업 API 사용) |
+| `dependencies.tenants[].entries` | 이음 `10` | 0이거나 `skipped>0`이면 FAQ 적재 실패 → 관리 콘솔 "테넌트 지식" 탭에서 사유 확인 |
+| `dependencies.tenants[].ctaFromEnv` | 운영 `true` | `false`면 신청 버튼이 코드 기본값 → `EUM_APPLY_URL` 미설정 |
 
 응답 헤더/로그 상관관계 키는 `x-request-id`. 고객 문의 시 이 값을 받아 로그에서 바로 찾는다.
+
+### 0-1. 전체 흐름 점검(2분)
+
+```bash
+npm run smoke                                   # 라이브 대상
+SMOKE_BASE_URL=https://<미리보기>.vercel.app npm run smoke   # 배포 직후 확인
+```
+
+핵심 흐름 8건(health·이음 FAQ 적재·embed.js·위젯·FAQ 답변의 근거와 CTA·모를 때 단정 금지·잘못된 입력 400)을 실제 요청으로 확인한다.
+종료코드 **0** 통과 · **1** 검사 실패(어느 검사가 왜 실패했는지 한 줄씩 출력) · **2** 대상 접속 불가 → §4 롤백 판단.
+매일 07:00 KST 에 GitHub Actions `Smoke (live)` 가 같은 검사를 돌린다.
 
 ---
 

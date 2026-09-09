@@ -184,3 +184,87 @@ test('위젯이 테넌트 인사말·CTA 버튼·AI 고지를 렌더한다', () 
   const page = read('src/app/widget/page.tsx');
   assert.match(page, /tenantConfig\(searchParams\?\.tenant\)/, '위젯 페이지가 tenant 쿼리를 해석해야 한다');
 });
+
+/* ══════════ 테넌트 적재 상태·관리 콘솔 조회(읽기 전용) ══════════ */
+
+test('tenantStatus는 배포본이 실제로 적재한 FAQ 건수를 센다', opts, async () => {
+  const { tenantStatus } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize']);
+  const list = tenantStatus({});
+  const eum = list.find((t) => t.id === 'eum');
+  assert.ok(eum, '이음 테넌트가 목록에 없다');
+  assert.equal(eum.entries, doc.faq.length, 'FAQ 원본 건수와 적재 건수가 다르다');
+  assert.equal(eum.skipped, 0, '형식 오류로 건너뛴 항목이 있다');
+  assert.equal(eum.ctaFromEnv, false, '환경변수 미설정이면 코드 기본값임을 밝혀야 한다');
+  assert.match(eum.ctaUrl, /^https?:\/\//);
+});
+
+test('CTA가 환경변수로 덮이면 상태에 그대로 드러난다', opts, async () => {
+  const { tenantStatus } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize']);
+  const eum = tenantStatus({ EUM_APPLY_URL: 'https://eum.example.go.kr/apply' }).find((t) => t.id === 'eum');
+  assert.equal(eum.ctaUrl, 'https://eum.example.go.kr/apply');
+  assert.equal(eum.ctaFromEnv, true);
+  // 잘못된 값은 기본값으로 되돌아가고, 그 사실을 ctaFromEnv=false 로 알린다(조용히 통과시키지 않는다)
+  const bad = tenantStatus({ EUM_APPLY_URL: 'javascript:alert(1)' }).find((t) => t.id === 'eum');
+  assert.equal(bad.ctaFromEnv, false);
+  assert.match(bad.ctaUrl, /^https:\/\//);
+});
+
+test('tenantDetail은 FAQ 원문과 근거 라벨을 함께 돌려준다', opts, async () => {
+  const { tenantDetail, tenantIds } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize']);
+  assert.deepEqual(tenantIds(), ['eum']);
+  const d = tenantDetail('eum', {});
+  assert.equal(d.faq.length, doc.faq.length);
+  assert.deepEqual(d.warnings, []);
+  for (const f of d.faq) {
+    assert.match(f.citation, /^이음 FAQ \d+\. /, `근거 라벨이 없다: ${f.id}`);
+    assert.ok(f.answer.trim().length > 0);
+    assert.ok(f.keywords.length >= 3);
+  }
+  assert.equal(d.config.aiNotice.includes('AI'), true, 'AI 고지가 설정에 없다');
+});
+
+test('실패 경로: 알 수 없는 테넌트 상세는 null이며 throw하지 않는다', opts, async () => {
+  const { tenantDetail } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize']);
+  for (const bad of ['../secret', 'EUM', 'no-such', '', null, 42]) {
+    assert.equal(tenantDetail(bad, {}), null, `거부되지 않았다: ${String(bad)}`);
+  }
+});
+
+test('테넌트 상세에 비밀값이 섞이지 않는다', opts, async () => {
+  const { tenantDetail } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize']);
+  const json = JSON.stringify(tenantDetail('eum', { ADMIN_TOKEN: 'super-secret-token', EUM_APPLY_URL: 'https://eum.example.go.kr/apply' }));
+  assert.equal(json.includes('super-secret-token'), false, '관리 토큰이 응답에 섞였다');
+  assert.equal(/token|secret|password/i.test(json), false, '비밀값스러운 키가 응답에 있다');
+});
+
+/* ══════════ 배선(정적 검사) ══════════ */
+
+test('/api/admin/tenants는 관리자 인증을 거치고 읽기 전용이다', () => {
+  const route = read('src/app/api/admin/tenants/route.ts');
+  assert.match(route, /requireAdmin/, '관리자 인증이 없다');
+  // route.ts 는 HTTP 메서드·설정 외 export를 두지 않는다(빌드 장애 방지 규칙)
+  const exports = [...route.matchAll(/^export (?:const|function|async function) ([A-Za-z_]+)/gm)].map((m) => m[1]);
+  assert.deepEqual(exports.sort(), ['GET', 'dynamic'].sort(), `허용되지 않은 export: ${exports.join(', ')}`);
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    assert.equal(exports.includes(method), false, `${method}가 열려 있다(읽기 전용이어야 한다)`);
+  }
+});
+
+test('/api/health가 테넌트 적재 상태를 노출하고 0건이면 degraded로 본다', () => {
+  const route = read('src/app/api/health/route.ts');
+  assert.match(route, /tenantStatus/);
+  assert.match(route, /entries === 0/, 'FAQ 0건을 정상으로 보고 있다');
+  assert.match(route, /brokenTenant/, 'status 판정에 테넌트 상태가 반영되지 않았다');
+});
+
+test('관리 콘솔 테넌트 탭은 편집 UI 없이 빈 상태·오류·로딩을 모두 처리한다', () => {
+  const page = read('src/app/admin/page.tsx');
+  assert.match(page, /\['tenant', '테넌트 지식'\]/, '탭이 등록되지 않았다');
+  assert.match(page, /테넌트 지식을 불러오는 중입니다/, '로딩 화면이 없다');
+  assert.match(page, /표시할 테넌트가 없습니다/, '빈 상태 화면이 없다');
+  assert.match(page, /테넌트 지식을 불러오지 못했습니다/, '오류 화면이 없다');
+  assert.match(page, /htmlFor="tenant-select"/, '선택 상자에 라벨이 없다(스크린리더)');
+  assert.match(page, /aria-busy=\{tenantBusy\}/, '진행 상태를 알리지 않는다');
+  // 읽기 전용 — 이 탭에서 테넌트 API를 쓰기 메서드로 호출하지 않는다
+  assert.equal(/api\/admin\/tenants[^\n]*method:\s*'(POST|PUT|DELETE)'/.test(page), false, '테넌트 편집 호출이 있다');
+});

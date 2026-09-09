@@ -91,3 +91,54 @@ export function tenantStatus(env: Record<string, string | undefined> = process.e
   }
   return list;
 }
+
+/** 관리 콘솔에 보여줄 FAQ 1건(공개 안내 문구 — 개인정보·비밀값 없음). */
+export interface TenantFAQView {
+  id: string;
+  /** 답변에 붙는 근거 라벨 그대로 — "이음 FAQ 3. 활동 시간" */
+  citation: string;
+  category: string;
+  question: string;
+  answer: string;
+  /** 매칭에 쓰이는 키워드(질문 문구 자동 추가분 포함). */
+  keywords: string[];
+}
+
+export interface TenantDetail {
+  status: TenantLoadStatus;
+  /** 위젯이 받는 공개 설정과 동일한 값(문구·색·CTA). */
+  config: PublicTenant;
+  faq: TenantFAQView[];
+  /** 형식 오류로 건너뛴 항목 사유. 비어 있어야 정상이다. */
+  warnings: string[];
+}
+
+/**
+ * 관리 콘솔용 테넌트 상세.
+ * 편집 기능은 없다 — 테넌트 FAQ는 파일(data/*.json)이 원본이고, 콘솔은 "지금 배포본이 무엇을 근거로 답하는가"를
+ * 확인하는 읽기 전용 창구다. 알 수 없는 id면 null.
+ */
+export function tenantDetail(id: unknown, env: Record<string, string | undefined> = process.env): TenantDetail | null {
+  const preset = getTenantPreset(id);
+  if (!preset) return null;
+  const status = tenantStatus(env).find((t) => t.id === preset.id);
+  if (!status) return null;
+  return {
+    status,
+    config: publicTenant(preset, env),
+    faq: tenantKB(preset).map((e) => ({
+      id: e.id,
+      citation: e.source || '',
+      category: e.category,
+      question: e.question,
+      answer: e.answer,
+      keywords: e.keywords,
+    })),
+    warnings: loadWarnings.filter((w) => w.startsWith(`[${preset.id}]`)),
+  };
+}
+
+/** 등록된 테넌트 id 목록(콘솔 탭 선택용). */
+export function tenantIds(): string[] {
+  return Object.keys(TENANTS);
+}

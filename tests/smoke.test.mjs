@@ -62,11 +62,16 @@ function stubFetch(override = {}) {
         return respond(200, override.widget ?? '<html><body>이음 안내 챗봇 · AI 자동응답 · 등록된 안내 자료 기반</body></html>');
       }
       if (key === '/api/chat') {
+        // override.tooLong / override.badTenant 는 "거절해야 할 입력을 200으로 받아주는 고장난 배포"를 흉내 낸다.
         if (typeof body?.message === 'string' && body.message.length > 2000) {
-          return respond(400, override.tooLong ?? { code: 'invalid_input', error: 'invalid_input', message: 'message가 너무 깁니다.' });
+          return override.tooLong
+            ? respond(200, override.tooLong)
+            : respond(400, { code: 'invalid_input', error: 'invalid_input', message: 'message가 너무 깁니다.' });
         }
         if (body?.tenant && !/^[a-z0-9][a-z0-9_-]{0,31}$/.test(body.tenant)) {
-          return respond(400, override.badTenant ?? { code: 'invalid_input', error: 'invalid_input', message: 'tenant 형식이 잘못됐습니다.' });
+          return override.badTenant
+            ? respond(200, override.badTenant)
+            : respond(400, { code: 'invalid_input', error: 'invalid_input', message: 'tenant 형식이 잘못됐습니다.' });
         }
         if (/마일리지/.test(body?.message || '')) return respond(200, override.chatUnknown ?? CHAT_UNKNOWN_OK);
         return respond(200, override.chatFaq ?? CHAT_FAQ_OK);
@@ -122,7 +127,7 @@ const failureCases = [
   ['신청 CTA가 빠지면 잡는다', { chatFaq: { ...CHAT_FAQ_OK, cta: undefined } }, /CTA 주소가 없다/],
   ['CTA가 http(s)가 아니면 잡는다', { chatFaq: { ...CHAT_FAQ_OK, cta: { url: 'javascript:alert(1)' } } }, /CTA 주소가 없다/],
   ['FAQ 질문이 매칭되지 않으면 잡는다', { chatFaq: { ...CHAT_FAQ_OK, source: 'fallback' } }, /매칭되지 않았다/],
-  ['모르는 질문에 단정하면 잡는다', { chatUnknown: { reply: '네, 마일리지로 교환할 수 있습니다.', source: 'fallback' } }, /단정|담당자 연결이 없다/],
+  ['모르는 질문에 단정하면 잡는다', { chatUnknown: { reply: '네, 마일리지로 교환할 수 있습니다.', source: 'fallback' } }, /단정|담당자 연결 안내가 없다/],
   ['모르는 질문을 FAQ 답변으로 내보내면 잡는다', { chatUnknown: { ...CHAT_UNKNOWN_OK, source: 'kb' } }, /FAQ 답변으로 내보냈다/],
   ['잘못된 테넌트를 200으로 받아주면 잡는다', { badTenant: CHAT_FAQ_OK }, /400이어야 하는데 200/],
   ['긴 입력을 200으로 받아주면 잡는다', { tooLong: CHAT_FAQ_OK }, /400이어야 하는데 200/],

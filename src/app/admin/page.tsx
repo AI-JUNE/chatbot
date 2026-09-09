@@ -148,6 +148,23 @@ interface StorageNsView {
   lastError: string | null;
 }
 
+/** 테넌트(고객사 프리셋) 지식 — /api/admin/tenants 응답. 읽기 전용이며 비밀값이 없다. */
+interface TenantFAQView {
+  id: string;
+  citation: string;
+  category: string;
+  question: string;
+  answer: string;
+  keywords: string[];
+}
+
+interface TenantDetailView {
+  status: { id: string; name: string; entries: number; skipped: number; ctaUrl: string; ctaFromEnv: boolean };
+  config: { headerTitle: string; greeting: string; aiNotice: string; brandColor: string; cta: { label: string; url: string; hint: string } };
+  faq: TenantFAQView[];
+  warnings: string[];
+}
+
 interface StorageView {
   driver: 'memory' | 'file';
   piiApproved: boolean;
@@ -291,7 +308,7 @@ const S = {
 };
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<'dash' | 'kb' | 'rules' | 'esc' | 'partner' | 'settle' | 'test' | 'audit'>('dash');
+  const [tab, setTab] = useState<'dash' | 'kb' | 'rules' | 'esc' | 'partner' | 'settle' | 'tenant' | 'test' | 'audit'>('dash');
   const [notice, setNotice] = useState('');
 
   // ---- 관리 토큰(ADMIN_TOKEN 설정 시 x-admin-token 필수) ----
@@ -588,6 +605,39 @@ export default function AdminPage() {
     }
   }, []);
 
+  // ---- 테넌트 지식(읽기 전용) ----
+  // 편집 화면이 아니다. "지금 배포본이 무엇을 근거로 답하는가"를 확인하는 창구다.
+  const [tenantId, setTenantId] = useState('eum');
+  const [tenantIdList, setTenantIdList] = useState<string[]>([]);
+  const [tenantView, setTenantView] = useState<TenantDetailView | null>(null);
+  const [tenantErr, setTenantErr] = useState('');
+  const [tenantBusy, setTenantBusy] = useState(false);
+  const loadTenant = useCallback(async (id: string) => {
+    setTenantBusy(true);
+    setTenantErr('');
+    try {
+      const list = await fetch('/api/admin/tenants', { headers: authHeaders(), cache: 'no-store' });
+      if (on401(list)) return;
+      const listData = await list.json();
+      if (listData.ok) setTenantIdList(listData.ids || []);
+
+      const res = await fetch(`/api/admin/tenants?id=${encodeURIComponent(id)}`, { headers: authHeaders(), cache: 'no-store' });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (!data.ok || !data.tenant) {
+        setTenantView(null);
+        setTenantErr(data.message || '테넌트 지식을 불러오지 못했습니다.');
+        return;
+      }
+      setTenantView(data.tenant as TenantDetailView);
+    } catch {
+      setTenantView(null);
+      setTenantErr('네트워크 오류로 테넌트 지식을 불러오지 못했습니다.');
+    } finally {
+      setTenantBusy(false);
+    }
+  }, []);
+
   /** 토큰 검증(/api/admin/auth) 후 통과 시 데이터 로드. 실패 시 잠금 화면 + 사유 표시. */
   const verifyAuth = useCallback(async () => {
     setAuthBusy(true);
@@ -630,7 +680,9 @@ export default function AdminPage() {
       if (!partnerLoaded && !partnerBusy) loadPartners('');
       if (!settleReport && !settleBusy && !settleErr) loadSettlement(settleMonth, settlePartner);
     }
-  }, [tab, partnerLoaded, partnerBusy, loadPartners, partnerFilter, settleReport, settleBusy, settleErr, loadSettlement, settleMonth, settlePartner]);
+    // 테넌트 지식도 탭을 열었을 때만 불러온다.
+    if (tab === 'tenant' && !tenantView && !tenantBusy && !tenantErr) loadTenant(tenantId);
+  }, [tab, partnerLoaded, partnerBusy, loadPartners, partnerFilter, settleReport, settleBusy, settleErr, loadSettlement, settleMonth, settlePartner, tenantView, tenantBusy, tenantErr, loadTenant, tenantId]);
 
   const flash = (msg: string) => {
     setNotice(msg);
@@ -890,6 +942,7 @@ export default function AdminPage() {
             ['esc', '상담원 요청'],
             ['partner', '파트너·귀속'],
             ['settle', '정산 리포트'],
+            ['tenant', '테넌트 지식'],
             ['test', '응답 테스트'],
             ['audit', '감사 로그'],
           ] as const
@@ -1620,6 +1673,88 @@ export default function AdminPage() {
               </section>
             </>
           )}
+        </>
+      )}
+
+      {tab === 'tenant' && (
+        <>
+          <section style={S.card} aria-labelledby="tenant-h">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <h2 id="tenant-h" style={{ fontSize: 16 }}>테넌트 지식 (읽기 전용)</h2>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <label htmlFor="tenant-select" style={S.tag}>테넌트</label>
+                <select
+                  id="tenant-select"
+                  style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '6px 10px', fontSize: 13 }}
+                  value={tenantId}
+                  onChange={(e) => {
+                    setTenantId(e.target.value);
+                    setTenantView(null);
+                    loadTenant(e.target.value);
+                  }}
+                >
+                  {(tenantIdList.length ? tenantIdList : [tenantId]).map((id) => (
+                    <option key={id} value={id}>{id}</option>
+                  ))}
+                </select>
+                <button style={S.btnGhost} onClick={() => loadTenant(tenantId)} disabled={tenantBusy} aria-busy={tenantBusy}>
+                  {tenantBusy ? '불러오는 중…' : '새로고침'}
+                </button>
+              </div>
+            </div>
+            <p style={{ ...S.tag, marginTop: 8 }}>
+              고객사(테넌트) 위젯이 답변 근거로 쓰는 FAQ입니다. 원본은 저장소의 <code>data/&lt;테넌트&gt;-faq.json</code> 파일이라
+              이 화면에서는 <strong>편집하지 않습니다</strong> — 배포본이 실제로 무엇을 근거로 답하는지 확인하는 용도입니다.
+            </p>
+
+            <div role="status" aria-live="polite">
+              {tenantErr && (
+                <p style={{ fontSize: 14, color: 'var(--danger, #c0392b)', marginTop: 10 }}>
+                  {tenantErr} <button style={{ ...S.btnGhost, marginLeft: 6 }} onClick={() => loadTenant(tenantId)}>다시 시도</button>
+                </p>
+              )}
+              {!tenantErr && tenantBusy && !tenantView && (
+                <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10 }}>테넌트 지식을 불러오는 중입니다…</p>
+              )}
+              {!tenantErr && !tenantBusy && !tenantView && (
+                <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10 }}>표시할 테넌트가 없습니다.</p>
+              )}
+            </div>
+
+            {tenantView && (
+              <>
+                <p style={{ ...S.tag, marginTop: 10 }}>
+                  <strong>{tenantView.status.name}</strong> · FAQ <strong>{tenantView.status.entries}건</strong>
+                  {' · '}신청 버튼 <a href={tenantView.status.ctaUrl} target="_blank" rel="noreferrer noopener">{tenantView.status.ctaUrl}</a>
+                  {' ('}{tenantView.status.ctaFromEnv ? '환경변수 적용됨' : '코드 기본값 — 배포 환경변수 미설정'}{')'}
+                </p>
+                <p style={{ ...S.tag, marginTop: 4 }}>AI 고지: {tenantView.config.aiNotice}</p>
+                {tenantView.status.skipped > 0 && (
+                  <ul style={{ marginTop: 8, paddingLeft: 18, fontSize: 13, color: 'var(--danger, #c0392b)' }}>
+                    {tenantView.warnings.map((w) => (
+                      <li key={w}>형식 오류로 제외됨: {w}</li>
+                    ))}
+                  </ul>
+                )}
+                {tenantView.faq.length === 0 && (
+                  <p style={{ fontSize: 14, color: 'var(--danger, #c0392b)', marginTop: 10 }}>
+                    적재된 FAQ가 0건입니다. 이 상태에서는 답변 근거가 없어 모든 질문이 담당자 연결로 넘어갑니다.
+                  </p>
+                )}
+              </>
+            )}
+          </section>
+
+          {tenantView?.faq.map((f) => (
+            <section key={f.id} style={{ ...S.card, padding: '12px 20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                <strong style={{ fontSize: 14 }}>{f.question}</strong>
+                <span style={S.tag}>{f.citation}</span>
+              </div>
+              <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 6, whiteSpace: 'pre-wrap' }}>{f.answer}</p>
+              <p style={{ ...S.tag, marginTop: 6 }}>매칭 키워드 {f.keywords.length}개</p>
+            </section>
+          ))}
         </>
       )}
 
