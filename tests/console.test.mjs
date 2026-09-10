@@ -99,3 +99,65 @@ test('콘솔 셸이 375px 화면에서 접히도록 반응형 규칙을 갖춘�
   // 터치 대상 최소 크기
   assert.match(css, /\.ac-navbtn\{[^}]*min-height:38px/, '메뉴 버튼은 손가락으로 누를 수 있어야 한다');
 });
+
+test('대시보드 최근 대화가 서랍을 여는 행 목록으로 렌더된다 (DS 2-3)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  const html = await render();
+  // 빈 상태: 일러스트 + 다음 행동
+  assert.match(html, /아직 기록된 대화가 없습니다/, '빈 상태 안내');
+  assert.match(html, /응답 테스트 열기/, '빈 상태에서 다음 행동을 제시해야 한다');
+  // 서랍: dialog 시맨틱·ESC·초점 복귀·초점 순환
+  assert.match(src, /role="dialog"[\s\S]*aria-modal="true"[\s\S]*aria-labelledby="ac-drawer-title"/, '서랍은 dialog 여야 한다');
+  assert.match(src, /e\.key === 'Escape'\) closeDrawer\(\)/, 'ESC 로 닫힌다');
+  assert.match(src, /drawerReturnRef\.current = from/, '닫으면 연 행으로 초점이 돌아가야 한다');
+  assert.match(src, /e\.key !== 'Tab'/, '서랍 안에서 초점이 순환해야 한다');
+  assert.match(src, /aria-haspopup="dialog"/, '행 버튼은 서랍을 연다고 알려야 한다');
+  // 세션 식별자는 전부 노출하지 않는다
+  assert.match(src, /function shortSession/, '대화 식별자 축약');
+  // 375px: 서랍 전체폭·행 세로 배치
+  const mobile = css.slice(css.indexOf('@media (max-width:900px){'));
+  assert.match(mobile, /\.ac-drawer\{width:100vw\}/);
+  assert.match(mobile, /\.ac-row\{flex-direction:column/);
+  assert.match(css, /\.ac-drawer\{animation:none!important\}|,\.ac-drawer\{animation:none!important\}/, '모션 최소화 존중');
+});
+
+test('지식베이스가 표(검색·카테고리 필터)+우측 편집 폼으로 렌더되고 라벨·검증·빈 상태를 갖춘다 (DS 2-4)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  const kb = src.slice(src.indexOf("{tab === 'kb' &&"), src.indexOf("{tab === 'rules' &&"));
+  assert.match(kb, /className="ac-split"/, '좌 표/우 폼 분할');
+  assert.match(kb, /type="search"/, '검색 입력');
+  assert.match(kb, /id="ac-kb-cat"[\s\S]*<option value="">모든 카테고리<\/option>/, '카테고리 필터');
+  assert.match(kb, /className="ac-table"/, '표');
+  for (const id of ['kb-category', 'kb-question', 'kb-keywords', 'kb-answer']) {
+    assert.match(kb, new RegExp(`htmlFor="${id}"`), `폼 라벨 누락: ${id}`);
+    assert.match(kb, new RegExp(`id="${id}"`), `입력 누락: ${id}`);
+  }
+  assert.match(kb, /aria-invalid=\{kbErr\.question/, '인라인 검증(질문)');
+  assert.match(kb, /aria-describedby=\{kbErr\.answer/, '오류 문구 연결(답변)');
+  assert.match(kb, /<EmptyArt kind="kb" \/>/, '빈 상태 일러스트');
+  assert.match(kb, /검색 결과가 없습니다/, '검색 0건 안내');
+  assert.match(kb, /aria-label=\{`삭제: \$\{e\.question\}`\}/, '행 버튼에 대상 이름이 있어야 한다');
+  assert.match(src, /window\.confirm\('이 항목을 삭제할까요/, '삭제는 확인을 거친다');
+  assert.match(src, /flash\(editingId \? '수정되었습니다\.' : '추가되었습니다\.'\)/, '저장 토스트');
+  const mobile = css.slice(css.indexOf('@media (max-width:900px){'));
+  assert.match(mobile, /\.ac-split,\.ac-split-test\{grid-template-columns:minmax\(0,1fr\)\}/, '좁은 화면에서는 한 단');
+  assert.match(mobile, /\.ac-col-wide\{display:none\}/, '좁은 화면에서는 키워드 열을 감춘다');
+});
+
+test('응답 테스트가 좌 입력·근거 / 우 상담창 미리보기로 분할되고 내부 코드가 보이지 않는다 (DS 2-6)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const t = src.slice(src.indexOf("{tab === 'test' &&"), src.indexOf("{tab === 'install' &&"));
+  assert.match(t, /className="ac-split ac-split-test"/, '분할 레이아웃');
+  assert.match(t, /aria-label="상담창 미리보기"/, '미리보기 영역 이름');
+  assert.match(t, /role="log" aria-live="polite"/, '미리보기 대화는 live region');
+  assert.match(t, /htmlFor="ac-test-msg"/, '입력 라벨');
+  assert.match(t, /aria-busy=\{testBusy/, '응답 대기 표시');
+  assert.match(t, /gw-dot/, '타이핑 인디케이터(위젯과 같은 것)');
+  assert.match(t, /INTENT_LABELS\[t\.intent\]/, '주제는 사람 말로');
+  assert.match(t, /SOURCE_VIEW_LABELS\[t\.source\]/, '근거는 사람 말로');
+  assert.equal(/intent: \{|source: \{/.test(t), false, '내부 코드 라벨을 그대로 보여주면 안 된다');
+  assert.match(t, /실제 고객 정보는 넣지 마세요/, '개인정보 주의 안내');
+  assert.match(src, /catch \{\n      data = \{ reply: '연결이 원활하지 않습니다/, '네트워크 실패 안내');
+});
