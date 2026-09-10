@@ -644,3 +644,51 @@ test('위젯·콘솔 화면에 내부 구현 문구가 노출되지 않는다', 
   const s = read('src/components/ChatWidget.tsx');
   for (const w of INTERNAL) assert.equal(s.includes(w), false, `위젯에 내부 문구 노출: ${w}`);
 });
+
+/* ══════════ 랜딩 — 상용 수준 구조 & 운영자 정보 비노출 ══════════ */
+
+test('랜딩에 설치 스니펫·개발자용 정보가 노출되지 않는다', () => {
+  const s = read('src/app/page.tsx');
+  for (const leak of ['embed.js', 'data-position', 'data-offset', 'data-z', '<script src', '/admin']) {
+    assert.equal(s.includes(leak), false, `랜딩에 운영자용 정보 노출: ${leak}`);
+  }
+});
+
+test('랜딩이 의사결정에 필요한 섹션을 갖춘다', () => {
+  const s = read('src/app/page.tsx');
+  for (const anchor of ['id="trust"', 'id="features"', 'id="channels"', 'id="steps"', 'id="faq"', 'id="demo"', 'id="contact"']) {
+    assert.ok(s.includes(anchor), `랜딩 섹션 누락: ${anchor}`);
+  }
+  assert.match(s, /인공지능\(AI\)이 응대합니다/, 'AI 고지');
+  assert.match(s, /<details/, 'FAQ는 펼침 목록이어야 한다(키보드 조작 가능)');
+});
+
+test('랜딩이 근거 없는 성과 수치·타사 이름을 쓰지 않는다', () => {
+  const s = read('src/app/page.tsx');
+  // "…률 87%" 같은 성과 주장
+  assert.equal(/(해결률|자동화율|절감|만족도|정확도|응답률)[^\n]{0,10}\d+\s*%/.test(s), false, '근거 없는 성과 수치가 있다');
+  for (const brand of ['채널톡', '알프', 'Intercom', 'Fin AI', 'Zendesk']) {
+    // 주석의 벤치마킹 기록은 허용하되, 화면 문자열(따옴표 안)에 타사명이 들어가면 안 된다
+    const inUi = new RegExp(`['\`"][^'\`"\\n]*${brand}[^'\`"\\n]*['\`"]`);
+    assert.equal(inUi.test(s), false, `화면 문구에 타사명이 있다: ${brand}`);
+  }
+  assert.match(s, /측정 중/, '값이 없는 지표는 「측정 중」으로 표시해야 한다');
+});
+
+test('설치 안내는 관리 콘솔 안에 있고 배포 주소를 하드코딩하지 않는다', () => {
+  const s = read('src/app/admin/page.tsx');
+  assert.match(s, /\['install', '설치'\]/, '설치 탭이 등록돼야 한다');
+  assert.match(s, /function installSnippet/, '설치 스니펫 생성 함수');
+  assert.match(s, /window\.location\.origin/, '배포 주소는 현재 접속 주소를 써야 한다');
+  assert.match(s, /INSTALL_OPTIONS/, '옵션 표');
+  assert.match(s, /data-tenant/, '테넌트 옵션 안내가 있어야 한다');
+});
+
+test('관리 콘솔 화면에 내부 구현 문구가 남아 있지 않다', () => {
+  const s = read('src/app/admin/page.tsx');
+  // 화면에 그려지는 문자열만 검사한다(주석의 구현 메모는 허용)
+  const ui = s.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+  for (const w of ['data/admin-store.json', '401이면', '서버 메모리 기준']) {
+    assert.equal(ui.includes(w), false, `콘솔 화면에 내부 문구 노출: ${w}`);
+  }
+});

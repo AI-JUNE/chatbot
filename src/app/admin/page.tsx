@@ -307,8 +307,28 @@ const S = {
   tag: { fontSize: 12, color: 'var(--mut)' } as const,
 };
 
+/** 고객사에 안내할 설치 스니펫. 배포 주소는 지금 보고 있는 주소를 그대로 쓴다. */
+function installSnippet(origin: string): string {
+  const base = origin || 'https://<배포도메인>';
+  return `<script src="${base}/embed.js" async></script>`;
+}
+
+/** 설치 스니펫에 붙일 수 있는 선택 속성(공개 계약 — embed.js 와 같이 유지한다). */
+const INSTALL_OPTIONS: [string, string][] = [
+  ['data-position="left"', '상담창을 화면 왼쪽 아래에 붙입니다(기본값: 오른쪽).'],
+  ['data-offset="24"', '화면 가장자리와의 여백(px).'],
+  ['data-z="2147483000"', '다른 요소에 가려질 때 쌓임 순서를 올립니다.'],
+  ['data-tenant="eum"', '고객사 전용 문구·색·안내 자료를 적용합니다.'],
+];
+
 export default function AdminPage() {
-  const [tab, setTab] = useState<'dash' | 'kb' | 'rules' | 'esc' | 'partner' | 'settle' | 'tenant' | 'test' | 'audit'>('dash');
+  const [tab, setTab] = useState<'dash' | 'kb' | 'rules' | 'esc' | 'partner' | 'settle' | 'tenant' | 'test' | 'install' | 'audit'>('dash');
+  // 설치 코드에 넣을 배포 주소 — 브라우저가 보고 있는 주소를 그대로 쓴다(하드코딩 금지).
+  const [origin, setOrigin] = useState('');
+  const [copied, setCopied] = useState('');
+  useEffect(() => {
+    try { setOrigin(window.location.origin); } catch { setOrigin(''); }
+  }, []);
   const [notice, setNotice] = useState('');
 
   // ---- 관리 토큰(ADMIN_TOKEN 설정 시 x-admin-token 필수) ----
@@ -931,7 +951,7 @@ export default function AdminPage() {
     <main style={S.page}>
       <h1 style={{ fontSize: 24, marginBottom: 4 }}>관리 콘솔</h1>
       <p style={{ color: 'var(--sub)', fontSize: 14, marginBottom: 16 }}>
-        지식베이스·시나리오 편집은 서버에 저장됩니다(로컬: data/admin-store.json 자동 저장 · 서버리스는 대시보드의 백업 JSON/복원 사용). 대화 로그·통계는 메모리 유지.
+        지식베이스·시나리오 편집 내용은 자동 저장됩니다. 대화 로그·통계는 서비스가 다시 시작되면 초기화되므로, 보관이 필요하면 대시보드에서 백업을 내려받아 주세요.
       </p>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 16 }}>
         {(
@@ -944,6 +964,7 @@ export default function AdminPage() {
             ['settle', '정산 리포트'],
             ['tenant', '테넌트 지식'],
             ['test', '응답 테스트'],
+            ['install', '설치'],
             ['audit', '감사 로그'],
           ] as const
         ).map(([key, label]) => (
@@ -1014,7 +1035,7 @@ export default function AdminPage() {
                 ))}
               </div>
             ) : (
-              <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 8 }}>통계를 불러오는 중입니다… (401이면 우측 상단에 관리 토큰을 입력하세요)</p>
+              <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 8 }}>통계를 불러오는 중입니다… 계속 표시되면 우측 상단에 관리 토큰을 입력해 주세요.</p>
             )}
             {stats && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 12, fontSize: 13, color: 'var(--sub)' }}>
@@ -1023,7 +1044,7 @@ export default function AdminPage() {
                 <span>상담원 제안 턴: {stats.conversation.escalatedTurns}</span>
               </div>
             )}
-            <p style={{ ...S.tag, marginTop: 8 }}>통계·로그는 서버 메모리 기준입니다(재시작 시 초기화 · 영구 저장은 준비 중).</p>
+            <p style={{ ...S.tag, marginTop: 8 }}>통계·로그는 서비스가 다시 시작되면 초기화됩니다. 보관이 필요하면 백업을 내려받아 주세요.</p>
           </section>
           {stats && stats.conversation.topIntents.length > 0 && (
             <section style={S.card}>
@@ -1887,6 +1908,56 @@ export default function AdminPage() {
               </div>
             </div>
           ))}
+        </section>
+      )}
+
+      {tab === 'install' && (
+        <section style={S.card} aria-label="설치">
+          <h2 style={{ fontSize: 16 }}>사이트에 상담창 붙이기</h2>
+          <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: '8px 0 14px' }}>
+            아래 한 줄을 홈페이지 <code>&lt;body&gt;</code> 끝에 넣으면 상담창이 나타납니다. 닫혀 있을 때는 버튼만 차지하므로 기존 페이지 클릭을 방해하지 않습니다.
+          </p>
+          <pre style={{ background: 'var(--ink)', color: '#E2E8F0', fontSize: 12.5, borderRadius: 'var(--r-sm)', padding: '14px 16px', overflowX: 'auto', margin: 0 }}>
+            <code>{installSnippet(origin)}</code>
+          </pre>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+            <button
+              style={S.btn}
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(installSnippet(origin));
+                  setCopied('설치 코드를 복사했습니다.');
+                } catch {
+                  setCopied('복사에 실패했습니다. 코드를 직접 선택해 복사해 주세요.');
+                }
+              }}
+            >
+              설치 코드 복사
+            </button>
+            <a style={{ ...S.btnGhost, display: 'inline-block' }} href="/" target="_blank" rel="noopener noreferrer">동작 화면 보기</a>
+          </div>
+          {copied && <p role="status" style={{ fontSize: 13, color: 'var(--brand-600)', marginTop: 10 }}>{copied}</p>}
+
+          <h3 style={{ fontSize: 14, fontWeight: 800, margin: '22px 0 8px' }}>선택 옵션</h3>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: 'var(--sub)' }}>
+                <th style={{ padding: '8px 6px', borderBottom: '1px solid var(--line)', width: 150 }}>옵션</th>
+                <th style={{ padding: '8px 6px', borderBottom: '1px solid var(--line)' }}>설명</th>
+              </tr>
+            </thead>
+            <tbody>
+              {INSTALL_OPTIONS.map(([opt, desc]) => (
+                <tr key={opt}>
+                  <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--line)' }}><code>{opt}</code></td>
+                  <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--line)', color: 'var(--sub)' }}>{desc}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p style={{ ...S.tag, marginTop: 14 }}>
+            설치 코드는 운영자용 정보라 홈페이지에는 표시하지 않습니다. 이 화면에서만 확인해 주세요.
+          </p>
         </section>
       )}
     </main>

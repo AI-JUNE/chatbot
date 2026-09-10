@@ -36,3 +36,16 @@ input,textarea{font-family:inherit}
   html{scroll-behavior:auto}
   .gw-rise,.gw-panel,.gw-dot{animation:none!important}
 }
+
+/* ── 랜딩 레이아웃 (인라인 스타일로 표현할 수 없는 반응형만 클래스로) ── */
+.lp-nav{display:flex;gap:20px;margin-left:12px}
+.lp-hero{display:grid;grid-template-columns:minmax(320px,1fr) minmax(280px,380px);gap:44px;align-items:center}
+.lp-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(272px,1fr))}
+.lp-kpi{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.lp-faq summary::-webkit-details-marker{display:none}
+.lp-faq summary::after{content:'+';float:right;color:var(--brand-600);font-weight:800}
+.lp-faq[open] summary::after{content:'−'}
+@media (max-width:900px){
+  .lp-nav{display:none}
+  .lp-hero{grid-template-columns:1fr;gap:28px}
+}
