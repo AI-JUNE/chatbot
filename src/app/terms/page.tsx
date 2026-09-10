@@ -4,19 +4,19 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import LegalLayout from '../privacy/LegalLayout';
 
-export const metadata: Metadata = { title: '이용약관 — 고원 챗봇' };
+export const metadata: Metadata = { title: '이용약관 — GOWON Chat' };
 
 export default function TermsPage() {
   return (
     <LegalLayout
       title="이용약관"
       updated="2026-08-12"
-      meta="서비스: 고원 챗봇(무인 상담 챗봇) · 운영: 주식회사 고원(GOWON)"
+      meta="서비스: GOWON Chat(상담 챗봇) · 운영: 주식회사 고원(GOWON)"
       draft
     >
       <h2>제1조 (목적)</h2>
       <p>
-        이 약관은 주식회사 고원(이하 &ldquo;회사&rdquo;)이 제공하는 무인 상담 챗봇 &ldquo;고원 챗봇&rdquo;(이하
+        이 약관은 주식회사 고원(이하 &ldquo;회사&rdquo;)이 제공하는 상담 챗봇 &ldquo;GOWON Chat&rdquo;(이하
         &ldquo;서비스&rdquo;) 및 관련 부가 서비스의 이용과 관련하여 회사와 이용자의 권리·의무 및 책임사항, 이용
         조건과 절차를 정함을 목적으로 합니다.
       </p>

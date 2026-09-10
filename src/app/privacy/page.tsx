@@ -3,20 +3,20 @@
 import type { Metadata } from 'next';
 import LegalLayout from './LegalLayout';
 
-export const metadata: Metadata = { title: '개인정보처리방침 — 고원 챗봇' };
+export const metadata: Metadata = { title: '개인정보처리방침 — GOWON Chat' };
 
 export default function PrivacyPage() {
   return (
     <LegalLayout
       title="개인정보처리방침"
       updated="2026-08-12"
-      meta="서비스: 고원 챗봇(무인 상담 챗봇) · 운영: 주식회사 고원(GOWON)"
+      meta="서비스: GOWON Chat(상담 챗봇) · 운영: 주식회사 고원(GOWON)"
       draft
     >
       <h2>1. 총칙</h2>
       <p>
         주식회사 고원(이하 &ldquo;회사&rdquo;)은 「개인정보 보호법」 등 관련 법령을 준수하며, 이용자의
-        개인정보를 보호하기 위해 노력합니다. 이 방침은 고원 챗봇 서비스가 어떤 개인정보를, 왜, 어떻게
+        개인정보를 보호하기 위해 노력합니다. 이 방침은 GOWON Chat 서비스가 어떤 개인정보를, 왜, 어떻게
         수집·이용·보관·파기하는지 안내합니다.
       </p>
 

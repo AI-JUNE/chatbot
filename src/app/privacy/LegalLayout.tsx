@@ -17,7 +17,7 @@ export default function LegalLayout({
 }) {
   return (
     <main style={{ maxWidth: 760, margin: '0 auto', padding: '60px 24px 100px', lineHeight: 1.7 }}>
-      <Link href="/" style={{ fontSize: 13, fontWeight: 700, color: 'var(--brand-600)' }}>← 고원 챗봇 홈</Link>
+      <Link href="/" style={{ fontSize: 13, fontWeight: 700, color: 'var(--brand-600)' }}>← GOWON Chat 홈</Link>
       <h1 style={{ fontSize: 30, fontWeight: 800, letterSpacing: '-.02em', margin: '18px 0 6px' }}>{title}</h1>
       {meta && <p style={{ fontSize: 13, color: 'var(--mut)', margin: '0 0 2px' }}>{meta}</p>}
       <p style={{ fontSize: 13, color: 'var(--mut)', margin: 0 }}>

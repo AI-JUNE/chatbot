@@ -355,8 +355,8 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
   const fullscreen = open && mobile;
   const starters = (tenant?.starters ?? []).slice(0, 4);
   const showStarters = starters.length > 0 && msgs.length === 1 && !busy;
-  const title = tenant?.headerTitle || '고원 상담 챗봇';
-  const avatarChar = tenant?.badge || '고';
+  const title = tenant?.headerTitle || 'GOWON Chat';
+  const avatarChar = tenant?.badge || 'G';
   const lastKey = msgs[msgs.length - 1]?.key;
 
   const wrapStyle: CSSProperties = fullscreen

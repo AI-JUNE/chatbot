@@ -682,6 +682,61 @@ test('위젯·콘솔 화면에 내부 구현 문구가 노출되지 않는다', 
   for (const w of INTERNAL) assert.equal(s.includes(w), false, `위젯에 내부 문구 노출: ${w}`);
 });
 
+/* ══════════ 브랜드 — 제품명·마크 (DS 3-2) ══════════ */
+
+const BRAND_SCREENS = [
+  'src/app/page.tsx',
+  'src/app/layout.tsx',
+  'src/app/admin/page.tsx',
+  'src/app/widget/page.tsx',
+  'src/components/ChatWidget.tsx',
+  'src/app/terms/page.tsx',
+  'src/app/privacy/page.tsx',
+  'src/app/privacy/LegalLayout.tsx',
+  'src/lib/rules.ts',
+].filter(has);
+
+test('제품명은 영문 GOWON Chat 하나로 통일돼 있다', () => {
+  for (const f of BRAND_SCREENS) {
+    const s = read(f);
+    assert.equal(/고원 챗봇|고원 상담 챗봇/.test(s), false, `${f}에 옛 제품명이 남아 있다`);
+  }
+  // 실제로 쓰이는 곳에는 새 이름이 있어야 한다(지우기만 하고 끝내지 않는다)
+  assert.match(read('src/app/page.tsx'), /GOWON Chat/);
+  assert.match(read('src/app/admin/page.tsx'), /GOWON Chat/);
+  assert.match(read('src/components/ChatWidget.tsx'), /'GOWON Chat'/);
+  // 법인명은 약관·방침에 그대로 남는다(표기 변경은 제품명에 한정)
+  assert.match(read('src/app/terms/page.tsx'), /주식회사 고원\(GOWON\)/);
+});
+
+test('랜딩에 「AICC 제품군」 배지가 없다', () => {
+  for (const f of BRAND_SCREENS) {
+    assert.equal(read(f).includes('AICC 제품군'), false, `${f}에 배지 문구가 남아 있다`);
+  }
+});
+
+test('브랜드 마크(파비콘)가 있고 화면과 같은 도형을 쓴다', () => {
+  assert.ok(has('src/app/icon.svg'), '파비콘(app/icon.svg)이 있어야 한다');
+  const svg = read('src/app/icon.svg');
+  const body = /d="(M7 2\.5h18[^"]+)"/.exec(svg)?.[1];
+  const initial = /d="(M20\.9 9\.9[^"]+)"/.exec(svg)?.[1];
+  assert.ok(body && initial, '말풍선 몸통·이니셜 경로가 있어야 한다');
+  // 랜딩·콘솔의 마크가 파비콘과 같은 도형이어야 한다(브랜드가 화면마다 달라지지 않게)
+  for (const f of ['src/app/page.tsx', 'src/app/admin/page.tsx']) {
+    const s = read(f);
+    assert.ok(s.includes(body), `${f}의 마크 몸통이 파비콘과 다르다`);
+    assert.ok(s.includes(initial), `${f}의 마크 이니셜이 파비콘과 다르다`);
+  }
+});
+
+test('랜딩 아이콘은 이모지가 아니라 선 아이콘이다', () => {
+  const s = read('src/app/page.tsx');
+  const emoji = s.match(/[\u{1F300}-\u{1FAFF}\u{2190}-\u{21FF}\u{2600}-\u{27BF}]/gu);
+  assert.equal(emoji, null, `랜딩에 이모지가 남아 있다: ${emoji && emoji.join(' ')}`);
+  assert.match(s, /function Icon\(/, '선 아이콘 컴포넌트가 있어야 한다');
+  assert.match(s, /strokeWidth="1\.4"/, '아이콘 굵기는 콘솔 메뉴와 같아야 한다');
+});
+
 /* ══════════ 랜딩 — 상용 수준 구조 & 운영자 정보 비노출 ══════════ */
 
 test('랜딩에 설치 스니펫·개발자용 정보가 노출되지 않는다', () => {

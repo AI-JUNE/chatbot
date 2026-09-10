@@ -434,6 +434,19 @@ const TAB_ICON: Record<TabKey, string> = {
   audit: 'M3.5 3.5h9M3.5 7h9M3.5 10.5h5.5M11.5 12.5l1.5-1.5',
 };
 
+/** 브랜드 마크 — 말풍선 + 이니셜. 원본은 `src/app/icon.svg`(파비콘)이며 경로 데이터를 같이 쓴다. */
+const MARK_BODY = 'M7 2.5h18A5.5 5.5 0 0 1 30.5 8v11a5.5 5.5 0 0 1-5.5 5.5H13l-5 5v-5H7A5.5 5.5 0 0 1 1.5 19V8A5.5 5.5 0 0 1 7 2.5Z';
+const MARK_G = 'M20.9 9.9A6 6 0 1 0 22 13.5h-5.2';
+
+function BrandMark({ size = 30 }: { size?: number }) {
+  return (
+    <svg aria-hidden="true" focusable="false" width={size} height={size} viewBox="0 0 32 32" style={{ flexShrink: 0 }}>
+      <path d={MARK_BODY} fill="var(--brand)" />
+      <path d={MARK_G} fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function NavIcon({ tab }: { tab: TabKey }) {
   return (
     <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
@@ -1099,9 +1112,9 @@ export default function AdminPage() {
       {/* ── 좌측 내비게이션(좁은 화면에서는 상단 가로 스크롤 바) ── */}
       <aside className="ac-side">
         <div className="ac-brand">
-          <span aria-hidden="true" className="ac-logo">고</span>
+          <BrandMark size={30} />
           <span style={{ minWidth: 0 }}>
-            <span style={{ display: 'block', fontSize: 14, fontWeight: 800, letterSpacing: '-.01em' }}>고원 챗봇</span>
+            <span style={{ display: 'block', fontSize: 14, fontWeight: 800, letterSpacing: '-.01em' }}>GOWON Chat</span>
             <span style={{ display: 'block', fontSize: 10.5, fontWeight: 700, color: 'var(--brand-600)' }}>관리 콘솔</span>
           </span>
         </div>
@@ -1590,7 +1603,7 @@ export default function AdminPage() {
               </button>
             </div>
             <p style={{ ...S.tag, marginTop: 6 }}>
-              계약 주체는 고원이며, 파트너는 유치·운영을 담당합니다. 여기서는 <b>어느 고객사를 누가 데려왔는지</b>만 기록합니다.
+              계약 주체는 고원이고, 파트너는 유치와 운영을 맡습니다. 여기서는 <b>어느 고객사를 누가 데려왔는지</b>만 기록합니다.
               담당자는 이름만 저장하고 연락처는 저장하지 않습니다. 실제 정산·청구는 계약서 확정 후 <b>[승인 필요]</b>.
             </p>
             {partnerErr && (

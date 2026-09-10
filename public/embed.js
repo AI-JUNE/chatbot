@@ -1,4 +1,4 @@
-/* 고원 챗봇 임베드 스니펫 (v0.5)
+/* GOWON Chat 임베드 스니펫 (v0.5)
  * 사용법: <script src="https://<배포도메인>/embed.js" async></script>
  * 옵션(선택): data-position="left" | data-offset="24" | data-z="2147483000"
  *            data-tenant="eum"  ← 테넌트 프리셋(문구·색·FAQ 지식)을 바꿔 끼운다

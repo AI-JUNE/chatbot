@@ -13,7 +13,7 @@ export interface Rule {
 
 export const RULES: Rule[] = [
   // --- 인사·종결 ---
-  { intent: 'greeting', label: '인사', test: /(안녕|하이|hello|반가|여보세요)/i, reply: '안녕하세요! 고원 상담 챗봇이에요. 무엇을 도와드릴까요?' },
+  { intent: 'greeting', label: '인사', test: /(안녕|하이|hello|반가|여보세요)/i, reply: '안녕하세요! 무엇을 도와드릴까요?' },
   { intent: 'thanks', label: '감사', test: /(감사|고마워|고맙|thank)/i, reply: '도움이 되었다니 기뻐요! 더 궁금한 점이 있으면 언제든 물어봐 주세요.' },
   { intent: 'bye', label: '종료 인사', test: /(잘 ?가|안녕히|종료|끝낼|바이)/, reply: '이용해 주셔서 감사합니다. 필요하실 때 언제든 다시 찾아 주세요!' },
 

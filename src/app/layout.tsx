@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: '고원 챗봇 — 무인 상담 멀티채널',
-  description: '웹·카카오 채널에서 AI가 1차 응대하고, 필요할 때만 상담원으로 연결하는 무인 상담 챗봇.',
+  title: 'GOWON Chat — 자료를 근거로 답하는 상담 챗봇',
+  description: '등록한 안내 자료를 근거로 AI가 1차 응대하고, 확인이 필요한 문의만 상담원에게 넘기는 상담 챗봇.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
