@@ -722,7 +722,7 @@ test('브랜드 마크(파비콘)가 있고 화면과 같은 도형을 쓴다', 
   const initial = /d="(M20\.9 9\.9[^"]+)"/.exec(svg)?.[1];
   assert.ok(body && initial, '말풍선 몸통·이니셜 경로가 있어야 한다');
   // 랜딩·콘솔의 마크가 파비콘과 같은 도형이어야 한다(브랜드가 화면마다 달라지지 않게)
-  for (const f of ['src/app/page.tsx', 'src/app/admin/page.tsx']) {
+  for (const f of ['src/app/page.tsx', 'src/app/admin/page.tsx', 'public/brand-mark.svg']) {
     const s = read(f);
     assert.ok(s.includes(body), `${f}의 마크 몸통이 파비콘과 다르다`);
     assert.ok(s.includes(initial), `${f}의 마크 이니셜이 파비콘과 다르다`);
