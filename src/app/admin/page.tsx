@@ -2,7 +2,7 @@
 
 // 관리 콘솔(MVP): 지식베이스(FAQ) CRUD · 시나리오 룰 편집 · 응답 테스트.
 // 저장은 인메모리 스텁 — [승인 필요] DB 영구 저장·관리자 인증(현재 ADMIN_TOKEN 미설정 시 개방).
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 
 interface KBEntryView {
   id: string;
@@ -106,6 +106,132 @@ interface OpsStats {
 /** 값이 아직 없는 지표는 0을 지어내지 않고 「측정 중」으로 표시한다(§13). */
 const MEASURING = '측정 중';
 
+/** 대화 식별자는 화면에 전부 보여주지 않는다(개인 추적 방지) — 앞 6자만. */
+function shortSession(id: string): string {
+  return id.length > 6 ? `${id.slice(0, 6)}…` : id;
+}
+
+function timeLabel(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/** 빈 상태 일러스트 — 장식이므로 스크린리더에서는 숨긴다. 색은 토큰만 쓴다. */
+function EmptyArt({ kind }: { kind: 'kb' | 'chat' }) {
+  return (
+    <svg aria-hidden="true" focusable="false" width="120" height="84" viewBox="0 0 120 84" fill="none" style={{ display: 'block', margin: '0 auto 12px' }}>
+      <rect x="14" y="14" width="92" height="58" rx="12" fill="var(--brand-50)" />
+      {kind === 'kb' ? (
+        <>
+          <rect x="30" y="30" width="60" height="6" rx="3" fill="var(--brand)" opacity=".55" />
+          <rect x="30" y="42" width="44" height="6" rx="3" fill="var(--brand)" opacity=".35" />
+          <rect x="30" y="54" width="52" height="6" rx="3" fill="var(--brand)" opacity=".25" />
+        </>
+      ) : (
+        <>
+          <rect x="28" y="28" width="40" height="12" rx="6" fill="var(--surface)" stroke="var(--line-2)" />
+          <rect x="52" y="46" width="40" height="12" rx="6" fill="var(--brand)" opacity=".55" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+/** 최근 대화 상세 서랍 — 같은 대화(세션)의 흐름 전체·주제·근거·상담원 전환 여부를 보여준다. */
+function ConversationDrawer({
+  sessionId, turns, ticket, onClose, onOpenTicket, closeRef,
+}: {
+  sessionId: string;
+  turns: TurnView[];
+  ticket: TicketView | undefined;
+  onClose: () => void;
+  onOpenTicket: () => void;
+  closeRef: RefObject<HTMLButtonElement>;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const escalated = turns.some((t) => t.escalate);
+  const channel = turns[0]?.channel ?? '';
+  const first = turns[0]?.at;
+  const last = turns[turns.length - 1]?.at;
+
+  // 초점 순환(Tab/Shift+Tab 이 서랍 밖으로 나가지 않는다). ESC 는 부모가 처리한다.
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab' || !panelRef.current) return;
+    const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>('button,[href],input,textarea,select,[tabindex]:not([tabindex="-1"])'))
+      .filter((el) => !el.hasAttribute('disabled'));
+    if (items.length === 0) return;
+    const firstEl = items[0];
+    const lastEl = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === firstEl) { e.preventDefault(); lastEl.focus(); }
+    else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); firstEl.focus(); }
+  };
+
+  return (
+    <div className="ac-drawer-root">
+      <div className="ac-drawer-bg" onClick={onClose} aria-hidden="true" />
+      <div
+        ref={panelRef}
+        className="ac-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ac-drawer-title"
+        onKeyDown={onKeyDown}
+      >
+        <div className="ac-drawer-head">
+          <div style={{ minWidth: 0 }}>
+            <h2 id="ac-drawer-title" style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-.01em' }}>대화 상세</h2>
+            <p style={{ fontSize: 12, color: 'var(--mut)', marginTop: 2 }}>
+              대화 {shortSession(sessionId)} · {CHANNEL_LABELS[channel] || channel || '채널 미상'}
+              {first && last ? ` · ${timeLabel(first)}${first !== last ? ` ~ ${timeLabel(last)}` : ''}` : ''}
+            </p>
+          </div>
+          <button ref={closeRef} type="button" className="ac-iconbtn" onClick={onClose} aria-label="상세 닫기">
+            <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+          </button>
+        </div>
+
+        <div className="ac-drawer-meta">
+          <span className="ac-pill">주고받은 메시지 {turns.length}쌍</span>
+          <span className="ac-pill" style={escalated ? { background: '#FFFBEB', color: 'var(--warn)' } : { background: '#F0FDF4', color: 'var(--success)' }}>
+            {escalated ? '상담원 제안됨' : '자동 응대로 완료'}
+          </span>
+          {ticket && <span className="ac-pill">접수 {TICKET_STATUS_LABELS[ticket.status]}</span>}
+        </div>
+
+        <div className="ac-drawer-body" role="log" aria-label="대화 내용">
+          {turns.map((t) => (
+            <div key={t.id} className="ac-turn">
+              <div className="ac-bubble ac-bubble-user">
+                <span className="ac-bubble-who">고객</span>
+                <p>{t.message}</p>
+              </div>
+              <div className="ac-bubble ac-bubble-bot">
+                <span className="ac-bubble-who">챗봇</span>
+                <p>{t.reply}</p>
+                <div className="ac-bubble-tags">
+                  <span className="ac-pill">{INTENT_LABELS[t.intent] || t.intent}</span>
+                  <span className="ac-pill">{SOURCE_VIEW_LABELS[t.source] || t.source}</span>
+                  {t.escalate && <span className="ac-pill" style={{ background: '#FFFBEB', color: 'var(--warn)' }}>상담원 제안</span>}
+                  <span style={{ fontSize: 11, color: 'var(--mut)', marginLeft: 'auto' }}>{timeLabel(t.at)}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="ac-drawer-foot">
+          {ticket ? (
+            <button type="button" style={S.btn} onClick={onOpenTicket}>상담원 요청 보기</button>
+          ) : (
+            <span style={{ fontSize: 12.5, color: 'var(--mut)' }}>이 대화에서 접수된 상담원 요청은 없습니다.</span>
+          )}
+          <button type="button" style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={onClose}>닫기</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function KpiCard({ label, value, note, empty }: { label: string; value: string; note: string; empty?: boolean }) {
   return (
     <div className="ac-kpicard">
@@ -189,6 +315,7 @@ const SOURCE_VIEW_LABELS: Record<string, string> = {
   context: '이어지는 대화',
   fallback: '기본 안내',
   empty: '내용 없음',
+  error: '연결 오류',
 };
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -207,6 +334,7 @@ const INTENT_LABELS: Record<string, string> = {
   handoff: '상담원 연결',
   unknown: '분류 전',
   faq: '자료 안내',
+  error: '연결 오류',
 };
 
 const TICKET_STATUS_LABELS: Record<TicketView['status'], string> = {
@@ -540,6 +668,11 @@ export default function AdminPage() {
   const [entries, setEntries] = useState<KBEntryView[]>([]);
   const [form, setForm] = useState<KBForm>(EMPTY_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [kbQuery, setKbQuery] = useState('');
+  const [kbCat, setKbCat] = useState('');
+  const [kbErr, setKbErr] = useState<{ question?: string; answer?: string }>({});
+  const [kbBusy, setKbBusy] = useState(false);
+  const kbFormRef = useRef<HTMLDivElement | null>(null);
 
   const loadKB = useCallback(async () => {
     const res = await fetch('/api/admin/kb', { headers: authHeaders() });
@@ -610,6 +743,33 @@ export default function AdminPage() {
   const [tickets, setTickets] = useState<TicketView[]>([]);
   const [stats, setStats] = useState<OpsStats | null>(null);
   const [recentTurns, setRecentTurns] = useState<TurnView[]>([]);
+
+  // ---- 최근 대화 상세 서랍(대시보드) ----
+  const [drawerSession, setDrawerSession] = useState<string | null>(null);
+  const drawerReturnRef = useRef<HTMLElement | null>(null);
+  const drawerCloseRef = useRef<HTMLButtonElement>(null);
+  const openDrawer = (sessionId: string, from: HTMLElement | null) => {
+    drawerReturnRef.current = from;
+    setDrawerSession(sessionId);
+  };
+  const closeDrawer = useCallback(() => {
+    setDrawerSession(null);
+    const el = drawerReturnRef.current;
+    drawerReturnRef.current = null;
+    window.setTimeout(() => el?.focus(), 0);
+  }, []);
+  useEffect(() => {
+    if (!drawerSession) return;
+    const t = window.setTimeout(() => drawerCloseRef.current?.focus(), 30);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeDrawer();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [drawerSession, closeDrawer]);
   const loadEsc = useCallback(async () => {
     const res = await fetch('/api/admin/escalations?logs=true', { headers: authHeaders() });
     if (on401(res)) return;
@@ -868,6 +1028,13 @@ export default function AdminPage() {
   };
 
   const submitKB = async () => {
+    const errs: { question?: string; answer?: string } = {};
+    if (!form.question.trim()) errs.question = '대표 질문을 입력해 주세요.';
+    if (!form.answer.trim()) errs.answer = '답변을 입력해 주세요.';
+    setKbErr(errs);
+    if (errs.question || errs.answer) return;
+    if (kbBusy) return;
+    setKbBusy(true);
     const body = {
       id: editingId ?? form.id,
       category: form.category,
@@ -875,29 +1042,42 @@ export default function AdminPage() {
       keywords: form.keywords,
       answer: form.answer,
     };
-    const res = await fetch('/api/admin/kb', {
-      method: 'POST',
-      headers: authHeaders(true),
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
+    let data: { ok?: boolean; error?: string };
+    try {
+      const res = await fetch('/api/admin/kb', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify(body),
+      });
+      data = await res.json();
+    } catch {
+      data = { ok: false, error: '연결이 원활하지 않습니다. 잠시 후 다시 시도해 주세요.' };
+    } finally {
+      setKbBusy(false);
+    }
     if (!data.ok) {
       flash(`저장 실패: ${data.error}`);
       return;
     }
     setForm(EMPTY_FORM);
     setEditingId(null);
+    setKbErr({});
     await loadKB();
     flash(editingId ? '수정되었습니다.' : '추가되었습니다.');
   };
 
   const editKB = (e: KBEntryView) => {
     setEditingId(e.id);
+    setKbErr({});
     setForm({ id: e.id, category: e.category, question: e.question, keywords: e.keywords.join(', '), answer: e.answer });
     setTab('kb');
+    // 좁은 화면에서는 편집 폼이 표 아래에 있으므로 보이는 곳으로 옮긴다.
+    window.setTimeout(() => kbFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
   };
 
   const removeKB = async (id: string) => {
+    // 되돌릴 수 없는 동작 — 확인을 거친다(QUALITY_BAR §3).
+    if (!window.confirm('이 항목을 삭제할까요? 삭제하면 되돌릴 수 없습니다.')) return;
     const res = await fetch(`/api/admin/kb?id=${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() });
     const data = await res.json();
     if (data.ok) {
@@ -909,6 +1089,7 @@ export default function AdminPage() {
   };
 
   const resetAll = async () => {
+    if (!window.confirm('등록한 항목을 모두 지우고 기본 자료로 되돌릴까요? 되돌릴 수 없습니다.')) return;
     await fetch('/api/admin/kb', {
       method: 'POST',
       headers: authHeaders(true),
@@ -1045,26 +1226,41 @@ export default function AdminPage() {
     }[]
   >([]);
 
+  const [testBusy, setTestBusy] = useState(false);
+  const testEndRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    testEndRef.current?.scrollIntoView({ block: 'end' });
+  }, [testLog, testBusy]);
+
   const runTest = async () => {
     const q = testInput.trim();
-    if (!q) return;
+    if (!q || testBusy) return;
     setTestInput('');
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: q }),
-    });
-    const data = await res.json();
-    const cite = data.citation && typeof data.citation.source === 'string' && typeof data.citation.snippet === 'string'
-      ? { source: data.citation.source as string, snippet: data.citation.snippet as string }
+    setTestBusy(true);
+    let data: Record<string, unknown> = {};
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: q }),
+      });
+      data = (await res.json()) as Record<string, unknown>;
+    } catch {
+      data = { reply: '연결이 원활하지 않습니다. 잠시 후 다시 시도해 주세요.', intent: 'error', source: 'error' };
+    } finally {
+      setTestBusy(false);
+    }
+    const c = data.citation as { source?: unknown; snippet?: unknown } | undefined;
+    const cite = c && typeof c.source === 'string' && typeof c.snippet === 'string'
+      ? { source: c.source, snippet: c.snippet }
       : undefined;
     setTestLog((prev) =>
       [
         {
           q,
-          reply: data.reply ?? '(오류)',
-          intent: data.intent ?? '-',
-          source: data.source ?? '-',
+          reply: typeof data.reply === 'string' ? data.reply : '답변을 받지 못했습니다. 다시 시도해 주세요.',
+          intent: typeof data.intent === 'string' ? data.intent : '-',
+          source: typeof data.source === 'string' ? data.source : '-',
           confidence: typeof data.confidence === 'number' ? data.confidence : undefined,
           citation: cite,
         },
@@ -1301,23 +1497,36 @@ export default function AdminPage() {
               <span style={S.tag}>최대 30건</span>
             </div>
             {recentTurns.length === 0 ? (
-              <p style={{ fontSize: 13.5, color: 'var(--mut)' }}>
-                아직 기록된 대화가 없습니다. 홈페이지의 상담창이나 「응답 테스트」에서 대화해 보세요.
-              </p>
+              <div className="ac-empty">
+                <EmptyArt kind="chat" />
+                <p style={{ fontSize: 14, fontWeight: 700 }}>아직 기록된 대화가 없습니다</p>
+                <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>홈페이지의 상담창이나 「응답 테스트」에서 대화하면 여기에 쌓입니다.</p>
+                <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => setTab('test')}>응답 테스트 열기</button>
+              </div>
             ) : (
-              recentTurns.map((t) => (
-                <div key={t.id} style={{ borderTop: '1px solid var(--line)', padding: '11px 0' }}>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 5 }}>
-                    <span style={S.tag}>{new Date(t.at).toLocaleString('ko-KR')}</span>
-                    <span className="ac-pill">{CHANNEL_LABELS[t.channel] || t.channel}</span>
-                    <span className="ac-pill">{INTENT_LABELS[t.intent] || t.intent}</span>
-                    <span className="ac-pill">{SOURCE_VIEW_LABELS[t.source] || t.source}</span>
-                    {t.escalate && <span className="ac-pill" style={{ background: '#FFFBEB', color: 'var(--warn)' }}>상담원 제안</span>}
-                  </div>
-                  <div style={{ fontSize: 14, color: 'var(--ink)' }}><strong>고객</strong> · {t.message}</div>
-                  <div style={{ fontSize: 14, color: 'var(--sub)', marginTop: 2 }}><strong>챗봇</strong> · {t.reply}</div>
-                </div>
-              ))
+              <ul className="ac-rows" aria-label="최근 대화 목록">
+                {recentTurns.map((t) => (
+                  <li key={t.id}>
+                  <button
+                    type="button"
+                    className="ac-row"
+                    aria-haspopup="dialog"
+                    onClick={(e) => openDrawer(t.sessionId, e.currentTarget)}
+                  >
+                    <span className="ac-row-main">
+                      <span className="ac-row-msg">{t.message}</span>
+                      <span className="ac-row-reply">{t.reply}</span>
+                    </span>
+                    <span className="ac-row-side">
+                      <span style={{ fontSize: 11.5, color: 'var(--mut)', whiteSpace: 'nowrap' }}>{timeLabel(t.at)}</span>
+                      <span className="ac-pill">{INTENT_LABELS[t.intent] || t.intent}</span>
+                      <span className="ac-pill">{SOURCE_VIEW_LABELS[t.source] || t.source}</span>
+                      {t.escalate && <span className="ac-pill" style={{ background: '#FFFBEB', color: 'var(--warn)' }}>상담원 제안</span>}
+                    </span>
+                  </button>
+                  </li>
+                ))}
+              </ul>
             )}
             <p style={{ ...S.tag, marginTop: 12 }}>
               대화 기록은 최근 분량만 보관합니다. 오래 보관하려면 위의 「대화 기록 내려받기」를 이용해 주세요.
@@ -1326,39 +1535,87 @@ export default function AdminPage() {
         </>
       )}
 
-      {tab === 'kb' && (
+      {tab === 'kb' && (() => {
+        const q = kbQuery.trim().toLowerCase();
+        const cats = Array.from(new Set(entries.map((e) => e.category).filter(Boolean))).sort();
+        const shown = entries.filter((e) => {
+          if (kbCat && e.category !== kbCat) return false;
+          if (!q) return true;
+          return [e.question, e.answer, e.category, e.id, e.keywords.join(' '), e.source || ''].join(' ').toLowerCase().includes(q);
+        });
+        return (
         <>
-          <section style={S.card}>
-            <h2 style={{ fontSize: 16, marginBottom: 10 }}>{editingId ? `수정: ${editingId}` : '새 FAQ 추가'}</h2>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <input style={S.input} placeholder="id(비우면 자동 생성)" value={form.id} disabled={editingId !== null} onChange={(e) => setForm({ ...form, id: e.target.value })} />
-              <input style={S.input} placeholder="카테고리(예: 요금)" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
-            </div>
-            <input style={S.input} placeholder="대표 질문" value={form.question} onChange={(e) => setForm({ ...form, question: e.target.value })} />
-            <input style={S.input} placeholder="키워드(콤마 구분, 예: 요금, 가격, 얼마)" value={form.keywords} onChange={(e) => setForm({ ...form, keywords: e.target.value })} />
-            <textarea style={{ ...S.input, minHeight: 80 }} placeholder="답변" value={form.answer} onChange={(e) => setForm({ ...form, answer: e.target.value })} />
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button style={S.btn} onClick={submitKB}>
-                {editingId ? '수정 저장' : '추가'}
-              </button>
-              {editingId && (
-                <button
-                  style={S.btnGhost}
-                  onClick={() => {
-                    setEditingId(null);
-                    setForm(EMPTY_FORM);
-                  }}
-                >
-                  취소
-                </button>
-              )}
-              <button style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={resetAll}>
-                기본값으로 초기화
-              </button>
-            </div>
-          </section>
-          <section style={S.card}>
-            <h2 style={{ fontSize: 16, marginBottom: 6 }}>문서로 FAQ 만들기</h2>
+          <div className="ac-split">
+            {/* ── 좌: 검색·필터 + 표 ── */}
+            <div style={{ minWidth: 0 }}>
+              <section style={{ ...S.card, padding: 0, overflow: 'hidden' }} aria-labelledby="ac-kb-list">
+                <div className="ac-toolbar">
+                  <h2 id="ac-kb-list" style={{ ...S.h2, marginRight: 'auto' }}>안내 자료 <span style={{ fontSize: 12.5, color: 'var(--mut)', fontWeight: 600 }}>{shown.length}/{entries.length}건</span></h2>
+                  <label htmlFor="ac-kb-q" className="ac-srhide">검색</label>
+                  <input
+                    id="ac-kb-q"
+                    className="ac-search"
+                    type="search"
+                    placeholder="질문·답변·키워드 검색"
+                    value={kbQuery}
+                    onChange={(e) => setKbQuery(e.target.value)}
+                  />
+                  <label htmlFor="ac-kb-cat" className="ac-srhide">카테고리</label>
+                  <select id="ac-kb-cat" className="ac-select" value={kbCat} onChange={(e) => setKbCat(e.target.value)}>
+                    <option value="">모든 카테고리</option>
+                    {cats.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                {entries.length === 0 ? (
+                  <div className="ac-empty">
+                    <EmptyArt kind="kb" />
+                    <p style={{ fontSize: 14, fontWeight: 700 }}>등록된 안내 자료가 없습니다</p>
+                    <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>오른쪽 폼에서 질문과 답변을 넣거나, 아래에서 문서를 붙여넣어 한 번에 만드세요.</p>
+                    <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={resetAll}>기본 자료 불러오기</button>
+                  </div>
+                ) : shown.length === 0 ? (
+                  <div className="ac-empty">
+                    <p style={{ fontSize: 14, fontWeight: 700 }}>검색 결과가 없습니다</p>
+                    <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>다른 말로 검색하거나 카테고리 필터를 풀어 보세요.</p>
+                    <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => { setKbQuery(''); setKbCat(''); }}>필터 지우기</button>
+                  </div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="ac-table">
+                      <thead>
+                        <tr>
+                          <th scope="col" style={{ width: 96 }}>카테고리</th>
+                          <th scope="col">질문 · 답변</th>
+                          <th scope="col" style={{ width: 160 }} className="ac-col-wide">키워드</th>
+                          <th scope="col" style={{ width: 116 }}><span className="ac-srhide">작업</span></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {shown.map((e) => (
+                          <tr key={e.id} data-editing={editingId === e.id ? 'true' : undefined}>
+                            <td><span className="ac-pill">{e.category || '미분류'}</span></td>
+                            <td style={{ minWidth: 220 }}>
+                              <div style={{ fontWeight: 700, color: 'var(--ink)' }}>{e.question}</div>
+                              <div className="ac-clamp" style={{ fontSize: 12.5, color: 'var(--sub)', marginTop: 3 }}>{e.answer}</div>
+                              {e.source && <div style={{ fontSize: 11.5, color: 'var(--mut)', marginTop: 3 }}>출처 · {e.source}</div>}
+                            </td>
+                            <td className="ac-col-wide" style={{ fontSize: 12, color: 'var(--sub)' }}>{e.keywords.join(', ')}</td>
+                            <td>
+                              <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                                <button type="button" className="ac-linkbtn" onClick={() => editKB(e)} aria-label={`수정: ${e.question}`}>수정</button>
+                                <button type="button" className="ac-linkbtn" data-tone="danger" onClick={() => removeKB(e.id)} aria-label={`삭제: ${e.question}`}>삭제</button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+          <section style={S.card} aria-labelledby="ac-kb-import">
+            <h2 id="ac-kb-import" style={{ ...S.h2, marginBottom: 6 }}>문서로 안내 자료 만들기</h2>
             <p style={{ fontSize: 12.5, color: 'var(--mut)', marginBottom: 10 }}>
               안내문·약관·매뉴얼 텍스트를 붙여넣으면 제목·문단 단위로 잘라 FAQ 후보를 만듭니다. 미리보기로 확인한 뒤 등록하세요.
               등록된 항목은 답변에 <strong>출처(근거)</strong>가 함께 표시됩니다. 키워드는 자동 추출값이므로 등록 후 보정하는 것을 권장합니다.
@@ -1396,31 +1653,88 @@ export default function AdminPage() {
               </div>
             )}
           </section>
-          {entries.map((e) => (
-            <section key={e.id} style={S.card}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                <div>
-                  <div style={S.tag}>
-                    [{e.category}] {e.id}
-                  </div>
-                  <strong>{e.question}</strong>
-                  <p style={{ fontSize: 14, color: 'var(--sub)', margin: '6px 0' }}>{e.answer}</p>
-                  <div style={S.tag}>키워드: {e.keywords.join(', ')}</div>
-                  {e.source && <div style={S.tag}>출처: {e.source}</div>}
+            </div>
+
+            {/* ── 우: 편집 폼(스티키) ── */}
+            <div ref={kbFormRef} style={{ minWidth: 0 }}>
+              <section className="ac-sticky" style={S.card} aria-labelledby="ac-kb-form">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                  <h2 id="ac-kb-form" style={{ ...S.h2, marginRight: 'auto' }}>{editingId ? '자료 수정' : '새 자료 추가'}</h2>
+                  {editingId && <span className="ac-pill">{editingId}</span>}
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <button style={S.btnGhost} onClick={() => editKB(e)}>
-                    수정
-                  </button>
-                  <button style={{ ...S.btnGhost, color: '#a33' }} onClick={() => removeKB(e.id)}>
-                    삭제
-                  </button>
+                <div className="ac-field">
+                  <label htmlFor="kb-category">카테고리</label>
+                  <input id="kb-category" style={S.input} placeholder="예: 요금" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
                 </div>
-              </div>
-            </section>
-          ))}
+                <div className="ac-field">
+                  <label htmlFor="kb-question">대표 질문 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span></label>
+                  <input
+                    id="kb-question"
+                    style={{ ...S.input, ...(kbErr.question ? { borderColor: 'var(--danger)' } : {}) }}
+                    placeholder="고객이 묻는 말 그대로"
+                    value={form.question}
+                    aria-required="true"
+                    aria-invalid={kbErr.question ? 'true' : undefined}
+                    aria-describedby={kbErr.question ? 'kb-question-err' : undefined}
+                    onChange={(e) => { setForm({ ...form, question: e.target.value }); if (kbErr.question) setKbErr({ ...kbErr, question: undefined }); }}
+                  />
+                  {kbErr.question && <p id="kb-question-err" className="ac-err">{kbErr.question}</p>}
+                </div>
+                <div className="ac-field">
+                  <label htmlFor="kb-keywords">키워드 <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(쉼표로 구분)</span></label>
+                  <input id="kb-keywords" style={S.input} placeholder="예: 요금, 가격, 얼마" value={form.keywords} onChange={(e) => setForm({ ...form, keywords: e.target.value })} />
+                </div>
+                <div className="ac-field">
+                  <label htmlFor="kb-answer">답변 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span></label>
+                  <textarea
+                    id="kb-answer"
+                    style={{ ...S.input, minHeight: 110, ...(kbErr.answer ? { borderColor: 'var(--danger)' } : {}) }}
+                    placeholder="고객에게 그대로 나가는 문장입니다."
+                    value={form.answer}
+                    aria-required="true"
+                    aria-invalid={kbErr.answer ? 'true' : undefined}
+                    aria-describedby={kbErr.answer ? 'kb-answer-err' : undefined}
+                    onChange={(e) => { setForm({ ...form, answer: e.target.value }); if (kbErr.answer) setKbErr({ ...kbErr, answer: undefined }); }}
+                  />
+                  {kbErr.answer && <p id="kb-answer-err" className="ac-err">{kbErr.answer}</p>}
+                </div>
+                {!editingId && (
+                  <details style={{ marginBottom: 10 }}>
+                    <summary style={{ fontSize: 12.5, color: 'var(--mut)', cursor: 'pointer' }}>고급: 식별자 직접 지정</summary>
+                    <div className="ac-field" style={{ marginTop: 8 }}>
+                      <label htmlFor="kb-id">식별자 <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(비우면 자동 생성)</span></label>
+                      <input id="kb-id" style={S.input} value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} />
+                    </div>
+                  </details>
+                )}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button type="button" style={{ ...S.btn, opacity: kbBusy ? 0.6 : 1 }} onClick={submitKB} disabled={kbBusy} aria-busy={kbBusy || undefined}>
+                    {kbBusy ? '저장 중…' : editingId ? '수정 저장' : '추가'}
+                  </button>
+                  {editingId && (
+                    <button
+                      type="button"
+                      style={S.btnGhost}
+                      onClick={() => {
+                        setEditingId(null);
+                        setForm(EMPTY_FORM);
+                        setKbErr({});
+                      }}
+                    >
+                      취소
+                    </button>
+                  )}
+                </div>
+                <p style={{ ...S.tag, marginTop: 12 }}>저장하면 바로 상담창 답변에 반영되고, 답변 아래에 출처로 표시됩니다.</p>
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+                  <button type="button" className="ac-linkbtn" onClick={resetAll}>기본 자료로 초기화</button>
+                </div>
+              </section>
+            </div>
+          </div>
         </>
-      )}
+        );
+      })()}
 
       {tab === 'rules' && (
         <>
@@ -2120,39 +2434,93 @@ export default function AdminPage() {
       )}
 
       {tab === 'test' && (
-        <section style={S.card}>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-            <input
-              style={{ ...S.input, marginBottom: 0 }}
-              placeholder="고객 메시지를 입력해 응답을 확인하세요"
-              value={testInput}
-              onChange={(e) => setTestInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && runTest()}
-            />
-            <button style={S.btn} onClick={runTest}>
-              보내기
-            </button>
-          </div>
-          {testLog.map((t, i) => (
-            <div key={i} style={{ borderTop: '1px solid var(--line)', padding: '10px 0' }}>
-              <div style={{ fontSize: 14 }}>
-                <strong>Q.</strong> {t.q}
+        <div className="ac-split ac-split-test">
+          {/* ── 좌: 입력 + 응답 분석 ── */}
+          <div style={{ minWidth: 0 }}>
+            <section style={S.card} aria-labelledby="ac-test-in">
+              <h2 id="ac-test-in" style={{ ...S.h2, marginBottom: 4 }}>고객이 보낼 말</h2>
+              <p style={{ ...S.tag, marginBottom: 10 }}>여기서 보낸 대화도 기록에 남습니다. 실제 고객 정보는 넣지 마세요.</p>
+              <label htmlFor="ac-test-msg" className="ac-srhide">고객 메시지</label>
+              <textarea
+                id="ac-test-msg"
+                style={{ ...S.input, minHeight: 84, marginBottom: 8 }}
+                placeholder="예: 요금이 얼마인가요?"
+                value={testInput}
+                onChange={(e) => setTestInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    runTest();
+                  }
+                }}
+              />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button type="button" style={{ ...S.btn, opacity: testBusy ? 0.6 : 1 }} onClick={runTest} disabled={testBusy} aria-busy={testBusy || undefined}>
+                  {testBusy ? '답변 기다리는 중…' : '보내기'}
+                </button>
+                <span style={S.tag}>Enter 로 보내고 Shift+Enter 로 줄을 바꿉니다.</span>
+                {testLog.length > 0 && (
+                  <button type="button" className="ac-linkbtn" style={{ marginLeft: 'auto' }} onClick={() => setTestLog([])}>기록 지우기</button>
+                )}
               </div>
-              <div style={{ fontSize: 14, color: 'var(--sub)' }}>
-                <strong>A.</strong> {t.reply}
+            </section>
+
+            <section style={S.card} aria-labelledby="ac-test-why">
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10 }}>
+                <h2 id="ac-test-why" style={S.h2}>왜 이렇게 답했나</h2>
+                <span style={S.tag}>최근 답변부터</span>
               </div>
-              {t.citation && (
-                <div style={{ ...S.tag, marginTop: 4 }}>
-                  근거: {t.citation.source} — “{t.citation.snippet}”
-                </div>
+              {testLog.length === 0 ? (
+                <p style={{ fontSize: 13.5, color: 'var(--mut)' }}>메시지를 보내면 어떤 자료·규칙을 근거로 답했는지 여기에 표시됩니다.</p>
+              ) : (
+                testLog.map((t, i) => (
+                  <div key={i} className="ac-why" data-latest={i === 0 ? 'true' : undefined}>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--ink)', marginBottom: 6 }}>“{t.q}”</div>
+                    <dl className="ac-dl">
+                      <dt>주제</dt><dd>{INTENT_LABELS[t.intent] || t.intent}</dd>
+                      <dt>근거</dt><dd>{SOURCE_VIEW_LABELS[t.source] || t.source}{t.citation ? ` · ${t.citation.source}` : ''}</dd>
+                      {t.citation && (<><dt>인용</dt><dd style={{ color: 'var(--sub)' }}>“{t.citation.snippet}”</dd></>)}
+                      {t.confidence !== undefined && (<><dt>확신도</dt><dd>{Math.round(t.confidence * 100)}% <span style={{ color: 'var(--mut)' }}>(엔진 판정값)</span></dd></>)}
+                    </dl>
+                  </div>
+                ))
               )}
-              <div style={S.tag}>
-                intent: {t.intent} · source: {t.source}
-                {t.confidence !== undefined && ` · 신뢰도(엔진 내부 판정값) ${t.confidence}`}
+            </section>
+          </div>
+
+          {/* ── 우: 고객에게 보이는 화면 미리보기 ── */}
+          <div style={{ minWidth: 0 }}>
+            <section className="ac-sticky ac-preview" aria-label="상담창 미리보기">
+              <div className="ac-preview-head">
+                <span className="ac-preview-avatar" aria-hidden="true">G</span>
+                <span style={{ minWidth: 0, flex: 1 }}>
+                  <span style={{ display: 'block', fontSize: 14, fontWeight: 800 }}>GOWON Chat</span>
+                  <span style={{ display: 'block', fontSize: 10.5, opacity: .88 }}>미리보기 · 실제 상담창과 같은 답변</span>
+                </span>
+                <span className="ac-preview-ai"><span aria-hidden="true">●</span> AI가 응대합니다</span>
               </div>
-            </div>
-          ))}
-        </section>
+              <div className="ac-preview-body" role="log" aria-live="polite" aria-label="미리보기 대화">
+                <div className="ac-pv-bot">안녕하세요! 무엇을 도와드릴까요?</div>
+                {testLog.slice().reverse().map((t, i) => (
+                  <div key={i} className="ac-pv-turn">
+                    <div className="ac-pv-user">{t.q}</div>
+                    <div className="ac-pv-bot">
+                      {t.reply}
+                      {t.citation && <span className="ac-pv-cite">근거 · {t.citation.source}</span>}
+                    </div>
+                  </div>
+                ))}
+                {testBusy && (
+                  <div className="ac-pv-bot" aria-label="답변을 작성하고 있습니다">
+                    <span className="gw-dot" /> <span className="gw-dot" /> <span className="gw-dot" />
+                  </div>
+                )}
+                <div ref={testEndRef} />
+              </div>
+              <div className="ac-preview-foot">고객에게는 이렇게 보입니다. 문구를 바꾸려면 「지식베이스」나 「시나리오 룰」에서 수정하세요.</div>
+            </section>
+          </div>
+        </div>
       )}
 
       {tab === 'install' && (
@@ -2206,6 +2574,23 @@ export default function AdminPage() {
       )}
         </main>
       </div>
+
+      {drawerSession && (
+        <ConversationDrawer
+          sessionId={drawerSession}
+          turns={recentTurns
+            .filter((t) => t.sessionId === drawerSession)
+            .slice()
+            .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())}
+          ticket={tickets.find((tk) => tk.sessionId === drawerSession)}
+          onClose={closeDrawer}
+          onOpenTicket={() => {
+            closeDrawer();
+            setTab('esc');
+          }}
+          closeRef={drawerCloseRef}
+        />
+      )}
 
       {/* 저장·삭제 결과 알림(토스트) — 화면 어디에 있든 같은 자리에서 알린다. */}
       {notice && (

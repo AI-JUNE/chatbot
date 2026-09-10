@@ -34,7 +34,7 @@ input,textarea{font-family:inherit}
 /* 모션 최소화 설정을 존중한다(전정 장애 등). */
 @media (prefers-reduced-motion: reduce){
   html{scroll-behavior:auto}
-  .gw-rise,.gw-panel,.gw-dot{animation:none!important}
+  .gw-rise,.gw-panel,.gw-dot,.ac-drawer{animation:none!important}
 }
 
 /* ── 관리 콘솔 셸 (AICC Portal admin 셸 규격) ──
@@ -72,6 +72,69 @@ input,textarea{font-family:inherit}
 .ac-table th{font-size:11.5px;font-weight:800;letter-spacing:.04em;color:var(--mut);text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
 .ac-table td{padding:10px;border-bottom:1px solid var(--line);color:var(--ink);vertical-align:top}
 .ac-table tbody tr:hover{background:var(--bg)}
+.ac-table tr[data-editing="true"]{background:var(--brand-50)}
+.ac-clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ac-linkbtn{font-size:12.5px;font-weight:700;color:var(--brand-600);padding:6px 8px;border-radius:8px;min-height:32px}
+.ac-linkbtn:hover{background:var(--brand-50)}
+.ac-linkbtn[data-tone="danger"]{color:var(--danger)}
+.ac-linkbtn[data-tone="danger"]:hover{background:#FEF2F2}
+.ac-iconbtn{width:34px;height:34px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;color:var(--sub);flex-shrink:0}
+.ac-iconbtn:hover{background:var(--bg);color:var(--ink)}
+
+/* 좌 목록 / 우 편집·미리보기 분할 (지식베이스·응답 테스트) */
+.ac-split{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:start}
+.ac-split-test{grid-template-columns:minmax(0,1fr) 360px}
+.ac-sticky{position:sticky;top:84px}
+.ac-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line)}
+.ac-search{border:1px solid var(--line-2);border-radius:10px;padding:7px 11px;font-size:13px;width:220px;background:var(--bg);color:var(--ink)}
+.ac-select{border:1px solid var(--line-2);border-radius:10px;padding:7px 10px;font-size:13px;background:var(--surface);color:var(--ink);font-family:inherit}
+.ac-field{margin-bottom:10px}
+.ac-field label{display:block;font-size:12.5px;font-weight:700;color:var(--sub);margin-bottom:4px}
+.ac-field input,.ac-field textarea{margin-bottom:0!important}
+.ac-err{font-size:12px;color:var(--danger);margin-top:4px;font-weight:600}
+.ac-empty{text-align:center;padding:36px 20px}
+
+/* 대시보드 최근 대화 행 → 상세 서랍 */
+.ac-rows{list-style:none;border-top:1px solid var(--line)}
+.ac-row{display:flex;gap:12px;align-items:flex-start;width:100%;text-align:left;padding:11px 8px;border-bottom:1px solid var(--line);border-radius:0;font-family:inherit;color:inherit}
+.ac-row:hover{background:var(--bg)}
+.ac-row-main{flex:1;min-width:0}
+.ac-row-msg{display:block;font-size:14px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ac-row-reply{display:block;font-size:12.5px;color:var(--sub);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ac-row-side{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;flex-shrink:0;max-width:46%}
+.ac-drawer-root{position:fixed;inset:0;z-index:40}
+.ac-drawer-bg{position:absolute;inset:0;background:rgba(15,23,42,.38)}
+.ac-drawer{position:absolute;top:0;right:0;bottom:0;width:min(520px,100vw);background:var(--surface);box-shadow:var(--shadow-pop);display:flex;flex-direction:column;animation:ac-slide .2s ease-out both}
+@keyframes ac-slide{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
+.ac-drawer-head{display:flex;align-items:flex-start;gap:10px;padding:16px 18px 12px;border-bottom:1px solid var(--line)}
+.ac-drawer-meta{display:flex;gap:6px;flex-wrap:wrap;padding:10px 18px;border-bottom:1px solid var(--line);background:var(--bg)}
+.ac-drawer-body{flex:1;overflow-y:auto;padding:16px 18px;background:var(--bg)}
+.ac-drawer-foot{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
+.ac-turn{margin-bottom:14px}
+.ac-bubble{max-width:88%;border-radius:14px;padding:9px 12px;font-size:13.5px;line-height:1.55}
+.ac-bubble p{white-space:pre-wrap;word-break:break-word}
+.ac-bubble-who{display:block;font-size:10.5px;font-weight:800;letter-spacing:.04em;color:var(--mut);margin-bottom:2px}
+.ac-bubble-user{margin-left:auto;background:var(--brand);color:#fff;border-bottom-right-radius:4px}
+.ac-bubble-user .ac-bubble-who{color:rgba(255,255,255,.8)}
+.ac-bubble-bot{background:var(--surface);border:1px solid var(--line);border-bottom-left-radius:4px;margin-top:6px}
+.ac-bubble-tags{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:7px;padding-top:6px;border-top:1px dashed var(--line)}
+
+/* 응답 테스트: 근거 설명 + 상담창 미리보기 */
+.ac-why{padding:10px 0;border-top:1px solid var(--line)}
+.ac-why[data-latest="true"]{background:var(--brand-50);margin:0 -8px;padding:10px 8px;border-radius:10px;border-top:0}
+.ac-dl{display:grid;grid-template-columns:52px minmax(0,1fr);gap:3px 10px;font-size:12.5px}
+.ac-dl dt{color:var(--mut);font-weight:700}
+.ac-dl dd{color:var(--ink);margin:0;min-width:0;word-break:break-word}
+.ac-preview{border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--shadow-card);background:var(--surface)}
+.ac-preview-head{display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--brand);color:#fff}
+.ac-preview-avatar{width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.22);display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;flex-shrink:0}
+.ac-preview-ai{font-size:10.5px;font-weight:700;background:rgba(255,255,255,.18);border-radius:999px;padding:3px 8px;white-space:nowrap}
+.ac-preview-body{height:420px;overflow-y:auto;padding:14px;background:var(--bg);display:flex;flex-direction:column;gap:8px}
+.ac-pv-turn{display:contents}
+.ac-pv-user{align-self:flex-end;max-width:84%;background:var(--brand);color:#fff;border-radius:14px 14px 4px 14px;padding:8px 12px;font-size:13.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.ac-pv-bot{align-self:flex-start;max-width:84%;background:var(--surface);border:1px solid var(--line);border-radius:14px 14px 14px 4px;padding:8px 12px;font-size:13.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.ac-pv-cite{display:block;margin-top:6px;padding-left:8px;border-left:2px solid var(--brand);font-size:11.5px;color:var(--sub)}
+.ac-preview-foot{font-size:11.5px;color:var(--mut);padding:10px 14px;border-top:1px solid var(--line)}
 
 @media (max-width:900px){
   .ac-shell{grid-template-columns:minmax(0,1fr)}
@@ -85,6 +148,14 @@ input,textarea{font-family:inherit}
   .ac-body{padding:16px 16px 64px}
   .ac-token{width:150px}
   .ac-toast{right:12px;left:12px;bottom:12px;max-width:none}
+  .ac-split,.ac-split-test{grid-template-columns:minmax(0,1fr)}
+  .ac-sticky{position:static}
+  .ac-search{width:100%}
+  .ac-col-wide{display:none}
+  .ac-row{flex-direction:column;gap:6px}
+  .ac-row-side{justify-content:flex-start;max-width:none}
+  .ac-drawer{width:100vw}
+  .ac-preview-body{height:300px}
 }
 
 /* ── 랜딩 레이아웃 (인라인 스타일로 표현할 수 없는 반응형만 클래스로) ── */
