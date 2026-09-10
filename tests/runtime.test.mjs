@@ -1364,3 +1364,51 @@ test('월 이용료는 검증된 값만 저장되고 미입력과 0원을 구분
   assert.match(bad.error, /월 이용료/);
   P.resetPartners();
 });
+
+/* ══════════ 답변 평가 저장소 ══════════ */
+
+test('답변 평가는 집계되고, 평가가 없으면 비율을 만들어내지 않는다', opts, async () => {
+  const F = await importLib('feedback', []);
+  F.resetFeedback();
+
+  assert.equal(F.feedbackSummary().helpfulRate, null, '평가 0건이면 비율은 null(「측정 중」)이어야 한다');
+
+  assert.equal(F.recordFeedback({ sessionHash: 'h1', verdict: 'up', citation: '이음 FAQ 1. 신청' }).ok, true);
+  assert.equal(F.recordFeedback({ sessionHash: 'h2', verdict: 'down', citation: '이음 FAQ 3. 활동 시간' }).ok, true);
+  assert.equal(F.recordFeedback({ sessionHash: 'h3', verdict: 'down', citation: '이음 FAQ 3. 활동 시간' }).ok, true);
+
+  const sum = F.feedbackSummary();
+  assert.equal(sum.total, 3);
+  assert.equal(sum.up, 1);
+  assert.equal(sum.down, 2);
+  assert.equal(sum.helpfulRate, 33);
+  assert.equal(sum.topDown[0].citation, '이음 FAQ 3. 활동 시간');
+  assert.equal(sum.topDown[0].down, 2);
+  F.resetFeedback();
+});
+
+test('잘못된 평가 입력은 사유와 함께 거절된다(실패 경로)', opts, async () => {
+  const F = await importLib('feedback', []);
+  F.resetFeedback();
+
+  const bad = F.recordFeedback({ sessionHash: 'h1', verdict: '최고' });
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /verdict/);
+
+  const noSession = F.recordFeedback({ sessionHash: '', verdict: 'up' });
+  assert.equal(noSession.ok, false);
+  assert.match(noSession.error, /sessionHash/);
+
+  assert.equal(F.feedbackSummary().total, 0, '거절된 입력이 집계에 들어가면 안 된다');
+  F.resetFeedback();
+});
+
+test('평가 근거 라벨은 길이를 잘라 저장한다', opts, async () => {
+  const F = await importLib('feedback', []);
+  F.resetFeedback();
+  const long = 'ㄱ'.repeat(300);
+  const r = F.recordFeedback({ sessionHash: 'h1', verdict: 'up', citation: long });
+  assert.equal(r.ok, true);
+  assert.ok(r.entry.citation.length <= 120, '근거 라벨이 잘리지 않았다');
+  F.resetFeedback();
+});

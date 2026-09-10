@@ -11,7 +11,7 @@ export default function Home() {
         <p style={{ fontSize: 17, color: 'var(--sub)', maxWidth: 520, margin: '0 auto', lineHeight: 1.6 }}>
           웹·카카오 채널에서 24시간 자동 응대하고, 복잡한 문의만 상담원으로 연결합니다. 오른쪽 아래 챗봇으로 바로 체험해 보세요.
         </p>
-        <div style={{ marginTop: 22, display: 'inline-flex', alignItems: 'center', gap: 8, background: 'var(--brand-50)', border: '1px solid #f0ddd4', color: 'var(--brand-600)', borderRadius: 999, padding: '9px 16px', fontSize: 13, fontWeight: 700 }}>
+        <div style={{ marginTop: 22, display: 'inline-flex', alignItems: 'center', gap: 8, background: 'var(--brand-50)', border: '1px solid var(--line)', color: 'var(--brand-600)', borderRadius: 999, padding: '9px 16px', fontSize: 13, fontWeight: 700 }}>
           <span aria-hidden="true">🤖</span><span>본 서비스는 인공지능(AI)이 응대합니다</span>
         </div>
         <div style={{ marginTop: 26, display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
@@ -26,7 +26,7 @@ export default function Home() {
           <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.6, margin: '0 0 12px' }}>
             아래 한 줄을 사이트 <code>&lt;body&gt;</code> 끝에 넣으면 이 챗봇이 그대로 나타납니다. 닫혀 있을 때는 버블만 차지하므로 기존 페이지 클릭을 방해하지 않습니다.
           </p>
-          <pre style={{ background: '#2b2220', color: '#f3ede4', fontSize: 12.5, borderRadius: 10, padding: '13px 15px', overflowX: 'auto', margin: 0 }}>
+          <pre style={{ background: 'var(--ink)', color: '#E2E8F0', fontSize: 12.5, borderRadius: 10, padding: '13px 15px', overflowX: 'auto', margin: 0 }}>
             <code>{'<script src="https://<배포도메인>/embed.js" async></script>'}</code>
           </pre>
           <p style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.6, margin: '10px 0 0' }}>

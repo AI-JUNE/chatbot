@@ -42,10 +42,22 @@ export function resolveTenant(id: unknown): { preset: TenantPreset; kb: KBEntry[
   return { preset, kb: tenantKB(preset) };
 }
 
-/** 위젯에 내려보낼 공개 설정(환경변수 반영). */
+/** 빠른 답장 칩에 쓸 대표 질문 수 — 위젯 폭(375px)에서 두 줄을 넘기지 않는 개수. */
+const STARTER_COUNT = 4;
+
+/**
+ * 위젯에 내려보낼 공개 설정(환경변수 반영).
+ * 빠른 답장 칩은 **실제 적재된 FAQ 질문 문구**에서 앞 STARTER_COUNT 건을 그대로 쓴다.
+ * 지식이 비어 있으면 칩도 비운다(없는 안내를 만들어 보여주지 않는다).
+ */
 export function tenantConfig(id: unknown): PublicTenant | null {
   const preset = getTenantPreset(id);
-  return preset ? publicTenant(preset, process.env) : null;
+  if (!preset) return null;
+  const starters = tenantKB(preset)
+    .slice(0, STARTER_COUNT)
+    .map((e) => e.question)
+    .filter((q) => typeof q === 'string' && q.trim().length > 0);
+  return { ...publicTenant(preset, process.env), ...(starters.length ? { starters } : {}) };
 }
 
 export function tenantLoadWarnings(): string[] {

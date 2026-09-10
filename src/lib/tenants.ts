@@ -175,6 +175,11 @@ export interface PublicTenant {
   greeting: string;
   aiNotice: string;
   cta: { label: string; url: string; hint: string };
+  /**
+   * 대화를 시작하기 전 위젯에 보여줄 빠른 답장 칩(등록된 FAQ 질문 문구 그대로).
+   * 값은 @/lib/tenantKB 가 실제 적재된 KB에서 채운다 — 여기서 지어내지 않는다.
+   */
+  starters?: string[];
 }
 
 export function publicTenant(preset: TenantPreset, env: Record<string, string | undefined> = {}): PublicTenant {

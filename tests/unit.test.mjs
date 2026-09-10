@@ -15,6 +15,7 @@ const ROUTES = [
   'src/app/api/chat/route.ts',
   'src/app/api/health/route.ts',
   'src/app/api/escalation/route.ts',
+  'src/app/api/feedback/route.ts',
   'src/app/api/kakao/webhook/route.ts',
   'src/app/api/shared/scenario/route.ts',
   'src/app/api/admin/auth/route.ts',
@@ -553,4 +554,93 @@ test('정산 리포트 접근은 인증·감사 로그를 거친다', () => {
   assert.match(s, /requirePrincipal/, '인증 없이 열려 있으면 안 된다');
   assert.match(s, /logAudit/, 'CSV 내보내기는 감사 로그에 남아야 한다');
   assert.match(s, /scopeAccountFilter/, '파트너 담당자 범위가 강제되어야 한다');
+});
+
+/* ══════════ 디자인 스프린트 — 위젯 화면 품질(DS 1-1·1-2·1-3·1-5) ══════════ */
+
+test('디자인 토큰이 AICC Portal 팔레트를 쓴다', () => {
+  const css = read('src/app/globals.css');
+  for (const token of ['--brand:#2563EB', '--ink:#0F172A', '--line:#E2E8F0', '--bg:#F8FAFC']) {
+    assert.ok(css.includes(token), `토큰 ${token} 이 없다`);
+  }
+  assert.match(css, /--shadow-card:/, '카드 그림자 규격이 토큰으로 있어야 한다');
+  assert.match(css, /prefers-reduced-motion/, '모션 최소화 설정을 존중해야 한다');
+  assert.match(css, /:focus-visible/, '키보드 초점 표시가 있어야 한다');
+});
+
+test('위젯 헤더에 아바타·AI 배지·최소화/닫기가 있다', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  assert.match(s, /borderRadius: '50%'/, '원형 아바타가 있어야 한다');
+  assert.match(s, /AI가 응대합니다/, '헤더 AI 고지 배지');
+  assert.match(s, /aria-label="대화 최소화 \(대화 내용 유지\)"/, '최소화 버튼(대화 유지)');
+  assert.match(s, /aria-label="대화 닫고 처음으로"/, '닫기 버튼(초기화)');
+  assert.match(s, /brandVars\(tenant\?\.brandColor\)/, '테넌트 색이 위젯에 적용돼야 한다');
+});
+
+test('위젯이 타이핑 인디케이터·도착 애니메이션·시각을 렌더한다', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  assert.match(s, /className="gw-dot"/, '타이핑 점이 있어야 한다');
+  assert.match(s, /답변을 작성하고 있습니다/, '타이핑 상태에 스크린리더 라벨이 있어야 한다');
+  assert.match(s, /className="gw-rise"/, '메시지 도착 애니메이션');
+  assert.match(s, /toLocaleTimeString/, '말풍선에 시각 표시');
+  assert.match(s, /mounted && m\.at/, '시각은 마운트 후에만 렌더해야 한다(hydration 불일치 방지)');
+  const css = read('src/app/globals.css');
+  assert.match(css, /@keyframes gw-blink/);
+  assert.match(css, /@keyframes gw-rise/);
+});
+
+test('위젯이 빠른 답장 칩과 답변 평가를 제공한다', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  assert.match(s, /이런 걸 물어보실 수 있어요/, '빠른 답장 안내');
+  assert.match(s, /tenant\?\.starters/, '빠른 답장은 서버가 준 실제 FAQ에서 와야 한다');
+  assert.match(s, /도움이 됐나요\?/, '답변 평가 문구');
+  assert.match(s, /'\/api\/feedback'/, '평가는 서버에 기록돼야 한다');
+  assert.match(s, /평가를 보내지 못했어요/, '실패를 삼키지 않고 알려야 한다');
+  // 평가 요청에 대화 본문을 싣지 않는다(개인정보)
+  assert.equal(/verdict, citation: m\.citation\?\.source \|\| ''/.test(s), true, '평가에는 근거 라벨만 보내야 한다');
+});
+
+test('빠른 답장은 실제 적재된 FAQ에서만 만들어진다', () => {
+  const s = read('src/lib/tenantKB.ts');
+  assert.match(s, /STARTER_COUNT/, '칩 개수 상수가 있어야 한다');
+  assert.match(s, /tenantKB\(preset\)\s*\n?\s*\.slice\(0, STARTER_COUNT\)/, '칩은 KB에서 잘라 써야 한다');
+  assert.equal(/starters: \[\s*'/.test(s), false, '칩 문구를 코드에 지어 넣으면 안 된다');
+});
+
+test('위젯이 모바일 전체화면·포커스 트랩·ESC·aria-live를 지원한다', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  assert.match(s, /MOBILE_MAX = 480/, '모바일 기준 폭');
+  assert.match(s, /const fullscreen = open && mobile/, '전체화면 전환');
+  assert.match(s, /e\.key === 'Escape'/, 'ESC 닫기');
+  assert.match(s, /FOCUSABLE/, '포커스 트랩 대상 선택자');
+  assert.match(s, /e\.key !== 'Tab'/, 'Tab 순환 처리');
+  assert.match(s, /role="dialog"/, '대화창 역할');
+  assert.match(s, /aria-live="polite"/, '새 메시지를 스크린리더에 알려야 한다');
+  assert.match(s, /aria-label="메시지 입력"/);
+  assert.match(s, /aria-label="메시지 전송"/);
+});
+
+test('임베드 스니펫이 호스트 폭을 위젯에 알려주고 전체화면을 적용한다', () => {
+  const s = read('public/embed.js');
+  assert.match(s, /gowon-chat-host/, '호스트→위젯 메시지가 있어야 한다');
+  assert.match(s, /function sendViewport/, '뷰포트 폭 전달');
+  assert.match(s, /applyPlacement/, '전체화면 배치 전환');
+  // 기존 임베드 옵션 계약 유지
+  assert.match(s, /data-tenant/);
+  assert.match(s, /data-position/);
+});
+
+test('답변 평가 API는 개인정보를 받지 않는다', () => {
+  const s = read('src/app/api/feedback/route.ts');
+  assert.match(s, /rateGuard\('feedback'/, '유량 제한이 있어야 한다');
+  assert.match(s, /hashId\(/, '세션은 해시로만 저장해야 한다');
+  assert.equal(/parsed\.data\.message/.test(s), false, '대화 본문을 받으면 안 된다');
+  const exports = [...s.matchAll(/^export (?:const|function|async function) ([A-Za-z_]+)/gm)].map((m) => m[1]);
+  assert.deepEqual(exports.sort(), ['POST', 'dynamic'].sort(), `허용되지 않은 export: ${exports.join(',')}`);
+});
+
+test('위젯·콘솔 화면에 내부 구현 문구가 노출되지 않는다', () => {
+  const INTERNAL = ['data/admin-store.json', '401이면', '서버 메모리 기준', 'process.env', 'localhost'];
+  const s = read('src/components/ChatWidget.tsx');
+  for (const w of INTERNAL) assert.equal(s.includes(w), false, `위젯에 내부 문구 노출: ${w}`);
 });
