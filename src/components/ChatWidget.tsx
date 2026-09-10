@@ -6,6 +6,17 @@ interface Suggestion { id: string; question: string }
 interface Citation { kbId: string; source: string; category: string; snippet: string }
 // 접수 대기 상태 — 접수순 표시용(예상 대기시간을 계산하지 않는다).
 interface QueueInfo { position: number; waiting: number }
+// 상담원 전환 카드 상태 — 버튼 → 연락처 입력(form) → 접수 중(sending) → 접수 완료(done)/실패(error).
+interface HandoffState {
+  /** 어느 답변에서 시작했는지 — 카드를 그 답변 아래에 붙인다. */
+  key: number;
+  stage: 'form' | 'sending' | 'done' | 'error';
+  contact: string;
+  error: string;
+  ticket?: { id: string; statusLabel: string; created: boolean };
+  queue?: QueueInfo;
+}
+
 // 멀티턴 접수(예약·장애 신고) 진행 단계 — 서버가 알려주는 화면 상태값.
 interface FormProgress { id: string; title: string; step: number; total: number; label: string; canSkip: boolean }
 // 테넌트 CTA — 서버가 내려준 신청 버튼(라벨·URL). 링크는 http(s)만 서버에서 통과시킨다.
@@ -115,6 +126,14 @@ const headerBtn: CSSProperties = {
 /** 초점을 가둘 수 있는 요소들(포커스 트랩용). */
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
+/** 연락처 형식 검사 — 전화번호 또는 이메일. 서버도 길이를 다시 검증한다. */
+export function validContact(v: string): boolean {
+  const t = v.trim();
+  if (t.length < 5 || t.length > 100) return false;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(t)) return true;
+  return /^[0-9][0-9\s()+-]{7,}$/.test(t) && t.replace(/\D/g, '').length >= 9;
+}
+
 /** 표시 시각 — 오전/오후 h:mm. 마운트 이후에만 호출한다. */
 function clock(ms: number): string {
   try {
@@ -137,6 +156,8 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
   const [msgs, setMsgs] = useState<Msg[]>([{ key: nextKey(), role: 'bot', text: greeting, at: 0 }]);
   // 답변 평가 상태 — 메시지 key → 보낸 평가('up'|'down') 또는 'error'(재시도 안내).
   const [rated, setRated] = useState<Record<number, 'up' | 'down' | 'error'>>({});
+  // 상담원 전환 — 한 번에 한 건만 진행한다(중복 접수 방지).
+  const [handoff, setHandoff] = useState<HandoffState | null>(null);
   const [sessionId] = useState(() => `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
   const lastUserRef = useRef('');
   const endRef = useRef<HTMLDivElement>(null);
@@ -180,6 +201,12 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
     return () => clearTimeout(t);
   }, [open]);
 
+  // 임베드 모드: 위젯이 그려졌음을 부모(embed.js)에 알린다 → 그때 iframe이 나타난다(첫 로드 깜빡임 제거).
+  useEffect(() => {
+    if (!embedded || typeof window === 'undefined' || window.parent === window) return;
+    window.parent.postMessage({ source: 'gowon-chat', type: 'ready' }, '*');
+  }, [embedded]);
+
   // 임베드 모드: 부모(embed.js)에 iframe 크기 변경 요청.
   useEffect(() => {
     if (!embedded || typeof window === 'undefined' || window.parent === window) return;
@@ -195,6 +222,7 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
     if (reset) {
       setMsgs([{ key: nextKey(), role: 'bot', text: greeting, at: Date.now() }]);
       setRated({});
+      setHandoff(null);
       setInput('');
       lastUserRef.current = '';
     }
@@ -280,28 +308,47 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
     }
   }
 
-  // 상담원 연결 접수 — 티켓 생성(인메모리 스텁, 실제 상담원 알림은 준비 중)
-  async function requestAgent() {
+  // ── 상담원 전환 ──
+  // 버튼을 누르면 바로 접수하지 않고 연락처 입력 카드를 연다(회신 수단이 있어야 상담이 이어진다).
+  function openHandoff(key: number) {
+    setHandoff({ key, stage: 'form', contact: '', error: '' });
+  }
+
+  // 접수 요청. 연락처는 비워도 접수되지만, 그때는 대화창으로만 안내가 돌아간다.
+  async function submitHandoff(contact: string) {
+    if (!handoff || handoff.stage === 'sending') return;
+    const trimmed = contact.trim();
+    setHandoff({ ...handoff, contact, stage: 'sending', error: '' });
     try {
       const r = await fetch('/api/escalation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, reason: 'user_request', message: lastUserRef.current }),
+        body: JSON.stringify({
+          sessionId,
+          reason: 'user_request',
+          message: lastUserRef.current,
+          ...(trimmed ? { contact: trimmed } : {}),
+        }),
       });
       const d = await r.json();
-      if (d.ok) {
-        pushBot({
-          text: d.created
-            ? `상담원 연결 요청이 접수됐어요. 접수번호 ${d.ticket.id} — 지금까지 나눈 대화가 상담원에게 함께 전달됩니다. (데모: 실제 연결은 준비 중)`
-            : `이미 접수된 요청이 있어요. 접수번호 ${d.ticket.id} (${d.ticket.statusLabel}) — 잠시만 기다려 주세요.`,
-          ticketId: typeof d.ticket?.id === 'string' ? d.ticket.id : undefined,
+      if (r.ok && d?.ok && d?.ticket?.id) {
+        setHandoff({
+          key: handoff.key,
+          stage: 'done',
+          contact,
+          error: '',
+          ticket: {
+            id: String(d.ticket.id),
+            statusLabel: typeof d.ticket.statusLabel === 'string' ? d.ticket.statusLabel : '',
+            created: d.created !== false,
+          },
           queue: isQueue(d.queue) ? d.queue : undefined,
         });
-      } else {
-        pushBot({ text: `상담원 연결 접수에 실패했어요. ${errorText(d, r)}` });
+        return;
       }
+      setHandoff({ ...handoff, contact, stage: 'error', error: errorText(d, r) });
     } catch {
-      pushBot({ text: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' });
+      setHandoff({ ...handoff, contact, stage: 'error', error: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' });
     }
   }
 
@@ -470,13 +517,120 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
                       </div>
                     )}
 
-                    {m.escalate && !m.ticketId && (
-                      <button
-                        onClick={requestAgent}
-                        style={{ marginTop: 8, fontSize: 12.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 10, padding: '9px 14px' }}
+                    {/* ── 상담원 전환: 버튼 → 연락처 카드 → 접수 완료 ── */}
+                    {m.escalate && !m.ticketId && handoff?.key !== m.key && (
+                      handoff?.stage === 'done' && handoff.ticket ? (
+                        <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--sub)' }}>
+                          접수번호 {handoff.ticket.id}로 상담원 연결이 접수돼 있어요.
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => openHandoff(m.key)}
+                          style={{ marginTop: 8, fontSize: 12.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 10, padding: '9px 14px' }}
+                        >
+                          상담원 연결하기
+                        </button>
+                      )
+                    )}
+
+                    {handoff?.key === m.key && (
+                      <div
+                        className="gw-rise"
+                        role="group"
+                        aria-label="상담원 연결 접수"
+                        style={{
+                          marginTop: 8, background: 'var(--surface)', border: '1px solid var(--line)',
+                          borderLeft: '3px solid var(--brand)', borderRadius: 12, padding: '11px 12px',
+                          boxShadow: 'var(--shadow-card)',
+                        }}
                       >
-                        상담원 연결하기
-                      </button>
+                        {(handoff.stage === 'form' || handoff.stage === 'sending' || handoff.stage === 'error') && (
+                          <>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--brand-600)' }}>상담원 연결</div>
+                            <p style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--sub)', marginTop: 4 }}>
+                              연락 받으실 곳을 남겨 주세요. 지금까지 나눈 대화가 상담원에게 함께 전달됩니다.
+                            </p>
+                            <label htmlFor="gw-handoff-contact" style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--ink)', margin: '9px 0 5px' }}>
+                              연락처 (전화번호 또는 이메일)
+                            </label>
+                            <input
+                              id="gw-handoff-contact"
+                              value={handoff.contact}
+                              onChange={(e) => setHandoff({ ...handoff, contact: e.target.value, error: '' })}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.nativeEvent.isComposing && validContact(handoff.contact)) submitHandoff(handoff.contact);
+                              }}
+                              disabled={handoff.stage === 'sending'}
+                              inputMode="text"
+                              autoComplete="off"
+                              aria-describedby="gw-handoff-hint"
+                              placeholder="010-0000-0000 또는 name@example.com"
+                              style={{
+                                width: '100%', border: '1px solid var(--line-2)', borderRadius: 10,
+                                padding: '9px 11px', fontSize: 13, color: 'var(--ink)', background: 'var(--bg)', outline: 'none',
+                              }}
+                            />
+                            <p id="gw-handoff-hint" style={{ fontSize: 10.5, lineHeight: 1.5, color: 'var(--mut)', marginTop: 5 }}>
+                              회신 목적으로만 사용하고, 상담이 끝나면 파기합니다.
+                            </p>
+                            {handoff.stage === 'error' && (
+                              <p role="alert" style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 6 }}>{handoff.error}</p>
+                            )}
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 9 }}>
+                              <button
+                                onClick={() => submitHandoff(handoff.contact)}
+                                disabled={handoff.stage === 'sending' || !validContact(handoff.contact)}
+                                aria-busy={handoff.stage === 'sending'}
+                                style={{
+                                  fontSize: 12.5, fontWeight: 700, color: '#fff', background: 'var(--brand)',
+                                  borderRadius: 10, padding: '9px 14px', minHeight: 36,
+                                  opacity: handoff.stage === 'sending' || !validContact(handoff.contact) ? 0.5 : 1,
+                                }}
+                              >
+                                {handoff.stage === 'sending' ? '접수 중…' : handoff.stage === 'error' ? '다시 시도' : '접수하기'}
+                              </button>
+                              <button
+                                onClick={() => submitHandoff('')}
+                                disabled={handoff.stage === 'sending'}
+                                style={chipStyle}
+                              >
+                                연락처 없이 접수
+                              </button>
+                              <button
+                                onClick={() => setHandoff(null)}
+                                disabled={handoff.stage === 'sending'}
+                                style={{ ...chipStyle, color: 'var(--mut)' }}
+                              >
+                                취소
+                              </button>
+                            </div>
+                          </>
+                        )}
+
+                        {handoff.stage === 'done' && handoff.ticket && (
+                          <div role="status" aria-live="polite">
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--brand-600)' }}>
+                              <span aria-hidden="true">✓ </span>
+                              {handoff.ticket.created ? '상담원 연결이 접수됐어요' : '이미 접수된 요청이 있어요'}
+                            </div>
+                            <div style={{ fontSize: 12.5, color: 'var(--ink)', marginTop: 6 }}>
+                              접수번호 <strong>{handoff.ticket.id}</strong>
+                              {handoff.ticket.statusLabel ? ` · ${handoff.ticket.statusLabel}` : ''}
+                            </div>
+                            {handoff.queue && (
+                              <div style={{ fontSize: 11.5, color: 'var(--sub)', marginTop: 4 }}>
+                                접수 순번 {handoff.queue.position}번 (대기 {handoff.queue.waiting}건)
+                              </div>
+                            )}
+                            <p style={{ fontSize: 11.5, lineHeight: 1.55, color: 'var(--sub)', marginTop: 7 }}>
+                              {handoff.contact.trim()
+                                ? '남겨주신 연락처로 상담원이 확인 후 연락드립니다.'
+                                : '연락처를 남기지 않으셔서, 이 대화창으로 안내드립니다.'}
+                              {' '}추가로 궁금한 점은 계속 물어보셔도 괜찮아요.
+                            </p>
+                          </div>
+                        )}
+                      </div>
                     )}
 
                     {/* 답변 평가 — 근거가 붙은 답변에만 묻는다(인사·오류 안내에는 묻지 않는다). */}

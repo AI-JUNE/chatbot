@@ -1,7 +1,12 @@
-/* 고원 챗봇 임베드 스니펫 (v0.4)
+/* 고원 챗봇 임베드 스니펫 (v0.5)
  * 사용법: <script src="https://<배포도메인>/embed.js" async></script>
  * 옵션(선택): data-position="left" | data-offset="24" | data-z="2147483000"
  *            data-tenant="eum"  ← 테넌트 프리셋(문구·색·FAQ 지식)을 바꿔 끼운다
+ *
+ * v0.5 변경점
+ * - 첫 로드 깜빡임 제거: iframe을 투명하게 붙였다가 위젯이 "준비됨"을 알릴 때 부드럽게 나타낸다.
+ *   신호가 오지 않아도(차단·오류) 폴백 타이머로 반드시 보이게 한다 — 위젯이 사라지는 일은 없다.
+ * - 모션 최소화 설정(prefers-reduced-motion)에서는 전환 효과를 쓰지 않는다.
  *
  * v0.4 변경점
  * - 호스트 뷰포트 폭을 위젯에 알려준다(gowon-chat-host/viewport) → 모바일에서 전체화면 시트로 전환
@@ -52,6 +57,12 @@
     iframe.style.height = Math.min(h, window.innerHeight) + 'px';
   }
 
+  // 모션 최소화 설정을 존중한다(전정 장애 등) — 이 경우 전환 없이 바로 보인다.
+  var calm = false;
+  try {
+    calm = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  } catch (e) { /* noop */ }
+
   iframe.style.cssText = [
     'position:fixed',
     side + ':' + offset + 'px',
@@ -60,9 +71,22 @@
     'background:transparent',
     'z-index:' + zIndex,
     'color-scheme:normal',
-    'transition:width .18s ease,height .18s ease'
+    // 붙는 순간에는 투명 — 위젯이 그려지기 전의 빈 사각형이 깜빡이지 않게 한다.
+    'opacity:0',
+    calm ? 'transition:none' : 'transition:opacity .22s ease,width .18s ease,height .18s ease'
   ].join(';');
   applySize(CLOSED.w, CLOSED.h);
+
+  // 위젯이 "준비됨"을 알리면 나타낸다. 신호가 없어도 폴백 타이머로 반드시 보이게 한다.
+  var revealed = false;
+  var revealTimer = null;
+  function reveal() {
+    if (revealed) return;
+    revealed = true;
+    if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
+    iframe.style.opacity = '1';
+  }
+  revealTimer = setTimeout(reveal, 2500);
 
   var lastOpen = false;
   var lastFull = false;
@@ -93,12 +117,19 @@
     }, origin || '*');
   }
 
-  iframe.addEventListener('load', sendViewport);
+  iframe.addEventListener('load', function () {
+    sendViewport();
+    // 문서는 떴지만 위젯 신호가 늦는 경우의 2차 안전망.
+    setTimeout(reveal, 400);
+  });
 
   window.addEventListener('message', function (ev) {
     if (origin && ev.origin !== origin) return;
     var d = ev.data;
-    if (!d || d.source !== 'gowon-chat' || d.type !== 'resize') return;
+    if (!d || d.source !== 'gowon-chat') return;
+    if (d.type === 'ready') { reveal(); sendViewport(); return; }
+    if (d.type !== 'resize') return;
+    reveal();
     lastOpen = !!d.open;
     lastFull = !!d.fullscreen;
     applyPlacement(lastFull);

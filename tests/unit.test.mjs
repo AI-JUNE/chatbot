@@ -630,6 +630,43 @@ test('임베드 스니펫이 호스트 폭을 위젯에 알려주고 전체화�
   assert.match(s, /data-position/);
 });
 
+test('위젯 상담원 전환이 버튼→연락처 카드→접수 완료 흐름을 갖는다 (DS 1-4)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  // 버튼을 누르면 곧바로 접수하지 않고 카드를 연다(연락처 없이 접수되는 사고 방지)
+  assert.match(s, /function openHandoff/, '카드를 여는 단계가 있어야 한다');
+  assert.match(s, /stage: 'form' \| 'sending' \| 'done' \| 'error'/, '4개 상태를 모두 다뤄야 한다');
+  assert.match(s, /aria-label="상담원 연결 접수"/, '카드에 이름이 있어야 한다(스크린리더)');
+  assert.match(s, /htmlFor="gw-handoff-contact"/, '연락처 입력에 라벨이 있어야 한다');
+  assert.match(s, /aria-describedby="gw-handoff-hint"/, '이용 목적 안내가 입력과 연결돼야 한다');
+  assert.match(s, /role="alert"/, '실패는 즉시 안내돼야 한다');
+  assert.match(s, /다시 시도/, '실패 시 재시도 경로가 있어야 한다');
+  assert.match(s, /접수번호/, '완료 상태에 접수번호가 보여야 한다');
+  assert.match(s, /파기합니다/, '연락처 이용·파기 안내가 있어야 한다');
+  // 계약 유지 — 서버 /api/escalation 은 contact 를 이미 받는다(계약 변경 금지)
+  assert.match(s, /\{ contact: trimmed \}/, '연락처는 기존 계약 필드로 보내야 한다');
+});
+
+test('상담원 전환은 접수 중 중복 전송을 막는다', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  assert.match(s, /if \(!handoff \|\| handoff\.stage === 'sending'\) return;/, '전송 중 재진입 차단');
+  assert.match(s, /disabled=\{handoff\.stage === 'sending'/, '전송 중에는 버튼이 잠겨야 한다');
+  assert.match(s, /aria-busy=\{handoff\.stage === 'sending'\}/, '진행 상태를 알려야 한다');
+});
+
+test('임베드 스니펫이 첫 로드 깜빡임 없이 나타난다 (DS 1-6)', () => {
+  const s = read('public/embed.js');
+  assert.match(s, /'opacity:0'/, '붙는 순간에는 보이지 않아야 한다');
+  assert.match(s, /function reveal/, '나타내는 단계가 있어야 한다');
+  assert.match(s, /d\.type === 'ready'/, '위젯 준비 신호를 받아야 한다');
+  assert.match(s, /setTimeout\(reveal, 2500\)/, '신호가 없어도 폴백으로 반드시 보여야 한다');
+  assert.match(s, /prefers-reduced-motion/, '모션 최소화 설정을 존중해야 한다');
+  // 공개 계약은 그대로
+  assert.match(s, /data-tenant/);
+  assert.match(s, /data-position/);
+  const w = read('src/components/ChatWidget.tsx');
+  assert.match(w, /type: 'ready'/, '위젯이 준비 신호를 보내야 한다');
+});
+
 test('답변 평가 API는 개인정보를 받지 않는다', () => {
   const s = read('src/app/api/feedback/route.ts');
   assert.match(s, /rateGuard\('feedback'/, '유량 제한이 있어야 한다');

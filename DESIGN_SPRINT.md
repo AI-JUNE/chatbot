@@ -19,12 +19,12 @@
   - 근거(9/10): 봇=흰 카드+좌하 꼬리(radius 4)·사용자=브랜드+우하 꼬리, 말풍선 하단 시각(마운트 후 렌더 — hydration 불일치 방지), `.gw-dot` 점 3개(aria-label "답변을 작성하고 있습니다"), `.gw-rise` 도착 애니메이션 + prefers-reduced-motion 존중
 - [x] 빠른 답장 칩(FAQ 상위 4개), 답변 하단 **근거 표시**(FAQ 번호·출처)와 「도움이 됐나요 👍👎」
   - 근거(9/10): `tenantConfig()`가 실제 적재 KB에서 상위 4건 질문을 그대로 내려보냄(문구 하드코딩 금지 테스트 동반). 근거 카드는 브랜드 좌측선+FAQ 라벨. 평가는 `/api/feedback`에 기록(근거 라벨·세션 해시만 저장, 대화 본문 미전송), 실패 시 재시도 안내
-- [ ] 상담원 전환 UI: 버튼 → 연락처 입력 카드 → 접수 완료 상태. 오류 시 재시도
-  - 참고: `/api/escalation` 이 이미 `contact` 를 받는다(계약 변경 불필요) — 위젯 카드 UI만 만들면 된다
+- [x] 상담원 전환 UI: 버튼 → 연락처 입력 카드 → 접수 완료 상태. 오류 시 재시도
+  - 근거(9/10): 「상담원 연결하기」가 곧바로 접수하지 않고 카드를 연다 — 연락처 입력(전화/이메일 형식 검사)·이용 목적/파기 안내(`aria-describedby`)·「연락처 없이 접수」·취소. 접수 중에는 버튼 잠금+`aria-busy`(중복 접수 차단), 실패는 `role="alert"`+「다시 시도」, 완료 카드에 접수번호·상태·접수 순번. `/api/escalation` 의 `contact` 계약 그대로 사용(서버 무변경)
 - [x] 모바일 375px 전체화면 모드, 키보드 포커스 트랩·ESC 닫기·aria-live
   - 근거(9/10): 480px 이하 전체화면 시트(임베드는 embed.js가 호스트 폭을 알려줌 — iframe 폭은 뷰포트가 아니므로). role=dialog + Tab 순환 + ESC 최소화 + 대화 목록 role=log/aria-live=polite, 닫은 뒤 초점은 런처로 복귀
-- [ ] `embed.js`: 로드 시 깜빡임 없음, `data-tenant`·`data-position` 옵션 유지
-  - 진행(9/10): v0.4 — 호스트 뷰포트 폭 전달·전체화면 배치 추가, `data-tenant`·`data-position`·`data-offset`·`data-z` 계약 유지. **남은 것**: 첫 로드 깜빡임(iframe 페인트 전 배경) 제거
+- [x] `embed.js`: 로드 시 깜빡임 없음, `data-tenant`·`data-position` 옵션 유지
+  - 근거(9/10): v0.5 — iframe을 `opacity:0` 으로 붙였다가 위젯이 보내는 `ready` 신호에 맞춰 페이드인. 신호가 막혀도 load+400ms·하드 2500ms 폴백으로 반드시 보인다(위젯이 사라지는 실패 모드 없음). `prefers-reduced-motion` 이면 전환 없이 즉시 표시. `data-tenant`·`data-position`·`data-offset`·`data-z` 계약 유지
 
 ## 2순위 — 관리 콘솔 (/admin)
 - [ ] 콘솔 셸: 좌측 사이드바(아이콘+라벨, 현재 탭 강조)·상단 헤더(테넌트·검색·관리자)·본문 카드 그리드
