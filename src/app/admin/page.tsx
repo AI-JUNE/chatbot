@@ -97,7 +97,76 @@ interface OpsStats {
     autoHandled: number;
     autoRate: number;
     escalatedTurns: number;
+    /** 최근 7일 일자별 집계(서버 @/lib/convlog convStats()와 같은 모양). 구버전 응답 대비 optional. */
+    daily?: { date: string; turns: number; escalated: number }[];
+    today?: { turns: number; sessions: number; escalated: number };
   };
+}
+
+/** 값이 아직 없는 지표는 0을 지어내지 않고 「측정 중」으로 표시한다(§13). */
+const MEASURING = '측정 중';
+
+function KpiCard({ label, value, note, empty }: { label: string; value: string; note: string; empty?: boolean }) {
+  return (
+    <div className="ac-kpicard">
+      <div className="ac-kpilabel">{label}</div>
+      <div className="ac-kpivalue" data-empty={empty ? 'true' : undefined}>{value}</div>
+      <div className="ac-kpinote">{note}</div>
+    </div>
+  );
+}
+
+/** 최근 7일 대화량 막대 차트 — 실제 로그에서만 그린다. 기록이 없으면 차트를 만들지 않는다. */
+function TrendChart({ daily }: { daily: { date: string; turns: number; escalated: number }[] }) {
+  const max = daily.reduce((m, d) => Math.max(m, d.turns), 0);
+  const label = daily.map((d) => `${d.date.slice(5).replace('-', '월 ')}일 ${d.turns}건`).join(', ');
+  const W = 560;
+  const H = 132;
+  const pad = { l: 4, r: 4, t: 10, b: 22 };
+  const slot = (W - pad.l - pad.r) / daily.length;
+  const barW = Math.min(38, slot * 0.52);
+  return (
+    <figure style={{ margin: 0 }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        width="100%"
+        height={H}
+        role="img"
+        aria-label={`최근 7일 일자별 대화 건수 — ${label}`}
+        style={{ display: 'block', overflow: 'visible' }}
+      >
+        {[0, 0.5, 1].map((r) => (
+          <line key={r} x1={pad.l} x2={W - pad.r} y1={pad.t + (H - pad.t - pad.b) * r} y2={pad.t + (H - pad.t - pad.b) * r} stroke="var(--line)" strokeWidth="1" />
+        ))}
+        {daily.map((d, i) => {
+          const full = H - pad.t - pad.b;
+          const h = max > 0 ? Math.round((d.turns / max) * full) : 0;
+          const x = pad.l + slot * i + (slot - barW) / 2;
+          const y = pad.t + full - h;
+          const eh = max > 0 ? Math.round((d.escalated / max) * full) : 0;
+          return (
+            <g key={d.date}>
+              {h > 0 && <rect x={x} y={y} width={barW} height={h} rx="5" fill="var(--brand)" />}
+              {eh > 0 && <rect x={x} y={pad.t + full - eh} width={barW} height={eh} rx="5" fill="var(--warn)" />}
+              <text x={x + barW / 2} y={H - 6} textAnchor="middle" fontSize="10.5" fill="var(--mut)">
+                {d.date.slice(8)}
+              </text>
+              {d.turns > 0 && (
+                <text x={x + barW / 2} y={y - 4} textAnchor="middle" fontSize="10.5" fontWeight="700" fill="var(--sub)">
+                  {d.turns}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      <figcaption style={{ display: 'flex', gap: 14, fontSize: 11.5, color: 'var(--mut)', marginTop: 6 }}>
+        <span><span aria-hidden="true" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 3, background: 'var(--brand)', marginRight: 5 }} />대화</span>
+        <span><span aria-hidden="true" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 3, background: 'var(--warn)', marginRight: 5 }} />상담원 제안</span>
+        <span style={{ marginLeft: 'auto' }}>일자는 한국 시간 기준</span>
+      </figcaption>
+    </figure>
+  );
 }
 
 interface TurnView {
@@ -111,6 +180,34 @@ interface TurnView {
   escalate: boolean;
   at: string;
 }
+
+/** 응답 근거 표시 — 화면에서는 내부 코드 대신 사람이 읽는 말로 보여준다. */
+const SOURCE_VIEW_LABELS: Record<string, string> = {
+  rule: '시나리오 규칙',
+  kb: '등록 자료',
+  llm: 'AI 생성',
+  context: '이어지는 대화',
+  fallback: '기본 안내',
+  empty: '내용 없음',
+};
+
+const CHANNEL_LABELS: Record<string, string> = {
+  web: '홈페이지',
+  kakao: '카카오톡',
+  call: '전화',
+};
+
+/** 대화 주제(인텐트) 표시명. 사전에 없으면 원래 값을 그대로 쓴다. */
+const INTENT_LABELS: Record<string, string> = {
+  greeting: '인사',
+  hours: '운영 시간',
+  price: '요금 문의',
+  location: '위치 안내',
+  refund: '환불·취소',
+  handoff: '상담원 연결',
+  unknown: '분류 전',
+  faq: '자료 안내',
+};
 
 const TICKET_STATUS_LABELS: Record<TicketView['status'], string> = {
   open: '접수',
@@ -298,8 +395,56 @@ function feeLabel(bp: number | null): string {
   return bp === null || bp === undefined ? '미설정' : `${(bp / 100).toFixed(2).replace(/\.?0+$/, '')}%`;
 }
 
+// ── 콘솔 내비게이션 ──
+// 탭 목록은 사이드바(넓은 화면)와 상단 가로 스크롤 바(좁은 화면)에 같은 순서로 쓰인다.
+type TabKey = 'dash' | 'kb' | 'rules' | 'esc' | 'partner' | 'settle' | 'tenant' | 'test' | 'install' | 'audit';
+
+const TAB_GROUPS: { group: string; tabs: readonly (readonly [TabKey, string])[] }[] = [
+  { group: '운영', tabs: [['dash', '대시보드'], ['esc', '상담원 요청'], ['tenant', '테넌트 지식']] },
+  { group: '콘텐츠', tabs: [['kb', '지식베이스'], ['rules', '시나리오 룰'], ['test', '응답 테스트']] },
+  { group: '사업', tabs: [['partner', '파트너·귀속'], ['settle', '정산 리포트']] },
+  { group: '설정', tabs: [['install', '설치'], ['audit', '감사 로그']] },
+];
+
+/** 상단 헤더에 쓰는 탭 설명 — 이 화면에서 무엇을 하는지 한 줄로 알린다. */
+const TAB_DESC: Record<TabKey, string> = {
+  dash: '오늘의 응대 현황과 최근 대화를 확인합니다.',
+  kb: '챗봇이 답변 근거로 쓰는 안내 자료를 등록·수정합니다.',
+  rules: '특정 표현에 정해진 답을 돌려주는 규칙을 관리합니다.',
+  esc: '상담원 연결 요청을 확인하고 처리 상태를 바꿉니다.',
+  partner: '파트너와 고객사, 유치 경로를 관리합니다.',
+  settle: '월별 파트너 수수료를 집계해 내려받습니다.',
+  tenant: '지금 배포본이 무엇을 근거로 답하는지 확인합니다(읽기 전용).',
+  test: '고객에게 나갈 답변을 미리 보내보고 근거를 확인합니다.',
+  install: '고객사 홈페이지에 상담창을 붙이는 방법을 안내합니다.',
+  audit: '누가 무엇을 바꿨는지 기록을 확인합니다.',
+};
+
+/** 내비게이션 아이콘 — 16px 뷰박스의 선 아이콘(현재 글자색을 따른다). */
+const TAB_ICON: Record<TabKey, string> = {
+  dash: 'M2.5 2.5h4v4h-4zM9.5 2.5h4v4h-4zM2.5 9.5h4v4h-4zM9.5 9.5h4v4h-4z',
+  kb: 'M2.5 3.5h4a2 2 0 0 1 1.5.7 2 2 0 0 1 1.5-.7h4v8h-4a2 2 0 0 0-1.5.7 2 2 0 0 0-1.5-.7h-4zM8 4.2v8',
+  rules: 'M2.5 4.5h4l3 4h4M13.5 8.5l-2-2M13.5 8.5l-2 2M6.5 4.5v7h3',
+  esc: 'M8 7.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM3.5 13.5c0-2.3 2-3.5 4.5-3.5s4.5 1.2 4.5 3.5',
+  partner: 'M6 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM11.3 7.4a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2M2 13.4c0-2.1 1.8-3.2 4-3.2s4 1.1 4 3.2M11 10.3c1.7.1 2.9 1.1 2.9 2.9',
+  settle: 'M2.5 13.5h11M4.5 11V6.5M8 11V3.5M11.5 11V8.5',
+  tenant: 'M3.5 13.5V3.5h6v10M9.5 7h3v6.5M5.5 6h2M5.5 8.5h2M5.5 11h2',
+  test: 'M2.5 3.5h11v7H8l-3.5 2.5V10.5h-2z',
+  install: 'M6 5.5 3.5 8 6 10.5M10 5.5 12.5 8 10 10.5',
+  audit: 'M3.5 3.5h9M3.5 7h9M3.5 10.5h5.5M11.5 12.5l1.5-1.5',
+};
+
+function NavIcon({ tab }: { tab: TabKey }) {
+  return (
+    <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+      <path d={TAB_ICON[tab]} stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 const S = {
   page: { maxWidth: 960, margin: '0 auto', padding: '32px 20px 80px' } as const,
+  h2: { fontSize: 16, fontWeight: 800, letterSpacing: '-.01em' } as const,
   card: { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--r)', padding: 20, marginBottom: 16 } as const,
   input: { width: '100%', border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '8px 10px', fontSize: 14, marginBottom: 8 } as const,
   btn: { background: 'var(--brand)', color: '#fff', borderRadius: 'var(--r-sm)', padding: '8px 14px', fontSize: 14 } as const,
@@ -322,7 +467,7 @@ const INSTALL_OPTIONS: [string, string][] = [
 ];
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<'dash' | 'kb' | 'rules' | 'esc' | 'partner' | 'settle' | 'tenant' | 'test' | 'install' | 'audit'>('dash');
+  const [tab, setTab] = useState<TabKey>('dash');
   // 설치 코드에 넣을 배포 주소 — 브라우저가 보고 있는 주소를 그대로 쓴다(하드코딩 금지).
   const [origin, setOrigin] = useState('');
   const [copied, setCopied] = useState('');
@@ -947,137 +1092,223 @@ export default function AdminPage() {
     );
   }
 
-  return (
-    <main style={S.page}>
-      <h1 style={{ fontSize: 24, marginBottom: 4 }}>관리 콘솔</h1>
-      <p style={{ color: 'var(--sub)', fontSize: 14, marginBottom: 16 }}>
-        지식베이스·시나리오 편집 내용은 자동 저장됩니다. 대화 로그·통계는 서비스가 다시 시작되면 초기화되므로, 보관이 필요하면 대시보드에서 백업을 내려받아 주세요.
-      </p>
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-        {(
-          [
-            ['dash', '대시보드'],
-            ['kb', '지식베이스'],
-            ['rules', '시나리오 룰'],
-            ['esc', '상담원 요청'],
-            ['partner', '파트너·귀속'],
-            ['settle', '정산 리포트'],
-            ['tenant', '테넌트 지식'],
-            ['test', '응답 테스트'],
-            ['install', '설치'],
-            ['audit', '감사 로그'],
-          ] as const
-        ).map(([key, label]) => (
-          <button key={key} style={tab === key ? S.btn : S.btnGhost} onClick={() => setTab(key)}>
-            {label}
-          </button>
-        ))}
-        {notice && <span style={{ alignSelf: 'center', fontSize: 13, color: 'var(--brand-600)' }}>{notice}</span>}
-        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          {authInfo && (
-            <span
-              style={{ fontSize: 12, color: authInfo.authed ? 'var(--brand-600)' : 'var(--mut)' }}
-              title={authInfo.authed ? '관리 토큰 인증됨' : authInfo.tokenConfigured ? '토큰 미인증' : '토큰 미설정(개방 모드)'}
-            >
-              {authInfo.authed ? '🔒 인증됨' : authInfo.tokenConfigured ? '미인증' : '개방 모드'}
-            </span>
-          )}
-          <input
-            style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '6px 10px', fontSize: 13, width: 170 }}
-            type="password"
-            placeholder="관리 토큰(설정 시)"
-            aria-label="관리 토큰"
-            value={adminToken}
-            onChange={(e) => applyToken(e.target.value)}
-            onBlur={() => verifyAuth()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !authBusy) verifyAuth();
-            }}
-          />
-        </span>
-      </div>
+  const currentLabel = TAB_GROUPS.flatMap((g) => g.tabs).find(([k]) => k === tab)?.[1] ?? '대시보드';
 
+  return (
+    <div className="ac-shell">
+      {/* ── 좌측 내비게이션(좁은 화면에서는 상단 가로 스크롤 바) ── */}
+      <aside className="ac-side">
+        <div className="ac-brand">
+          <span aria-hidden="true" className="ac-logo">고</span>
+          <span style={{ minWidth: 0 }}>
+            <span style={{ display: 'block', fontSize: 14, fontWeight: 800, letterSpacing: '-.01em' }}>고원 챗봇</span>
+            <span style={{ display: 'block', fontSize: 10.5, fontWeight: 700, color: 'var(--brand-600)' }}>관리 콘솔</span>
+          </span>
+        </div>
+        <nav aria-label="콘솔 메뉴" className="ac-nav">
+          {TAB_GROUPS.map((g) => (
+            <div key={g.group} className="ac-navgroup">
+              <div className="ac-group">{g.group}</div>
+              {g.tabs.map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className="ac-navbtn"
+                  aria-current={tab === key ? 'page' : undefined}
+                  onClick={() => setTab(key)}
+                >
+                  <NavIcon tab={key} />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+        </nav>
+      </aside>
+
+      <div style={{ minWidth: 0 }}>
+        {/* ── 상단 헤더: 현재 화면 · 인증 상태 · 관리 토큰 ── */}
+        <header className="ac-top">
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <h1 style={{ fontSize: 19, fontWeight: 800, letterSpacing: '-.02em' }}>{currentLabel}</h1>
+            <p style={{ fontSize: 12.5, color: 'var(--sub)', marginTop: 2 }}>{TAB_DESC[tab]}</p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {authInfo && (
+              <span
+                className="ac-badge"
+                data-tone={authInfo.authed ? 'on' : authInfo.tokenConfigured ? 'warn' : 'off'}
+                title={authInfo.authed ? '관리 토큰으로 인증된 상태입니다.' : authInfo.tokenConfigured ? '관리 토큰을 입력하면 인증됩니다.' : '아직 관리 토큰이 설정되지 않아 누구나 열 수 있습니다.'}
+              >
+                {authInfo.authed ? '인증됨' : authInfo.tokenConfigured ? '미인증' : '토큰 미설정'}
+              </span>
+            )}
+            <label htmlFor="ac-token" className="ac-srhide">관리 토큰</label>
+            <input
+              id="ac-token"
+              className="ac-token"
+              type="password"
+              placeholder="관리 토큰(설정 시)"
+              value={adminToken}
+              onChange={(e) => applyToken(e.target.value)}
+              onBlur={() => verifyAuth()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !authBusy) verifyAuth();
+              }}
+            />
+          </div>
+        </header>
+
+        <main className="ac-body">
       {tab === 'dash' && (
         <>
-          <section style={S.card}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2 style={{ fontSize: 16 }}>운영 대시보드</h2>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button style={S.btnGhost} onClick={downloadLogsCsv}>로그 CSV</button>
-                <button style={S.btnGhost} onClick={downloadBackup}>백업 JSON</button>
-                <button style={S.btnGhost} onClick={() => restoreInputRef.current?.click()}>복원</button>
-                <input
-                  ref={restoreInputRef}
-                  type="file"
-                  accept="application/json,.json"
-                  style={{ display: 'none' }}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) restoreBackup(f);
-                    e.target.value = '';
-                  }}
-                />
-                <button style={S.btnGhost} onClick={loadEsc}>새로고침</button>
-              </div>
-            </div>
-            {stats ? (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginTop: 12 }}>
-                {[
-                  ['총 대화 턴', String(stats.conversation.totalTurns)],
-                  ['세션 수', String(stats.conversation.sessions)],
-                  ['자동처리율', `${Math.round(stats.conversation.autoRate * 100)}%`],
-                  ['상담원 요청', `${stats.escalation.total}건 (대기 ${stats.escalation.open})`],
-                ].map(([k, v]) => (
-                  <div key={k} style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-sm)', padding: '12px 14px' }}>
-                    <div style={S.tag}>{k}</div>
-                    <div style={{ fontSize: 21, fontWeight: 800 }}>{v}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 8 }}>통계를 불러오는 중입니다… 계속 표시되면 우측 상단에 관리 토큰을 입력해 주세요.</p>
-            )}
-            {stats && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 12, fontSize: 13, color: 'var(--sub)' }}>
-                <span>응답 소스: {Object.entries(stats.conversation.bySource).map(([k, v]) => `${k} ${v}`).join(' · ') || '-'}</span>
-                <span>채널: {Object.entries(stats.conversation.byChannel).map(([k, v]) => `${k} ${v}`).join(' · ') || '-'}</span>
-                <span>상담원 제안 턴: {stats.conversation.escalatedTurns}</span>
-              </div>
-            )}
-            <p style={{ ...S.tag, marginTop: 8 }}>통계·로그는 서비스가 다시 시작되면 초기화됩니다. 보관이 필요하면 백업을 내려받아 주세요.</p>
+          <section style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+            <h2 style={{ ...S.h2, marginRight: 'auto' }}>오늘의 응대 현황</h2>
+            <button style={S.btnGhost} onClick={loadEsc}>새로고침</button>
+            <button style={S.btnGhost} onClick={downloadLogsCsv}>대화 기록 내려받기</button>
+            <button style={S.btnGhost} onClick={downloadBackup}>백업 내려받기</button>
+            <button style={S.btnGhost} onClick={() => restoreInputRef.current?.click()}>백업 복원</button>
+            <input
+              ref={restoreInputRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: 'none' }}
+              aria-label="복원할 백업 파일 선택"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) restoreBackup(f);
+                e.target.value = '';
+              }}
+            />
           </section>
-          {stats && stats.conversation.topIntents.length > 0 && (
-            <section style={S.card}>
-              <h2 style={{ fontSize: 16, marginBottom: 8 }}>인텐트 TOP {stats.conversation.topIntents.length}</h2>
-              {stats.conversation.topIntents.map((t) => {
-                const max = stats.conversation.topIntents[0].count || 1;
-                return (
-                  <div key={t.intent} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <span style={{ width: 160, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.intent}</span>
-                    <div style={{ flex: 1, background: 'var(--brand-50)', borderRadius: 999, height: 10 }}>
-                      <div style={{ width: `${Math.max(6, Math.round((t.count / max) * 100))}%`, background: 'var(--brand)', borderRadius: 999, height: 10 }} />
-                    </div>
-                    <span style={{ ...S.tag, width: 36, textAlign: 'right' }}>{t.count}</span>
-                  </div>
-                );
-              })}
+
+          {/* ── KPI 4 — 값이 없으면 0을 지어내지 않고 「측정 중」 ── */}
+          {stats ? (
+            <div className="ac-kpi" style={{ marginBottom: 16 }}>
+              <KpiCard
+                label="오늘 대화"
+                value={`${(stats.conversation.today?.turns ?? 0).toLocaleString('ko-KR')}건`}
+                note={`대화 상대 ${(stats.conversation.today?.sessions ?? 0).toLocaleString('ko-KR')}명 · 보관 중 ${stats.conversation.totalTurns.toLocaleString('ko-KR')}건`}
+              />
+              <KpiCard
+                label="자동완결률"
+                value={stats.conversation.totalTurns > 0 ? `${Math.round(stats.conversation.autoRate * 100)}%` : MEASURING}
+                empty={stats.conversation.totalTurns === 0}
+                note={
+                  stats.conversation.totalTurns > 0
+                    ? `등록된 안내 자료·규칙으로 바로 답한 비율 (${stats.conversation.autoHandled.toLocaleString('ko-KR')}/${stats.conversation.totalTurns.toLocaleString('ko-KR')})`
+                    : '대화가 쌓이면 계산됩니다.'
+                }
+              />
+              <KpiCard
+                label="상담원 전환"
+                value={`${(stats.conversation.today?.escalated ?? 0).toLocaleString('ko-KR')}건`}
+                note={`접수 대기 ${stats.escalation.open.toLocaleString('ko-KR')}건 · 누적 접수 ${stats.escalation.total.toLocaleString('ko-KR')}건`}
+              />
+              <KpiCard
+                label="평균 응답 시간"
+                value={MEASURING}
+                empty
+                note="응답 시간 수집은 준비 중입니다."
+              />
+            </div>
+          ) : (
+            <div className="ac-kpi" style={{ marginBottom: 16 }} aria-busy="true">
+              {['오늘 대화', '자동완결률', '상담원 전환', '평균 응답 시간'].map((k) => (
+                <KpiCard key={k} label={k} value={MEASURING} empty note="현황을 불러오는 중입니다." />
+              ))}
+            </div>
+          )}
+
+          {!stats && (
+            <section style={S.card} role="status">
+              <p style={{ fontSize: 14, color: 'var(--sub)' }}>
+                현황을 불러오는 중입니다. 계속 이 화면이면 위쪽 관리 토큰을 확인해 주세요.
+              </p>
             </section>
           )}
-          <section style={S.card}>
-            <h2 style={{ fontSize: 16, marginBottom: 8 }}>최근 대화 (최대 30건)</h2>
-            {recentTurns.length === 0 && (
-              <p style={{ fontSize: 14, color: 'var(--sub)' }}>아직 대화 로그가 없습니다. 위젯이나 응답 테스트 탭에서 대화해 보세요.</p>
-            )}
-            {recentTurns.map((t) => (
-              <div key={t.id} style={{ borderTop: '1px solid var(--line)', padding: '8px 0' }}>
-                <div style={S.tag}>
-                  {new Date(t.at).toLocaleString()} · {t.channel} · {t.sessionId} · intent {t.intent} · source {t.source}
-                  {t.escalate ? ' · 상담원 제안' : ''}
-                </div>
-                <div style={{ fontSize: 14 }}><strong>Q.</strong> {t.message}</div>
-                <div style={{ fontSize: 14, color: 'var(--sub)' }}><strong>A.</strong> {t.reply}</div>
+
+          {/* ── 최근 7일 대화량 ── */}
+          {stats && (
+            <section style={S.card}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12 }}>
+                <h2 style={S.h2}>최근 7일 대화량</h2>
+                <span style={S.tag}>보관 중인 기록 기준</span>
               </div>
-            ))}
+              {stats.conversation.daily && stats.conversation.daily.some((d) => d.turns > 0) ? (
+                <TrendChart daily={stats.conversation.daily} />
+              ) : (
+                <p style={{ fontSize: 13.5, color: 'var(--mut)' }}>
+                  {MEASURING} — 최근 7일 안에 기록된 대화가 없습니다. 위젯이나 「응답 테스트」에서 대화하면 여기에 쌓입니다.
+                </p>
+              )}
+            </section>
+          )}
+
+          {/* ── 무엇을 많이 묻는가 ── */}
+          {stats && (
+            <section style={S.card}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12 }}>
+                <h2 style={S.h2}>많이 묻는 주제</h2>
+                <span style={S.tag}>상위 {stats.conversation.topIntents.length || 0}개</span>
+              </div>
+              {stats.conversation.topIntents.length > 0 ? (
+                stats.conversation.topIntents.map((t) => {
+                  const max = stats.conversation.topIntents[0].count || 1;
+                  return (
+                    <div key={t.intent} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                      <span style={{ width: 150, fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {INTENT_LABELS[t.intent] || t.intent}
+                      </span>
+                      <div style={{ flex: 1, background: 'var(--brand-50)', borderRadius: 999, height: 10, minWidth: 60 }}>
+                        <div style={{ width: `${Math.max(6, Math.round((t.count / max) * 100))}%`, background: 'var(--brand)', borderRadius: 999, height: 10 }} />
+                      </div>
+                      <span style={{ ...S.tag, width: 40, textAlign: 'right' }}>{t.count}건</span>
+                    </div>
+                  );
+                })
+              ) : (
+                <p style={{ fontSize: 13.5, color: 'var(--mut)' }}>{MEASURING} — 아직 집계할 대화가 없습니다.</p>
+              )}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+                {Object.entries(stats.conversation.bySource).map(([k, v]) => (
+                  <span key={k} className="ac-pill">{SOURCE_VIEW_LABELS[k] || k} {v}건</span>
+                ))}
+                {Object.entries(stats.conversation.byChannel).map(([k, v]) => (
+                  <span key={k} className="ac-pill">{CHANNEL_LABELS[k] || k} {v}건</span>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* ── 최근 대화 ── */}
+          <section style={S.card}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12 }}>
+              <h2 style={S.h2}>최근 대화</h2>
+              <span style={S.tag}>최대 30건</span>
+            </div>
+            {recentTurns.length === 0 ? (
+              <p style={{ fontSize: 13.5, color: 'var(--mut)' }}>
+                아직 기록된 대화가 없습니다. 홈페이지의 상담창이나 「응답 테스트」에서 대화해 보세요.
+              </p>
+            ) : (
+              recentTurns.map((t) => (
+                <div key={t.id} style={{ borderTop: '1px solid var(--line)', padding: '11px 0' }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 5 }}>
+                    <span style={S.tag}>{new Date(t.at).toLocaleString('ko-KR')}</span>
+                    <span className="ac-pill">{CHANNEL_LABELS[t.channel] || t.channel}</span>
+                    <span className="ac-pill">{INTENT_LABELS[t.intent] || t.intent}</span>
+                    <span className="ac-pill">{SOURCE_VIEW_LABELS[t.source] || t.source}</span>
+                    {t.escalate && <span className="ac-pill" style={{ background: '#FFFBEB', color: 'var(--warn)' }}>상담원 제안</span>}
+                  </div>
+                  <div style={{ fontSize: 14, color: 'var(--ink)' }}><strong>고객</strong> · {t.message}</div>
+                  <div style={{ fontSize: 14, color: 'var(--sub)', marginTop: 2 }}><strong>챗봇</strong> · {t.reply}</div>
+                </div>
+              ))
+            )}
+            <p style={{ ...S.tag, marginTop: 12 }}>
+              대화 기록은 최근 분량만 보관합니다. 오래 보관하려면 위의 「대화 기록 내려받기」를 이용해 주세요.
+            </p>
           </section>
         </>
       )}
@@ -1960,6 +2191,13 @@ export default function AdminPage() {
           </p>
         </section>
       )}
-    </main>
+        </main>
+      </div>
+
+      {/* 저장·삭제 결과 알림(토스트) — 화면 어디에 있든 같은 자리에서 알린다. */}
+      {notice && (
+        <div className="ac-toast" role="status" aria-live="polite">{notice}</div>
+      )}
+    </div>
   );
 }

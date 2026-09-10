@@ -101,6 +101,37 @@ export interface ConvStats {
   autoHandled: number; // rule/kb로 즉시 응답한 턴
   autoRate: number; // 자동처리율(0~1, 소수 3자리)
   escalatedTurns: number;
+  /** 최근 7일(오늘 포함) 일자별 집계. 보존된 로그 범위 안에서만 센다 — 없는 날은 0이 아니라 '기록 없음'이다. */
+  daily: DailyBucket[];
+  /** 오늘(한국 시간) 집계. */
+  today: { turns: number; sessions: number; escalated: number };
+}
+
+export interface DailyBucket {
+  /** YYYY-MM-DD (한국 시간 기준) */
+  date: string;
+  turns: number;
+  escalated: number;
+}
+
+/** 한국 시간 기준 날짜 문자열. 서버 시간대(UTC)와 무관하게 같은 날로 묶기 위한 것. */
+function dayKey(iso: string | number | Date): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  try {
+    // sv-SE 로캘은 YYYY-MM-DD 형식을 준다.
+    return d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+/** 최근 7일 축(오늘 포함, 과거→오늘 순). */
+function recentDays(count = 7): string[] {
+  const out: string[] = [];
+  const now = Date.now();
+  for (let i = count - 1; i >= 0; i -= 1) out.push(dayKey(now - i * 86400000));
+  return out;
 }
 
 export function convStats(): ConvStats {
@@ -118,6 +149,27 @@ export function convStats(): ConvStats {
     if (l.source === 'rule' || l.source === 'kb') autoHandled += 1;
     if (l.escalate) escalatedTurns += 1;
   }
+  // 일자별 집계 — 로그의 실제 타임스탬프만 쓴다(없는 날은 0으로 표시하되, 화면에서 '기록 없음'과 구분한다).
+  const axis = recentDays(7);
+  const byDay = new Map<string, DailyBucket>(axis.map((d) => [d, { date: d, turns: 0, escalated: 0 }]));
+  const todayKey = axis[axis.length - 1];
+  const todaySessions = new Set<string>();
+  let todayTurns = 0;
+  let todayEscalated = 0;
+  for (const l of logs) {
+    const k = dayKey(l.at);
+    const bucket = byDay.get(k);
+    if (bucket) {
+      bucket.turns += 1;
+      if (l.escalate) bucket.escalated += 1;
+    }
+    if (k === todayKey) {
+      todayTurns += 1;
+      todaySessions.add(l.sessionId);
+      if (l.escalate) todayEscalated += 1;
+    }
+  }
+
   const topIntents = Object.entries(byIntent)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 10)
@@ -132,6 +184,8 @@ export function convStats(): ConvStats {
     autoHandled,
     autoRate: totalTurns ? Math.round((autoHandled / totalTurns) * 1000) / 1000 : 0,
     escalatedTurns,
+    daily: axis.map((d) => byDay.get(d) as DailyBucket),
+    today: { turns: todayTurns, sessions: todaySessions.size, escalated: todayEscalated },
   };
 }
 

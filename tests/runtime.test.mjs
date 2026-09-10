@@ -1412,3 +1412,34 @@ test('평가 근거 라벨은 길이를 잘라 저장한다', opts, async () => 
   assert.ok(r.entry.citation.length <= 120, '근거 라벨이 잘리지 않았다');
   F.resetFeedback();
 });
+
+/* ══════════ 대시보드 집계 — 실제 로그에서만 값이 나온다 (DS 2-2) ══════════ */
+
+test('일자별·오늘 집계는 기록된 대화에서만 만들어진다', opts, async () => {
+  const { logTurn, convStats, resetLogs } = await importLib('convlog', ['chat', 'storage', 'logger', 'monitoring', 'knowledge', 'normalize', 'rules', 'adminStore', 'slots', 'session', 'llm', 'tenantKB', 'ingest']);
+  resetLogs();
+
+  // 기록이 없으면 지어내지 않는다 — 축은 7일이지만 값은 전부 0이고 오늘도 0이다.
+  const empty = convStats();
+  assert.equal(empty.daily.length, 7, '최근 7일 축');
+  assert.equal(empty.daily.every((d) => d.turns === 0), true, '기록이 없으면 값이 없어야 한다');
+  assert.equal(empty.today.turns, 0);
+  assert.equal(empty.today.sessions, 0);
+
+  logTurn({ sessionId: 's1', channel: 'web', message: '안녕', reply: '안녕하세요', intent: 'greeting', source: 'rule', escalate: false });
+  logTurn({ sessionId: 's1', channel: 'web', message: '상담원', reply: '연결할게요', intent: 'handoff', source: 'rule', escalate: true });
+  logTurn({ sessionId: 's2', channel: 'kakao', message: '요금', reply: '안내드립니다', intent: 'price', source: 'kb', escalate: false });
+
+  const s = convStats();
+  assert.equal(s.today.turns, 3, '오늘 대화 수');
+  assert.equal(s.today.sessions, 2, '오늘 대화 상대 수(세션)');
+  assert.equal(s.today.escalated, 1, '오늘 상담원 전환 수');
+  const last = s.daily[s.daily.length - 1];
+  assert.equal(last.turns, 3, '마지막 칸이 오늘이어야 한다');
+  assert.equal(last.escalated, 1);
+  assert.equal(s.daily.slice(0, 6).every((d) => d.turns === 0), true, '없는 날에 값을 만들면 안 된다');
+  // 날짜 형식(YYYY-MM-DD)이 유지돼야 화면 축 라벨이 깨지지 않는다
+  for (const d of s.daily) assert.match(d.date, /^\d{4}-\d{2}-\d{2}$/);
+
+  resetLogs();
+});
