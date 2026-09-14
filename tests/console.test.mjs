@@ -219,3 +219,74 @@ test('관리 토큰 입력이 브랜드 로그인 화면으로 옮겨졌다 (DS 
   assert.match(src, /로그아웃[\s\S]{0,40}/, '로그아웃 버튼');
   assert.match(src, /applyToken\(''\);\s*setAuthMsg\(''\);\s*setLoginOpen\(true\);/, '로그아웃 시 토큰 삭제 후 로그인 화면');
 });
+
+test('상담원 요청이 요약 KPI·상태 필터·표·상세 서랍으로 렌더된다 (DS 2-9)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  const t = src.slice(src.indexOf("{tab === 'esc' &&"), src.indexOf("{tab === 'partner' &&"));
+  assert.match(t, /className="ac-kpi"/, '상단 요약 카드');
+  for (const k of ['대기 중', '상담 중', '완료', '자동 응대 완료율']) assert.ok(t.includes(k), `요약 누락: ${k}`);
+  assert.match(t, /empty=\{autoRate === MEASURING\}/, '대화 0건이면 완료율을 0%로 단정하지 않는다');
+  // 필터·검색·표
+  assert.match(t, /role="group" aria-label="처리 상태로 거르기"/, '상태 필터 그룹 이름');
+  assert.match(t, /aria-pressed=\{escFilter === f\.key\}/, '필터 칩은 눌림 상태를 알린다');
+  assert.match(t, /aria-label="요청 검색\(고객 말·사유·접수번호\)"/, '검색 입력 라벨');
+  assert.match(t, /<table className="ac-table">/, '표');
+  assert.match(t, /<th scope="col">/, '표 헤더 scope');
+  assert.match(t, /aria-haspopup="dialog"/, '접수번호 버튼은 서랍을 연다');
+  assert.match(t, /TICKET_STATUS_TONE\[t\.status\]/, '상태 pill 색');
+  // 빈 상태·검색 0건
+  assert.match(t, /접수된 상담원 연결 요청이 없습니다/, '빈 상태');
+  assert.match(t, /조건에 맞는 요청이 없습니다/, '필터 0건');
+  assert.match(t, /필터 지우기/, '필터 0건 복구 행동');
+  // 식별자·세션은 전부 노출하지 않는다
+  assert.match(src, /function shortTicket/, '접수번호 축약');
+  assert.equal(/세션 \{t\.sessionId\}/.test(t), false, '세션 원문 노출 금지');
+  // 서랍: dialog·ESC·초점 복귀·연락처 마스킹(보기 전까지)
+  const d = src.slice(src.indexOf('function TicketDrawer'), src.indexOf('function KpiCard'));
+  assert.match(d, /role="dialog" aria-modal="true" aria-labelledby="ac-ticket-title"/, '서랍 dialog');
+  assert.match(d, /showContact \? t\.contact : maskContact\(t\.contact\)/, '연락처는 기본 마스킹');
+  assert.match(d, /aria-pressed=\{showContact\}/, '보기/가리기 토글 상태');
+  assert.match(d, /aria-busy=\{busy\}/, '상태 변경 중 잠금');
+  assert.match(src, /e\.key === 'Escape'\) closeTicket\(\)/, 'ESC 로 닫힌다');
+  assert.match(src, /ticketReturnRef\.current = from/, '닫으면 연 행으로 초점 복귀');
+  // 마스킹 함수가 실제로 가린다
+  assert.match(src, /digits\.slice\(0, 3\)\}-\*\*\*\*-\$\{digits\.slice\(-4\)/, '전화 가운데 마스킹');
+  // 375px: 사유·시각 열은 접히고 서랍은 전체폭
+  const mobile = css.slice(css.indexOf('@media (max-width:900px){\n  .ac-shell'));
+  assert.match(mobile, /\.ac-col-wide\{display:none\}/);
+  assert.match(mobile, /\.ac-drawer\{width:100vw\}/);
+});
+
+test('감사 로그·저장소 상태가 표·카드 그리드로 렌더되고 환경변수명이 화면에 없다 (DS 2-10)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  const t = src.slice(src.indexOf("{tab === 'audit' &&"), src.indexOf("{tab === 'test' &&"));
+  assert.match(t, /htmlFor="audit-filter"[\s\S]*id="audit-filter"/, '작업 종류 필터 라벨');
+  assert.match(t, /<table className="ac-table">/, '표');
+  assert.match(t, /기록된 관리 작업이 없습니다/, '빈 상태');
+  assert.match(t, /지식베이스 열기/, '빈 상태 다음 행동');
+  assert.match(t, /선택한 종류의 작업이 없습니다/, '필터 0건');
+  assert.match(t, /className="ac-nsgrid"/, '저장소 네임스페이스 카드 그리드');
+  assert.match(t, /data-health=\{n\.health\}/, '카드 상태 색');
+  assert.match(t, /aria-labelledby="storage-h"/, '저장소 섹션 이름');
+  // 화면 문자열에 환경변수명·내부 문구 없음(주석 제외)
+  const ui = src.split('\n').filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('/**') && !l.trim().startsWith('*')).join('\n');
+  for (const leak of ['ADMIN_PERSIST', 'PERSIST_PII', '서버 메모리에만', 'data/&lt;', 'faq.json']) {
+    assert.equal(ui.includes(leak), false, `콘솔 화면에 내부 문구 노출: ${leak}`);
+  }
+  assert.match(css, /\.ac-nsgrid\{display:grid/, '카드 그리드 CSS');
+});
+
+test('테넌트 지식이 요약 카드+FAQ 표로 렌더되고 편집 UI 가 없다 (DS 2-11)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const t = src.slice(src.indexOf("{tab === 'tenant' &&"), src.indexOf("{tab === 'audit' &&"));
+  assert.match(t, /className="ac-statgrid"/, '요약 카드');
+  for (const k of ['상담창 이름', '적재된 FAQ', '신청 버튼 주소', 'AI 고지 문구']) assert.ok(t.includes(k), `요약 누락: ${k}`);
+  assert.match(t, /배포 설정 적용됨[\s\S]*기본값 — 배포 설정 미등록/, 'CTA 출처를 사람 말로');
+  assert.match(t, /<table className="ac-table">/, 'FAQ 표');
+  assert.match(t, /<th scope="col">근거<\/th>/, '근거 라벨 열');
+  assert.match(t, /적재된 FAQ가 0건입니다/, '0건 경고 상태');
+  assert.match(t, /aria-hidden="true" style=\{\{ width: 14, height: 14, borderRadius: '50%', background: tenantView\.config\.brandColor/, '브랜드 색 견본은 장식');
+  assert.equal(/<textarea|<input(?![^>]*type="search")/.test(t), false, '편집 입력이 없어야 한다');
+});

@@ -111,6 +111,31 @@ function shortSession(id: string): string {
   return id.length > 6 ? `${id.slice(0, 6)}…` : id;
 }
 
+/** 접수번호는 앞 8자만 보여준다(전체는 서랍 제목의 title 로). */
+function shortTicket(id: string): string {
+  return id.length > 8 ? `${id.slice(0, 8)}…` : id;
+}
+
+/** 연락처는 기본 마스킹 — 전화는 가운데, 이메일은 아이디 뒷부분을 가린다. 원문은 운영자가 「보기」를 눌렀을 때만. */
+function maskContact(raw: string): string {
+  const v = raw.trim();
+  if (v.includes('@')) {
+    const [id, domain] = v.split('@');
+    return `${id.slice(0, 2)}${'*'.repeat(Math.max(1, id.length - 2))}@${domain}`;
+  }
+  const digits = v.replace(/\D/g, '');
+  if (digits.length >= 7) return `${digits.slice(0, 3)}-****-${digits.slice(-4)}`;
+  return v.length > 2 ? `${v.slice(0, 2)}${'*'.repeat(v.length - 2)}` : '**';
+}
+
+/** 처리 상태 pill 색 — 토큰만 쓴다(성공/경고/기본). */
+const TICKET_STATUS_TONE: Record<TicketView['status'], { background: string; color: string }> = {
+  open: { background: '#FFFBEB', color: 'var(--warn)' },
+  in_progress: { background: 'var(--brand-50)', color: 'var(--brand-600)' },
+  resolved: { background: '#F0FDF4', color: 'var(--success)' },
+  canceled: { background: 'var(--bg)', color: 'var(--mut)' },
+};
+
 function timeLabel(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -224,6 +249,122 @@ function ConversationDrawer({
             <button type="button" style={S.btn} onClick={onOpenTicket}>상담원 요청 보기</button>
           ) : (
             <span style={{ fontSize: 12.5, color: 'var(--mut)' }}>이 대화에서 접수된 상담원 요청은 없습니다.</span>
+          )}
+          <button type="button" style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={onClose}>닫기</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 상담원 요청 상세 서랍 — 고객의 마지막 말·사유·이관 요약·연락처(마스킹)·처리 상태 변경. */
+function TicketDrawer({
+  ticket, hasConversation, busy, onClose, onStatus, onOpenConversation, closeRef,
+}: {
+  ticket: TicketView;
+  hasConversation: boolean;
+  busy: boolean;
+  onClose: () => void;
+  onStatus: (status: TicketView['status']) => void;
+  onOpenConversation: () => void;
+  closeRef: RefObject<HTMLButtonElement>;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [showContact, setShowContact] = useState(false);
+  const t = ticket;
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab' || !panelRef.current) return;
+    const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>('button,[href],input,textarea,select,[tabindex]:not([tabindex="-1"])'))
+      .filter((el) => !el.hasAttribute('disabled'));
+    if (items.length === 0) return;
+    const firstEl = items[0];
+    const lastEl = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === firstEl) { e.preventDefault(); lastEl.focus(); }
+    else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); firstEl.focus(); }
+  };
+  const reasonLabel = t.reasonCode ? (HANDOFF_REASON_LABELS[t.reasonCode] ?? t.reasonCode) : t.reason;
+
+  return (
+    <div className="ac-drawer-root">
+      <div className="ac-drawer-bg" onClick={onClose} aria-hidden="true" />
+      <div ref={panelRef} className="ac-drawer" role="dialog" aria-modal="true" aria-labelledby="ac-ticket-title" onKeyDown={onKeyDown}>
+        <div className="ac-drawer-head">
+          <div style={{ minWidth: 0 }}>
+            <h2 id="ac-ticket-title" style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-.01em' }}>
+              상담원 요청 <span title={t.id} style={{ fontWeight: 600, color: 'var(--sub)' }}>{shortTicket(t.id)}</span>
+            </h2>
+            <p style={{ fontSize: 12, color: 'var(--mut)', marginTop: 2 }}>
+              접수 {timeLabel(t.createdAt)} · 마지막 변경 {timeLabel(t.updatedAt)} · 대화 {shortSession(t.sessionId)}
+            </p>
+          </div>
+          <button ref={closeRef} type="button" className="ac-iconbtn" onClick={onClose} aria-label="상세 닫기">
+            <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+          </button>
+        </div>
+
+        <div className="ac-drawer-meta">
+          <span className="ac-pill" style={TICKET_STATUS_TONE[t.status]}>{TICKET_STATUS_LABELS[t.status]}</span>
+          <span className="ac-pill">사유 · {reasonLabel}</span>
+          {t.contact ? <span className="ac-pill">연락처 남김</span> : <span className="ac-pill" style={{ background: 'var(--bg)', color: 'var(--mut)' }}>연락처 없음</span>}
+        </div>
+
+        <div className="ac-drawer-body">
+          <span className="ac-rulekey">고객이 마지막으로 한 말</span>
+          {t.message ? (
+            <div className="ac-bubble ac-bubble-user" style={{ marginBottom: 16 }}>
+              <span className="ac-bubble-who">고객</span>
+              <p>{t.message}</p>
+            </div>
+          ) : (
+            <p style={{ fontSize: 13, color: 'var(--mut)', marginBottom: 16 }}>남긴 메시지가 없습니다.</p>
+          )}
+
+          <span className="ac-rulekey">연락처</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+            {t.contact ? (
+              <>
+                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)', fontVariantNumeric: 'tabular-nums' }}>
+                  {showContact ? t.contact : maskContact(t.contact)}
+                </span>
+                <button type="button" className="ac-linkbtn" aria-pressed={showContact} onClick={() => setShowContact((v) => !v)}>
+                  {showContact ? '가리기' : '보기'}
+                </button>
+                <span style={{ fontSize: 11.5, color: 'var(--mut)', flexBasis: '100%' }}>연락 목적으로만 쓰고 다른 곳에 옮겨 적지 마세요.</span>
+              </>
+            ) : (
+              <span style={{ fontSize: 13, color: 'var(--mut)' }}>고객이 연락처 없이 접수했습니다. 대화 기록으로 맥락을 확인하세요.</span>
+            )}
+          </div>
+
+          <span className="ac-rulekey">이관 요약</span>
+          {t.summary ? (
+            <div className="ac-summary">{t.summary}</div>
+          ) : (
+            <p style={{ fontSize: 13, color: 'var(--mut)' }}>요약이 만들어지지 않았습니다.</p>
+          )}
+          {t.note && (
+            <>
+              <span className="ac-rulekey" style={{ marginTop: 16 }}>메모</span>
+              <p style={{ fontSize: 13.5, color: 'var(--ink)', whiteSpace: 'pre-wrap' }}>{t.note}</p>
+            </>
+          )}
+        </div>
+
+        <div className="ac-drawer-foot" style={{ flexWrap: 'wrap' }}>
+          {t.status === 'open' && (
+            <button type="button" style={S.btn} disabled={busy} aria-busy={busy} onClick={() => onStatus('in_progress')}>상담 시작</button>
+          )}
+          {t.status === 'in_progress' && (
+            <button type="button" style={S.btn} disabled={busy} aria-busy={busy} onClick={() => onStatus('resolved')}>완료 처리</button>
+          )}
+          {(t.status === 'open' || t.status === 'in_progress') && (
+            <button type="button" className="ac-linkbtn" data-tone="danger" disabled={busy} onClick={() => onStatus('canceled')}>취소</button>
+          )}
+          {(t.status === 'resolved' || t.status === 'canceled') && (
+            <button type="button" style={S.btnGhost} disabled={busy} aria-busy={busy} onClick={() => onStatus('open')}>다시 열기</button>
+          )}
+          {hasConversation && (
+            <button type="button" className="ac-linkbtn" onClick={onOpenConversation}>대화 전체 보기</button>
           )}
           <button type="button" style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={onClose}>닫기</button>
         </div>
@@ -406,8 +547,8 @@ const STORAGE_NS_LABELS: Record<string, string> = {
 const STORAGE_HEALTH: Record<StorageNsView['health'], { label: string; hint: string }> = {
   ok: { label: '저장됨', hint: '디스크에 반영되었습니다.' },
   empty: { label: '저장분 없음', hint: '아직 저장된 내용이 없습니다. 편집하면 자동 저장됩니다.' },
-  disabled: { label: '영속화 꺼짐', hint: 'ADMIN_PERSIST=false 로 저장이 꺼져 있습니다(메모리만 사용).' },
-  awaiting_approval: { label: '승인 대기', hint: '개인정보 포함 데이터입니다. PERSIST_PII 승인 전까지 저장하지 않습니다.' },
+  disabled: { label: '저장 꺼짐', hint: '배포 설정에서 저장이 꺼져 있어 재시작하면 사라집니다.' },
+  awaiting_approval: { label: '승인 대기', hint: '개인정보가 포함된 데이터라 저장 승인 전까지 디스크에 쓰지 않습니다. [승인 필요]' },
   readonly: { label: '읽기전용 환경', hint: '배포 환경의 파일시스템이 읽기전용입니다. 백업 API로 내보내 주세요.' },
   error: { label: '저장 실패', hint: '아래 오류를 확인해 주세요. 데이터는 메모리에 남아 있습니다.' },
 };
@@ -805,6 +946,37 @@ export default function AdminPage() {
       window.removeEventListener('keydown', onKey);
     };
   }, [drawerSession, closeDrawer]);
+  // ---- 상담원 요청 큐(필터·검색·상세 서랍) ----
+  const [escFilter, setEscFilter] = useState<'all' | TicketView['status']>('all');
+  const [escQuery, setEscQuery] = useState('');
+  const [ticketId, setTicketId] = useState<string | null>(null);
+  const [ticketBusy, setTicketBusy] = useState(false);
+  const ticketReturnRef = useRef<HTMLElement | null>(null);
+  const ticketCloseRef = useRef<HTMLButtonElement>(null);
+  const openTicket = (id: string, from: HTMLElement | null) => {
+    ticketReturnRef.current = from;
+    setTicketId(id);
+  };
+  const closeTicket = useCallback(() => {
+    setTicketId(null);
+    const el = ticketReturnRef.current;
+    ticketReturnRef.current = null;
+    window.setTimeout(() => el?.focus(), 0);
+  }, []);
+  useEffect(() => {
+    if (!ticketId) return;
+    const t = window.setTimeout(() => ticketCloseRef.current?.focus(), 30);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeTicket();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [ticketId, closeTicket]);
+  // ---- 감사 로그 필터 ----
+  const [auditFilter, setAuditFilter] = useState('all');
   const loadEsc = useCallback(async () => {
     const res = await fetch('/api/admin/escalations?logs=true', { headers: authHeaders() });
     if (on401(res)) return;
@@ -1252,17 +1424,24 @@ export default function AdminPage() {
   };
 
   const patchTicket = async (id: string, status: TicketView['status']) => {
-    const res = await fetch('/api/admin/escalations', {
-      method: 'PATCH',
-      headers: authHeaders(true),
-      body: JSON.stringify({ id, status }),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      await loadEsc();
-      flash(`${id} → ${TICKET_STATUS_LABELS[status]}`);
-    } else {
-      flash(`변경 실패: ${data.error}`);
+    setTicketBusy(true);
+    try {
+      const res = await fetch('/api/admin/escalations', {
+        method: 'PATCH',
+        headers: authHeaders(true),
+        body: JSON.stringify({ id, status }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        await loadEsc();
+        flash(`접수 ${shortTicket(id)} → ${TICKET_STATUS_LABELS[status]}`);
+      } else {
+        flash(`상태를 바꾸지 못했습니다: ${data.error}`);
+      }
+    } catch {
+      flash('상태를 바꾸지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.');
+    } finally {
+      setTicketBusy(false);
     }
   };
 
@@ -2082,87 +2261,142 @@ export default function AdminPage() {
         );
       })()}
 
-      {tab === 'esc' && (
-        <>
-          <section style={S.card}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2 style={{ fontSize: 16 }}>운영 현황</h2>
-              <button style={S.btnGhost} onClick={loadEsc}>새로고침</button>
+      {tab === 'esc' && (() => {
+        const counts = { open: 0, in_progress: 0, resolved: 0, canceled: 0 } as Record<TicketView['status'], number>;
+        for (const t of tickets) counts[t.status] += 1;
+        const q = escQuery.trim().toLowerCase();
+        const filtered = tickets
+          .filter((t) => escFilter === 'all' || t.status === escFilter)
+          .filter((t) => !q || [t.message, t.reason, t.id, HANDOFF_REASON_LABELS[t.reasonCode ?? ''] ?? ''].some((v) => (v ?? '').toLowerCase().includes(q)))
+          .slice()
+          .sort((x, y) => new Date(y.createdAt).getTime() - new Date(x.createdAt).getTime());
+        const turnsTotal = stats?.conversation.totalTurns ?? 0;
+        const autoRate = stats && turnsTotal > 0 ? `${Math.round(stats.conversation.autoRate * 100)}%` : MEASURING;
+        const FILTERS: { key: 'all' | TicketView['status']; label: string; n: number }[] = [
+          { key: 'all', label: '전체', n: tickets.length },
+          { key: 'open', label: '대기', n: counts.open },
+          { key: 'in_progress', label: '상담 중', n: counts.in_progress },
+          { key: 'resolved', label: '완료', n: counts.resolved },
+          { key: 'canceled', label: '취소', n: counts.canceled },
+        ];
+        const nextAction = (t: TicketView): { label: string; status: TicketView['status']; primary: boolean } =>
+          t.status === 'open' ? { label: '상담 시작', status: 'in_progress', primary: true }
+          : t.status === 'in_progress' ? { label: '완료', status: 'resolved', primary: true }
+          : { label: '다시 열기', status: 'open', primary: false };
+        const ticketsPersisted = storage?.namespaces.find((n) => n.ns === 'tickets')?.persisted ?? null;
+        return (
+          <>
+            <div className="ac-kpi" style={{ marginBottom: 16 }}>
+              <KpiCard label="대기 중" value={String(counts.open)} note="아직 상담을 시작하지 않은 요청" />
+              <KpiCard label="상담 중" value={String(counts.in_progress)} note="상담원이 응대하고 있는 요청" />
+              <KpiCard label="완료" value={String(counts.resolved)} note={`취소 ${counts.canceled}건 별도`} />
+              <KpiCard label="자동 응대 완료율" value={autoRate} empty={autoRate === MEASURING} note={turnsTotal > 0 ? `전체 ${turnsTotal}쌍 중 ${stats?.conversation.autoHandled ?? 0}쌍은 챗봇이 마무리` : '대화가 쌓이면 계산합니다'} />
             </div>
-            {stats && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 10, fontSize: 14 }}>
-                <span>대화 <strong>{stats.conversation.totalTurns}</strong>턴 · 세션 <strong>{stats.conversation.sessions}</strong></span>
-                <span>자동처리율 <strong>{Math.round(stats.conversation.autoRate * 100)}%</strong> (룰/KB {stats.conversation.autoHandled}턴)</span>
-                <span>상담원 요청 <strong>{stats.escalation.total}</strong>건 (대기 {stats.escalation.open} · 상담 중 {stats.escalation.inProgress} · 완료 {stats.escalation.resolved})</span>
-                {stats.escalation.byReason && (
-                  <span style={S.tag}>
-                    이관 사유:{' '}
-                    {Object.entries(stats.escalation.byReason)
-                      .filter(([, n]) => n > 0)
-                      .map(([code, n]) => `${HANDOFF_REASON_LABELS[code] ?? code} ${n}`)
-                      .join(' · ') || '없음'}
-                  </span>
-                )}
+
+            <section style={{ ...S.card, padding: 0 }} aria-labelledby="esc-h">
+              <div className="ac-toolbar">
+                <h2 id="esc-h" style={{ ...S.h2, marginRight: 4 }}>요청 목록</h2>
+                <div role="group" aria-label="처리 상태로 거르기" className="ac-chips">
+                  {FILTERS.map((f) => (
+                    <button
+                      key={f.key}
+                      type="button"
+                      className="ac-chip"
+                      data-hit={escFilter === f.key ? 'true' : undefined}
+                      aria-pressed={escFilter === f.key}
+                      onClick={() => setEscFilter(f.key)}
+                    >
+                      {f.label} {f.n}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  className="ac-search"
+                  type="search"
+                  aria-label="요청 검색(고객 말·사유·접수번호)"
+                  placeholder="고객 말·사유·접수번호 검색"
+                  value={escQuery}
+                  onChange={(e) => setEscQuery(e.target.value)}
+                  style={{ marginLeft: 'auto' }}
+                />
+                <span style={S.tag} aria-live="polite">{filtered.length}/{tickets.length}건</span>
+                <button type="button" style={S.btnGhost} onClick={loadEsc}>새로고침</button>
               </div>
+
+              {tickets.length === 0 ? (
+                <div className="ac-empty">
+                  <EmptyArt kind="chat" />
+                  <p style={{ fontSize: 14, fontWeight: 700 }}>접수된 상담원 연결 요청이 없습니다</p>
+                  <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>고객이 상담창에서 「상담원 연결하기」를 누르거나 챗봇이 답하지 못하면 여기에 쌓입니다.</p>
+                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => setTab('test')}>응답 테스트에서 시험해 보기</button>
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className="ac-empty">
+                  <p style={{ fontSize: 14, fontWeight: 700 }}>조건에 맞는 요청이 없습니다</p>
+                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => { setEscFilter('all'); setEscQuery(''); }}>필터 지우기</button>
+                </div>
+              ) : (
+                <table className="ac-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">접수</th>
+                      <th scope="col">상태</th>
+                      <th scope="col">고객이 마지막으로 한 말</th>
+                      <th scope="col" className="ac-col-wide">사유</th>
+                      <th scope="col" className="ac-col-wide">접수 시각</th>
+                      <th scope="col"><span className="ac-srhide">처리</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((t) => {
+                      const act = nextAction(t);
+                      return (
+                        <tr key={t.id}>
+                          <td style={{ whiteSpace: 'nowrap' }}>
+                            <button
+                              type="button"
+                              className="ac-linkbtn"
+                              aria-haspopup="dialog"
+                              aria-label={`접수 ${shortTicket(t.id)} 상세 보기`}
+                              onClick={(e) => openTicket(t.id, e.currentTarget)}
+                            >
+                              {shortTicket(t.id)}
+                            </button>
+                          </td>
+                          <td><span className="ac-pill" style={TICKET_STATUS_TONE[t.status]}>{TICKET_STATUS_LABELS[t.status]}</span></td>
+                          <td style={{ minWidth: 160 }}>
+                            <span className="ac-clamp" style={{ color: t.message ? 'var(--ink)' : 'var(--mut)' }}>{t.message || '남긴 메시지 없음'}</span>
+                            {t.contact && <span style={{ ...S.tag, display: 'block', marginTop: 2 }}>연락처 남김</span>}
+                          </td>
+                          <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{t.reasonCode ? (HANDOFF_REASON_LABELS[t.reasonCode] ?? t.reasonCode) : t.reason}</td>
+                          <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{timeLabel(t.createdAt)}</td>
+                          <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+                            <button
+                              type="button"
+                              className="ac-linkbtn"
+                              style={act.primary ? { background: 'var(--brand)', color: '#fff' } : undefined}
+                              disabled={ticketBusy}
+                              aria-label={`접수 ${shortTicket(t.id)} ${act.label}`}
+                              onClick={() => patchTicket(t.id, act.status)}
+                            >
+                              {act.label}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </section>
+            {ticketsPersisted === false && (
+              <p style={{ ...S.tag, marginTop: -6 }}>
+                상담 요청에는 개인정보가 들어 있어 저장 승인 전까지는 서비스가 재시작되면 사라집니다. 승인 상태는 「감사 로그 › 저장소 상태」에서 확인할 수 있습니다.
+              </p>
             )}
-            <p style={{ ...S.tag, marginTop: 8 }}>로그·티켓은 서버 메모리에만 저장됩니다(재시작 시 초기화 · 영구 저장은 준비 중).</p>
-          </section>
-          {tickets.length === 0 && (
-            <section style={S.card}>
-              <p style={{ fontSize: 14, color: 'var(--sub)' }}>접수된 상담원 연결 요청이 없습니다. 위젯에서 &quot;상담원&quot;을 입력해 테스트할 수 있어요.</p>
-            </section>
-          )}
-          {tickets.map((t) => (
-            <section key={t.id} style={S.card}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
-                <div>
-                  <strong>{t.id}</strong>{' '}
-                  <span style={S.tag}>
-                    {TICKET_STATUS_LABELS[t.status]} · 세션 {t.sessionId} · 사유{' '}
-                    {t.reasonCode ? `${HANDOFF_REASON_LABELS[t.reasonCode] ?? t.reasonCode} (${t.reason})` : t.reason}
-                  </span>
-                  {t.message && <p style={{ fontSize: 14, color: 'var(--sub)', margin: '6px 0' }}>마지막 메시지: {t.message}</p>}
-                  {t.summary && (
-                    <details style={{ marginTop: 6 }}>
-                      <summary style={{ ...S.tag, cursor: 'pointer', fontWeight: 700 }}>이관 요약 보기(개인정보 마스킹 적용)</summary>
-                      <pre
-                        style={{
-                          whiteSpace: 'pre-wrap',
-                          fontSize: 12.5,
-                          lineHeight: 1.55,
-                          background: '#faf7f3',
-                          border: '1px solid var(--line)',
-                          borderRadius: 'var(--r-sm)',
-                          padding: 10,
-                          marginTop: 6,
-                          fontFamily: 'inherit',
-                        }}
-                      >
-                        {t.summary}
-                      </pre>
-                    </details>
-                  )}
-                  <div style={S.tag}>접수 {new Date(t.createdAt).toLocaleString()} · 갱신 {new Date(t.updatedAt).toLocaleString()}</div>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {t.status === 'open' && (
-                    <button style={S.btn} onClick={() => patchTicket(t.id, 'in_progress')}>상담 시작</button>
-                  )}
-                  {(t.status === 'open' || t.status === 'in_progress') && (
-                    <>
-                      <button style={S.btnGhost} onClick={() => patchTicket(t.id, 'resolved')}>완료</button>
-                      <button style={{ ...S.btnGhost, color: '#a33' }} onClick={() => patchTicket(t.id, 'canceled')}>취소</button>
-                    </>
-                  )}
-                  {(t.status === 'resolved' || t.status === 'canceled') && (
-                    <button style={S.btnGhost} onClick={() => patchTicket(t.id, 'open')}>다시 열기</button>
-                  )}
-                </div>
-              </div>
-            </section>
-          ))}
-        </>
-      )}
+          </>
+        );
+      })()}
 
       {tab === 'partner' && (
         <>
@@ -2516,12 +2750,17 @@ export default function AdminPage() {
         <>
           <section style={S.card} aria-labelledby="tenant-h">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <h2 id="tenant-h" style={{ fontSize: 16 }}>테넌트 지식 (읽기 전용)</h2>
+              <div>
+                <h2 id="tenant-h" style={S.h2}>배포본이 답변 근거로 쓰는 자료</h2>
+                <p style={{ ...S.tag, marginTop: 4 }}>
+                  고객사(테넌트) 상담창이 실제로 참조하는 FAQ입니다. 원본은 배포 파일에 담겨 있어 이 화면에서는 <strong>편집하지 않고 확인만</strong> 합니다.
+                </p>
+              </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <label htmlFor="tenant-select" style={S.tag}>테넌트</label>
+                <label htmlFor="tenant-select" style={{ ...S.tag, fontWeight: 700 }}>테넌트</label>
                 <select
                   id="tenant-select"
-                  style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '6px 10px', fontSize: 13 }}
+                  className="ac-select"
                   value={tenantId}
                   onChange={(e) => {
                     setTenantId(e.target.value);
@@ -2538,157 +2777,237 @@ export default function AdminPage() {
                 </button>
               </div>
             </div>
-            <p style={{ ...S.tag, marginTop: 8 }}>
-              고객사(테넌트) 위젯이 답변 근거로 쓰는 FAQ입니다. 원본은 저장소의 <code>data/&lt;테넌트&gt;-faq.json</code> 파일이라
-              이 화면에서는 <strong>편집하지 않습니다</strong> — 배포본이 실제로 무엇을 근거로 답하는지 확인하는 용도입니다.
-            </p>
 
             <div role="status" aria-live="polite">
               {tenantErr && (
-                <p style={{ fontSize: 14, color: 'var(--danger, #c0392b)', marginTop: 10 }}>
+                <p style={{ fontSize: 14, color: 'var(--danger)', marginTop: 12 }}>
                   {tenantErr} <button style={{ ...S.btnGhost, marginLeft: 6 }} onClick={() => loadTenant(tenantId)}>다시 시도</button>
                 </p>
               )}
               {!tenantErr && tenantBusy && !tenantView && (
-                <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10 }}>테넌트 지식을 불러오는 중입니다…</p>
+                <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 12 }}>테넌트 지식을 불러오는 중입니다…</p>
               )}
               {!tenantErr && !tenantBusy && !tenantView && (
-                <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10 }}>표시할 테넌트가 없습니다.</p>
+                <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 12 }}>표시할 테넌트가 없습니다.</p>
               )}
             </div>
 
             {tenantView && (
               <>
-                <p style={{ ...S.tag, marginTop: 10 }}>
-                  <strong>{tenantView.status.name}</strong> · FAQ <strong>{tenantView.status.entries}건</strong>
-                  {' · '}신청 버튼 <a href={tenantView.status.ctaUrl} target="_blank" rel="noreferrer noopener">{tenantView.status.ctaUrl}</a>
-                  {' ('}{tenantView.status.ctaFromEnv ? '환경변수 적용됨' : '코드 기본값 — 배포 환경변수 미설정'}{')'}
-                </p>
-                <p style={{ ...S.tag, marginTop: 4 }}>AI 고지: {tenantView.config.aiNotice}</p>
+                <div className="ac-statgrid">
+                  <div className="ac-stat">
+                    <div className="ac-statlabel">상담창 이름</div>
+                    <div className="ac-statvalue" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span aria-hidden="true" style={{ width: 14, height: 14, borderRadius: '50%', background: tenantView.config.brandColor, flexShrink: 0, border: '1px solid var(--line)' }} />
+                      {tenantView.status.name}
+                    </div>
+                  </div>
+                  <div className="ac-stat">
+                    <div className="ac-statlabel">적재된 FAQ</div>
+                    <div className="ac-statvalue">
+                      {tenantView.status.entries}건
+                      {tenantView.status.skipped > 0 && <span className="ac-pill" style={{ marginLeft: 6, background: '#FEF2F2', color: 'var(--danger)' }}>제외 {tenantView.status.skipped}건</span>}
+                    </div>
+                  </div>
+                  <div className="ac-stat">
+                    <div className="ac-statlabel">신청 버튼 주소</div>
+                    <div className="ac-statvalue">
+                      <a href={tenantView.status.ctaUrl} target="_blank" rel="noreferrer noopener">{tenantView.status.ctaUrl}</a>
+                      <span className="ac-pill" style={{ marginLeft: 6, ...(tenantView.status.ctaFromEnv ? { background: '#F0FDF4', color: 'var(--success)' } : { background: '#FFFBEB', color: 'var(--warn)' }) }}>
+                        {tenantView.status.ctaFromEnv ? '배포 설정 적용됨' : '기본값 — 배포 설정 미등록'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="ac-stat">
+                    <div className="ac-statlabel">AI 고지 문구</div>
+                    <div className="ac-statvalue" style={{ fontWeight: 500, color: 'var(--sub)' }}>{tenantView.config.aiNotice}</div>
+                  </div>
+                </div>
                 {tenantView.status.skipped > 0 && (
-                  <ul style={{ marginTop: 8, paddingLeft: 18, fontSize: 13, color: 'var(--danger, #c0392b)' }}>
+                  <ul style={{ marginTop: 10, paddingLeft: 18, fontSize: 13, color: 'var(--danger)' }}>
                     {tenantView.warnings.map((w) => (
                       <li key={w}>형식 오류로 제외됨: {w}</li>
                     ))}
                   </ul>
                 )}
-                {tenantView.faq.length === 0 && (
-                  <p style={{ fontSize: 14, color: 'var(--danger, #c0392b)', marginTop: 10 }}>
-                    적재된 FAQ가 0건입니다. 이 상태에서는 답변 근거가 없어 모든 질문이 담당자 연결로 넘어갑니다.
-                  </p>
-                )}
               </>
             )}
           </section>
 
-          {tenantView?.faq.map((f) => (
-            <section key={f.id} style={{ ...S.card, padding: '12px 20px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
-                <strong style={{ fontSize: 14 }}>{f.question}</strong>
-                <span style={S.tag}>{f.citation}</span>
+          {tenantView && (
+            <section style={{ ...S.card, padding: 0 }} aria-labelledby="tenant-faq-h">
+              <div className="ac-toolbar">
+                <h2 id="tenant-faq-h" style={S.h2}>FAQ 목록</h2>
+                <span style={S.tag}>{tenantView.faq.length}건 · 답변 아래 근거 카드에 「근거」 열의 라벨이 그대로 표시됩니다</span>
               </div>
-              <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 6, whiteSpace: 'pre-wrap' }}>{f.answer}</p>
-              <p style={{ ...S.tag, marginTop: 6 }}>매칭 키워드 {f.keywords.length}개</p>
+              {tenantView.faq.length === 0 ? (
+                <div className="ac-empty">
+                  <EmptyArt kind="kb" />
+                  <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)' }}>적재된 FAQ가 0건입니다</p>
+                  <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>이 상태에서는 답변 근거가 없어 모든 질문이 담당자 연결로 넘어갑니다. 배포 파일의 FAQ 자료를 확인해 주세요.</p>
+                </div>
+              ) : (
+                <table className="ac-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">근거</th>
+                      <th scope="col">질문</th>
+                      <th scope="col" className="ac-col-wide">답변</th>
+                      <th scope="col" className="ac-col-wide">표현</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tenantView.faq.map((f) => (
+                      <tr key={f.id}>
+                        <td style={{ whiteSpace: 'nowrap' }}><span className="ac-pill">{f.citation}</span></td>
+                        <td style={{ minWidth: 160 }}>
+                          <span style={{ fontWeight: 700 }}>{f.question}</span>
+                          {f.category && <span style={{ ...S.tag, display: 'block', marginTop: 2 }}>{f.category}</span>}
+                        </td>
+                        <td className="ac-col-wide" style={{ color: 'var(--sub)', maxWidth: 420 }}><span className="ac-clamp">{f.answer}</span></td>
+                        <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{f.keywords.length}개</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </section>
-          ))}
+          )}
         </>
       )}
 
-      {tab === 'audit' && (
-        <>
-          <section style={S.card}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <h2 style={{ fontSize: 16 }}>관리 작업 감사 로그</h2>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button style={S.btnGhost} onClick={loadAudit}>새로고침</button>
+      {tab === 'audit' && (() => {
+        const actions = Array.from(new Set(auditEvents.map((e) => e.action)));
+        const shown = auditEvents.filter((e) => auditFilter === 'all' || e.action === auditFilter);
+        return (
+          <>
+            <section style={{ ...S.card, padding: 0 }} aria-labelledby="audit-h">
+              <div className="ac-toolbar">
+                <div style={{ marginRight: 4 }}>
+                  <h2 id="audit-h" style={S.h2}>관리 작업 기록</h2>
+                  <p style={{ ...S.tag, marginTop: 2 }}>안내 자료·규칙 편집, 상담 요청 처리, 백업 복원 이력(최근 100건). 토큰 값은 기록하지 않습니다.</p>
+                </div>
+                <label htmlFor="audit-filter" className="ac-srhide">작업 종류로 거르기</label>
+                <select id="audit-filter" className="ac-select" value={auditFilter} onChange={(e) => setAuditFilter(e.target.value)} style={{ marginLeft: 'auto' }}>
+                  <option value="all">모든 작업</option>
+                  {actions.map((a) => (
+                    <option key={a} value={a}>{AUDIT_ACTION_LABELS[a] || a}</option>
+                  ))}
+                </select>
+                <span style={S.tag}>{shown.length}/{auditEvents.length}건</span>
+                <button type="button" style={S.btnGhost} onClick={loadAudit}>새로고침</button>
                 <a
                   style={{ ...S.btnGhost, textDecoration: 'none' }}
                   href={`/api/admin/audit?format=csv${adminToken ? `&token=${encodeURIComponent(adminToken)}` : ''}`}
                 >
-                  CSV 다운로드
+                  CSV 내려받기
                 </a>
               </div>
-            </div>
-            <p style={{ ...S.tag, marginTop: 8 }}>
-              KB·룰 편집, 티켓 상태 변경, 백업 복원 이력(최근 500건)입니다. 토큰 값은 기록하지 않습니다.
-            </p>
-          </section>
-
-          <section style={S.card} aria-labelledby="storage-h">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <h2 id="storage-h" style={{ fontSize: 16 }}>저장소 상태</h2>
-              <button style={S.btnGhost} onClick={loadStorage} disabled={storageBusy} aria-busy={storageBusy}>
-                {storageBusy ? '확인 중…' : '새로고침'}
-              </button>
-            </div>
-            <p style={{ ...S.tag, marginTop: 8 }}>
-              데이터가 어디에 저장되는지와 최근 저장 결과입니다. 저장이 막히면 서비스는 메모리로 계속 동작하며, 그 사유가 여기에 표시됩니다.
-            </p>
-
-            <div role="status" aria-live="polite">
-              {storageErr && (
-                <p style={{ fontSize: 14, color: 'var(--danger, #c0392b)', marginTop: 10 }}>
-                  {storageErr} <button style={{ ...S.btnGhost, marginLeft: 6 }} onClick={loadStorage}>다시 시도</button>
-                </p>
-              )}
-              {!storageErr && storageBusy && !storage && (
-                <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10 }}>저장소 상태를 확인하는 중입니다…</p>
-              )}
-              {!storageErr && !storageBusy && !storage && (
-                <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10 }}>표시할 저장소 정보가 없습니다.</p>
-              )}
-            </div>
-
-            {storage && (
-              <>
-                <p style={{ ...S.tag, marginTop: 10 }}>
-                  드라이버: <strong>{storage.driver === 'file' ? '파일(file)' : '메모리(memory)'}</strong>
-                  {' · '}개인정보 저장 승인: <strong>{storage.piiApproved ? '승인됨' : '미승인 [승인 필요]'}</strong>
-                </p>
-                <ul style={{ listStyle: 'none', marginTop: 10, display: 'grid', gap: 8 }}>
-                  {storage.namespaces.map((n) => {
-                    const meta = STORAGE_HEALTH[n.health] ?? STORAGE_HEALTH.empty;
-                    return (
-                      <li key={n.ns} style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-sm)', padding: '10px 12px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
-                          <strong style={{ fontSize: 14 }}>{STORAGE_NS_LABELS[n.ns] || n.ns}</strong>
-                          <span style={S.tag}>
-                            {meta.label}
-                            {n.lastSavedAt ? ` · 최근 저장 ${new Date(n.lastSavedAt).toLocaleString()}` : ''}
-                          </span>
-                        </div>
-                        <p style={{ ...S.tag, marginTop: 4 }}>{meta.hint}</p>
-                        {n.lastError && (
-                          <p style={{ fontSize: 12, color: 'var(--danger, #c0392b)', marginTop: 4 }}>오류: {n.lastError}</p>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </>
-            )}
-          </section>
-          {auditEvents.length === 0 && (
-            <section style={S.card}>
-              <p style={{ fontSize: 14, color: 'var(--sub)' }}>기록된 관리 작업이 없습니다. 지식베이스나 룰을 수정하면 이곳에 이력이 남아요.</p>
-            </section>
-          )}
-          {auditEvents.map((e) => (
-            <section key={e.id} style={{ ...S.card, padding: '12px 20px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
-                <div style={{ fontSize: 14 }}>
-                  <strong>{AUDIT_ACTION_LABELS[e.action] || e.action}</strong>
-                  {e.target && <span style={{ color: 'var(--sub)' }}> · {e.target}</span>}
-                  {e.detail && <span style={{ color: 'var(--sub)' }}> — {e.detail}</span>}
+              {auditEvents.length === 0 ? (
+                <div className="ac-empty">
+                  <EmptyArt kind="kb" />
+                  <p style={{ fontSize: 14, fontWeight: 700 }}>기록된 관리 작업이 없습니다</p>
+                  <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>지식베이스나 규칙을 수정하면 누가 언제 무엇을 바꿨는지 이곳에 남습니다.</p>
+                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => setTab('kb')}>지식베이스 열기</button>
                 </div>
-                <span style={S.tag}>
-                  {new Date(e.at).toLocaleString()} · {e.authed ? '토큰 인증' : '미인증(토큰 미설정)'}
-                </span>
-              </div>
+              ) : shown.length === 0 ? (
+                <div className="ac-empty">
+                  <p style={{ fontSize: 14, fontWeight: 700 }}>선택한 종류의 작업이 없습니다</p>
+                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => setAuditFilter('all')}>필터 지우기</button>
+                </div>
+              ) : (
+                <table className="ac-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">시각</th>
+                      <th scope="col">작업</th>
+                      <th scope="col">대상·내용</th>
+                      <th scope="col" className="ac-col-wide">인증</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shown.map((e) => (
+                      <tr key={e.id}>
+                        <td style={{ whiteSpace: 'nowrap', color: 'var(--sub)' }}>{timeLabel(e.at)}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}><span className="ac-pill">{AUDIT_ACTION_LABELS[e.action] || e.action}</span></td>
+                        <td style={{ minWidth: 160 }}>
+                          {e.target && <span style={{ fontWeight: 700 }}>{e.target}</span>}
+                          {e.detail && <span className="ac-clamp" style={{ color: 'var(--sub)', display: 'block' }}>{e.detail}</span>}
+                          {!e.target && !e.detail && <span style={{ color: 'var(--mut)' }}>—</span>}
+                        </td>
+                        <td className="ac-col-wide">
+                          <span className="ac-pill" style={e.authed ? { background: '#F0FDF4', color: 'var(--success)' } : { background: '#FFFBEB', color: 'var(--warn)' }}>
+                            {e.authed ? '로그인됨' : '인증 없이 수행'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </section>
-          ))}
-        </>
-      )}
+
+            <section style={S.card} aria-labelledby="storage-h">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <div>
+                  <h2 id="storage-h" style={S.h2}>저장소 상태</h2>
+                  <p style={{ ...S.tag, marginTop: 2 }}>데이터가 어디에 저장되는지와 최근 저장 결과입니다. 저장이 막혀도 서비스는 계속 동작하며, 사유가 여기에 표시됩니다.</p>
+                </div>
+                <button style={S.btnGhost} onClick={loadStorage} disabled={storageBusy} aria-busy={storageBusy}>
+                  {storageBusy ? '확인 중…' : '새로고침'}
+                </button>
+              </div>
+
+              <div role="status" aria-live="polite">
+                {storageErr && (
+                  <p style={{ fontSize: 14, color: 'var(--danger)', marginTop: 10 }}>
+                    {storageErr} <button style={{ ...S.btnGhost, marginLeft: 6 }} onClick={loadStorage}>다시 시도</button>
+                  </p>
+                )}
+                {!storageErr && storageBusy && !storage && (
+                  <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10 }}>저장소 상태를 확인하는 중입니다…</p>
+                )}
+                {!storageErr && !storageBusy && !storage && (
+                  <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10 }}>표시할 저장소 정보가 없습니다.</p>
+                )}
+              </div>
+
+              {storage && (
+                <>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
+                    <span className="ac-pill">저장 방식 · {storage.driver === 'file' ? '파일' : '메모리'}</span>
+                    <span className="ac-pill" style={storage.piiApproved ? { background: '#F0FDF4', color: 'var(--success)' } : { background: '#FFFBEB', color: 'var(--warn)' }}>
+                      개인정보 저장 {storage.piiApproved ? '승인됨' : '미승인 [승인 필요]'}
+                    </span>
+                  </div>
+                  <ul className="ac-nsgrid">
+                    {storage.namespaces.map((n) => {
+                      const meta = STORAGE_HEALTH[n.health] ?? STORAGE_HEALTH.empty;
+                      const tone = n.health === 'ok' ? { background: '#F0FDF4', color: 'var(--success)' }
+                        : n.health === 'error' || n.health === 'readonly' ? { background: '#FEF2F2', color: 'var(--danger)' }
+                        : n.health === 'empty' ? undefined
+                        : { background: '#FFFBEB', color: 'var(--warn)' };
+                      return (
+                        <li key={n.ns} className="ac-nscard" data-health={n.health}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                            <strong style={{ fontSize: 13.5 }}>{STORAGE_NS_LABELS[n.ns] || n.ns}</strong>
+                            <span className="ac-pill" style={tone}>{meta.label}</span>
+                          </div>
+                          <p style={{ fontSize: 12.5, color: 'var(--sub)', marginTop: 6, lineHeight: 1.5 }}>{meta.hint}</p>
+                          {n.lastSavedAt && <p style={{ ...S.tag, marginTop: 4 }}>최근 저장 {timeLabel(n.lastSavedAt)}</p>}
+                          {n.lastError && (
+                            <p style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>오류: {n.lastError}</p>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
+            </section>
+          </>
+        );
+      })()}
 
       {tab === 'test' && (
         <div className="ac-split ac-split-test">
@@ -2831,6 +3150,26 @@ export default function AdminPage() {
       )}
         </main>
       </div>
+
+      {ticketId && (() => {
+        const t = tickets.find((x) => x.id === ticketId);
+        if (!t) return null;
+        return (
+          <TicketDrawer
+            ticket={t}
+            hasConversation={recentTurns.some((r) => r.sessionId === t.sessionId)}
+            busy={ticketBusy}
+            onClose={closeTicket}
+            onStatus={(st) => patchTicket(t.id, st)}
+            onOpenConversation={() => {
+              const from = ticketReturnRef.current;
+              closeTicket();
+              openDrawer(t.sessionId, from);
+            }}
+            closeRef={ticketCloseRef}
+          />
+        );
+      })()}
 
       {drawerSession && (
         <ConversationDrawer
