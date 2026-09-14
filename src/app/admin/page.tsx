@@ -373,6 +373,99 @@ function TicketDrawer({
   );
 }
 
+/** 고객사 상세 서랍 — 계약 정보와 귀속 이력(누가 언제 어떤 근거로 바꿨는지)을 시간순으로 보여준다. */
+function AccountDrawer({
+  account, partnerName, canWrite, onClose, onEdit, closeRef,
+}: {
+  account: AccountView;
+  partnerName: (id: string | null) => string;
+  canWrite: boolean;
+  onClose: () => void;
+  onEdit: () => void;
+  closeRef: RefObject<HTMLButtonElement>;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const a = account;
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab' || !panelRef.current) return;
+    const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>('button,[href],input,textarea,select,[tabindex]:not([tabindex="-1"])'))
+      .filter((el) => !el.hasAttribute('disabled'));
+    if (items.length === 0) return;
+    const firstEl = items[0];
+    const lastEl = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === firstEl) { e.preventDefault(); lastEl.focus(); }
+    else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); firstEl.focus(); }
+  };
+  const history = a.attribution.slice().sort((x, y) => new Date(y.at).getTime() - new Date(x.at).getTime());
+
+  return (
+    <div className="ac-drawer-root">
+      <div className="ac-drawer-bg" onClick={onClose} aria-hidden="true" />
+      <div ref={panelRef} className="ac-drawer" role="dialog" aria-modal="true" aria-labelledby="ac-account-title" onKeyDown={onKeyDown}>
+        <div className="ac-drawer-head">
+          <div style={{ minWidth: 0 }}>
+            <h2 id="ac-account-title" style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-.01em' }}>{a.name}</h2>
+            <p style={{ fontSize: 12, color: 'var(--mut)', marginTop: 2 }}>
+              {a.partnerId ? `${partnerName(a.partnerId)} 귀속` : '직접 계약'} · {SOURCE_LABELS[a.source] ?? '미확인'}
+            </p>
+          </div>
+          <button ref={closeRef} type="button" className="ac-iconbtn" onClick={onClose} aria-label="상세 닫기">
+            <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+          </button>
+        </div>
+
+        <div className="ac-drawer-meta">
+          <span className="ac-pill" style={ACCOUNT_STATUS_TONE[a.status]}>{ACCOUNT_STATUS_LABELS[a.status]}</span>
+          <span className="ac-pill">{a.contractedAt ? `계약일 ${a.contractedAt}` : '계약일 없음'}</span>
+          <span className="ac-pill" style={typeof a.monthlyFeeKrw === 'number' ? undefined : { background: 'var(--bg)', color: 'var(--mut)' }}>
+            월 {wonLabel(a.monthlyFeeKrw)}
+          </span>
+        </div>
+
+        <div className="ac-drawer-body">
+          <span className="ac-rulekey">계약 정보</span>
+          <dl className="ac-dl" style={{ gridTemplateColumns: '84px minmax(0,1fr)', marginBottom: 18 }}>
+            <dt>귀속</dt><dd>{partnerName(a.partnerId)}</dd>
+            <dt>유입 경로</dt><dd>{SOURCE_LABELS[a.source] ?? '미확인'}</dd>
+            <dt>고원 담당</dt><dd>{a.ownerName || <span style={{ color: 'var(--mut)' }}>미지정</span>}</dd>
+            <dt>월 이용료</dt><dd>{wonLabel(a.monthlyFeeKrw)}{typeof a.monthlyFeeKrw !== 'number' && <span style={{ color: 'var(--mut)' }}> — 정산 합계에서 제외됩니다</span>}</dd>
+            {a.memo && <><dt>메모</dt><dd style={{ whiteSpace: 'pre-wrap' }}>{a.memo}</dd></>}
+          </dl>
+
+          <span className="ac-rulekey">귀속 이력 {history.length}건</span>
+          {history.length === 0 ? (
+            <p style={{ fontSize: 13, color: 'var(--mut)' }}>아직 기록된 이력이 없습니다. 귀속을 바꾸면 여기에 근거와 함께 남습니다.</p>
+          ) : (
+            <ol className="ac-timeline">
+              {history.map((h, idx) => (
+                <li key={idx} className="ac-tl-item">
+                  <span className="ac-tl-dot" aria-hidden="true" />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12, color: 'var(--mut)', fontVariantNumeric: 'tabular-nums' }}>{h.at.slice(0, 10)}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>
+                        {partnerName(h.fromPartnerId)} <span aria-hidden="true" style={{ color: 'var(--mut)' }}>→</span><span className="ac-srhide">에서</span> {partnerName(h.toPartnerId)}
+                      </span>
+                      <span className="ac-pill" style={{ background: 'var(--bg)', color: 'var(--sub)' }}>{SOURCE_LABELS[h.source] ?? '미확인'}</span>
+                      {h.authed && <span className="ac-pill" style={{ background: '#F0FDF4', color: 'var(--success)' }}>인증됨</span>}
+                    </div>
+                    {h.note && <p style={{ fontSize: 12.5, color: 'var(--sub)', marginTop: 3, whiteSpace: 'pre-wrap' }}>{h.note}</p>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+
+        <div className="ac-drawer-foot">
+          {canWrite && <button type="button" style={S.btn} onClick={onEdit}>수정</button>}
+          <button type="button" style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={onClose}>닫기</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function KpiCard({ label, value, note, empty }: { label: string; value: string; note: string; empty?: boolean }) {
   return (
     <div className="ac-kpicard">
@@ -649,8 +742,8 @@ const ACCOUNT_STATUS_LABELS: Record<AccountView['status'], string> = {
   contracted: '계약',
   churned: '해지',
 };
-interface PartnerForm { id: string; name: string; managerName: string; feeRateBp: string; status: 'active' | 'paused'; memo: string }
-const EMPTY_PARTNER_FORM: PartnerForm = { id: '', name: '', managerName: '', feeRateBp: '', status: 'active', memo: '' };
+interface PartnerForm { id: string; name: string; managerName: string; feeRatePct: string; status: 'active' | 'paused'; memo: string }
+const EMPTY_PARTNER_FORM: PartnerForm = { id: '', name: '', managerName: '', feeRatePct: '', status: 'active', memo: '' };
 interface AccountForm {
   id: string; name: string; partnerId: string; source: string;
   status: AccountView['status']; contractedAt: string; ownerName: string; monthlyFeeKrw: string; attributionNote: string;
@@ -663,6 +756,24 @@ const EMPTY_ACCOUNT_FORM: AccountForm = {
 function feeLabel(bp: number | null): string {
   return bp === null || bp === undefined ? '미설정' : `${(bp / 100).toFixed(2).replace(/\.?0+$/, '')}%`;
 }
+/** 화면은 %로 받고 저장은 bp(1% = 100bp)로 한다 — API 계약은 그대로다. */
+function pctToBp(pct: string): number {
+  return Math.round(Number(pct) * 100);
+}
+function bpToPct(bp: number): string {
+  return (bp / 100).toFixed(2).replace(/\.?0+$/, '');
+}
+
+/** 계약 상태 pill 색 — 토큰만 쓴다. */
+const ACCOUNT_STATUS_TONE: Record<AccountView['status'], { background: string; color: string }> = {
+  prospect: { background: '#FFFBEB', color: 'var(--warn)' },
+  contracted: { background: '#F0FDF4', color: 'var(--success)' },
+  churned: { background: 'var(--bg)', color: 'var(--mut)' },
+};
+const PARTNER_STATUS_TONE: Record<PartnerView['status'], { background: string; color: string }> = {
+  active: { background: '#F0FDF4', color: 'var(--success)' },
+  paused: { background: 'var(--bg)', color: 'var(--mut)' },
+};
 
 // ── 콘솔 내비게이션 ──
 // 탭 목록은 사이드바(넓은 화면)와 상단 가로 스크롤 바(좁은 화면)에 같은 순서로 쓰인다.
@@ -998,8 +1109,42 @@ export default function AdminPage() {
   const [partnerLoaded, setPartnerLoaded] = useState(false);
   const [pForm, setPForm] = useState<PartnerForm>(EMPTY_PARTNER_FORM);
   const [aForm, setAForm] = useState<AccountForm>(EMPTY_ACCOUNT_FORM);
+  // 우측 폼은 고객사/파트너 중 하나만 보여준다(한 화면에 긴 폼 두 개를 쌓지 않는다).
+  const [partnerFormKind, setPartnerFormKind] = useState<'account' | 'partner'>('account');
+  const [pErr, setPErr] = useState<{ name?: string; feeRatePct?: string }>({});
+  const [aErr, setAErr] = useState<{ name?: string; partnerId?: string; contractedAt?: string; monthlyFeeKrw?: string }>({});
+  const [partnerSaving, setPartnerSaving] = useState(false);
+  const [accountQuery, setAccountQuery] = useState('');
+  const partnerFormRef = useRef<HTMLDivElement | null>(null);
   // 파트너 담당자 계정은 읽기 전용이다 — 서버가 403으로 막지만, 화면에서도 쓰기 UI를 감춘다.
   const [canWrite, setCanWrite] = useState(true);
+
+  // 고객사 상세 서랍(귀속 이력) — 연 행으로 초점을 되돌린다.
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const accountReturnRef = useRef<HTMLElement | null>(null);
+  const accountCloseRef = useRef<HTMLButtonElement>(null);
+  const openAccount = (id: string, from: HTMLElement | null) => {
+    accountReturnRef.current = from;
+    setAccountId(id);
+  };
+  const closeAccount = useCallback(() => {
+    setAccountId(null);
+    const el = accountReturnRef.current;
+    accountReturnRef.current = null;
+    window.setTimeout(() => el?.focus(), 0);
+  }, []);
+  useEffect(() => {
+    if (!accountId) return;
+    const t = window.setTimeout(() => accountCloseRef.current?.focus(), 30);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeAccount();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [accountId, closeAccount]);
 
   const loadPartners = useCallback(async (filter = '') => {
     setPartnerBusy(true);
@@ -1025,40 +1170,100 @@ export default function AdminPage() {
     }
   }, []);
 
-  const submitPartner = async () => {
-    setPartnerErr('');
-    const res = await fetch('/api/admin/partners', {
-      method: 'POST',
-      headers: authHeaders(true),
-      body: JSON.stringify({ kind: 'partner', ...pForm, feeRateBp: pForm.feeRateBp === '' ? null : pForm.feeRateBp }),
+  /** 폼으로 스크롤(좁은 화면에서는 폼이 목록 아래에 있다). */
+  const focusPartnerForm = (kind: 'account' | 'partner') => {
+    setPartnerFormKind(kind);
+    window.setTimeout(() => partnerFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  };
+  const editPartner = (p: PartnerView) => {
+    setPForm({ id: p.id, name: p.name, managerName: p.managerName ?? '', feeRatePct: p.feeRateBp === null ? '' : bpToPct(p.feeRateBp), status: p.status, memo: p.memo ?? '' });
+    setPErr({});
+    focusPartnerForm('partner');
+  };
+  const editAccount = (a: AccountView) => {
+    setAForm({
+      id: a.id, name: a.name, partnerId: a.partnerId ?? '', source: a.source,
+      status: a.status, contractedAt: a.contractedAt ?? '', ownerName: a.ownerName ?? '',
+      monthlyFeeKrw: typeof a.monthlyFeeKrw === 'number' ? String(a.monthlyFeeKrw) : '', attributionNote: '',
     });
-    if (on401(res)) return;
-    const data = await res.json();
-    if (!data.ok) {
-      setPartnerErr(data.message || data.error || '저장하지 못했습니다.');
-      return;
+    setAErr({});
+    focusPartnerForm('account');
+  };
+
+  const submitPartner = async () => {
+    if (partnerSaving) return;
+    // 서버도 같은 규칙으로 거절하지만, 어느 칸이 왜 틀렸는지는 화면에서 먼저 알린다.
+    const errs: typeof pErr = {};
+    if (!pForm.name.trim()) errs.name = '파트너명을 입력해 주세요.';
+    if (pForm.feeRatePct.trim() !== '') {
+      const n = Number(pForm.feeRatePct);
+      if (!Number.isFinite(n) || n < 0 || n > 100) errs.feeRatePct = '수수료율은 0~100 사이의 숫자(%)여야 합니다.';
     }
-    setPForm(EMPTY_PARTNER_FORM);
-    await loadPartners(partnerFilter);
-    flash(data.created ? '파트너를 등록했습니다.' : '파트너를 수정했습니다.');
+    setPErr(errs);
+    if (Object.keys(errs).length > 0) return;
+    setPartnerErr('');
+    setPartnerSaving(true);
+    try {
+      const res = await fetch('/api/admin/partners', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({
+          kind: 'partner', id: pForm.id, name: pForm.name, managerName: pForm.managerName, status: pForm.status, memo: pForm.memo,
+          feeRateBp: pForm.feeRatePct.trim() === '' ? null : pctToBp(pForm.feeRatePct),
+        }),
+      });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (!data.ok) {
+        setPartnerErr(data.message || data.error || '저장하지 못했습니다.');
+        return;
+      }
+      setPForm(EMPTY_PARTNER_FORM);
+      await loadPartners(partnerFilter);
+      flash(data.created ? '파트너를 등록했습니다.' : '파트너를 수정했습니다.');
+    } catch {
+      setPartnerErr('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setPartnerSaving(false);
+    }
   };
 
   const submitAccount = async () => {
-    setPartnerErr('');
-    const res = await fetch('/api/admin/partners', {
-      method: 'POST',
-      headers: authHeaders(true),
-      body: JSON.stringify({ kind: 'account', ...aForm }),
-    });
-    if (on401(res)) return;
-    const data = await res.json();
-    if (!data.ok) {
-      setPartnerErr(data.message || data.error || '저장하지 못했습니다.');
-      return;
+    if (partnerSaving) return;
+    const errs: typeof aErr = {};
+    if (!aForm.name.trim()) errs.name = '고객사명을 입력해 주세요.';
+    if (aForm.source === 'partner' && !aForm.partnerId) errs.partnerId = '유입 경로가 「파트너 유치」이면 귀속 파트너를 골라야 합니다.';
+    const date = aForm.contractedAt.trim();
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) errs.contractedAt = '계약일은 2026-09-01 처럼 연-월-일 형식이어야 합니다.';
+    if (!date && aForm.status === 'contracted') errs.contractedAt = '계약 상태로 두려면 계약일이 필요합니다(정산 기준일).';
+    if (aForm.monthlyFeeKrw.trim() !== '') {
+      const n = Number(aForm.monthlyFeeKrw);
+      if (!Number.isFinite(n) || n < 0) errs.monthlyFeeKrw = '월 이용료는 0 이상의 숫자(원)여야 합니다.';
     }
-    setAForm(EMPTY_ACCOUNT_FORM);
-    await loadPartners(partnerFilter);
-    flash(data.created ? '고객사를 등록했습니다.' : '고객사를 수정했습니다.');
+    setAErr(errs);
+    if (Object.keys(errs).length > 0) return;
+    setPartnerErr('');
+    setPartnerSaving(true);
+    try {
+      const res = await fetch('/api/admin/partners', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({ kind: 'account', ...aForm }),
+      });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (!data.ok) {
+        setPartnerErr(data.message || data.error || '저장하지 못했습니다.');
+        return;
+      }
+      setAForm(EMPTY_ACCOUNT_FORM);
+      await loadPartners(partnerFilter);
+      flash(data.created ? '고객사를 등록했습니다.' : '고객사를 수정했습니다.');
+    } catch {
+      setPartnerErr('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setPartnerSaving(false);
+    }
   };
 
   const removePartner = async (p: PartnerView) => {
@@ -1074,6 +1279,7 @@ export default function AdminPage() {
       setPartnerErr(data.message || data.error || '삭제하지 못했습니다.');
       return;
     }
+    if (pForm.id === p.id) setPForm(EMPTY_PARTNER_FORM);
     await loadPartners(partnerFilter);
     flash('파트너를 삭제했습니다.');
   };
@@ -2398,353 +2604,470 @@ export default function AdminPage() {
         );
       })()}
 
-      {tab === 'partner' && (
-        <>
-          <section style={S.card} aria-labelledby="partner-h">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <h2 id="partner-h" style={{ fontSize: 16 }}>파트너·매출 귀속</h2>
-              <button style={S.btnGhost} onClick={() => loadPartners(partnerFilter)} disabled={partnerBusy}>
-                {partnerBusy ? '불러오는 중…' : '새로고침'}
-              </button>
+      {tab === 'partner' && (() => {
+        const counts = { prospect: 0, contracted: 0, churned: 0 } as Record<AccountView['status'], number>;
+        for (const a of accounts) counts[a.status] += 1;
+        const activePartners = partners.filter((p) => p.status === 'active').length;
+        const partnerName = (id: string | null) => (id ? partners.find((p) => p.id === id)?.name ?? '이름 없는 파트너' : '직접 계약');
+        const q = accountQuery.trim().toLowerCase();
+        const filteredAccounts = accounts
+          .filter((a) => !q || [a.name, partnerName(a.partnerId), a.ownerName ?? '', SOURCE_LABELS[a.source] ?? '', ACCOUNT_STATUS_LABELS[a.status]].some((v) => v.toLowerCase().includes(q)))
+          .slice()
+          .sort((x, y) => x.name.localeCompare(y.name, 'ko'));
+        const rollupOf = (id: string | null) => rollup.find((r) => (r.partnerId ?? null) === id);
+        const directRollup = rollupOf(null);
+        const filtering = Boolean(partnerFilter) || Boolean(q);
+        const inputStyle = (bad?: string) => ({ ...S.input, ...(bad ? { borderColor: 'var(--danger)' } : {}) });
+        return (
+          <>
+            <div className="ac-kpi" style={{ marginBottom: 16 }}>
+              <KpiCard label="운영 중 파트너" value={partnerLoaded ? String(activePartners) : MEASURING} empty={!partnerLoaded} note={partnerLoaded ? `중지 ${partners.length - activePartners}곳 별도` : '파트너 정보를 불러오는 중'} />
+              <KpiCard label="고객사" value={partnerLoaded ? String(accounts.length) : MEASURING} empty={!partnerLoaded} note={partnerFilter ? '현재 귀속 필터 기준' : '직접 계약 포함 전체'} />
+              <KpiCard label="계약 중" value={partnerLoaded ? String(counts.contracted) : MEASURING} empty={!partnerLoaded} note={`해지 ${counts.churned}곳 별도`} />
+              <KpiCard label="검토 중" value={partnerLoaded ? String(counts.prospect) : MEASURING} empty={!partnerLoaded} note="아직 계약 전인 고객사" />
             </div>
-            <p style={{ ...S.tag, marginTop: 6 }}>
-              계약 주체는 고원이고, 파트너는 유치와 운영을 맡습니다. 여기서는 <b>어느 고객사를 누가 데려왔는지</b>만 기록합니다.
-              담당자는 이름만 저장하고 연락처는 저장하지 않습니다. 실제 정산·청구는 계약서 확정 후 <b>[승인 필요]</b>.
-            </p>
+
             {partnerErr && (
-              <p role="alert" style={{ fontSize: 13, color: '#c0392b', marginTop: 10 }}>{partnerErr}</p>
+              <p role="alert" style={{ fontSize: 13, color: 'var(--danger)', fontWeight: 600, marginBottom: 12 }}>{partnerErr}</p>
             )}
-          </section>
-
-          <section style={S.card} aria-labelledby="rollup-h">
-            <h3 id="rollup-h" style={{ fontSize: 15, marginBottom: 8 }}>귀속 집계</h3>
-            {rollup.length === 0 ? (
-              <p style={S.tag}>{partnerBusy ? '불러오는 중…' : '집계할 계약이 아직 없습니다.'}</p>
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                  <caption style={{ ...S.tag, textAlign: 'left', marginBottom: 6 }}>
-                    건수만 집계합니다(금액·성과 수치는 실적 연동 후 표시).
-                  </caption>
-                  <thead>
-                    <tr style={{ textAlign: 'left', color: 'var(--mut)' }}>
-                      <th scope="col" style={{ padding: '6px 8px' }}>귀속</th>
-                      <th scope="col" style={{ padding: '6px 8px' }}>수수료율</th>
-                      <th scope="col" style={{ padding: '6px 8px' }}>전체</th>
-                      <th scope="col" style={{ padding: '6px 8px' }}>계약</th>
-                      <th scope="col" style={{ padding: '6px 8px' }}>검토 중</th>
-                      <th scope="col" style={{ padding: '6px 8px' }}>해지</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rollup.map((r) => (
-                      <tr key={r.partnerId ?? 'direct'} style={{ borderTop: '1px solid var(--line)' }}>
-                        <th scope="row" style={{ padding: '6px 8px', fontWeight: 600, textAlign: 'left' }}>{r.partnerName}</th>
-                        <td style={{ padding: '6px 8px' }}>{r.partnerId ? feeLabel(r.feeRateBp) : '—'}</td>
-                        <td style={{ padding: '6px 8px' }}>{r.total}</td>
-                        <td style={{ padding: '6px 8px' }}>{r.contracted}</td>
-                        <td style={{ padding: '6px 8px' }}>{r.prospect}</td>
-                        <td style={{ padding: '6px 8px' }}>{r.churned}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            {!canWrite && (
+              <p role="note" style={{ ...S.card, fontSize: 13, padding: '12px 16px' }}>
+                <b>조회 전용 계정</b>입니다. 파트너 담당자 계정은 자기 파트너에 귀속된 고객사만 볼 수 있고 등록·수정은 할 수 없습니다. 변경이 필요하면 고원 관리자에게 요청해 주세요.
+              </p>
             )}
-          </section>
 
-          {!canWrite && (
-            <section style={S.card} role="note">
-              <p style={{ fontSize: 13 }}>
-                <b>조회 전용 계정</b>입니다. 파트너 담당자 계정은 자기 파트너에 귀속된 고객사만 볼 수 있고,
-                등록·수정은 할 수 없습니다. 변경이 필요하면 고원 관리자에게 요청해 주세요.
-              </p>
-            </section>
-          )}
-          {canWrite && (
-          <section style={S.card} aria-labelledby="partner-form-h">
-            <h3 id="partner-form-h" style={{ fontSize: 15, marginBottom: 8 }}>{pForm.id ? '파트너 수정' : '파트너 등록'}</h3>
-            <label htmlFor="p-name" style={S.tag}>파트너명</label>
-            <input id="p-name" style={S.input} value={pForm.name} onChange={(e) => setPForm({ ...pForm, name: e.target.value })} placeholder="예: 제이투모로우원" />
-            <label htmlFor="p-manager" style={S.tag}>담당자 이름(연락처는 저장하지 않습니다)</label>
-            <input id="p-manager" style={S.input} value={pForm.managerName} onChange={(e) => setPForm({ ...pForm, managerName: e.target.value })} placeholder="예: 김담당" />
-            <label htmlFor="p-fee" style={S.tag}>수수료율(bp · 100bp = 1%, 비우면 미설정)</label>
-            <input id="p-fee" style={S.input} inputMode="numeric" value={pForm.feeRateBp} onChange={(e) => setPForm({ ...pForm, feeRateBp: e.target.value })} placeholder="예: 1500 (=15%)" />
-            <label htmlFor="p-status" style={S.tag}>상태</label>
-            <select id="p-status" style={S.input} value={pForm.status} onChange={(e) => setPForm({ ...pForm, status: e.target.value as PartnerForm['status'] })}>
-              <option value="active">운영 중</option>
-              <option value="paused">중지</option>
-            </select>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button style={S.btn} onClick={submitPartner}>{pForm.id ? '수정 저장' : '등록'}</button>
-              {pForm.id && <button style={S.btnGhost} onClick={() => setPForm(EMPTY_PARTNER_FORM)}>취소</button>}
-            </div>
-          </section>
-
-          )}
-
-          <section style={S.card} aria-labelledby="partner-list-h">
-            <h3 id="partner-list-h" style={{ fontSize: 15, marginBottom: 8 }}>파트너 ({partners.length})</h3>
-            {partners.length === 0 ? (
-              <p style={S.tag}>
-                {partnerBusy ? '불러오는 중…' : '등록된 파트너가 없습니다. 위 양식에서 첫 파트너를 등록하면 고객사 귀속을 지정할 수 있습니다.'}
-              </p>
-            ) : (
-              partners.map((p) => (
-                <div key={p.id} style={{ borderTop: '1px solid var(--line)', padding: '10px 0', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <b style={{ fontSize: 14 }}>{p.name}</b>
-                  <span style={S.tag}>{p.id} · {p.status === 'active' ? '운영 중' : '중지'} · 수수료 {feeLabel(p.feeRateBp)}{p.managerName ? ` · 담당 ${p.managerName}` : ''}</span>
-                  <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-                    {canWrite && <button style={S.btnGhost} onClick={() => setPForm({ id: p.id, name: p.name, managerName: p.managerName ?? '', feeRateBp: p.feeRateBp === null ? '' : String(p.feeRateBp), status: p.status, memo: p.memo ?? '' })}>수정</button>}
-                    {canWrite && <button style={S.btnGhost} onClick={() => removePartner(p)}>삭제</button>}
-                  </span>
-                </div>
-              ))
-            )}
-          </section>
-
-          {canWrite && (
-          <section style={S.card} aria-labelledby="account-form-h">
-            <h3 id="account-form-h" style={{ fontSize: 15, marginBottom: 8 }}>{aForm.id ? '고객사 수정' : '고객사 등록'}</h3>
-            <label htmlFor="a-name" style={S.tag}>고객사명</label>
-            <input id="a-name" style={S.input} value={aForm.name} onChange={(e) => setAForm({ ...aForm, name: e.target.value })} placeholder="예: OO의원" />
-            <label htmlFor="a-partner" style={S.tag}>귀속 파트너(비우면 직접 계약)</label>
-            <select id="a-partner" style={S.input} value={aForm.partnerId} onChange={(e) => setAForm({ ...aForm, partnerId: e.target.value })}>
-              <option value="">직접 계약</option>
-              {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <label htmlFor="a-source" style={S.tag}>유입 경로</label>
-            <select id="a-source" style={S.input} value={aForm.source} onChange={(e) => setAForm({ ...aForm, source: e.target.value })}>
-              {Object.entries(SOURCE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
-            <label htmlFor="a-status" style={S.tag}>계약 상태</label>
-            <select id="a-status" style={S.input} value={aForm.status} onChange={(e) => setAForm({ ...aForm, status: e.target.value as AccountView['status'] })}>
-              {Object.entries(ACCOUNT_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
-            <label htmlFor="a-date" style={S.tag}>계약일(YYYY-MM-DD · 계약 상태면 필수)</label>
-            <input id="a-date" style={S.input} value={aForm.contractedAt} onChange={(e) => setAForm({ ...aForm, contractedAt: e.target.value })} placeholder="2026-09-01" />
-            <label htmlFor="a-fee" style={S.tag}>월 이용료(원 · 계약서 금액. 비우면 미입력 — 정산 합계에서 제외됩니다)</label>
-            <input id="a-fee" style={S.input} inputMode="numeric" value={aForm.monthlyFeeKrw} onChange={(e) => setAForm({ ...aForm, monthlyFeeKrw: e.target.value })} placeholder="예: 300000" />
-            <label htmlFor="a-owner" style={S.tag}>고원 담당자 이름</label>
-            <input id="a-owner" style={S.input} value={aForm.ownerName} onChange={(e) => setAForm({ ...aForm, ownerName: e.target.value })} placeholder="예: 이담당" />
-            <label htmlFor="a-note" style={S.tag}>귀속 근거(변경 시 이력에 남습니다)</label>
-            <input id="a-note" style={S.input} value={aForm.attributionNote} onChange={(e) => setAForm({ ...aForm, attributionNote: e.target.value })} placeholder="예: 파트너 소개로 최초 미팅(2026-08-20)" />
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button style={S.btn} onClick={submitAccount}>{aForm.id ? '수정 저장' : '등록'}</button>
-              {aForm.id && <button style={S.btnGhost} onClick={() => setAForm(EMPTY_ACCOUNT_FORM)}>취소</button>}
-            </div>
-          </section>
-
-          )}
-
-          <section style={S.card} aria-labelledby="account-list-h">
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <h3 id="account-list-h" style={{ fontSize: 15 }}>고객사 ({accounts.length})</h3>
-              <span>
-                <label htmlFor="a-filter" style={{ ...S.tag, marginRight: 6 }}>귀속 필터</label>
-                <select
-                  id="a-filter"
-                  style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '6px 10px', fontSize: 13 }}
-                  value={partnerFilter}
-                  onChange={(e) => { setPartnerFilter(e.target.value); loadPartners(e.target.value); }}
-                >
-                  <option value="">전체</option>
-                  <option value="direct">직접 계약</option>
-                  {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </span>
-            </div>
-            {accounts.length === 0 ? (
-              <p style={{ ...S.tag, marginTop: 10 }}>
-                {partnerBusy
-                  ? '불러오는 중…'
-                  : partnerFilter
-                    ? '이 조건에 해당하는 고객사가 없습니다. 필터를 "전체"로 바꿔 보세요.'
-                    : '등록된 고객사가 없습니다. 위 양식에서 첫 고객사를 등록하면 유입 경로와 귀속 이력이 함께 기록됩니다.'}
-              </p>
-            ) : (
-              accounts.map((a) => {
-                const last = a.attribution[a.attribution.length - 1];
-                const partnerName = a.partnerId ? partners.find((p) => p.id === a.partnerId)?.name ?? a.partnerId : '직접 계약';
-                return (
-                  <div key={a.id} style={{ borderTop: '1px solid var(--line)', padding: '10px 0' }}>
-                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <b style={{ fontSize: 14 }}>{a.name}</b>
-                      <span style={S.tag}>
-                        {a.id} · {partnerName} · {SOURCE_LABELS[a.source] ?? a.source} · {ACCOUNT_STATUS_LABELS[a.status]}
-                        {a.contractedAt ? ` · 계약일 ${a.contractedAt}` : ''}
-                        {a.ownerName ? ` · 담당 ${a.ownerName}` : ''}
-                        {` · 월 ${wonLabel(a.monthlyFeeKrw)}`}
-                      </span>
-                      <span style={{ marginLeft: 'auto' }}>
-                        {canWrite && <button
-                          style={S.btnGhost}
-                          onClick={() => setAForm({
-                            id: a.id, name: a.name, partnerId: a.partnerId ?? '', source: a.source,
-                            status: a.status, contractedAt: a.contractedAt ?? '', ownerName: a.ownerName ?? '',
-                            monthlyFeeKrw: typeof a.monthlyFeeKrw === 'number' ? String(a.monthlyFeeKrw) : '', attributionNote: '',
-                          })}
-                        >수정</button>}
-                      </span>
-                    </div>
-                    <details style={{ marginTop: 6 }}>
-                      <summary style={{ ...S.tag, cursor: 'pointer' }}>귀속 이력 {a.attribution.length}건{last ? ` · 최근: ${last.note}` : ''}</summary>
-                      <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 12.5, color: 'var(--sub)' }}>
-                        {a.attribution.map((h, idx) => (
-                          <li key={idx} style={{ marginBottom: 3 }}>
-                            {h.at.slice(0, 10)} · {h.fromPartnerId ?? '직접'} → {h.toPartnerId ?? '직접'} · {SOURCE_LABELS[h.source] ?? h.source} · {h.note}
-                            {h.authed ? ' · 인증됨' : ''}
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
+            <div className="ac-split">
+              {/* ── 좌: 고객사 표 → 파트너 표 ── */}
+              <div style={{ minWidth: 0 }}>
+                <section style={{ ...S.card, padding: 0 }} aria-labelledby="account-list-h">
+                  <div className="ac-toolbar">
+                    <h2 id="account-list-h" style={{ ...S.h2, marginRight: 4 }}>고객사</h2>
+                    <input
+                      className="ac-search"
+                      type="search"
+                      aria-label="고객사 검색(고객사명·파트너·담당자)"
+                      placeholder="고객사명·파트너·담당자 검색"
+                      value={accountQuery}
+                      onChange={(e) => setAccountQuery(e.target.value)}
+                    />
+                    <label htmlFor="a-filter" className="ac-srhide">귀속으로 거르기</label>
+                    <select
+                      id="a-filter"
+                      className="ac-select"
+                      value={partnerFilter}
+                      onChange={(e) => { setPartnerFilter(e.target.value); loadPartners(e.target.value); }}
+                    >
+                      <option value="">모든 귀속</option>
+                      <option value="direct">직접 계약</option>
+                      {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                    <span style={{ ...S.tag, marginLeft: 'auto' }} aria-live="polite">{filteredAccounts.length}/{accounts.length}곳</span>
+                    <button type="button" style={S.btnGhost} onClick={() => loadPartners(partnerFilter)} disabled={partnerBusy} aria-busy={partnerBusy || undefined}>
+                      {partnerBusy ? '불러오는 중…' : '새로고침'}
+                    </button>
                   </div>
-                );
-              })
-            )}
-          </section>
-        </>
-      )}
 
-      {tab === 'settle' && (
-        <>
-          <section style={S.card} aria-labelledby="settle-h">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <h2 id="settle-h" style={{ fontSize: 16 }}>파트너 정산 리포트</h2>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button style={S.btnGhost} onClick={() => loadSettlement(settleMonth, settlePartner)} disabled={settleBusy}>
-                  {settleBusy ? '불러오는 중…' : '다시 계산'}
-                </button>
-                <button style={S.btnGhost} onClick={downloadSettlementCsv} disabled={!settleReport || settleReport.rows.length === 0}>
-                  CSV 내려받기
-                </button>
+                  {!partnerLoaded && partnerBusy ? (
+                    <p role="status" aria-live="polite" style={{ ...S.tag, padding: '20px 16px' }}>고객사와 파트너 정보를 불러오는 중입니다…</p>
+                  ) : accounts.length === 0 && !filtering ? (
+                    <div className="ac-empty">
+                      <EmptyArt kind="kb" />
+                      <p style={{ fontSize: 14, fontWeight: 700 }}>등록된 고객사가 없습니다</p>
+                      <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>첫 고객사를 등록하면 유입 경로와 귀속 이력이 함께 기록되고, 정산 리포트의 기준이 됩니다.</p>
+                      {canWrite && <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => focusPartnerForm('account')}>첫 고객사 등록</button>}
+                    </div>
+                  ) : filteredAccounts.length === 0 ? (
+                    <div className="ac-empty">
+                      <p style={{ fontSize: 14, fontWeight: 700 }}>조건에 맞는 고객사가 없습니다</p>
+                      <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => { setAccountQuery(''); if (partnerFilter) { setPartnerFilter(''); loadPartners(''); } }}>필터 지우기</button>
+                    </div>
+                  ) : (
+                    <table className="ac-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">고객사</th>
+                          <th scope="col">귀속</th>
+                          <th scope="col">상태</th>
+                          <th scope="col" className="ac-col-wide">유입 경로</th>
+                          <th scope="col" className="ac-col-wide">계약일</th>
+                          <th scope="col" className="ac-col-wide">월 이용료</th>
+                          <th scope="col"><span className="ac-srhide">동작</span></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredAccounts.map((a) => (
+                          <tr key={a.id} data-editing={aForm.id === a.id ? 'true' : undefined}>
+                            <td style={{ minWidth: 140 }}>
+                              <button
+                                type="button"
+                                className="ac-linkbtn"
+                                style={{ padding: '2px 0', minHeight: 0, fontSize: 13.5, color: 'var(--ink)' }}
+                                aria-haspopup="dialog"
+                                aria-label={`${a.name} 상세 보기`}
+                                onClick={(e) => openAccount(a.id, e.currentTarget)}
+                              >
+                                {a.name}
+                              </button>
+                              {a.ownerName && <span style={{ ...S.tag, display: 'block', marginTop: 2 }}>담당 {a.ownerName}</span>}
+                            </td>
+                            <td style={{ color: a.partnerId ? 'var(--ink)' : 'var(--sub)' }}>{partnerName(a.partnerId)}</td>
+                            <td><span className="ac-pill" style={ACCOUNT_STATUS_TONE[a.status]}>{ACCOUNT_STATUS_LABELS[a.status]}</span></td>
+                            <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{SOURCE_LABELS[a.source] ?? '미확인'}</td>
+                            <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{a.contractedAt || '—'}</td>
+                            <td className="ac-col-wide" style={{ whiteSpace: 'nowrap', color: typeof a.monthlyFeeKrw === 'number' ? 'var(--ink)' : 'var(--mut)' }}>{wonLabel(a.monthlyFeeKrw)}</td>
+                            <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+                              {canWrite && (
+                                <button type="button" className="ac-linkbtn" aria-label={`${a.name} 수정`} onClick={() => editAccount(a)}>수정</button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </section>
+
+                <section style={{ ...S.card, padding: 0 }} aria-labelledby="partner-list-h">
+                  <div className="ac-toolbar">
+                    <h2 id="partner-list-h" style={{ ...S.h2, marginRight: 4 }}>파트너</h2>
+                    <span style={S.tag}>{partners.length}곳 · 고객사 수는 귀속 기준 건수만 셉니다</span>
+                    {canWrite && partners.length > 0 && (
+                      <button type="button" style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={() => { setPForm(EMPTY_PARTNER_FORM); setPErr({}); focusPartnerForm('partner'); }}>파트너 추가</button>
+                    )}
+                  </div>
+                  {partners.length === 0 ? (
+                    <div className="ac-empty">
+                      <p style={{ fontSize: 14, fontWeight: 700 }}>등록된 파트너가 없습니다</p>
+                      <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>파트너를 등록하면 고객사를 그 파트너에 귀속시키고 수수료를 집계할 수 있습니다.</p>
+                      {canWrite && <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => focusPartnerForm('partner')}>첫 파트너 등록</button>}
+                    </div>
+                  ) : (
+                    <table className="ac-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">파트너</th>
+                          <th scope="col">상태</th>
+                          <th scope="col">수수료율</th>
+                          <th scope="col" className="ac-col-wide">담당</th>
+                          <th scope="col">고객사</th>
+                          <th scope="col"><span className="ac-srhide">동작</span></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {partners.map((p) => {
+                          const r = rollupOf(p.id);
+                          return (
+                            <tr key={p.id} data-editing={pForm.id === p.id ? 'true' : undefined}>
+                              <td style={{ fontWeight: 700 }}>{p.name}</td>
+                              <td><span className="ac-pill" style={PARTNER_STATUS_TONE[p.status]}>{p.status === 'active' ? '운영 중' : '중지'}</span></td>
+                              <td style={{ color: p.feeRateBp === null ? 'var(--mut)' : 'var(--ink)', whiteSpace: 'nowrap' }}>{feeLabel(p.feeRateBp)}</td>
+                              <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{p.managerName || '—'}</td>
+                              <td style={{ whiteSpace: 'nowrap' }}>
+                                {r ? <>{r.total}곳<span style={{ ...S.tag, marginLeft: 4 }}>계약 {r.contracted}</span></> : <span style={S.tag}>0곳</span>}
+                              </td>
+                              <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+                                {canWrite && (
+                                  <>
+                                    <button type="button" className="ac-linkbtn" aria-label={`${p.name} 수정`} onClick={() => editPartner(p)}>수정</button>
+                                    <button type="button" className="ac-linkbtn" data-tone="danger" aria-label={`${p.name} 삭제`} onClick={() => removePartner(p)}>삭제</button>
+                                  </>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {directRollup && directRollup.total > 0 && (
+                          <tr>
+                            <td style={{ fontWeight: 700, color: 'var(--sub)' }}>직접 계약</td>
+                            <td><span className="ac-pill" style={{ background: 'var(--bg)', color: 'var(--mut)' }}>고원 직접</span></td>
+                            <td style={{ color: 'var(--mut)' }}>—</td>
+                            <td className="ac-col-wide" style={{ color: 'var(--mut)' }}>—</td>
+                            <td style={{ whiteSpace: 'nowrap' }}>{directRollup.total}곳<span style={{ ...S.tag, marginLeft: 4 }}>계약 {directRollup.contracted}</span></td>
+                            <td />
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  )}
+                </section>
+                <p style={S.tag}>
+                  계약 주체는 고원이고 파트너는 유치와 운영을 맡습니다. 여기에는 어느 고객사를 누가 데려왔는지만 기록하며, 담당자는 이름만 저장합니다. 실제 정산·청구는 계약서 확정 후 [승인 필요].
+                </p>
               </div>
+
+              {/* ── 우: 등록·수정 폼(스티키) — 고객사/파트너 전환 ── */}
+              {canWrite && (
+                <div ref={partnerFormRef} style={{ minWidth: 0 }}>
+                  <section className="ac-sticky" style={S.card} aria-labelledby="partner-form-h">
+                    <div role="group" aria-label="등록 대상" className="ac-seg" style={{ marginBottom: 14 }}>
+                      <button type="button" className="ac-segbtn" aria-pressed={partnerFormKind === 'account'} onClick={() => setPartnerFormKind('account')}>고객사</button>
+                      <button type="button" className="ac-segbtn" aria-pressed={partnerFormKind === 'partner'} onClick={() => setPartnerFormKind('partner')}>파트너</button>
+                    </div>
+
+                    {partnerFormKind === 'account' ? (
+                      <form onSubmit={(e) => { e.preventDefault(); submitAccount(); }} noValidate>
+                        <h2 id="partner-form-h" style={{ ...S.h2, marginBottom: 12 }}>{aForm.id ? '고객사 수정' : '새 고객사'}</h2>
+                        <div className="ac-field">
+                          <label htmlFor="a-name">고객사명 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span></label>
+                          <input id="a-name" style={inputStyle(aErr.name)} value={aForm.name} placeholder="예: OO의원" aria-required="true"
+                            aria-invalid={aErr.name ? 'true' : undefined} aria-describedby={aErr.name ? 'a-name-err' : undefined}
+                            onChange={(e) => { setAForm({ ...aForm, name: e.target.value }); if (aErr.name) setAErr({ ...aErr, name: undefined }); }} />
+                          {aErr.name && <p id="a-name-err" className="ac-err">{aErr.name}</p>}
+                        </div>
+                        <div className="ac-field">
+                          <label htmlFor="a-partner">귀속 파트너</label>
+                          <select id="a-partner" className="ac-select" style={{ width: '100%', ...(aErr.partnerId ? { borderColor: 'var(--danger)' } : {}) }} value={aForm.partnerId}
+                            aria-invalid={aErr.partnerId ? 'true' : undefined} aria-describedby={aErr.partnerId ? 'a-partner-err' : undefined}
+                            onChange={(e) => { setAForm({ ...aForm, partnerId: e.target.value }); if (aErr.partnerId) setAErr({ ...aErr, partnerId: undefined }); }}>
+                            <option value="">직접 계약(파트너 없음)</option>
+                            {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          </select>
+                          {aErr.partnerId && <p id="a-partner-err" className="ac-err">{aErr.partnerId}</p>}
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                          <div className="ac-field">
+                            <label htmlFor="a-source">유입 경로</label>
+                            <select id="a-source" className="ac-select" style={{ width: '100%' }} value={aForm.source} onChange={(e) => setAForm({ ...aForm, source: e.target.value })}>
+                              {Object.entries(SOURCE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                            </select>
+                          </div>
+                          <div className="ac-field">
+                            <label htmlFor="a-status">계약 상태</label>
+                            <select id="a-status" className="ac-select" style={{ width: '100%' }} value={aForm.status} onChange={(e) => setAForm({ ...aForm, status: e.target.value as AccountView['status'] })}>
+                              {Object.entries(ACCOUNT_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                        <div className="ac-field">
+                          <label htmlFor="a-date">계약일 <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(계약 상태면 필수 · 정산 기준일)</span></label>
+                          <input id="a-date" type="date" style={inputStyle(aErr.contractedAt)} value={aForm.contractedAt}
+                            aria-invalid={aErr.contractedAt ? 'true' : undefined} aria-describedby={aErr.contractedAt ? 'a-date-err' : undefined}
+                            onChange={(e) => { setAForm({ ...aForm, contractedAt: e.target.value }); if (aErr.contractedAt) setAErr({ ...aErr, contractedAt: undefined }); }} />
+                          {aErr.contractedAt && <p id="a-date-err" className="ac-err">{aErr.contractedAt}</p>}
+                        </div>
+                        <div className="ac-field">
+                          <label htmlFor="a-fee">월 이용료(원) <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(계약서 금액 · 비우면 정산 합계에서 제외)</span></label>
+                          <input id="a-fee" style={inputStyle(aErr.monthlyFeeKrw)} inputMode="numeric" value={aForm.monthlyFeeKrw} placeholder="예: 300000"
+                            aria-invalid={aErr.monthlyFeeKrw ? 'true' : undefined} aria-describedby={aErr.monthlyFeeKrw ? 'a-fee-err' : undefined}
+                            onChange={(e) => { setAForm({ ...aForm, monthlyFeeKrw: e.target.value }); if (aErr.monthlyFeeKrw) setAErr({ ...aErr, monthlyFeeKrw: undefined }); }} />
+                          {aErr.monthlyFeeKrw && <p id="a-fee-err" className="ac-err">{aErr.monthlyFeeKrw}</p>}
+                        </div>
+                        <div className="ac-field">
+                          <label htmlFor="a-owner">고원 담당자 이름</label>
+                          <input id="a-owner" style={S.input} value={aForm.ownerName} placeholder="예: 이담당" onChange={(e) => setAForm({ ...aForm, ownerName: e.target.value })} />
+                        </div>
+                        <div className="ac-field">
+                          <label htmlFor="a-note">귀속 근거 <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(이력에 남습니다)</span></label>
+                          <input id="a-note" style={S.input} value={aForm.attributionNote} placeholder="예: 파트너 소개로 최초 미팅(2026-08-20)" onChange={(e) => setAForm({ ...aForm, attributionNote: e.target.value })} />
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <button type="submit" style={{ ...S.btn, opacity: partnerSaving ? 0.6 : 1 }} disabled={partnerSaving} aria-busy={partnerSaving || undefined}>
+                            {partnerSaving ? '저장 중…' : aForm.id ? '수정 저장' : '고객사 등록'}
+                          </button>
+                          {aForm.id && <button type="button" style={S.btnGhost} onClick={() => { setAForm(EMPTY_ACCOUNT_FORM); setAErr({}); }}>취소</button>}
+                        </div>
+                      </form>
+                    ) : (
+                      <form onSubmit={(e) => { e.preventDefault(); submitPartner(); }} noValidate>
+                        <h2 id="partner-form-h" style={{ ...S.h2, marginBottom: 12 }}>{pForm.id ? '파트너 수정' : '새 파트너'}</h2>
+                        <div className="ac-field">
+                          <label htmlFor="p-name">파트너명 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span></label>
+                          <input id="p-name" style={inputStyle(pErr.name)} value={pForm.name} placeholder="예: 제이투모로우원" aria-required="true"
+                            aria-invalid={pErr.name ? 'true' : undefined} aria-describedby={pErr.name ? 'p-name-err' : undefined}
+                            onChange={(e) => { setPForm({ ...pForm, name: e.target.value }); if (pErr.name) setPErr({ ...pErr, name: undefined }); }} />
+                          {pErr.name && <p id="p-name-err" className="ac-err">{pErr.name}</p>}
+                        </div>
+                        <div className="ac-field">
+                          <label htmlFor="p-manager">담당자 이름 <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(연락처는 저장하지 않습니다)</span></label>
+                          <input id="p-manager" style={S.input} value={pForm.managerName} placeholder="예: 김담당" onChange={(e) => setPForm({ ...pForm, managerName: e.target.value })} />
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                          <div className="ac-field">
+                            <label htmlFor="p-fee">수수료율(%) <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(비우면 미설정)</span></label>
+                            <input id="p-fee" style={inputStyle(pErr.feeRatePct)} inputMode="decimal" value={pForm.feeRatePct} placeholder="예: 15"
+                              aria-invalid={pErr.feeRatePct ? 'true' : undefined} aria-describedby={pErr.feeRatePct ? 'p-fee-err' : undefined}
+                              onChange={(e) => { setPForm({ ...pForm, feeRatePct: e.target.value }); if (pErr.feeRatePct) setPErr({ ...pErr, feeRatePct: undefined }); }} />
+                            {pErr.feeRatePct && <p id="p-fee-err" className="ac-err">{pErr.feeRatePct}</p>}
+                          </div>
+                          <div className="ac-field">
+                            <label htmlFor="p-status">상태</label>
+                            <select id="p-status" className="ac-select" style={{ width: '100%' }} value={pForm.status} onChange={(e) => setPForm({ ...pForm, status: e.target.value as PartnerForm['status'] })}>
+                              <option value="active">운영 중</option>
+                              <option value="paused">중지</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div className="ac-field">
+                          <label htmlFor="p-memo">메모</label>
+                          <input id="p-memo" style={S.input} value={pForm.memo} placeholder="예: 경기 남부 병의원 전담" onChange={(e) => setPForm({ ...pForm, memo: e.target.value })} />
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <button type="submit" style={{ ...S.btn, opacity: partnerSaving ? 0.6 : 1 }} disabled={partnerSaving} aria-busy={partnerSaving || undefined}>
+                            {partnerSaving ? '저장 중…' : pForm.id ? '수정 저장' : '파트너 등록'}
+                          </button>
+                          {pForm.id && <button type="button" style={S.btnGhost} onClick={() => { setPForm(EMPTY_PARTNER_FORM); setPErr({}); }}>취소</button>}
+                        </div>
+                      </form>
+                    )}
+                  </section>
+                </div>
+              )}
             </div>
-            <p style={{ ...S.tag, marginTop: 6 }}>
-              월 이용료(계약서 입력값) × 수수료율로 <b>산출 근거</b>를 만듭니다. 값이 없는 항목은 0으로 채우지 않고 <b>합계에서 제외</b>하고 사유를 표시합니다.
-              실제 청구·지급은 계약서 확정 후 <b>[승인 필요]</b>.
-            </p>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
-              <span>
-                <label htmlFor="s-month" style={{ ...S.tag, display: 'block' }}>기준월</label>
+          </>
+        );
+      })()}
+
+      {tab === 'settle' && (() => {
+        const r = settleReport;
+        const won = (v: number) => `${v.toLocaleString('ko-KR')}원`;
+        const feeTotal = !r ? MEASURING : r.rows.length === 0 ? '대상 없음' : r.totals.billable === 0 ? '산출 불가' : won(r.totals.feeAmountKrw);
+        const feeEmpty = !r || r.rows.length === 0 || r.totals.billable === 0;
+        const monthLabel = r ? `${r.month.slice(0, 4)}년 ${Number(r.month.slice(5, 7))}월` : '';
+        const ISSUE_TONE = { background: '#FFFBEB', color: 'var(--warn)' } as const;
+        return (
+          <>
+            <section style={{ ...S.card, padding: 0 }} aria-labelledby="settle-h">
+              <div className="ac-toolbar">
+                <h2 id="settle-h" style={{ ...S.h2, marginRight: 4 }}>정산 조건</h2>
+                <label htmlFor="s-month" className="ac-srhide">기준월</label>
                 <input
                   id="s-month"
                   type="month"
-                  style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '6px 10px', fontSize: 13 }}
+                  className="ac-select"
                   value={settleMonth}
                   onChange={(e) => { setSettleMonth(e.target.value); loadSettlement(e.target.value, settlePartner); }}
                 />
-              </span>
-              <span>
-                <label htmlFor="s-partner" style={{ ...S.tag, display: 'block' }}>파트너</label>
+                <label htmlFor="s-partner" className="ac-srhide">파트너</label>
                 <select
                   id="s-partner"
-                  style={{ border: '1px solid var(--line-2)', borderRadius: 'var(--r-sm)', padding: '6px 10px', fontSize: 13 }}
+                  className="ac-select"
                   value={settlePartner}
                   onChange={(e) => { setSettlePartner(e.target.value); loadSettlement(settleMonth, e.target.value); }}
                 >
-                  <option value="">전체 파트너</option>
+                  <option value="">모든 파트너</option>
                   {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
-              </span>
+                <span role="status" aria-live="polite" style={{ ...S.tag, marginLeft: 'auto' }}>
+                  {settleBusy ? '계산하는 중…' : r ? `${r.periodStart} ~ ${r.periodEnd}` : ''}
+                </span>
+                <button type="button" style={S.btnGhost} onClick={() => loadSettlement(settleMonth, settlePartner)} disabled={settleBusy} aria-busy={settleBusy || undefined}>다시 계산</button>
+                <button type="button" style={S.btn} onClick={downloadSettlementCsv} disabled={!r || r.rows.length === 0}>CSV 내려받기</button>
+              </div>
+              <p style={{ ...S.tag, padding: '10px 16px' }}>
+                월 이용료(계약서 입력값) × 수수료율로 산출 근거를 만듭니다. 값이 없는 항목은 0으로 채우지 않고 합계에서 빼며 사유를 표시합니다. 실제 청구·지급은 계약서 확정 후 [승인 필요].
+              </p>
+            </section>
+
+            {settleErr && (
+              <div role="alert" style={{ ...S.card, borderColor: '#FECACA', background: '#FEF2F2', padding: '12px 16px', fontSize: 13, color: 'var(--danger)', fontWeight: 600 }}>
+                {settleErr}
+                <button type="button" className="ac-linkbtn" style={{ marginLeft: 8 }} onClick={() => loadSettlement(settleMonth, settlePartner)}>다시 시도</button>
+              </div>
+            )}
+
+            <div className="ac-kpi" style={{ marginBottom: 16 }}>
+              <KpiCard label="대상 고객사" value={r ? String(r.totals.accounts) : MEASURING} empty={!r} note={r ? `${monthLabel} 기준 계약 중` : '리포트를 불러오는 중'} />
+              <KpiCard label="산출 완료" value={r ? String(r.totals.billable) : MEASURING} empty={!r} note="월 이용료·수수료율이 모두 있는 건" />
+              <KpiCard label="미산출" value={r ? String(r.totals.incomplete) : MEASURING} empty={!r} note={r && r.totals.incomplete > 0 ? '근거가 부족해 합계에서 뺐습니다' : '근거 부족 건 없음'} />
+              <KpiCard label="수수료 합계" value={feeTotal} empty={feeEmpty} note={r && r.totals.partial ? '확정 금액 아님 — 미산출 건 제외' : r && r.totals.billable > 0 ? `기준금액 ${won(r.totals.baseAmountKrw)}` : '산출된 건이 없습니다'} />
             </div>
-            {settleErr && <p role="alert" style={{ fontSize: 13, color: '#c0392b', marginTop: 10 }}>{settleErr}</p>}
-            <p role="status" aria-live="polite" style={{ ...S.tag, marginTop: 8 }}>
-              {settleBusy ? '정산 리포트를 계산하는 중입니다…' : ''}
-            </p>
-          </section>
 
-          {!settleErr && settleReport && (
-            <>
-              <section style={S.card} aria-labelledby="settle-sum-h">
-                <h3 id="settle-sum-h" style={{ fontSize: 15, marginBottom: 8 }}>
-                  {settleReport.month} 요약 ({settleReport.periodStart} ~ {settleReport.periodEnd})
-                </h3>
-                {settleReport.partnerTotals.length === 0 ? (
-                  <p style={S.tag}>
-                    이 기간에 정산 대상 고객사가 없습니다. 파트너 귀속 고객사를 <b>계약</b> 상태로 두고 계약일을 입력하면 여기에 나타납니다.
-                  </p>
-                ) : (
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                      <caption style={{ ...S.tag, textAlign: 'left', marginBottom: 6 }}>파트너별 합계(근거가 갖춰진 건만 합산)</caption>
-                      <thead>
-                        <tr style={{ textAlign: 'left', color: 'var(--mut)' }}>
-                          <th scope="col" style={{ padding: '6px 8px' }}>파트너</th>
-                          <th scope="col" style={{ padding: '6px 8px' }}>대상</th>
-                          <th scope="col" style={{ padding: '6px 8px' }}>산출</th>
-                          <th scope="col" style={{ padding: '6px 8px' }}>미산출</th>
-                          <th scope="col" style={{ padding: '6px 8px' }}>기준금액</th>
-                          <th scope="col" style={{ padding: '6px 8px' }}>수수료</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {settleReport.partnerTotals.map((t) => (
-                          <tr key={t.partnerId} style={{ borderTop: '1px solid var(--line)' }}>
-                            <th scope="row" style={{ padding: '6px 8px', fontWeight: 600, textAlign: 'left' }}>{t.partnerName}</th>
-                            <td style={{ padding: '6px 8px' }}>{t.accounts}</td>
-                            <td style={{ padding: '6px 8px' }}>{t.billable}</td>
-                            <td style={{ padding: '6px 8px' }}>{t.incomplete}</td>
-                            <td style={{ padding: '6px 8px' }}>{t.baseAmountKrw.toLocaleString('ko-KR')}원</td>
-                            <td style={{ padding: '6px 8px' }}>{t.feeAmountKrw.toLocaleString('ko-KR')}원</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                {settleReport.totals.partial && (
-                  <p role="alert" style={{ fontSize: 13, color: '#b26a00', marginTop: 10 }}>
-                    근거가 부족한 {settleReport.totals.incomplete}건이 합계에서 빠져 있습니다. 이 합계는 <b>확정 금액이 아닙니다</b>.
-                  </p>
-                )}
-              </section>
+            {r && r.totals.partial && (
+              <p role="alert" style={{ ...S.card, borderColor: '#FDE68A', background: '#FFFBEB', padding: '12px 16px', fontSize: 13, color: 'var(--warn)', fontWeight: 600 }}>
+                근거가 부족한 {r.totals.incomplete}건이 합계에서 빠져 있습니다. 이 합계는 확정 금액이 아닙니다. 「파트너·귀속」에서 월 이용료와 수수료율을 채우면 다시 계산됩니다.
+              </p>
+            )}
 
-              <section style={S.card} aria-labelledby="settle-rows-h">
-                <h3 id="settle-rows-h" style={{ fontSize: 15, marginBottom: 8 }}>고객사별 산출 근거 ({settleReport.rows.length})</h3>
-                {settleReport.rows.length === 0 ? (
-                  <p style={S.tag}>표시할 항목이 없습니다.</p>
-                ) : (
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                      <thead>
-                        <tr style={{ textAlign: 'left', color: 'var(--mut)' }}>
-                          <th scope="col" style={{ padding: '6px 8px' }}>고객사</th>
-                          <th scope="col" style={{ padding: '6px 8px' }}>파트너</th>
-                          <th scope="col" style={{ padding: '6px 8px' }}>계약일</th>
-                          <th scope="col" style={{ padding: '6px 8px' }}>월 이용료</th>
-                          <th scope="col" style={{ padding: '6px 8px' }}>수수료율</th>
-                          <th scope="col" style={{ padding: '6px 8px' }}>수수료</th>
-                          <th scope="col" style={{ padding: '6px 8px' }}>비고</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {settleReport.rows.map((r) => (
-                          <tr key={r.accountId} style={{ borderTop: '1px solid var(--line)' }}>
-                            <th scope="row" style={{ padding: '6px 8px', fontWeight: 600, textAlign: 'left' }}>{r.accountName}</th>
-                            <td style={{ padding: '6px 8px' }}>{r.partnerName}</td>
-                            <td style={{ padding: '6px 8px' }}>{r.contractedAt}</td>
-                            <td style={{ padding: '6px 8px' }}>{wonLabel(r.baseAmountKrw)}</td>
-                            <td style={{ padding: '6px 8px' }}>{feeLabel(r.feeRateBp)}</td>
-                            <td style={{ padding: '6px 8px' }}>{r.feeAmountKrw === null ? '산출 불가' : `${r.feeAmountKrw.toLocaleString('ko-KR')}원`}</td>
-                            <td style={{ padding: '6px 8px', color: 'var(--mut)' }}>{ISSUE_LABELS[r.issue]}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                <details style={{ marginTop: 12 }}>
-                  <summary style={{ ...S.tag, cursor: 'pointer' }}>산출 기준·한계 {settleReport.notes.length}건</summary>
-                  <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 12.5, color: 'var(--sub)' }}>
-                    {settleReport.notes.map((n, i) => <li key={i} style={{ marginBottom: 3 }}>{n}</li>)}
-                  </ul>
-                </details>
+            {r && r.rows.length === 0 && !settleErr && (
+              <section style={S.card}>
+                <div className="ac-empty">
+                  <EmptyArt kind="kb" />
+                  <p style={{ fontSize: 14, fontWeight: 700 }}>{monthLabel}에 정산 대상 고객사가 없습니다</p>
+                  <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>파트너 귀속 고객사를 「계약」 상태로 두고 계약일을 입력하면 그 달부터 여기에 나타납니다.</p>
+                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => setTab('partner')}>파트너·귀속 열기</button>
+                </div>
               </section>
-            </>
-          )}
-        </>
-      )}
+            )}
+
+            {r && r.rows.length > 0 && (
+              <>
+                <section style={{ ...S.card, padding: 0 }} aria-labelledby="settle-sum-h">
+                  <div className="ac-toolbar">
+                    <h2 id="settle-sum-h" style={S.h2}>파트너별 합계</h2>
+                    <span style={S.tag}>근거가 갖춰진 건만 합산</span>
+                  </div>
+                  <table className="ac-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">파트너</th>
+                        <th scope="col">대상</th>
+                        <th scope="col">산출</th>
+                        <th scope="col">미산출</th>
+                        <th scope="col" className="ac-col-wide">기준금액</th>
+                        <th scope="col" style={{ textAlign: 'right' }}>수수료</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {r.partnerTotals.map((t) => (
+                        <tr key={t.partnerId}>
+                          <td style={{ fontWeight: 700 }}>{t.partnerName}</td>
+                          <td>{t.accounts}</td>
+                          <td>{t.billable}</td>
+                          <td>{t.incomplete > 0 ? <span className="ac-pill" style={ISSUE_TONE}>{t.incomplete}건</span> : <span style={{ color: 'var(--mut)' }}>0</span>}</td>
+                          <td className="ac-col-wide" style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{won(t.baseAmountKrw)}</td>
+                          <td style={{ whiteSpace: 'nowrap', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{won(t.feeAmountKrw)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+
+                <section style={{ ...S.card, padding: 0 }} aria-labelledby="settle-rows-h">
+                  <div className="ac-toolbar">
+                    <h2 id="settle-rows-h" style={S.h2}>고객사별 산출 근거</h2>
+                    <span style={S.tag}>{r.rows.length}건</span>
+                  </div>
+                  <table className="ac-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">고객사</th>
+                        <th scope="col">파트너</th>
+                        <th scope="col" className="ac-col-wide">계약일</th>
+                        <th scope="col" className="ac-col-wide">월 이용료</th>
+                        <th scope="col" className="ac-col-wide">수수료율</th>
+                        <th scope="col" style={{ textAlign: 'right' }}>수수료</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {r.rows.map((row) => (
+                        <tr key={row.accountId}>
+                          <td style={{ fontWeight: 700, minWidth: 120 }}>
+                            {row.accountName}
+                            {row.issue !== 'none' && <span className="ac-pill" style={{ ...ISSUE_TONE, display: 'block', width: 'fit-content', marginTop: 4 }}>{ISSUE_LABELS[row.issue]}</span>}
+                          </td>
+                          <td style={{ color: 'var(--sub)' }}>{row.partnerName}</td>
+                          <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{row.contractedAt}</td>
+                          <td className="ac-col-wide" style={{ whiteSpace: 'nowrap', color: row.baseAmountKrw === null ? 'var(--mut)' : 'var(--ink)' }}>{wonLabel(row.baseAmountKrw)}</td>
+                          <td className="ac-col-wide" style={{ color: row.feeRateBp === null ? 'var(--mut)' : 'var(--ink)' }}>{feeLabel(row.feeRateBp)}</td>
+                          <td style={{ whiteSpace: 'nowrap', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: row.feeAmountKrw === null ? 500 : 700, color: row.feeAmountKrw === null ? 'var(--mut)' : 'var(--ink)' }}>
+                            {row.feeAmountKrw === null ? '산출 불가' : won(row.feeAmountKrw)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <details style={{ padding: '12px 16px' }}>
+                    <summary style={{ fontSize: 12.5, color: 'var(--mut)', cursor: 'pointer' }}>산출 기준·한계 {r.notes.length}건</summary>
+                    <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 12.5, color: 'var(--sub)' }}>
+                      {r.notes.map((n, i) => <li key={i} style={{ marginBottom: 3 }}>{n}</li>)}
+                    </ul>
+                  </details>
+                </section>
+              </>
+            )}
+          </>
+        );
+      })()}
 
       {tab === 'tenant' && (
         <>
@@ -3167,6 +3490,21 @@ export default function AdminPage() {
               openDrawer(t.sessionId, from);
             }}
             closeRef={ticketCloseRef}
+          />
+        );
+      })()}
+
+      {accountId && (() => {
+        const a = accounts.find((x) => x.id === accountId);
+        if (!a) return null;
+        return (
+          <AccountDrawer
+            account={a}
+            partnerName={(id) => (id ? partners.find((p) => p.id === id)?.name ?? '이름 없는 파트너' : '직접 계약')}
+            canWrite={canWrite}
+            onClose={closeAccount}
+            onEdit={() => { closeAccount(); editAccount(a); }}
+            closeRef={accountCloseRef}
           />
         );
       })()}

@@ -178,6 +178,16 @@ input,textarea{font-family:inherit}
 .ac-statgrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:12px}
 .ac-stat{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--bg);min-width:0}
 .ac-statlabel{font-size:11.5px;font-weight:800;letter-spacing:.04em;color:var(--mut)}
+
+/* 파트너·귀속 · 정산 리포트 */
+.ac-seg{display:inline-flex;padding:3px;border-radius:10px;background:var(--bg);border:1px solid var(--line)}
+.ac-segbtn{padding:6px 14px;border-radius:8px;font-size:13px;font-weight:700;color:var(--sub);min-height:32px}
+.ac-segbtn[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-card)}
+.ac-segbtn:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+.ac-timeline{list-style:none;margin:0;padding:0;border-left:2px solid var(--line);margin-left:6px}
+.ac-tl-item{position:relative;padding:0 0 14px 16px}
+.ac-tl-item:last-child{padding-bottom:0}
+.ac-tl-dot{position:absolute;left:-7px;top:4px;width:12px;height:12px;border-radius:50%;background:var(--brand);border:2px solid var(--surface);box-shadow:0 0 0 1px var(--line)}
 .ac-statvalue{font-size:14px;font-weight:700;color:var(--ink);margin-top:4px;word-break:break-all;line-height:1.45}
 .ac-statvalue a{color:var(--brand-600)}
 

@@ -290,3 +290,88 @@ test('테넌트 지식이 요약 카드+FAQ 표로 렌더되고 편집 UI 가 �
   assert.match(t, /aria-hidden="true" style=\{\{ width: 14, height: 14, borderRadius: '50%', background: tenantView\.config\.brandColor/, '브랜드 색 견본은 장식');
   assert.equal(/<textarea|<input(?![^>]*type="search")/.test(t), false, '편집 입력이 없어야 한다');
 });
+
+test('파트너·귀속이 요약 KPI·고객사/파트너 표·우측 폼·상세 서랍으로 렌더되고 식별자 원문이 없다 (DS 2-12)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  const t = src.slice(src.indexOf("{tab === 'partner' &&"), src.indexOf("{tab === 'settle' &&"));
+  assert.match(t, /className="ac-kpi"/, '상단 요약 카드');
+  for (const k of ['운영 중 파트너', '고객사', '계약 중', '검토 중']) assert.ok(t.includes(k), `요약 누락: ${k}`);
+  assert.match(t, /empty=\{!partnerLoaded\}/, '불러오기 전에는 0을 지어내지 않는다');
+  // 좌: 표 2개(고객사·파트너) + 검색·귀속 필터
+  assert.match(t, /className="ac-split"/, '좌 표 / 우 폼 분할');
+  assert.equal((t.match(/<table className="ac-table">/g) || []).length, 2, '고객사·파트너 표');
+  assert.match(t, /aria-label="고객사 검색\(고객사명·파트너·담당자\)"/, '검색 입력 라벨');
+  assert.match(t, /htmlFor="a-filter" className="ac-srhide"/, '귀속 필터 라벨(스크린리더)');
+  assert.match(t, /ACCOUNT_STATUS_TONE\[a\.status\]/, '계약 상태 pill');
+  assert.match(t, /PARTNER_STATUS_TONE\[p\.status\]/, '파트너 상태 pill');
+  assert.match(t, /aria-haspopup="dialog"[\s\S]{0,80}상세 보기/, '고객사명 버튼은 서랍을 연다');
+  // 식별자·내부 값 원문 노출 없음 — 파트너·고객사는 이름으로만 보인다
+  assert.equal(/\{p\.id\}|\{a\.id\}|fromPartnerId\}|toPartnerId\}/.test(t.replace(/key=\{[^}]+\}|value=\{p\.id\}/g, '')), false, '식별자 원문을 화면에 쓰지 않는다(key·option value 제외)');
+  assert.equal(/bp\b/.test(t.replace(/feeRateBp|pctToBp|bpToPct/g, '')), false, '「bp」 같은 내부 단위를 화면에 쓰지 않는다');
+  assert.equal(/#c0392b/.test(t), false, '색은 토큰만');
+  // 빈 상태·필터 0건
+  assert.match(t, /등록된 고객사가 없습니다[\s\S]*첫 고객사 등록/, '고객사 빈 상태 + 다음 행동');
+  assert.match(t, /등록된 파트너가 없습니다[\s\S]*첫 파트너 등록/, '파트너 빈 상태 + 다음 행동');
+  assert.match(t, /조건에 맞는 고객사가 없습니다[\s\S]*필터 지우기/, '필터 0건');
+  assert.match(t, /조회 전용 계정/, '읽기 전용 계정 안내');
+  // 우: 폼 — 고객사/파트너 전환, 라벨, 인라인 오류, 저장 잠금, Enter 제출
+  assert.match(t, /role="group" aria-label="등록 대상" className="ac-seg"/, '전환 그룹 이름');
+  assert.match(t, /aria-pressed=\{partnerFormKind === 'account'\}/, '전환 상태 알림');
+  assert.equal((t.match(/<form onSubmit=/g) || []).length, 2, '두 폼 모두 Enter 제출');
+  for (const id of ['a-name', 'a-partner', 'a-source', 'a-status', 'a-date', 'a-fee', 'a-owner', 'a-note', 'p-name', 'p-manager', 'p-fee', 'p-status', 'p-memo']) {
+    assert.match(t, new RegExp(`htmlFor="${id}"`), `라벨 누락: ${id}`);
+    assert.match(t, new RegExp(`id="${id}"`), `입력 누락: ${id}`);
+  }
+  for (const f of ['aErr.name', 'aErr.partnerId', 'aErr.contractedAt', 'aErr.monthlyFeeKrw', 'pErr.name', 'pErr.feeRatePct']) {
+    assert.ok(t.includes(`aria-invalid={${f} ? 'true' : undefined}`), `인라인 오류 표시 누락: ${f}`);
+  }
+  assert.match(t, /aria-busy=\{partnerSaving \|\| undefined\}/, '저장 중 잠금');
+  assert.match(t, /type="date"/, '계약일은 날짜 입력');
+  assert.match(t, /수수료율\(%\)/, '수수료율은 %로 입력');
+  // 검증·변환 로직
+  const h = src.slice(src.indexOf('const submitPartner = async'), src.indexOf('const removePartner = async'));
+  assert.match(h, /n < 0 \|\| n > 100/, '수수료율 % 범위 검사');
+  assert.match(h, /feeRateBp: pForm\.feeRatePct\.trim\(\) === '' \? null : pctToBp\(pForm\.feeRatePct\)/, '저장은 bp — API 계약 유지');
+  assert.match(h, /aForm\.source === 'partner' && !aForm\.partnerId/, '파트너 유치면 파트너 필수');
+  assert.match(h, /aForm\.status === 'contracted'/, '계약 상태면 계약일 필수');
+  assert.match(h, /네트워크 오류로 저장하지 못했습니다/, '네트워크 실패 안내');
+  // 서랍: 계약 정보 + 귀속 이력 타임라인, 접근성
+  const d = src.slice(src.indexOf('function AccountDrawer('), src.indexOf('function KpiCard('));
+  assert.match(d, /role="dialog" aria-modal="true" aria-labelledby="ac-account-title"/, '서랍 대화상자');
+  assert.match(d, /aria-label="상세 닫기"/, '닫기 버튼 이름');
+  assert.match(d, /e\.key !== 'Tab'/, 'Tab 순환');
+  assert.match(d, /className="ac-timeline"/, '귀속 이력 타임라인');
+  assert.match(d, /아직 기록된 이력이 없습니다/, '이력 빈 상태');
+  assert.match(d, /partnerName\(h\.fromPartnerId\)[\s\S]*partnerName\(h\.toPartnerId\)/, '이력은 식별자가 아니라 이름으로');
+  assert.match(src, /if \(e\.key === 'Escape'\) closeAccount\(\);/, 'ESC 로 닫힘');
+  assert.match(src, /accountReturnRef\.current = from;/, '닫으면 연 행으로 초점 복귀');
+  // CSS
+  assert.match(css, /\.ac-segbtn\[aria-pressed="true"\]/, '전환 버튼 눌림 스타일');
+  assert.match(css, /\.ac-segbtn:focus-visible\{outline/, '전환 버튼 키보드 초점');
+  assert.match(css, /\.ac-tl-dot\{/, '타임라인 점');
+});
+
+test('정산 리포트가 조건 툴바·요약 KPI·합계/근거 표·빈 상태로 렌더되고 확정 아님을 밝힌다 (DS 2-13)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const t = src.slice(src.indexOf("{tab === 'settle' &&"), src.indexOf("{tab === 'tenant' &&"));
+  assert.match(t, /className="ac-toolbar"[\s\S]*id="s-month"[\s\S]*id="s-partner"/, '기준월·파트너 조건 툴바');
+  assert.match(t, /htmlFor="s-month" className="ac-srhide"/, '기준월 라벨(스크린리더)');
+  assert.match(t, /htmlFor="s-partner" className="ac-srhide"/, '파트너 라벨(스크린리더)');
+  assert.match(t, /className="ac-kpi"/, '요약 카드');
+  for (const k of ['대상 고객사', '산출 완료', '미산출', '수수료 합계']) assert.ok(t.includes(k), `요약 누락: ${k}`);
+  assert.match(t, /value=\{r \? String\(r\.totals\.accounts\) : MEASURING\}/, '리포트 전에는 「측정 중」');
+  assert.match(t, /empty=\{feeEmpty\}/, '산출 건이 없으면 합계를 0원으로 보이지 않는다');
+  assert.match(t, /'확정 금액 아님 — 미산출 건 제외'/, '부분 합계는 확정 금액이 아님을 밝힌다');
+  assert.match(t, /이 합계는 확정 금액이 아닙니다/, '경고 문구');
+  assert.equal((t.match(/<table className="ac-table">/g) || []).length, 2, '파트너별 합계·고객사별 근거 표');
+  assert.match(t, /ISSUE_LABELS\[row\.issue\]/, '미산출 사유 pill');
+  assert.match(t, /정산 대상 고객사가 없습니다[\s\S]*파트너·귀속 열기/, '빈 상태 + 다음 행동');
+  assert.match(t, /role="alert"[\s\S]{0,400}다시 시도/, '오류에는 다시 시도');
+  assert.match(t, /role="status" aria-live="polite"/, '계산 중 안내');
+  assert.match(t, /aria-busy=\{settleBusy \|\| undefined\}/, '계산 중 버튼 잠금');
+  assert.match(t, /disabled=\{!r \|\| r\.rows\.length === 0\}/, '내려받을 것이 없으면 CSV 버튼 잠금');
+  assert.match(t, /\[승인 필요\]/, '실제 청구·지급은 승인 필요');
+  assert.equal(/#c0392b|#b26a00/.test(t), false, '색은 토큰만');
+  assert.match(t, /className="ac-col-wide"/, '좁은 화면에서 접히는 열');
+});
