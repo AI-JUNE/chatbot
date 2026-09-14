@@ -35,6 +35,7 @@ input,textarea{font-family:inherit}
 @media (prefers-reduced-motion: reduce){
   html{scroll-behavior:auto}
   .gw-rise,.gw-panel,.gw-dot,.ac-drawer{animation:none!important}
+  .ac-switch,.ac-switch-knob{transition:none}
 }
 
 /* ── 관리 콘솔 셸 (AICC Portal admin 셸 규격) ──
@@ -136,6 +137,46 @@ input,textarea{font-family:inherit}
 .ac-pv-cite{display:block;margin-top:6px;padding-left:8px;border-left:2px solid var(--brand);font-size:11.5px;color:var(--sub)}
 .ac-preview-foot{font-size:11.5px;color:var(--mut);padding:10px 14px;border-top:1px solid var(--line)}
 
+/* 시나리오 룰: 조건 → 응답 카드 빌더 + 토글 스위치 + 미리보기 */
+.ac-rulelist{list-style:none;margin:0;padding:6px 0 0}
+.ac-rulecard{padding:14px 16px;border-top:1px solid var(--line)}
+.ac-rulecard[data-editing="true"]{background:var(--brand-50)}
+.ac-rulecard[data-off="true"] .ac-ruleflow{opacity:.55}
+.ac-rulehead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.ac-rulename{font-size:14px;font-weight:800;color:var(--ink);margin-right:auto}
+.ac-ruleflow{display:grid;grid-template-columns:minmax(0,1fr) 24px minmax(0,1.2fr);gap:10px;align-items:start}
+.ac-rulecond,.ac-rulereply{min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.ac-rulereply{background:var(--surface)}
+.ac-rulekey{display:block;font-size:11px;font-weight:800;letter-spacing:.04em;color:var(--mut);margin-bottom:6px}
+.ac-rulereply p{font-size:13.5px;line-height:1.5;color:var(--ink);white-space:pre-wrap;word-break:break-word}
+.ac-rulearrow{align-self:center;text-align:center;color:var(--brand);font-weight:800;font-size:18px}
+.ac-rulereply-input{width:100%;border:1px solid var(--line-2);border-radius:10px;padding:7px 10px;font-size:13.5px;line-height:1.5;font-family:inherit;color:var(--ink);background:var(--surface);resize:vertical}
+.ac-rulehint{font-size:11.5px;color:var(--mut);margin-top:4px;font-weight:500}
+.ac-ruleactions{display:flex;gap:4px;margin-top:8px;justify-content:flex-end}
+.ac-chips{display:flex;flex-wrap:wrap;gap:5px}
+.ac-chip{display:inline-block;font-size:12px;font-weight:700;border-radius:999px;padding:3px 9px;background:var(--surface);border:1px solid var(--line-2);color:var(--sub)}
+.ac-chip[data-hit="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
+.ac-switch{position:relative;width:38px;height:22px;border-radius:999px;background:var(--line-2);flex-shrink:0;transition:background .15s}
+.ac-switch[aria-checked="true"]{background:var(--success)}
+.ac-switch:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.ac-switch-knob{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.25);transition:transform .15s}
+.ac-switch[aria-checked="true"] .ac-switch-knob{transform:translateX(16px)}
+.ac-step{display:flex;gap:10px;align-items:flex-start;margin-bottom:12px}
+.ac-stepno{width:22px;height:22px;border-radius:50%;background:var(--brand);color:#fff;font-size:11.5px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.ac-check{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:var(--ink);margin-top:8px;cursor:pointer}
+.ac-check input{margin-top:3px;flex-shrink:0}
+.ac-rulepreview{margin-top:4px;padding-top:12px;border-top:1px dashed var(--line)}
+.ac-pv-mini{display:flex;flex-direction:column;gap:8px;min-height:64px;padding:12px;background:var(--bg);border:1px solid var(--line);border-radius:12px}
+.ac-pv-note{font-size:12.5px;color:var(--mut);margin:auto 0;text-align:center}
+
+/* 로그인 화면 */
+.ac-login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px;background:var(--bg)}
+.ac-login-card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:28px 26px 22px;box-shadow:var(--shadow-card)}
+.ac-login-input{position:relative}
+.ac-login-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:12px;font-weight:700;color:var(--brand-600);padding:5px 8px;border-radius:8px;min-height:30px}
+.ac-login-eye:hover{background:var(--brand-50)}
+.ac-login-foot{font-size:11.5px;color:var(--mut);margin-top:16px;padding-top:12px;border-top:1px solid var(--line);line-height:1.5}
+
 @media (max-width:900px){
   .ac-shell{grid-template-columns:minmax(0,1fr)}
   .ac-side{position:sticky;top:0;z-index:6;height:auto;flex-direction:row;align-items:center;gap:6px;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--line);padding:9px 12px}
@@ -156,6 +197,9 @@ input,textarea{font-family:inherit}
   .ac-row-side{justify-content:flex-start;max-width:none}
   .ac-drawer{width:100vw}
   .ac-preview-body{height:300px}
+  .ac-ruleflow{grid-template-columns:minmax(0,1fr)}
+  .ac-rulearrow{transform:rotate(90deg);line-height:1}
+  .ac-login-card{padding:22px 18px 18px}
 }
 
 /* ── 랜딩 레이아웃 (인라인 스타일로 표현할 수 없는 반응형만 클래스로) ── */

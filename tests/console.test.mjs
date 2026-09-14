@@ -67,8 +67,9 @@ test('콘솔 셸이 사이드바·현재 탭 강조·상단 헤더로 렌더된�
   for (const label of ['대시보드', '상담원 요청', '테넌트 지식', '지식베이스', '시나리오 룰', '응답 테스트', '파트너·귀속', '정산 리포트', '설치', '감사 로그']) {
     assert.ok(html.includes(label), `메뉴 누락: ${label}`);
   }
-  // 관리 토큰 입력에는 보이지 않는 라벨이라도 붙어 있어야 한다
-  assert.match(html, /for="ac-token"/, '토큰 입력 라벨');
+  // 관리 토큰 입력은 헤더가 아니라 로그인 화면에 있다(DS 2-8) — 헤더에는 로그인/로그아웃 진입만 남긴다
+  assert.equal(/id="ac-token"/.test(html), false, '헤더의 토큰 입력은 사라져야 한다');
+  assert.match(html, />로그인</, '헤더에서 로그인 화면으로 갈 수 있어야 한다');
 });
 
 test('대시보드 KPI 4개가 값 없이도 「측정 중」으로 렌더된다 (DS 2-2)', opts, async () => {
@@ -160,4 +161,61 @@ test('응답 테스트가 좌 입력·근거 / 우 상담창 미리보기로 분
   assert.equal(/intent: \{|source: \{/.test(t), false, '내부 코드 라벨을 그대로 보여주면 안 된다');
   assert.match(t, /실제 고객 정보는 넣지 마세요/, '개인정보 주의 안내');
   assert.match(src, /catch \{\n      data = \{ reply: '연결이 원활하지 않습니다/, '네트워크 실패 안내');
+});
+
+test('시나리오 룰이 「조건 → 응답」 카드 빌더와 미리보기로 렌더된다 (DS 2-5)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  const t = src.slice(src.indexOf("{tab === 'rules' &&"), src.indexOf("{tab === 'esc' &&"));
+  assert.match(t, /className="ac-split"/, '좌 카드 목록 / 우 빌더 분할');
+  assert.match(t, /className="ac-rulecard"/, '규칙 카드');
+  assert.match(t, /고객이 이렇게 말하면[\s\S]*이렇게 답합니다/, '조건 → 응답 흐름이 사람 말로 적혀야 한다');
+  assert.match(t, /className="ac-rulearrow" aria-hidden="true">→/, '화살표는 장식');
+  // 토글은 스위치 시맨틱 + 이름
+  assert.match(t, /role="switch"[\s\S]*aria-checked=\{r\.enabled\}[\s\S]*aria-label=\{`\$\{r\.label\} 규칙/, '켜기/끄기 스위치');
+  // 빌더 폼: 라벨·필수·인라인 오류·잠금
+  for (const id of ['cr-label', 'cr-keywords', 'cr-reply', 'cr-probe', 'ac-rule-q']) {
+    assert.match(t, new RegExp(`htmlFor="${id}"`), `폼 라벨 누락: ${id}`);
+    assert.match(t, new RegExp(`id="${id}"`), `입력 누락: ${id}`);
+  }
+  assert.match(t, /aria-invalid=\{crErr\.keywords/, '인라인 검증(표현)');
+  assert.match(t, /aria-describedby=\{crErr\.reply/, '오류 문구 연결(답변)');
+  assert.match(t, /aria-busy=\{crBusy/, '저장 중 잠금');
+  // 미리보기: 시험 문장 → 적용 여부 + 말풍선, 최종 판정은 응답 테스트로 안내
+  assert.match(t, /role="log" aria-live="polite"/, '미리보기는 live region');
+  assert.match(t, /표현으로 이 규칙이 적용됩니다/, '적용 근거를 보여준다');
+  assert.match(t, /규칙이 적용되지 않습니다/, '미적용 상태도 알려준다');
+  assert.match(t, /「응답 테스트」에서 확인하세요/, '근사치임을 밝힌다');
+  // 빈 상태·검색 0건·삭제 확인·토스트
+  assert.match(t, /아직 만든 규칙이 없습니다/, '빈 상태');
+  assert.match(t, /검색 결과가 없습니다/, '검색 0건');
+  assert.match(src, /window\.confirm\(`「\$\{target\?\.label \?\? intent\}」 규칙을 삭제할까요/, '삭제는 확인을 거친다');
+  assert.match(src, /flash\(crEditing \? '규칙을 수정했습니다\.' : '규칙을 추가했습니다\.'\)/, '저장 토스트');
+  // 내부 용어(intent·정규식·커스텀 룰)가 화면 문자열에 남지 않는다
+  for (const leak of ['커스텀 룰', '정규식', '패턴: /', '({r.intent}', '>{r.intent}']) {
+    assert.equal(t.includes(leak), false, `내부 용어 노출: ${leak}`);
+  }
+  // 375px: 조건/응답이 세로로 쌓이고 스위치 전환은 reduced-motion 존중
+  const mobile = css.slice(css.indexOf('@media (max-width:900px){\n  .ac-shell'));
+  assert.match(mobile, /\.ac-ruleflow\{grid-template-columns:minmax\(0,1fr\)\}/, '좁은 화면에서는 한 단');
+  assert.match(css, /\.ac-switch:focus-visible\{outline/, '스위치 키보드 초점 표시');
+  assert.match(css, /\.ac-switch,\.ac-switch-knob\{transition:none\}/, 'reduced-motion');
+});
+
+test('관리 토큰 입력이 브랜드 로그인 화면으로 옮겨졌다 (DS 2-8)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const login = src.slice(src.indexOf('// ---- 로그인 화면'), src.indexOf('const currentLabel = TAB_GROUPS'));
+  assert.match(login, /className="ac-login-card"[\s\S]*onSubmit=/, '폼 제출(Enter)로 로그인');
+  assert.match(login, /<BrandMark size=\{34\} \/>/, '브랜드 마크');
+  assert.match(login, /htmlFor="ac-login-token"[\s\S]*id="ac-login-token"/, '토큰 입력 라벨');
+  assert.match(login, /type=\{showToken \? 'text' : 'password'\}/, '보기/숨기기');
+  assert.match(login, /aria-pressed=\{showToken\}/, '토글 상태 알림');
+  assert.match(login, /role="alert" className="ac-err"/, '오류는 alert');
+  assert.match(login, /aria-invalid=\{authMsg \? 'true' : undefined\}/, '오류 시 입력에 표시');
+  assert.match(login, /aria-busy=\{authBusy/, '확인 중 잠금');
+  assert.match(login, /로그인하지 않고 돌아가기/, '인증이 필수가 아닐 때 돌아갈 수 있어야 한다');
+  assert.equal(/🔒|localStorage|401/.test(login), false, '이모지·내부 문구 없음');
+  // 헤더: 로그아웃은 토큰을 지운다
+  assert.match(src, /로그아웃[\s\S]{0,40}/, '로그아웃 버튼');
+  assert.match(src, /applyToken\(''\);\s*setAuthMsg\(''\);\s*setLoginOpen\(true\);/, '로그아웃 시 토큰 삭제 후 로그인 화면');
 });

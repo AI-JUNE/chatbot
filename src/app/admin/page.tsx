@@ -359,8 +359,8 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   'kb.reset': 'KB 초기화',
   'kb.import': '문서 업로드 등록',
   'rule.override': '내장 룰 변경',
-  'rule.custom.upsert': '커스텀 룰 등록/수정',
-  'rule.custom.delete': '커스텀 룰 삭제',
+  'rule.custom.upsert': '규칙 등록/수정',
+  'rule.custom.delete': '규칙 삭제',
   'escalation.update': '티켓 변경',
   'backup.restore': '백업 복원',
 };
@@ -593,6 +593,34 @@ const S = {
   tag: { fontSize: 12, color: 'var(--mut)' } as const,
 };
 
+/** 쉼표·줄바꿈으로 나눈 표현 목록(빈 항목·중복 제거). */
+function splitKeywords(raw: string): string[] {
+  const out: string[] = [];
+  for (const k of raw.split(/[,\n]/)) {
+    const v = k.trim();
+    if (v && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
+/** 조건 시험(화면용 근사치): 띄어쓰기를 무시하고 표현이 포함되는지 본다. 실제 판정은 응답 테스트에서 확인한다. */
+function probeKeywords(sentence: string, keywords: string[]): string[] {
+  const compact = sentence.replace(/\s+/g, '').toLowerCase();
+  if (!compact) return [];
+  return keywords.filter((k) => compact.includes(k.replace(/\s+/g, '').toLowerCase()));
+}
+
+/** 내장 룰의 정규식을 사람이 읽을 예시 표현으로 푼다(첫 그룹의 대안만, 최대 6개). */
+function patternExamples(pattern: string): string[] {
+  const m = /\(([^()]+)\)/.exec(pattern);
+  const body = m ? m[1] : pattern;
+  return body
+    .split('|')
+    .map((s) => s.replace(/[\\^$.*+?[\]{}]/g, '').replace(/ ?\?/g, '').trim())
+    .filter((s) => s && !/[|()]/.test(s))
+    .slice(0, 6);
+}
+
 /** 고객사에 안내할 설치 스니펫. 배포 주소는 지금 보고 있는 주소를 그대로 쓴다. */
 function installSnippet(origin: string): string {
   const base = origin || 'https://<배포도메인>';
@@ -655,6 +683,8 @@ export default function AdminPage() {
   const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
   const [authMsg, setAuthMsg] = useState('');
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [showToken, setShowToken] = useState(false);
 
   /** 데이터 API가 401을 돌려주면 잠금 화면으로 전환한다. true = 401 처리됨. */
   const on401 = (res: Response): boolean => {
@@ -729,6 +759,11 @@ export default function AdminPage() {
   const [customRules, setCustomRules] = useState<CustomRuleView[]>([]);
   const [crForm, setCrForm] = useState<CustomRuleForm>(EMPTY_CR_FORM);
   const [crEditing, setCrEditing] = useState<string | null>(null);
+  const [crErr, setCrErr] = useState<{ label?: string; keywords?: string; reply?: string }>({});
+  const [crBusy, setCrBusy] = useState(false);
+  const [ruleProbe, setRuleProbe] = useState('');
+  const [ruleQuery, setRuleQuery] = useState('');
+  const ruleFormRef = useRef<HTMLDivElement | null>(null);
   const loadRules = useCallback(async () => {
     const res = await fetch('/api/admin/rules', { headers: authHeaders() });
     if (on401(res)) return;
@@ -986,6 +1021,8 @@ export default function AdminPage() {
         setAuthInfo({ authRequired: data.authRequired, tokenConfigured: data.tokenConfigured, allowed: data.allowed, authed: data.authed });
         if (data.allowed) {
           setAuthMsg('');
+          if (data.authed || !data.tokenConfigured) setLoginOpen(false);
+          else if (tokenRef.current) setAuthMsg('토큰이 올바르지 않습니다. 다시 확인해 주세요.');
           loadKB();
           loadRules();
           loadEsc();
@@ -1114,6 +1151,12 @@ export default function AdminPage() {
   };
 
   const submitCustomRule = async () => {
+    const errs: { label?: string; keywords?: string; reply?: string } = {};
+    if (!crForm.label.trim()) errs.label = '규칙 이름을 입력해 주세요.';
+    if (splitKeywords(crForm.keywords).length === 0) errs.keywords = '고객이 쓸 표현을 한 개 이상 입력해 주세요.';
+    if (!crForm.reply.trim()) errs.reply = '고객에게 보낼 답변을 입력해 주세요.';
+    setCrErr(errs);
+    if (Object.keys(errs).length) return;
     const body = {
       ...(crEditing ? { intent: crEditing } : {}),
       label: crForm.label,
@@ -1121,20 +1164,28 @@ export default function AdminPage() {
       reply: crForm.reply,
       escalate: crForm.escalate,
     };
-    const res = await fetch('/api/admin/rules', {
-      method: 'POST',
-      headers: authHeaders(true),
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!data.ok) {
-      flash(`저장 실패: ${data.error}`);
-      return;
+    setCrBusy(true);
+    try {
+      const res = await fetch('/api/admin/rules', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify(body),
+      });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (!data.ok) {
+        flash(`저장하지 못했습니다: ${data.message || data.error}`);
+        return;
+      }
+      setCrForm(EMPTY_CR_FORM);
+      setCrEditing(null);
+      await loadRules();
+      flash(crEditing ? '규칙을 수정했습니다.' : '규칙을 추가했습니다.');
+    } catch {
+      flash('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setCrBusy(false);
     }
-    setCrForm(EMPTY_CR_FORM);
-    setCrEditing(null);
-    await loadRules();
-    flash(crEditing ? '커스텀 룰이 수정되었습니다.' : '커스텀 룰이 추가되었습니다.');
   };
 
   const toggleCustomRule = async (r: CustomRuleView) => {
@@ -1149,6 +1200,8 @@ export default function AdminPage() {
   };
 
   const removeCustomRule = async (intent: string) => {
+    const target = customRules.find((r) => r.intent === intent);
+    if (!window.confirm(`「${target?.label ?? intent}」 규칙을 삭제할까요? 삭제하면 되돌릴 수 없습니다.`)) return;
     const res = await fetch(`/api/admin/rules?intent=${encodeURIComponent(intent)}`, { method: 'DELETE', headers: authHeaders() });
     const data = await res.json();
     if (data.ok) {
@@ -1157,7 +1210,7 @@ export default function AdminPage() {
         setCrForm(EMPTY_CR_FORM);
       }
       await loadRules();
-      flash('커스텀 룰이 삭제되었습니다.');
+      flash('규칙을 삭제했습니다.');
     } else {
       flash(`삭제 실패: ${data.error}`);
     }
@@ -1195,7 +1248,7 @@ export default function AdminPage() {
       return;
     }
     await Promise.all([loadKB(), loadRules()]);
-    flash(`복원 완료: KB ${data.kb} · 커스텀 룰 ${data.customRules} · 오버라이드 ${data.overrides}`);
+    flash(`복원 완료: 안내 자료 ${data.kb}건 · 규칙 ${data.customRules}건 · 기본 규칙 답변 수정 ${data.overrides}건`);
   };
 
   const patchTicket = async (id: string, status: TicketView['status']) => {
@@ -1269,34 +1322,61 @@ export default function AdminPage() {
     );
   };
 
-  // ---- 잠금 화면: 인증 게이트에 막힌 경우 콘솔 대신 토큰 입력 화면을 보여준다 ----
-  if (authInfo && !authInfo.allowed) {
+  // ---- 로그인 화면: 인증 게이트에 막혔거나 운영자가 직접 열었을 때 콘솔 대신 보여준다 ----
+  if ((authInfo && !authInfo.allowed) || loginOpen) {
+    const canReturn = Boolean(authInfo?.allowed);
     return (
-      <main style={S.page}>
-        <h1 style={{ fontSize: 24, marginBottom: 4 }}>관리 콘솔</h1>
-        <section style={{ ...S.card, maxWidth: 420, margin: '48px auto 0' }} aria-label="관리 콘솔 잠금">
-          <h2 style={{ fontSize: 17, marginBottom: 6 }}>🔒 잠금 상태</h2>
-          <p style={{ fontSize: 14, color: 'var(--sub)', marginBottom: 12 }}>관리 토큰을 입력하면 콘솔이 열립니다.</p>
-          <input
-            style={S.input}
-            type="password"
-            placeholder="관리 토큰"
-            aria-label="관리 토큰"
-            autoFocus
-            value={adminToken}
-            onChange={(e) => applyToken(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !authBusy) verifyAuth();
-            }}
-          />
-          <button style={{ ...S.btn, width: '100%', opacity: authBusy ? 0.6 : 1 }} onClick={() => verifyAuth()} disabled={authBusy}>
-            {authBusy ? '확인 중…' : '확인'}
+      <main className="ac-login" aria-labelledby="ac-login-title">
+        <form
+          className="ac-login-card"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!authBusy) verifyAuth();
+          }}
+        >
+          <div className="ac-brand" style={{ padding: '0 0 18px' }}>
+            <BrandMark size={34} />
+            <span style={{ minWidth: 0 }}>
+              <span style={{ display: 'block', fontSize: 15, fontWeight: 800, letterSpacing: '-.01em' }}>GOWON Chat</span>
+              <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--brand-600)' }}>관리 콘솔</span>
+            </span>
+          </div>
+          <h1 id="ac-login-title" style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-.02em', marginBottom: 6 }}>로그인</h1>
+          <p style={{ fontSize: 13.5, color: 'var(--sub)', marginBottom: 18 }}>운영자에게 받은 관리 토큰으로 콘솔을 엽니다.</p>
+          <div className="ac-field">
+            <label htmlFor="ac-login-token">관리 토큰</label>
+            <div className="ac-login-input">
+              <input
+                id="ac-login-token"
+                style={{ ...S.input, marginBottom: 0, paddingRight: 64 }}
+                type={showToken ? 'text' : 'password'}
+                autoComplete="current-password"
+                autoFocus
+                value={adminToken}
+                aria-describedby={authMsg ? 'ac-login-err' : 'ac-login-help'}
+                aria-invalid={authMsg ? 'true' : undefined}
+                onChange={(e) => applyToken(e.target.value)}
+              />
+              <button type="button" className="ac-login-eye" aria-pressed={showToken} onClick={() => setShowToken((v) => !v)}>
+                {showToken ? '숨기기' : '보기'}
+              </button>
+            </div>
+            {authMsg ? (
+              <p id="ac-login-err" role="alert" className="ac-err">{authMsg}</p>
+            ) : (
+              <p id="ac-login-help" className="ac-rulehint">토큰은 이 브라우저에만 저장되며, 서버에는 확인할 때만 전송됩니다.</p>
+            )}
+          </div>
+          <button type="submit" style={{ ...S.btn, width: '100%', padding: '11px 14px', opacity: authBusy ? 0.6 : 1 }} disabled={authBusy} aria-busy={authBusy || undefined}>
+            {authBusy ? '확인 중…' : '로그인'}
           </button>
-          {authMsg && (
-            <p role="alert" style={{ fontSize: 13, color: '#c0392b', marginTop: 10 }}>{authMsg}</p>
+          {canReturn && (
+            <button type="button" className="ac-linkbtn" style={{ width: '100%', marginTop: 8 }} onClick={() => setLoginOpen(false)}>
+              로그인하지 않고 돌아가기
+            </button>
           )}
-          <p style={{ ...S.tag, marginTop: 12 }}>토큰은 이 브라우저(localStorage)에만 저장되며 서버로는 요청 헤더로만 전송됩니다.</p>
-        </section>
+          <p className="ac-login-foot">토큰을 모르시면 서비스 운영자에게 문의하세요. 잘못된 토큰을 여러 번 입력하면 잠시 잠깁니다.</p>
+        </form>
       </main>
     );
   }
@@ -1347,24 +1427,28 @@ export default function AdminPage() {
               <span
                 className="ac-badge"
                 data-tone={authInfo.authed ? 'on' : authInfo.tokenConfigured ? 'warn' : 'off'}
-                title={authInfo.authed ? '관리 토큰으로 인증된 상태입니다.' : authInfo.tokenConfigured ? '관리 토큰을 입력하면 인증됩니다.' : '아직 관리 토큰이 설정되지 않아 누구나 열 수 있습니다.'}
+                title={authInfo.authed ? '관리 토큰으로 로그인한 상태입니다.' : authInfo.tokenConfigured ? '로그인하면 변경 이력에 관리자 인증이 남습니다.' : '아직 관리자 인증이 설정되지 않아 누구나 열 수 있습니다.'}
               >
-                {authInfo.authed ? '인증됨' : authInfo.tokenConfigured ? '미인증' : '토큰 미설정'}
+                {authInfo.authed ? '로그인됨' : authInfo.tokenConfigured ? '로그인 전' : '인증 미설정'}
               </span>
             )}
-            <label htmlFor="ac-token" className="ac-srhide">관리 토큰</label>
-            <input
-              id="ac-token"
-              className="ac-token"
-              type="password"
-              placeholder="관리 토큰(설정 시)"
-              value={adminToken}
-              onChange={(e) => applyToken(e.target.value)}
-              onBlur={() => verifyAuth()}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !authBusy) verifyAuth();
-              }}
-            />
+            {authInfo?.authed ? (
+              <button
+                type="button"
+                className="ac-linkbtn"
+                onClick={() => {
+                  applyToken('');
+                  setAuthMsg('');
+                  setLoginOpen(true);
+                }}
+              >
+                로그아웃
+              </button>
+            ) : (
+              <button type="button" className="ac-linkbtn" onClick={() => { setAuthMsg(''); setLoginOpen(true); }}>
+                로그인
+              </button>
+            )}
           </div>
         </header>
 
@@ -1736,94 +1820,267 @@ export default function AdminPage() {
         );
       })()}
 
-      {tab === 'rules' && (
-        <>
-          <section style={S.card}>
-            <h2 style={{ fontSize: 16, marginBottom: 4 }}>{crEditing ? `커스텀 룰 수정: ${crEditing}` : '커스텀 룰 추가'}</h2>
-            <p style={{ ...S.tag, marginBottom: 10 }}>키워드가 포함된 메시지에 지정한 응답을 보냅니다. 내장 룰 다음, FAQ 매칭 이전에 적용됩니다.</p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <input style={S.input} placeholder="이름(예: 배송 문의)" value={crForm.label} onChange={(e) => setCrForm({ ...crForm, label: e.target.value })} />
-              <input style={S.input} placeholder="키워드(콤마 구분, 예: 배송, 택배, 언제 와)" value={crForm.keywords} onChange={(e) => setCrForm({ ...crForm, keywords: e.target.value })} />
-            </div>
-            <textarea style={{ ...S.input, minHeight: 60 }} placeholder="응답문" value={crForm.reply} onChange={(e) => setCrForm({ ...crForm, reply: e.target.value })} />
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginBottom: 8 }}>
-              <input type="checkbox" checked={crForm.escalate} onChange={(e) => setCrForm({ ...crForm, escalate: e.target.checked })} />
-              상담원 접수로 연결(응답 후 접수번호 발급·연락처 요청)
-            </label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button style={S.btn} onClick={submitCustomRule}>{crEditing ? '수정 저장' : '추가'}</button>
-              {crEditing && (
-                <button
-                  style={S.btnGhost}
-                  onClick={() => {
-                    setCrEditing(null);
-                    setCrForm(EMPTY_CR_FORM);
-                  }}
-                >
-                  취소
-                </button>
-              )}
-            </div>
-          </section>
-          {customRules.map((r) => (
-            <section key={r.intent} style={S.card}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                <div>
-                  <strong>{r.label}</strong>{' '}
-                  <span style={S.tag}>({r.intent} · 커스텀{r.escalate ? ' · 상담원 연결' : ''})</span>
-                  <div style={S.tag}>키워드: {r.keywords.join(', ')}</div>
-                  <p style={{ fontSize: 14, color: 'var(--sub)', margin: '6px 0 0' }}>{r.reply}</p>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <button style={r.enabled ? S.btn : S.btnGhost} onClick={() => toggleCustomRule(r)}>
-                    {r.enabled ? '활성' : '비활성'}
-                  </button>
-                  <button
-                    style={S.btnGhost}
-                    onClick={() => {
-                      setCrEditing(r.intent);
-                      setCrForm({ label: r.label, keywords: r.keywords.join(', '), reply: r.reply, escalate: r.escalate });
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    }}
-                  >
-                    수정
-                  </button>
-                  <button style={{ ...S.btnGhost, color: '#a33' }} onClick={() => removeCustomRule(r.intent)}>
-                    삭제
-                  </button>
-                </div>
+      {tab === 'rules' && (() => {
+        const q = ruleQuery.trim().toLowerCase();
+        const hit = (s: string) => !q || s.toLowerCase().includes(q);
+        const shownCustom = customRules.filter((r) => hit([r.label, r.keywords.join(' '), r.reply].join(' ')));
+        const shownBuiltin = rules.filter((r) => hit([r.label, r.pattern, r.effectiveReply].join(' ')));
+        const formKeywords = splitKeywords(crForm.keywords);
+        const probeHits = probeKeywords(ruleProbe, formKeywords);
+        const onEdit = (r: CustomRuleView) => {
+          setCrEditing(r.intent);
+          setCrForm({ label: r.label, keywords: r.keywords.join(', '), reply: r.reply, escalate: r.escalate });
+          setCrErr({});
+          ruleFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        };
+        return (
+        <div className="ac-split">
+          {/* ── 좌: 규칙 카드 목록(조건 → 응답) ── */}
+          <div style={{ minWidth: 0 }}>
+            <section style={{ ...S.card, padding: 0, overflow: 'hidden' }} aria-labelledby="ac-rule-custom">
+              <div className="ac-toolbar">
+                <h2 id="ac-rule-custom" style={{ ...S.h2, marginRight: 'auto' }}>내가 만든 규칙 <span style={{ fontSize: 12.5, color: 'var(--mut)', fontWeight: 600 }}>{shownCustom.length}/{customRules.length}건</span></h2>
+                <label htmlFor="ac-rule-q" className="ac-srhide">규칙 검색</label>
+                <input id="ac-rule-q" className="ac-search" type="search" placeholder="이름·표현·답변 검색" value={ruleQuery} onChange={(e) => setRuleQuery(e.target.value)} />
               </div>
-            </section>
-          ))}
-          <p style={{ ...S.tag, margin: '4px 0 12px' }}>아래 내장 룰은 패턴(정규식)을 코드에서 관리하며, 여기서는 활성화 여부와 응답문만 편집합니다.</p>
-          {rules.map((r) => (
-            <section key={r.intent} style={S.card}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <div>
-                  <strong>{r.label}</strong> <span style={S.tag}>({r.intent}{r.escalate ? ' · 상담원 연결' : ''})</span>
-                  <div style={S.tag}>패턴: /{r.pattern}/</div>
+              <p style={{ ...S.tag, padding: '10px 16px 0' }}>고객 말에 아래 표현이 들어 있으면 정해진 답을 보냅니다. 기본 규칙 다음, 안내 자료 검색 이전에 적용됩니다.</p>
+              {customRules.length === 0 ? (
+                <div className="ac-empty">
+                  <svg width="72" height="56" viewBox="0 0 72 56" aria-hidden="true" fill="none" stroke="var(--line-2)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="4" y="10" width="26" height="18" rx="6" />
+                    <path d="M30 19h10m0 0-4-4m4 4-4 4" stroke="var(--brand)" />
+                    <rect x="42" y="10" width="26" height="18" rx="6" />
+                    <path d="M12 18h10M50 18h10" />
+                    <rect x="20" y="36" width="32" height="14" rx="6" strokeDasharray="3 3" />
+                  </svg>
+                  <p style={{ fontSize: 14, fontWeight: 700, marginTop: 8 }}>아직 만든 규칙이 없습니다</p>
+                  <p style={{ fontSize: 13, color: 'var(--sub)', marginTop: 4 }}>오른쪽에서 「고객이 쓰는 표현 → 답변」을 정하면 바로 상담창에 적용됩니다.</p>
                 </div>
-                <button style={r.enabled ? S.btn : S.btnGhost} onClick={() => patchRule(r.intent, { enabled: !r.enabled })}>
-                  {r.enabled ? '활성' : '비활성'}
-                </button>
-              </div>
-              <textarea
-                style={{ ...S.input, minHeight: 60, marginBottom: 4 }}
-                defaultValue={r.effectiveReply}
-                onBlur={(ev) => {
-                  const v = ev.target.value.trim();
-                  if (v !== r.effectiveReply) patchRule(r.intent, { reply: v === r.defaultReply ? null : v });
-                }}
-              />
-              {r.replyOverride && (
-                <button style={S.btnGhost} onClick={() => patchRule(r.intent, { reply: null })}>
-                  기본 응답으로 되돌리기
-                </button>
+              ) : shownCustom.length === 0 ? (
+                <div className="ac-empty">
+                  <p style={{ fontSize: 14, fontWeight: 700 }}>검색 결과가 없습니다</p>
+                  <button type="button" className="ac-linkbtn" onClick={() => setRuleQuery('')}>검색 지우기</button>
+                </div>
+              ) : (
+                <ul className="ac-rulelist">
+                  {shownCustom.map((r) => (
+                    <li key={r.intent} className="ac-rulecard" data-editing={crEditing === r.intent ? 'true' : undefined} data-off={r.enabled ? undefined : 'true'}>
+                      <div className="ac-rulehead">
+                        <strong className="ac-rulename">{r.label}</strong>
+                        {r.escalate && <span className="ac-pill" style={{ background: '#FFFBEB', color: 'var(--warn)' }}>상담원 연결</span>}
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={r.enabled}
+                          aria-label={`${r.label} 규칙 ${r.enabled ? '사용 중' : '사용 안 함'}`}
+                          className="ac-switch"
+                          onClick={() => toggleCustomRule(r)}
+                        >
+                          <span className="ac-switch-knob" aria-hidden="true" />
+                        </button>
+                      </div>
+                      <div className="ac-ruleflow">
+                        <div className="ac-rulecond">
+                          <span className="ac-rulekey">고객이 이렇게 말하면</span>
+                          <div className="ac-chips">
+                            {r.keywords.map((k) => <span key={k} className="ac-chip">{k}</span>)}
+                          </div>
+                        </div>
+                        <span className="ac-rulearrow" aria-hidden="true">→</span>
+                        <div className="ac-rulereply">
+                          <span className="ac-rulekey">이렇게 답합니다</span>
+                          <p className="ac-clamp">{r.reply}</p>
+                        </div>
+                      </div>
+                      <div className="ac-ruleactions">
+                        <button type="button" className="ac-linkbtn" onClick={() => onEdit(r)}>수정</button>
+                        <button type="button" className="ac-linkbtn" data-tone="danger" onClick={() => removeCustomRule(r.intent)}>삭제</button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
               )}
             </section>
-          ))}
-        </>
-      )}
+
+            <section style={{ ...S.card, padding: 0, overflow: 'hidden' }} aria-labelledby="ac-rule-builtin">
+              <div className="ac-toolbar">
+                <h2 id="ac-rule-builtin" style={{ ...S.h2, marginRight: 'auto' }}>기본 규칙 <span style={{ fontSize: 12.5, color: 'var(--mut)', fontWeight: 600 }}>{shownBuiltin.length}/{rules.length}건</span></h2>
+              </div>
+              <p style={{ ...S.tag, padding: '10px 16px 0' }}>인사·요금·상담원 연결처럼 어느 상담에나 필요한 규칙입니다. 켜고 끄거나 답변 문구만 바꿀 수 있고, 조건은 바꿀 수 없습니다.</p>
+              {rules.length === 0 ? (
+                <div className="ac-empty" aria-busy="true"><p style={{ fontSize: 13, color: 'var(--sub)' }}>규칙을 불러오는 중…</p></div>
+              ) : shownBuiltin.length === 0 ? (
+                <div className="ac-empty">
+                  <p style={{ fontSize: 14, fontWeight: 700 }}>검색 결과가 없습니다</p>
+                  <button type="button" className="ac-linkbtn" onClick={() => setRuleQuery('')}>검색 지우기</button>
+                </div>
+              ) : (
+                <ul className="ac-rulelist">
+                  {shownBuiltin.map((r) => {
+                    const ex = patternExamples(r.pattern);
+                    return (
+                      <li key={r.intent} className="ac-rulecard" data-off={r.enabled ? undefined : 'true'}>
+                        <div className="ac-rulehead">
+                          <strong className="ac-rulename">{r.label}</strong>
+                          {r.escalate && <span className="ac-pill" style={{ background: '#FFFBEB', color: 'var(--warn)' }}>상담원 연결</span>}
+                          {r.replyOverride && <span className="ac-pill">답변 수정됨</span>}
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={r.enabled}
+                            aria-label={`${r.label} 규칙 ${r.enabled ? '사용 중' : '사용 안 함'}`}
+                            className="ac-switch"
+                            onClick={() => patchRule(r.intent, { enabled: !r.enabled })}
+                          >
+                            <span className="ac-switch-knob" aria-hidden="true" />
+                          </button>
+                        </div>
+                        <div className="ac-ruleflow">
+                          <div className="ac-rulecond">
+                            <span className="ac-rulekey">예를 들어</span>
+                            <div className="ac-chips">
+                              {ex.map((k) => <span key={k} className="ac-chip">{k}</span>)}
+                              {ex.length === 6 && <span className="ac-chip" style={{ color: 'var(--mut)' }}>…</span>}
+                            </div>
+                          </div>
+                          <span className="ac-rulearrow" aria-hidden="true">→</span>
+                          <div className="ac-rulereply">
+                            <label htmlFor={`ac-rule-reply-${r.intent}`} className="ac-rulekey">이렇게 답합니다</label>
+                            <textarea
+                              id={`ac-rule-reply-${r.intent}`}
+                              className="ac-rulereply-input"
+                              defaultValue={r.effectiveReply}
+                              rows={2}
+                              onBlur={(ev) => {
+                                const v = ev.target.value.trim();
+                                if (v !== r.effectiveReply) patchRule(r.intent, { reply: v === r.defaultReply ? null : v });
+                              }}
+                            />
+                            <span className="ac-rulehint">입력칸을 벗어나면 저장됩니다.</span>
+                          </div>
+                        </div>
+                        {r.replyOverride && (
+                          <div className="ac-ruleactions">
+                            <button type="button" className="ac-linkbtn" onClick={() => patchRule(r.intent, { reply: null })}>기본 답변으로 되돌리기</button>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+          </div>
+
+          {/* ── 우: 규칙 만들기(조건 → 응답) + 미리보기 ── */}
+          <div ref={ruleFormRef} style={{ minWidth: 0 }}>
+            <section className="ac-sticky" style={S.card} aria-labelledby="ac-rule-form">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <h2 id="ac-rule-form" style={{ ...S.h2, marginRight: 'auto' }}>{crEditing ? '규칙 수정' : '새 규칙 만들기'}</h2>
+                {crEditing && <span className="ac-pill">수정 중</span>}
+              </div>
+
+              <div className="ac-field">
+                <label htmlFor="cr-label">규칙 이름 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span></label>
+                <input
+                  id="cr-label"
+                  style={{ ...S.input, ...(crErr.label ? { borderColor: 'var(--danger)' } : {}) }}
+                  placeholder="예: 배송 문의"
+                  value={crForm.label}
+                  aria-required="true"
+                  aria-invalid={crErr.label ? 'true' : undefined}
+                  aria-describedby={crErr.label ? 'cr-label-err' : undefined}
+                  onChange={(e) => { setCrForm({ ...crForm, label: e.target.value }); if (crErr.label) setCrErr({ ...crErr, label: undefined }); }}
+                />
+                {crErr.label && <p id="cr-label-err" className="ac-err">{crErr.label}</p>}
+              </div>
+
+              <div className="ac-step">
+                <span className="ac-stepno" aria-hidden="true">1</span>
+                <div className="ac-field" style={{ flex: 1, marginBottom: 0 }}>
+                  <label htmlFor="cr-keywords">고객이 이렇게 말하면 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span> <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(쉼표로 구분)</span></label>
+                  <input
+                    id="cr-keywords"
+                    style={{ ...S.input, ...(crErr.keywords ? { borderColor: 'var(--danger)' } : {}) }}
+                    placeholder="예: 배송, 택배, 언제 와"
+                    value={crForm.keywords}
+                    aria-required="true"
+                    aria-invalid={crErr.keywords ? 'true' : undefined}
+                    aria-describedby={crErr.keywords ? 'cr-keywords-err' : 'cr-keywords-help'}
+                    onChange={(e) => { setCrForm({ ...crForm, keywords: e.target.value }); if (crErr.keywords) setCrErr({ ...crErr, keywords: undefined }); }}
+                  />
+                  {crErr.keywords ? (
+                    <p id="cr-keywords-err" className="ac-err">{crErr.keywords}</p>
+                  ) : (
+                    <p id="cr-keywords-help" className="ac-rulehint">한 표현만 들어 있어도 규칙이 적용됩니다.</p>
+                  )}
+                  {formKeywords.length > 0 && (
+                    <div className="ac-chips" style={{ marginTop: 6 }} aria-label="입력한 표현">
+                      {formKeywords.map((k) => <span key={k} className="ac-chip" data-hit={probeHits.includes(k) ? 'true' : undefined}>{k}</span>)}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="ac-step">
+                <span className="ac-stepno" aria-hidden="true">2</span>
+                <div className="ac-field" style={{ flex: 1, marginBottom: 0 }}>
+                  <label htmlFor="cr-reply">이렇게 답합니다 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span></label>
+                  <textarea
+                    id="cr-reply"
+                    style={{ ...S.input, minHeight: 90, ...(crErr.reply ? { borderColor: 'var(--danger)' } : {}) }}
+                    placeholder="고객에게 그대로 나가는 문장입니다."
+                    value={crForm.reply}
+                    aria-required="true"
+                    aria-invalid={crErr.reply ? 'true' : undefined}
+                    aria-describedby={crErr.reply ? 'cr-reply-err' : undefined}
+                    onChange={(e) => { setCrForm({ ...crForm, reply: e.target.value }); if (crErr.reply) setCrErr({ ...crErr, reply: undefined }); }}
+                  />
+                  {crErr.reply && <p id="cr-reply-err" className="ac-err">{crErr.reply}</p>}
+                  <label className="ac-check">
+                    <input type="checkbox" checked={crForm.escalate} onChange={(e) => setCrForm({ ...crForm, escalate: e.target.checked })} />
+                    <span>답변 뒤에 상담원 접수를 안내합니다<span className="ac-rulehint" style={{ display: 'block' }}>접수번호를 발급하고 연락처를 받습니다.</span></span>
+                  </label>
+                </div>
+              </div>
+
+              {/* 미리보기: 시험 문장 → 규칙 적용 여부 + 고객에게 보일 말풍선 */}
+              <div className="ac-rulepreview" aria-labelledby="ac-rule-pv">
+                <div className="ac-field" style={{ marginBottom: 8 }}>
+                  <label id="ac-rule-pv" htmlFor="cr-probe">미리보기 — 고객이 보낼 말을 적어 보세요</label>
+                  <input id="cr-probe" style={S.input} placeholder="예: 택배가 언제 오나요?" value={ruleProbe} onChange={(e) => setRuleProbe(e.target.value)} />
+                </div>
+                <div className="ac-pv-mini" role="log" aria-live="polite">
+                  {ruleProbe.trim() && <div className="ac-pv-user">{ruleProbe.trim()}</div>}
+                  {ruleProbe.trim() && probeHits.length > 0 && crForm.reply.trim() ? (
+                    <div className="ac-pv-bot">
+                      {crForm.reply.trim()}
+                      <span className="ac-pv-cite">「{probeHits[0]}」 표현으로 이 규칙이 적용됩니다{crForm.escalate ? ' · 이어서 상담원 접수 안내' : ''}</span>
+                    </div>
+                  ) : ruleProbe.trim() ? (
+                    <p className="ac-pv-note">{probeHits.length === 0 ? '이 문장에는 입력한 표현이 없어 규칙이 적용되지 않습니다.' : '답변을 입력하면 말풍선으로 보여 드립니다.'}</p>
+                  ) : (
+                    <p className="ac-pv-note">문장을 입력하면 이 규칙이 적용되는지 바로 확인할 수 있습니다.</p>
+                  )}
+                </div>
+                <p className="ac-rulehint" style={{ marginTop: 6 }}>여기서는 표현 포함 여부만 봅니다. 기본 규칙·안내 자료까지 합친 최종 답은 「응답 테스트」에서 확인하세요.</p>
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+                <button type="button" style={{ ...S.btn, opacity: crBusy ? 0.6 : 1 }} onClick={submitCustomRule} disabled={crBusy} aria-busy={crBusy || undefined}>
+                  {crBusy ? '저장 중…' : crEditing ? '수정 저장' : '규칙 추가'}
+                </button>
+                {crEditing && (
+                  <button type="button" style={S.btnGhost} onClick={() => { setCrEditing(null); setCrForm(EMPTY_CR_FORM); setCrErr({}); }}>
+                    취소
+                  </button>
+                )}
+              </div>
+            </section>
+          </div>
+        </div>
+        );
+      })()}
 
       {tab === 'esc' && (
         <>
