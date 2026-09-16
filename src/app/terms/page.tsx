@@ -4,7 +4,10 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import LegalLayout from '../privacy/LegalLayout';
 
-export const metadata: Metadata = { title: '이용약관 — GOWON Chat' };
+export const metadata: Metadata = {
+  title: '이용약관 — GOWON Chat',
+  description: 'GOWON Chat 상담 챗봇 서비스 이용약관(검토 초안).',
+};
 
 export default function TermsPage() {
   return (

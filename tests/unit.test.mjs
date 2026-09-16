@@ -815,3 +815,69 @@ test('관리 콘솔 화면에 내부 구현 문구가 남아 있지 않다', () 
     assert.equal(ui.includes(w), false, `콘솔 화면에 내부 문구 노출: ${w}`);
   }
 });
+
+/* ══════════ 약관·방침 셸 통일 (DS 4-4) ══════════ */
+
+test('약관·방침 레이아웃은 랜딩과 같은 셸(상단바·브랜드 마크·목차·푸터)을 쓴다', () => {
+  const s = read('src/app/privacy/LegalLayout.tsx');
+  assert.match(s, /from '@\/components\/BrandMark'/, '브랜드 마크는 공용 컴포넌트를 쓴다');
+  assert.match(s, /aria-label="목차"/);
+  assert.match(s, /aria-labelledby="legal-title"/);
+  assert.match(s, /href="\/terms"/);
+  assert.match(s, /href="\/privacy"/);
+  assert.equal(s.includes('/admin'), false, '법적 고지 페이지는 운영자 화면을 안내하지 않는다');
+  // 이모지·하드코딩 색 0건 — 토큰(var())만
+  assert.equal(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(s), false, '이모지 아이콘이 남아 있다');
+  assert.equal(/#[0-9a-f]{3,8}\b/i.test(s), false, '하드코딩 색이 남아 있다');
+  // 375px: 목차가 가로 스크롤 칩으로 접히고 카드 여백이 줄어든다
+  const css = read('src/app/globals.css');
+  assert.match(css, /@media \(max-width:900px\)\{[^}]*\.lg-main\{grid-template-columns:minmax\(0,1fr\)/);
+  assert.match(css, /\.lg-toc-list\{flex-direction:row;flex-wrap:nowrap;overflow-x:auto/);
+  assert.match(css, /\.legal-body h2\{[^}]*scroll-margin-top/);
+});
+
+test('약관·방침 페이지에 설명 메타가 있고 제목은 문자열이라 목차에 잡힌다', () => {
+  for (const f of ['src/app/terms/page.tsx', 'src/app/privacy/page.tsx']) {
+    const s = read(f);
+    assert.match(s, /description: '/, `${f} 설명 메타`);
+    assert.ok((s.match(/<h2>/g) ?? []).length >= 5, `${f} 조항 제목`);
+  }
+});
+
+/* ══════════ 링크 미리보기·색인 메타데이터 (DS 4-5) ══════════ */
+
+test('루트 레이아웃이 링크 미리보기(OG·트위터)·테마색·metadataBase 를 내보낸다', () => {
+  const s = read('src/app/layout.tsx');
+  assert.match(s, /metadataBase: new URL\(/);
+  assert.match(s, /openGraph: \{[^}]*locale: 'ko_KR'/);
+  assert.match(s, /twitter: \{ card: 'summary_large_image'/);
+  assert.match(s, /export const viewport: Viewport/);
+  assert.match(s, /themeColor: '#2563EB'/, '테마색은 globals.css --brand 와 같아야 한다');
+  assert.match(read('src/app/globals.css'), /--brand:#2563EB;/);
+});
+
+test('미리보기 이미지는 1200x630 PNG 파일 규약으로 있고 대체 텍스트가 붙어 있다', () => {
+  for (const name of ['opengraph-image', 'twitter-image']) {
+    const p = `src/app/${name}.png`;
+    assert.ok(has(p), `${p} 가 있어야 한다`);
+    const buf = readFileSync(new URL(`../${p}`, import.meta.url));
+    assert.equal(buf.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', `${p} 는 PNG 여야 한다`);
+    assert.equal(buf.readUInt32BE(16), 1200, `${p} 폭`);
+    assert.equal(buf.readUInt32BE(20), 630, `${p} 높이`);
+    assert.ok(buf.length < 300 * 1024, `${p} 용량(300KB 미만)`);
+    const alt = read(`src/app/${name}.alt.txt`);
+    assert.match(alt, /GOWON Chat/);
+  }
+  // 생성 스크립트는 수치·타사명을 쓰지 않는다(§13)
+  const gen = read('scripts/og-image.py');
+  assert.equal(/\d+\s*%/.test(gen), false, '성과 수치 금지');
+});
+
+test('관리 콘솔·임베드 프레임은 검색 색인에서 제외된다', () => {
+  assert.match(read('src/app/admin/layout.tsx'), /robots: \{ index: false, follow: false/);
+  assert.match(read('src/app/widget/page.tsx'), /robots: \{ index: false, follow: false \}/);
+  // 랜딩·약관·방침은 색인 허용(색인 제외 지정 없음)
+  for (const f of ['src/app/page.tsx', 'src/app/terms/page.tsx', 'src/app/privacy/page.tsx']) {
+    assert.equal(read(f).includes('index: false'), false, `${f} 는 색인돼야 한다`);
+  }
+});

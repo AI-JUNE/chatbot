@@ -3,7 +3,10 @@
 import type { Metadata } from 'next';
 import LegalLayout from './LegalLayout';
 
-export const metadata: Metadata = { title: '개인정보처리방침 — GOWON Chat' };
+export const metadata: Metadata = {
+  title: '개인정보처리방침 — GOWON Chat',
+  description: 'GOWON Chat 상담 챗봇이 어떤 정보를 왜, 어떻게 처리하는지 안내합니다(검토 초안).',
+};
 
 export default function PrivacyPage() {
   return (
