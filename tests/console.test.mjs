@@ -120,7 +120,7 @@ test('헤더 전역 검색이 combobox 로 렌더되고 키보드·연락처 비
   // 개인정보: 연락처·세션 원문은 색인하지 않는다(요청 서랍에서 「보기」를 눌러야 한다)
   const index = page.slice(page.indexOf('const searchAll = '), page.indexOf('const currentLabel ='));
   assert.equal(/\.contact\b/.test(index), false, '연락처는 검색 색인에 넣지 않는다');
-  assert.equal(/t\.sessionId\)|t\.sessionId,/.test(index.replace(/shortSession\(t\.sessionId\)/g, '')), false, '세션 원문은 색인·표시하지 않는다');
+  assert.equal(/t\.sessionId\)|t\.sessionId,/.test(index.replace(/shortSession\(t\.sessionId\)/g, '').replace(/openDrawer\(t\.sessionId/g, '')), false, '세션 원문은 색인·표시하지 않는다(서랍 열기 인자는 표시가 아니므로 제외)');
   assert.equal(/t\.id[,)]/.test(index.replace(/shortTicket\(t\.id\)/g, '').replace(/openTicket\(t\.id/g, '').replace(/`ticket:\$\{t\.id\}`|`turn:\$\{t\.id\}`/g, '')), false, '접수번호 전체는 색인하지 않는다');
   // 모든 출처가 색인된다
   for (const src of ['tickets', 'recentTurns', 'entries', 'customRules', 'rules', 'accounts', 'partners']) {
