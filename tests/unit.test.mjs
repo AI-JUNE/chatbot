@@ -722,7 +722,7 @@ test('브랜드 마크(파비콘)가 있고 화면과 같은 도형을 쓴다', 
   const initial = /d="(M20\.9 9\.9[^"]+)"/.exec(svg)?.[1];
   assert.ok(body && initial, '말풍선 몸통·이니셜 경로가 있어야 한다');
   // 랜딩·콘솔의 마크가 파비콘과 같은 도형이어야 한다(브랜드가 화면마다 달라지지 않게)
-  for (const f of ['src/app/page.tsx', 'src/app/admin/page.tsx', 'public/brand-mark.svg']) {
+  for (const f of ['src/app/page.tsx', 'src/app/admin/page.tsx', 'public/brand-mark.svg', 'src/components/BrandMark.tsx']) {
     const s = read(f);
     assert.ok(s.includes(body), `${f}의 마크 몸통이 파비콘과 다르다`);
     assert.ok(s.includes(initial), `${f}의 마크 이니셜이 파비콘과 다르다`);
@@ -735,6 +735,37 @@ test('랜딩 아이콘은 이모지가 아니라 선 아이콘이다', () => {
   assert.equal(emoji, null, `랜딩에 이모지가 남아 있다: ${emoji && emoji.join(' ')}`);
   assert.match(s, /function Icon\(/, '선 아이콘 컴포넌트가 있어야 한다');
   assert.match(s, /strokeWidth="1\.4"/, '아이콘 굵기는 콘솔 메뉴와 같아야 한다');
+});
+
+/* ══════════ 시스템 화면 — 404·오류 (DS 4-1) ══════════ */
+
+test('404·오류 화면이 브랜드 규격으로 있고 내부 오류 내용을 싣지 않는다 (DS 4-1)', () => {
+  for (const f of ['src/app/not-found.tsx', 'src/app/error.tsx', 'src/app/global-error.tsx', 'src/components/SystemPage.tsx']) {
+    assert.ok(has(f), `${f} 가 있어야 한다(기본 Next 화면은 개발자 초안 수준)`);
+  }
+  const sys = read('src/components/SystemPage.tsx');
+  assert.match(sys, /import BrandMark from '\.\/BrandMark'/, '랜딩·콘솔과 같은 마크');
+  assert.match(sys, /GOWON Chat/, '제품명');
+  assert.match(sys, /aria-labelledby="sys-title"/, '화면 제목 연결');
+  assert.match(sys, /<h1 id="sys-title"/, '제목은 h1');
+  assert.match(sys, /minHeight: 42/, '버튼 터치 영역');
+  assert.match(sys, /flexWrap: 'wrap'/, '375px 에서 버튼이 줄바꿈');
+
+  const nf = read('src/app/not-found.tsx');
+  assert.match(nf, /페이지를 찾을 수 없습니다/, '404 문구');
+  assert.match(nf, /href: '\/'/, '홈으로');
+  assert.equal(/\/admin/.test(nf), false, '404 에서 운영자 경로를 안내하지 않는다');
+
+  for (const f of ['src/app/error.tsx', 'src/app/global-error.tsx']) {
+    const e = read(f);
+    assert.match(e, /^'use client';/, `${f} 는 클라이언트 경계`);
+    assert.match(e, /onClick: reset/, `${f}: 다시 시도`);
+    assert.match(e, /reference=\{error\.digest\}/, `${f}: 참조 번호만`);
+    assert.equal(/error\.message|error\.stack|\{String\(error/.test(e), false, `${f}: 오류 내용(메시지·스택)을 화면에 싣지 않는다`);
+  }
+  const ge = read('src/app/global-error.tsx');
+  assert.match(ge, /<html lang="ko">/, 'global-error 는 루트 레이아웃을 대체하므로 lang 을 직접 준다');
+  assert.match(ge, /'--brand': '#2563EB'/, 'globals.css 가 없으므로 토큰을 인라인으로');
 });
 
 /* ══════════ 랜딩 — 상용 수준 구조 & 운영자 정보 비노출 ══════════ */

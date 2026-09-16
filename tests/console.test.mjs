@@ -77,10 +77,67 @@ test('대시보드 KPI 4개가 값 없이도 「측정 중」으로 렌더된다
   for (const k of ['오늘 대화', '자동완결률', '상담원 전환', '평균 응답 시간']) {
     assert.ok(html.includes(k), `KPI 누락: ${k}`);
   }
-  assert.match(html, /측정 중/, '값이 없으면 「측정 중」이어야 한다');
   // 지어낸 수치가 들어가면 안 된다 — 로딩 상태에서 0건/0% 로 단정하지 않는다
   assert.equal(/ac-kpivalue[^>]*>0%/.test(html), false, '값이 없는데 0%로 단정하면 안 된다');
+  assert.equal(/ac-kpivalue[^>]*>0</.test(html), false, '값이 없는데 0건으로 단정하면 안 된다');
   assert.match(html, /aria-busy="true"/, '불러오는 중임을 알려야 한다');
+  // 「측정 중」은 데이터가 *없을 때* 의 값이다(불러오는 중은 DS 4-2 스켈레톤). 소스에서 KPI 4개가 값 없으면 MEASURING 으로 떨어지는지 본다
+  const page = readFileSync(path.join(REPO, 'src', 'app', 'admin', 'page.tsx'), 'utf8');
+  const dash = page.slice(page.indexOf("{tab === 'dash' && ("), page.indexOf('최근 7일 대화량'));
+  assert.ok((dash.match(/: MEASURING\}/g) || []).length >= 3, '값이 없으면 「측정 중」이어야 한다(0으로 단정 금지)');
+  assert.equal(page.includes('위쪽 관리 토큰을 확인'), false, '헤더의 토큰 입력은 사라졌으므로 옛 안내가 남으면 안 된다');
+});
+
+test('불러오는 동안 빈 상태 대신 스켈레톤을 그리고, 실패는 「다시 시도」로 드러낸다 (DS 4-2)', opts, async () => {
+  const html = await render();
+  // 첫 렌더(데이터 도착 전)에는 「없습니다」 빈 상태가 보이면 안 된다 — 불러오는 중 ≠ 0건
+  assert.equal(html.includes('아직 기록된 대화가 없습니다'), false, '데이터 전에 빈 상태를 단정하면 안 된다');
+  assert.match(html, /class="ac-skelrows" role="status" aria-live="polite" aria-busy="true"/, '스켈레톤 목록은 status 로 알린다');
+  assert.match(html, /class="ac-srhide">최근 대화를 불러오는 중입니다</, '스크린리더에는 문장 하나');
+  assert.match(html, /class="ac-skel" aria-hidden="true"/, '막대는 장식');
+  assert.match(html, /class="ac-skelchart"/, '차트 자리도 스켈레톤');
+  assert.equal(html.includes('불러오는 중…'), false, '텍스트만 있는 로딩 문구는 스켈레톤으로 바뀐다');
+
+  const page = readFileSync(path.join(REPO, 'src', 'app', 'admin', 'page.tsx'), 'utf8');
+  // 실패 경로: 네트워크 예외를 삼키지 않고 phase=error → role=alert + 다시 시도
+  for (const k of ['kb', 'rules', 'esc', 'audit']) {
+    assert.ok(new RegExp(`markPhase\\('${k}', 'error'\\)`).test(page), `${k} 실패 상태 기록 누락`);
+    assert.ok(new RegExp(`markPhase\\('${k}', data\\.ok \\? 'done' : 'error'\\)`).test(page), `${k} 완료 상태 기록 누락`);
+  }
+  const ls = page.slice(page.indexOf('function LoadState('), page.indexOf('function TrendChart('));
+  assert.match(ls, /role="alert"/, '실패는 alert');
+  assert.match(ls, /다시 시도/, '실패에는 다시 시도');
+  // 빈 상태는 phase 가 done 일 때만 — 5개 목록 전부
+  for (const cond of ["recentTurns.length === 0 && phase.esc !== 'done'", "entries.length === 0 && phase.kb !== 'done'", "tickets.length === 0 && phase.esc !== 'done'", "auditEvents.length === 0 && phase.audit !== 'done'"]) {
+    assert.ok(page.includes(cond), `빈 상태 게이트 누락: ${cond}`);
+  }
+  assert.match(page, /<LoadState phase=\{phase\.rules === 'done' \? 'error' : phase\.rules\}/, '기본 규칙 목록');
+  assert.match(page, /<SkeletonRows rows=\{4\} label="고객사와 파트너 정보를 불러오는 중입니다" \/>/, '파트너 탭');
+  assert.match(page, /<SkeletonRows rows=\{4\} label="테넌트 지식을 불러오는 중입니다" \/>/, '테넌트 탭');
+  // KPI 카드는 불러오는 동안 값 자리를 비운다(측정 중으로 단정하지 않음)
+  assert.match(page, /loading \? \([\s\S]{0,200}<Skeleton w="46%" h=\{26\}/, 'KPI 로딩 스켈레톤');
+
+  const css = readFileSync(path.join(REPO, 'src', 'app', 'globals.css'), 'utf8');
+  assert.match(css, /@keyframes ac-shimmer/, '반짝임 애니메이션');
+  const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'), css.indexOf('/* ── 관리 콘솔 셸'));
+  assert.match(reduced, /\.ac-skel::after\{animation:none\}/, '모션 최소화에서는 반짝임 제거');
+  const mobile = css.slice(css.indexOf('@media (max-width:900px)'));
+  assert.match(mobile, /\.ac-skelchart\{height:110px/, '375px: 차트 스켈레톤 높이 축소');
+});
+
+test('인터넷이 끊기면 헤더 아래 배너로 알린다 (DS 4-3)', opts, async () => {
+  const page = readFileSync(path.join(REPO, 'src', 'app', 'admin', 'page.tsx'), 'utf8');
+  assert.match(page, /window\.addEventListener\('offline', sync\)/, 'offline 이벤트 구독');
+  assert.match(page, /window\.addEventListener\('online', sync\)/, 'online 이벤트 구독(복구 시 사라짐)');
+  assert.match(page, /window\.removeEventListener\('offline', sync\)/, '해제');
+  assert.match(page, /className="ac-offline" role="status" aria-live="assertive"/, '배너는 status + assertive');
+  assert.match(page, /인터넷 연결이 끊겼습니다/, '사용자 언어 안내');
+  const html = await render();
+  assert.equal(html.includes('ac-offline'), false, '서버 렌더(연결 상태 미확인)에서는 배너를 그리지 않는다');
+  const css = readFileSync(path.join(REPO, 'src', 'app', 'globals.css'), 'utf8');
+  assert.match(css, /\.ac-offline\{[^}]*#FFFBEB/, '경고 톤');
+  const mobile = css.slice(css.indexOf('@media (max-width:900px)'));
+  assert.match(mobile, /\.ac-offline\{padding:9px 16px\}/, '375px 여백');
 });
 
 test('평균 응답 시간 KPI 가 실측(서버 처리 시간)으로 연결되고 값이 없을 때만 「측정 중」이다 (DS 2-14)', opts, () => {

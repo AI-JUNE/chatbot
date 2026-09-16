@@ -475,14 +475,57 @@ function AccountDrawer({
   );
 }
 
-function KpiCard({ label, value, note, empty }: { label: string; value: string; note: string; empty?: boolean }) {
+function KpiCard({ label, value, note, empty, loading }: { label: string; value: string; note: string; empty?: boolean; loading?: boolean }) {
   return (
     <div className="ac-kpicard">
       <div className="ac-kpilabel">{label}</div>
-      <div className="ac-kpivalue" data-empty={empty ? 'true' : undefined}>{value}</div>
+      {loading ? (
+        // 불러오는 동안은 값을 단정하지 않는다 — 「측정 중」은 데이터가 없을 때만 쓴다.
+        <div className="ac-kpivalue" aria-hidden="true"><Skeleton w="46%" h={26} style={{ marginTop: 6 }} /></div>
+      ) : (
+        <div className="ac-kpivalue" data-empty={empty ? 'true' : undefined}>{value}</div>
+      )}
       <div className="ac-kpinote">{note}</div>
     </div>
   );
+}
+
+/** 자리 표시 막대 — 장식이므로 스크린리더에서 숨긴다(문장은 SkeletonRows 가 하나만 읽힌다). */
+function Skeleton({ w = '100%', h = 12, style }: { w?: number | string; h?: number; style?: React.CSSProperties }) {
+  return <span className="ac-skel" aria-hidden="true" style={{ width: w, height: h, ...style }} />;
+}
+
+/** 표·목록이 오기 전의 자리 표시 — 빈 상태 문구를 먼저 보이지 않게 한다(불러오는 중 ≠ 0건). */
+function SkeletonRows({ rows = 4, label }: { rows?: number; label: string }) {
+  const widths = ['52%', '38%', '46%', '34%', '42%', '30%'];
+  return (
+    <div className="ac-skelrows" role="status" aria-live="polite" aria-busy="true">
+      <span className="ac-srhide">{label}</span>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="ac-skelrow">
+          <Skeleton w={widths[i % widths.length]} h={13} />
+          <Skeleton w="16%" h={11} />
+          <Skeleton w="12%" h={11} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+type LoadPhase = 'loading' | 'done' | 'error';
+
+/** 목록 자리: 불러오는 중이면 스켈레톤, 실패면 이유 + 「다시 시도」. done 이면 아무것도 그리지 않는다. */
+function LoadState({ phase, busy, fail, onRetry, rows = 4 }: { phase: LoadPhase; busy: string; fail: string; onRetry: () => void; rows?: number }) {
+  if (phase === 'error') {
+    return (
+      <div className="ac-empty" role="alert">
+        <p style={{ fontSize: 14, fontWeight: 700 }}>{fail}</p>
+        <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>네트워크 상태를 확인한 뒤 다시 시도해 주세요. 계속 반복되면 로그인 상태를 확인해 주세요.</p>
+        <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={onRetry}>다시 시도</button>
+      </div>
+    );
+  }
+  return <SkeletonRows rows={rows} label={busy} />;
 }
 
 /** 최근 7일 대화량 막대 차트 — 실제 로그에서만 그린다. 기록이 없으면 차트를 만들지 않는다. */
@@ -1117,6 +1160,24 @@ export default function AdminPage() {
     return true;
   };
 
+  // ---- 초기 데이터 로드 상태 (DS 4-2) — 오기 전엔 빈 상태를 보이지 않고, 실패는 숨기지 않는다 ----
+  type DataKey = 'kb' | 'rules' | 'esc' | 'audit';
+  const [phase, setPhase] = useState<Record<DataKey, LoadPhase>>({ kb: 'loading', rules: 'loading', esc: 'loading', audit: 'loading' });
+  const markPhase = (k: DataKey, v: LoadPhase) => setPhase((p) => (p[k] === v ? p : { ...p, [k]: v }));
+
+  // ---- 네트워크 연결 상태 (DS 4-3) — 끊기면 헤더 아래 배너로 알리고, 복구되면 조용히 사라진다 ----
+  const [offline, setOffline] = useState(false);
+  useEffect(() => {
+    const sync = () => setOffline(typeof navigator !== 'undefined' && navigator.onLine === false);
+    sync();
+    window.addEventListener('online', sync);
+    window.addEventListener('offline', sync);
+    return () => {
+      window.removeEventListener('online', sync);
+      window.removeEventListener('offline', sync);
+    };
+  }, []);
+
   // ---- KB ----
   const [entries, setEntries] = useState<KBEntryView[]>([]);
   const [form, setForm] = useState<KBForm>(EMPTY_FORM);
@@ -1128,10 +1189,16 @@ export default function AdminPage() {
   const kbFormRef = useRef<HTMLDivElement | null>(null);
 
   const loadKB = useCallback(async () => {
-    const res = await fetch('/api/admin/kb', { headers: authHeaders() });
-    if (on401(res)) return;
-    const data = await res.json();
-    if (data.ok) setEntries(data.entries);
+    markPhase('kb', 'loading');
+    try {
+      const res = await fetch('/api/admin/kb', { headers: authHeaders() });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (data.ok) setEntries(data.entries);
+      markPhase('kb', data.ok ? 'done' : 'error');
+    } catch {
+      markPhase('kb', 'error');
+    }
   }, []);
 
   // ---- 문서 업로드(청킹 → KB 후보) ----
@@ -1188,12 +1255,18 @@ export default function AdminPage() {
   const [ruleQuery, setRuleQuery] = useState('');
   const ruleFormRef = useRef<HTMLDivElement | null>(null);
   const loadRules = useCallback(async () => {
-    const res = await fetch('/api/admin/rules', { headers: authHeaders() });
-    if (on401(res)) return;
-    const data = await res.json();
-    if (data.ok) {
-      setRules(data.rules);
-      setCustomRules(data.customRules || []);
+    markPhase('rules', 'loading');
+    try {
+      const res = await fetch('/api/admin/rules', { headers: authHeaders() });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (data.ok) {
+        setRules(data.rules);
+        setCustomRules(data.customRules || []);
+      }
+      markPhase('rules', data.ok ? 'done' : 'error');
+    } catch {
+      markPhase('rules', 'error');
     }
   }, []);
 
@@ -1260,13 +1333,19 @@ export default function AdminPage() {
   // ---- 감사 로그 필터 ----
   const [auditFilter, setAuditFilter] = useState('all');
   const loadEsc = useCallback(async () => {
-    const res = await fetch('/api/admin/escalations?logs=true', { headers: authHeaders() });
-    if (on401(res)) return;
-    const data = await res.json();
-    if (data.ok) {
-      setTickets(data.tickets);
-      setStats(data.stats);
-      setRecentTurns(data.recentTurns || []);
+    markPhase('esc', 'loading');
+    try {
+      const res = await fetch('/api/admin/escalations?logs=true', { headers: authHeaders() });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (data.ok) {
+        setTickets(data.tickets);
+        setStats(data.stats);
+        setRecentTurns(data.recentTurns || []);
+      }
+      markPhase('esc', data.ok ? 'done' : 'error');
+    } catch {
+      markPhase('esc', 'error');
     }
   }, []);
 
@@ -1496,10 +1575,16 @@ export default function AdminPage() {
   // ---- Audit ----
   const [auditEvents, setAuditEvents] = useState<AuditView[]>([]);
   const loadAudit = useCallback(async () => {
-    const res = await fetch('/api/admin/audit?limit=100', { headers: authHeaders() });
-    if (on401(res)) return;
-    const data = await res.json();
-    if (data.ok) setAuditEvents(data.events || []);
+    markPhase('audit', 'loading');
+    try {
+      const res = await fetch('/api/admin/audit?limit=100', { headers: authHeaders() });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (data.ok) setAuditEvents(data.events || []);
+      markPhase('audit', data.ok ? 'done' : 'error');
+    } catch {
+      markPhase('audit', 'error');
+    }
   }, []);
 
   // ---- 저장소 상태(/api/health) ----
@@ -2103,6 +2188,12 @@ export default function AdminPage() {
             )}
           </div>
         </header>
+        {offline && (
+          <div className="ac-offline" role="status" aria-live="assertive">
+            <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M2 2l20 20" /><path d="M8.5 16.4a5 5 0 0 1 7 0" /><path d="M5 12.9a10 10 0 0 1 4.2-2.5" /><path d="M12 8a14 14 0 0 1 10 4.1" /><circle cx="12" cy="20" r=".8" /></svg>
+            인터넷 연결이 끊겼습니다. 화면은 볼 수 있지만 저장·새로고침은 연결이 돌아온 뒤에 됩니다.
+          </div>
+        )}
 
         <main className="ac-body">
       {tab === 'dash' && (
@@ -2164,16 +2255,27 @@ export default function AdminPage() {
           ) : (
             <div className="ac-kpi" style={{ marginBottom: 16 }} aria-busy="true">
               {['오늘 대화', '자동완결률', '상담원 전환', '평균 응답 시간'].map((k) => (
-                <KpiCard key={k} label={k} value={MEASURING} empty note="현황을 불러오는 중입니다." />
+                <KpiCard key={k} label={k} value="" loading note={phase.esc === 'error' ? '현황을 불러오지 못했습니다.' : '현황을 불러오는 중입니다.'} />
               ))}
             </div>
           )}
 
-          {!stats && (
-            <section style={S.card} role="status">
-              <p style={{ fontSize: 14, color: 'var(--sub)' }}>
-                현황을 불러오는 중입니다. 계속 이 화면이면 위쪽 관리 토큰을 확인해 주세요.
-              </p>
+          {!stats && phase.esc === 'error' && (
+            <section style={S.card}>
+              <LoadState phase="error" busy="" fail="현황을 불러오지 못했습니다" onRetry={loadEsc} />
+            </section>
+          )}
+
+          {!stats && phase.esc !== 'error' && (
+            <section style={S.card} aria-busy="true">
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12 }}>
+                <h2 style={S.h2}>최근 7일 대화량</h2>
+                <span style={S.tag}>보관 중인 기록 기준</span>
+              </div>
+              <div className="ac-skelchart" role="status" aria-live="polite">
+                <span className="ac-srhide">현황을 불러오는 중입니다</span>
+                {[46, 70, 58, 92, 64, 80, 52].map((h, i) => <Skeleton key={i} h={h} style={{ height: `${h}%` }} />)}
+              </div>
             </section>
           )}
 
@@ -2236,7 +2338,9 @@ export default function AdminPage() {
               <h2 style={S.h2}>최근 대화</h2>
               <span style={S.tag}>최대 30건</span>
             </div>
-            {recentTurns.length === 0 ? (
+            {recentTurns.length === 0 && phase.esc !== 'done' ? (
+              <LoadState phase={phase.esc} busy="최근 대화를 불러오는 중입니다" fail="최근 대화를 불러오지 못했습니다" onRetry={loadEsc} rows={5} />
+            ) : recentTurns.length === 0 ? (
               <div className="ac-empty">
                 <EmptyArt kind="chat" />
                 <p style={{ fontSize: 14, fontWeight: 700 }}>아직 기록된 대화가 없습니다</p>
@@ -2306,7 +2410,9 @@ export default function AdminPage() {
                     {cats.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
-                {entries.length === 0 ? (
+                {entries.length === 0 && phase.kb !== 'done' ? (
+                  <LoadState phase={phase.kb} busy="안내 자료를 불러오는 중입니다" fail="안내 자료를 불러오지 못했습니다" onRetry={loadKB} rows={5} />
+                ) : entries.length === 0 ? (
                   <div className="ac-empty">
                     <EmptyArt kind="kb" />
                     <p style={{ fontSize: 14, fontWeight: 700 }}>등록된 안내 자료가 없습니다</p>
@@ -2564,7 +2670,7 @@ export default function AdminPage() {
               </div>
               <p style={{ ...S.tag, padding: '10px 16px 0' }}>인사·요금·상담원 연결처럼 어느 상담에나 필요한 규칙입니다. 켜고 끄거나 답변 문구만 바꿀 수 있고, 조건은 바꿀 수 없습니다.</p>
               {rules.length === 0 ? (
-                <div className="ac-empty" aria-busy="true"><p style={{ fontSize: 13, color: 'var(--sub)' }}>규칙을 불러오는 중…</p></div>
+                <LoadState phase={phase.rules === 'done' ? 'error' : phase.rules} busy="규칙을 불러오는 중입니다" fail="규칙을 불러오지 못했습니다" onRetry={loadRules} rows={4} />
               ) : shownBuiltin.length === 0 ? (
                 <div className="ac-empty">
                   <p style={{ fontSize: 14, fontWeight: 700 }}>검색 결과가 없습니다</p>
@@ -2800,7 +2906,9 @@ export default function AdminPage() {
                 <button type="button" style={S.btnGhost} onClick={loadEsc}>새로고침</button>
               </div>
 
-              {tickets.length === 0 ? (
+              {tickets.length === 0 && phase.esc !== 'done' ? (
+                <LoadState phase={phase.esc} busy="상담원 요청을 불러오는 중입니다" fail="상담원 요청을 불러오지 못했습니다" onRetry={loadEsc} rows={4} />
+              ) : tickets.length === 0 ? (
                 <div className="ac-empty">
                   <EmptyArt kind="chat" />
                   <p style={{ fontSize: 14, fontWeight: 700 }}>접수된 상담원 연결 요청이 없습니다</p>
@@ -2939,7 +3047,7 @@ export default function AdminPage() {
                   </div>
 
                   {!partnerLoaded && partnerBusy ? (
-                    <p role="status" aria-live="polite" style={{ ...S.tag, padding: '20px 16px' }}>고객사와 파트너 정보를 불러오는 중입니다…</p>
+                    <SkeletonRows rows={4} label="고객사와 파트너 정보를 불러오는 중입니다" />
                   ) : accounts.length === 0 && !filtering ? (
                     <div className="ac-empty">
                       <EmptyArt kind="kb" />
@@ -3379,7 +3487,7 @@ export default function AdminPage() {
                 </p>
               )}
               {!tenantErr && tenantBusy && !tenantView && (
-                <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 12 }}>테넌트 지식을 불러오는 중입니다…</p>
+                <SkeletonRows rows={4} label="테넌트 지식을 불러오는 중입니다" />
               )}
               {!tenantErr && !tenantBusy && !tenantView && (
                 <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 12 }}>표시할 테넌트가 없습니다.</p>
@@ -3497,7 +3605,9 @@ export default function AdminPage() {
                   CSV 내려받기
                 </a>
               </div>
-              {auditEvents.length === 0 ? (
+              {auditEvents.length === 0 && phase.audit !== 'done' ? (
+                <LoadState phase={phase.audit} busy="변경 이력을 불러오는 중입니다" fail="변경 이력을 불러오지 못했습니다" onRetry={loadAudit} rows={4} />
+              ) : auditEvents.length === 0 ? (
                 <div className="ac-empty">
                   <EmptyArt kind="kb" />
                   <p style={{ fontSize: 14, fontWeight: 700 }}>기록된 관리 작업이 없습니다</p>
