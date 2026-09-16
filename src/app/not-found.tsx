@@ -3,7 +3,7 @@ import SystemPage from '@/components/SystemPage';
 
 export const metadata: Metadata = { title: '페이지를 찾을 수 없습니다 — GOWON Chat' };
 
-/** 404 — 기본 Next 화면 대신 브랜드 규격. 운영자 경로(/admin)는 여기서도 안내하지 않는다. */
+/** 404 — 기본 Next 화면 대신 브랜드 규격. 운영자 콘솔 경로는 여기서도 안내하지 않는다(랜딩과 같은 원칙). */
 export default function NotFound() {
   return (
     <SystemPage

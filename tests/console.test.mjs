@@ -83,8 +83,9 @@ test('대시보드 KPI 4개가 값 없이도 「측정 중」으로 렌더된다
   assert.match(html, /aria-busy="true"/, '불러오는 중임을 알려야 한다');
   // 「측정 중」은 데이터가 *없을 때* 의 값이다(불러오는 중은 DS 4-2 스켈레톤). 소스에서 KPI 4개가 값 없으면 MEASURING 으로 떨어지는지 본다
   const page = readFileSync(path.join(REPO, 'src', 'app', 'admin', 'page.tsx'), 'utf8');
-  const dash = page.slice(page.indexOf("{tab === 'dash' && ("), page.indexOf('최근 7일 대화량'));
-  assert.ok((dash.match(/: MEASURING\}/g) || []).length >= 3, '값이 없으면 「측정 중」이어야 한다(0으로 단정 금지)');
+  const dashStart = page.indexOf("{tab === 'dash' && (");
+  const dash = page.slice(dashStart, page.indexOf('최근 7일 대화량', dashStart));
+  assert.ok((dash.match(/: MEASURING\}/g) || []).length >= 2, '값이 없으면 「측정 중」이어야 한다(0으로 단정 금지)');
   assert.equal(page.includes('위쪽 관리 토큰을 확인'), false, '헤더의 토큰 입력은 사라졌으므로 옛 안내가 남으면 안 된다');
 });
 
@@ -213,9 +214,10 @@ test('대시보드 최근 대화가 서랍을 여는 행 목록으로 렌더된�
   const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
   const html = await render();
-  // 빈 상태: 일러스트 + 다음 행동
-  assert.match(html, /아직 기록된 대화가 없습니다/, '빈 상태 안내');
-  assert.match(html, /응답 테스트 열기/, '빈 상태에서 다음 행동을 제시해야 한다');
+  // 빈 상태: 일러스트 + 다음 행동 (데이터가 도착한 뒤에만 — 첫 렌더는 DS 4-2 스켈레톤)
+  assert.match(src, /아직 기록된 대화가 없습니다/, '빈 상태 안내');
+  assert.match(src, /응답 테스트 열기/, '빈 상태에서 다음 행동을 제시해야 한다');
+  assert.match(html, /최근 대화를 불러오는 중입니다/, '첫 렌더는 불러오는 중');
   // 서랍: dialog 시맨틱·ESC·초점 복귀·초점 순환
   assert.match(src, /role="dialog"[\s\S]*aria-modal="true"[\s\S]*aria-labelledby="ac-drawer-title"/, '서랍은 dialog 여야 한다');
   assert.match(src, /e\.key === 'Escape'\) closeDrawer\(\)/, 'ESC 로 닫힌다');

@@ -5,7 +5,7 @@ import SystemPage from '@/components/SystemPage';
 
 /**
  * 화면 오류 경계 — 흰 화면 대신 브랜드 규격의 안내 + 「다시 시도」.
- * error.message·stack 은 내부 경로가 섞일 수 있어 화면에 싣지 않는다. 참조 번호(digest)만 보인다.
+ * 오류 메시지·스택은 내부 경로가 섞일 수 있어 화면에 싣지 않는다. 참조 번호(digest)만 보인다.
  */
 export default function ErrorPage({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   useEffect(() => {
