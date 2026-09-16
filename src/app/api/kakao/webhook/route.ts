@@ -86,6 +86,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(dup.response ?? kakaoErrorResponse('앞서 보내주신 요청을 처리하고 있어요. 잠시만 기다려 주세요.'));
   }
 
+  const startedAt = Date.now();
   let result;
   try {
     result = await replyToAsync(parsed.utterance, sessionId);
@@ -115,6 +116,7 @@ export async function POST(req: NextRequest) {
       source: result.source,
       escalate: result.escalate,
       confidence: result.confidence,
+      latencyMs: Date.now() - startedAt,
     });
   }
 

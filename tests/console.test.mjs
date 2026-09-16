@@ -83,6 +83,57 @@ test('대시보드 KPI 4개가 값 없이도 「측정 중」으로 렌더된다
   assert.match(html, /aria-busy="true"/, '불러오는 중임을 알려야 한다');
 });
 
+test('평균 응답 시간 KPI 가 실측(서버 처리 시간)으로 연결되고 값이 없을 때만 「측정 중」이다 (DS 2-14)', opts, () => {
+  const page = readFileSync(path.join(REPO, 'src', 'app', 'admin', 'page.tsx'), 'utf8');
+  assert.equal(page.includes('응답 시간 수집은 준비 중'), false, '영구 「준비 중」 카드는 사라져야 한다');
+  assert.match(page, /avgLatencyMs/, 'KPI 는 집계 응답의 평균 처리 시간을 읽는다');
+  assert.match(page, /서버가 답을 만드는 데 걸린 시간/, '네트워크 왕복이 아닌 서버 처리 시간임을 밝힌다');
+  // 두 채널 모두 측정한다 — 한쪽만 재면 평균이 한 채널로 치우친다
+  for (const route of ['src/app/api/chat/route.ts', 'src/app/api/kakao/webhook/route.ts']) {
+    const src = readFileSync(path.join(REPO, route), 'utf8');
+    assert.match(src, /latencyMs: Date\.now\(\) - startedAt/, `${route} 가 처리 시간을 기록해야 한다`);
+  }
+  // 집계는 표본이 없으면 null(0 아님)
+  const conv = readFileSync(path.join(REPO, 'src', 'lib', 'convlog.ts'), 'utf8');
+  assert.match(conv, /avgLatencyMs: latencySamples \? [^:]+ : null/, '표본 없으면 null');
+});
+
+test('헤더 전역 검색이 combobox 로 렌더되고 키보드·연락처 비색인·375px 규칙을 갖춘다 (DS 2-15)', opts, async () => {
+  const html = await render();
+  assert.match(html, /<label for="ac-gsearch" class="ac-srhide">/, '검색칸에 스크린리더 라벨');
+  assert.match(html, /id="ac-gsearch"[^>]*role="combobox"/, 'WAI-ARIA combobox');
+  assert.match(html, /aria-expanded="false"/, '처음에는 결과 목록이 닫혀 있다');
+  assert.match(html, /aria-controls="ac-gsearch-list"/, '결과 목록과 연결');
+  assert.equal(/role="listbox"/.test(html), false, '검색어가 없으면 목록을 그리지 않는다');
+  assert.match(html, /class="ac-gsearch-kbd" aria-hidden="true">Ctrl K</, '단축키 힌트는 장식(스크린리더에는 설명 문장으로)');
+  assert.match(html, /Ctrl\+K 로 바로 열 수 있습니다/, '스크린리더용 사용법');
+
+  const page = readFileSync(path.join(REPO, 'src', 'app', 'admin', 'page.tsx'), 'utf8');
+  const comp = page.slice(page.indexOf('function GlobalSearch('), page.indexOf('const S = {'));
+  for (const key of ["'ArrowDown'", "'ArrowUp'", "'Enter'", "'Escape'"]) {
+    assert.ok(comp.includes(key), `키보드 조작 누락: ${key}`);
+  }
+  assert.match(comp, /aria-activedescendant/, '활성 항목을 스크린리더에 알린다');
+  assert.match(comp, /role="option"/, '결과는 option 이어야 한다');
+  assert.match(comp, /role="status" aria-live="polite"/, '건수를 읽어 준다');
+  assert.match(comp, /맞는 항목이 없습니다/, '빈 결과 안내');
+  // 개인정보: 연락처·세션 원문은 색인하지 않는다(요청 서랍에서 「보기」를 눌러야 한다)
+  const index = page.slice(page.indexOf('const searchAll = '), page.indexOf('const currentLabel ='));
+  assert.equal(/\.contact\b/.test(index), false, '연락처는 검색 색인에 넣지 않는다');
+  assert.equal(/t\.sessionId\)|t\.sessionId,/.test(index.replace(/shortSession\(t\.sessionId\)/g, '')), false, '세션 원문은 색인·표시하지 않는다');
+  assert.equal(/t\.id[,)]/.test(index.replace(/shortTicket\(t\.id\)/g, '').replace(/openTicket\(t\.id/g, '').replace(/`ticket:\$\{t\.id\}`|`turn:\$\{t\.id\}`/g, '')), false, '접수번호 전체는 색인하지 않는다');
+  // 모든 출처가 색인된다
+  for (const src of ['tickets', 'recentTurns', 'entries', 'customRules', 'rules', 'accounts', 'partners']) {
+    assert.ok(new RegExp(`\\b${src}\\s*\\n?\\s*\\.filter`).test(index), `검색 출처 누락: ${src}`);
+  }
+
+  const css = readFileSync(path.join(REPO, 'src', 'app', 'globals.css'), 'utf8');
+  const mobile = css.slice(css.indexOf('@media (max-width:900px)'));
+  assert.match(mobile, /\.ac-gsearch\{order:3;flex-basis:100%/, '375px: 검색칸이 헤더 아래 한 줄 전체폭');
+  assert.match(mobile, /\.ac-gsearch-kbd\{display:none\}/, '375px: 키보드 힌트 숨김');
+  assert.match(css, /\.ac-gsearch-input:focus\{outline:2px solid var\(--brand\)/, '초점 표시');
+});
+
 test('콘솔 화면에 내부 구현 문구·미완성 값이 노출되지 않는다', opts, async () => {
   const html = await render();
   for (const leak of ['data/admin-store.json', '401이면', '서버 메모리 기준', 'undefined', 'NaN', 'process.env', 'localhost', 'intent ', 'source ']) {

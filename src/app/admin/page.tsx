@@ -100,7 +100,16 @@ interface OpsStats {
     /** 최근 7일 일자별 집계(서버 @/lib/convlog convStats()와 같은 모양). 구버전 응답 대비 optional. */
     daily?: { date: string; turns: number; escalated: number }[];
     today?: { turns: number; sessions: number; escalated: number };
+    /** 평균 서버 처리 시간(ms). 기록된 턴이 없으면 null. 구버전 응답 대비 optional. */
+    avgLatencyMs?: number | null;
+    latencySamples?: number;
   };
+}
+
+/** 처리 시간을 사람이 읽는 단위로 — 1초 미만은 ms, 그 이상은 소수 1자리 초. */
+function latencyLabel(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}초`;
 }
 
 /** 값이 아직 없는 지표는 0을 지어내지 않고 「측정 중」으로 표시한다(§13). */
@@ -832,6 +841,168 @@ function NavIcon({ tab }: { tab: TabKey }) {
     <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
       <path d={TAB_ICON[tab]} stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
+  );
+}
+
+// ---- 전역 검색(헤더) — 대화·안내 자료·규칙·상담원 요청·고객사를 한 칸에서 찾아 그 화면으로 보낸다 ----
+type SearchKind = '화면' | '지식베이스' | '시나리오 룰' | '상담원 요청' | '최근 대화' | '고객사' | '파트너';
+const SEARCH_KIND_ORDER: SearchKind[] = ['화면', '상담원 요청', '최근 대화', '지식베이스', '시나리오 룰', '고객사', '파트너'];
+/** 종류별 최대 표시 수 · 전체 상한 — 목록이 화면을 덮지 않게 한다. */
+const SEARCH_PER_KIND = 3;
+const SEARCH_MAX = 12;
+
+interface SearchHit {
+  key: string;
+  kind: SearchKind;
+  title: string;
+  detail: string;
+  /** 선택 시 실행. `from` 은 검색 입력칸 — 서랍을 열면 닫힐 때 초점이 여기로 돌아온다. */
+  run: (from: HTMLElement | null) => void;
+}
+
+/** 띄어쓰기·대소문자를 무시하고 포함 여부를 본다(한국어 검색에서 띄어쓰기 차이로 놓치지 않게). */
+function searchNorm(v: string): string {
+  return v.toLowerCase().replace(/\s+/g, '');
+}
+function searchMatch(q: string, ...hay: (string | undefined)[]): boolean {
+  return hay.some((h) => !!h && searchNorm(h).includes(q));
+}
+/** 목록에 보일 요약 — 길면 줄인다. */
+function clip(v: string, n = 64): string {
+  const t = v.replace(/\s+/g, ' ').trim();
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+}
+
+function GlobalSearch({ search, onFirstOpen }: { search: (q: string) => SearchHit[]; onFirstOpen?: () => void }) {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const openedOnce = useRef(false);
+
+  // Ctrl/⌘+K 또는 입력 중이 아닐 때 "/" 로 검색칸에 초점
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const isK = (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k';
+      const target = e.target as HTMLElement | null;
+      const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
+      const isSlash = e.key === '/' && !editing && !e.ctrlKey && !e.metaKey && !e.altKey;
+      if (isK || isSlash) {
+        e.preventDefault();
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const term = searchNorm(q);
+  const hits = open && term ? search(term) : [];
+  const listId = 'ac-gsearch-list';
+  const optId = (i: number) => `ac-gsearch-opt-${i}`;
+  const activeIdx = Math.min(active, Math.max(hits.length - 1, 0));
+
+  const pick = (h: SearchHit) => {
+    setOpen(false);
+    setQ('');
+    setActive(0);
+    h.run(inputRef.current);
+  };
+  const onFocus = () => {
+    setOpen(true);
+    if (!openedOnce.current) {
+      openedOnce.current = true;
+      onFirstOpen?.();
+    }
+  };
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setOpen(true);
+      if (hits.length) setActive((i) => (i + 1) % hits.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (hits.length) setActive((i) => (i - 1 + hits.length) % hits.length);
+    } else if (e.key === 'Enter') {
+      if (hits[activeIdx]) {
+        e.preventDefault();
+        pick(hits[activeIdx]);
+      }
+    } else if (e.key === 'Escape') {
+      if (q) {
+        e.preventDefault();
+        e.stopPropagation();
+        setQ('');
+      }
+      setOpen(false);
+    }
+  };
+
+  // 종류별로 묶되, 순서는 운영에서 급한 것(요청·대화) 우선
+  const grouped = SEARCH_KIND_ORDER.map((k) => ({ kind: k, items: hits.map((h, i) => ({ h, i })).filter(({ h }) => h.kind === k) })).filter((g) => g.items.length);
+
+  return (
+    <div className="ac-gsearch" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false); }}>
+      <label htmlFor="ac-gsearch" className="ac-srhide">전체 검색 — 대화·안내 자료·규칙·상담원 요청·고객사</label>
+      <svg className="ac-gsearch-icon" aria-hidden="true" focusable="false" width="15" height="15" viewBox="0 0 16 16" fill="none">
+        <path d="M7 12.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zM11 11l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+      <input
+        ref={inputRef}
+        id="ac-gsearch"
+        className="ac-gsearch-input"
+        type="search"
+        role="combobox"
+        autoComplete="off"
+        placeholder="대화·자료·규칙·요청·고객사 검색"
+        value={q}
+        aria-expanded={open && !!term}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={open && hits[activeIdx] ? optId(activeIdx) : undefined}
+        aria-describedby="ac-gsearch-hint"
+        onFocus={onFocus}
+        onChange={(e) => { setQ(e.target.value); setActive(0); setOpen(true); }}
+        onKeyDown={onKeyDown}
+      />
+      <kbd className="ac-gsearch-kbd" aria-hidden="true">Ctrl K</kbd>
+      <span id="ac-gsearch-hint" className="ac-srhide">Ctrl+K 로 바로 열 수 있습니다. 위아래 화살표로 고르고 Enter 로 이동합니다.</span>
+      <span role="status" aria-live="polite" className="ac-srhide">{open && term ? `검색 결과 ${hits.length}건` : ''}</span>
+      {open && term && (
+        <div className="ac-gsearch-pop">
+          <ul id={listId} role="listbox" aria-label="검색 결과" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {hits.length === 0 && (
+              <li role="presentation" className="ac-gsearch-empty">
+                「{clip(q, 30)}」에 맞는 항목이 없습니다. 다른 말로 찾아보세요.
+              </li>
+            )}
+            {grouped.map((g) => (
+              <li key={g.kind} role="presentation">
+                <div className="ac-gsearch-group" aria-hidden="true">{g.kind}</div>
+                <ul role="group" aria-label={g.kind} style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                  {g.items.map(({ h, i }) => (
+                    <li
+                      key={h.key}
+                      id={optId(i)}
+                      role="option"
+                      aria-selected={i === activeIdx}
+                      className="ac-gsearch-opt"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onMouseEnter={() => setActive(i)}
+                      onClick={() => pick(h)}
+                    >
+                      <span className="ac-gsearch-title">{h.title}</span>
+                      {h.detail && <span className="ac-gsearch-detail">{h.detail}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1766,6 +1937,97 @@ export default function AdminPage() {
     );
   }
 
+  /** 전역 검색 색인 — 화면에 이미 불러온 목록만 뒤진다(추가 API 호출 없음). 연락처·세션 원문은 색인하지 않는다. */
+  const searchAll = (term: string): SearchHit[] => {
+    const hits: SearchHit[] = [];
+    const take = (list: SearchHit[]) => {
+      hits.push(...list.slice(0, SEARCH_PER_KIND));
+    };
+
+    take(TAB_GROUPS.flatMap((g) => g.tabs.map(([key, label]) => ({ key, label, group: g.group })))
+      .filter(({ key, label, group }) => searchMatch(term, label, TAB_DESC[key], group))
+      .map(({ key, label }) => ({
+        key: `tab:${key}`,
+        kind: '화면' as const,
+        title: label,
+        detail: TAB_DESC[key],
+        run: () => setTab(key),
+      })));
+
+    take(tickets
+      .filter((t) => searchMatch(term, t.message, t.reason, shortTicket(t.id), HANDOFF_REASON_LABELS[t.reasonCode ?? ''], TICKET_STATUS_LABELS[t.status]))
+      .map((t) => ({
+        key: `ticket:${t.id}`,
+        kind: '상담원 요청' as const,
+        title: `${shortTicket(t.id)} · ${TICKET_STATUS_LABELS[t.status]}`,
+        detail: clip(t.message),
+        run: (from: HTMLElement | null) => { setTab('esc'); setEscFilter('all'); setEscQuery(''); openTicket(t.id, from); },
+      })));
+
+    take(recentTurns
+      .filter((t) => searchMatch(term, t.message, t.reply, shortSession(t.sessionId)))
+      .map((t) => ({
+        key: `turn:${t.id}`,
+        kind: '최근 대화' as const,
+        title: clip(t.message, 48),
+        detail: `${timeLabel(t.at)} · 대화 ${shortSession(t.sessionId)} · ${t.escalate ? '상담원 제안' : '자동 응대'}`,
+        run: (from: HTMLElement | null) => { setTab('dash'); openDrawer(t.sessionId, from); },
+      })));
+
+    take(entries
+      .filter((e) => searchMatch(term, e.question, e.answer, e.category, e.keywords.join(' ')))
+      .map((e) => ({
+        key: `kb:${e.id}`,
+        kind: '지식베이스' as const,
+        title: clip(e.question, 48),
+        detail: `${e.category || '분류 없음'} · ${clip(e.answer, 56)}`,
+        run: () => { setTab('kb'); setKbCat(''); setKbQuery(e.question); },
+      })));
+
+    take([
+      ...customRules
+        .filter((r) => searchMatch(term, r.label, r.keywords.join(' '), r.reply))
+        .map((r) => ({
+          key: `rule:${r.intent}`,
+          kind: '시나리오 룰' as const,
+          title: r.label,
+          detail: `내가 만든 규칙 · ${r.keywords.slice(0, 4).join(', ')}`,
+          run: () => { setTab('rules'); setRuleQuery(r.label); },
+        })),
+      ...rules
+        .filter((r) => searchMatch(term, r.label, patternExamples(r.pattern).join(' '), r.effectiveReply))
+        .map((r) => ({
+          key: `builtin:${r.intent}`,
+          kind: '시나리오 룰' as const,
+          title: r.label,
+          detail: `기본 규칙 · ${patternExamples(r.pattern).slice(0, 4).join(', ')}`,
+          run: () => { setTab('rules'); setRuleQuery(r.label); },
+        })),
+    ]);
+
+    take(accounts
+      .filter((a) => searchMatch(term, a.name, a.ownerName, ACCOUNT_STATUS_LABELS[a.status]))
+      .map((a) => ({
+        key: `account:${a.id}`,
+        kind: '고객사' as const,
+        title: a.name,
+        detail: `${ACCOUNT_STATUS_LABELS[a.status]} · ${a.partnerId ? `${partners.find((p) => p.id === a.partnerId)?.name ?? '이름 없는 파트너'} 귀속` : '직접 계약'}`,
+        run: () => { setTab('partner'); setAccountQuery(a.name); },
+      })));
+
+    take(partners
+      .filter((p) => searchMatch(term, p.name, p.managerName))
+      .map((p) => ({
+        key: `partner:${p.id}`,
+        kind: '파트너' as const,
+        title: p.name,
+        detail: `파트너 · ${p.status === 'active' ? '운영 중' : '일시 중지'}${p.managerName ? ` · 담당 ${p.managerName}` : ''}`,
+        run: () => { setTab('partner'); setAccountQuery(''); setPartnerFormKind('partner'); },
+      })));
+
+    return hits.slice(0, SEARCH_MAX);
+  };
+
   const currentLabel = TAB_GROUPS.flatMap((g) => g.tabs).find(([k]) => k === tab)?.[1] ?? '대시보드';
 
   return (
@@ -1807,6 +2069,11 @@ export default function AdminPage() {
             <h1 style={{ fontSize: 19, fontWeight: 800, letterSpacing: '-.02em' }}>{currentLabel}</h1>
             <p style={{ fontSize: 12.5, color: 'var(--sub)', marginTop: 2 }}>{TAB_DESC[tab]}</p>
           </div>
+          <GlobalSearch
+            search={searchAll}
+            // 고객사·파트너는 탭을 열기 전엔 비어 있으므로, 검색을 처음 열 때 한 번 채운다
+            onFirstOpen={() => { if (!partnerLoaded && !partnerBusy) loadPartners(''); }}
+          />
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             {authInfo && (
               <span
@@ -1885,9 +2152,13 @@ export default function AdminPage() {
               />
               <KpiCard
                 label="평균 응답 시간"
-                value={MEASURING}
-                empty
-                note="응답 시간 수집은 준비 중입니다."
+                value={typeof stats.conversation.avgLatencyMs === 'number' ? latencyLabel(stats.conversation.avgLatencyMs) : MEASURING}
+                empty={typeof stats.conversation.avgLatencyMs !== 'number'}
+                note={
+                  typeof stats.conversation.avgLatencyMs === 'number'
+                    ? `서버가 답을 만드는 데 걸린 시간 · 최근 ${(stats.conversation.latencySamples ?? 0).toLocaleString('ko-KR')}건 평균`
+                    : '대화가 쌓이면 서버 처리 시간 기준으로 계산됩니다.'
+                }
               />
             </div>
           ) : (

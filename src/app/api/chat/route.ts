@@ -53,6 +53,8 @@ export async function POST(req: NextRequest) {
   const sessionId = sid.value || 'anon';
   const sessionHash = hashId(sessionId);
 
+  // 응답 시간 측정 — 답을 만드는 데 걸린 서버 처리 시간만 잰다(네트워크 왕복 제외).
+  const startedAt = Date.now();
   let result;
   try {
     result = await replyToAsync(message, sessionId, tenantId ? { tenantId } : {});
@@ -90,6 +92,7 @@ export async function POST(req: NextRequest) {
       source: result.source,
       escalate: result.escalate,
       confidence: result.confidence,
+      latencyMs: Date.now() - startedAt,
     });
   }
 

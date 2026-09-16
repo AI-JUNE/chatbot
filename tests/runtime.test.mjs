@@ -1443,3 +1443,38 @@ test('일자별·오늘 집계는 기록된 대화에서만 만들어진다', op
 
   resetLogs();
 });
+
+test('평균 응답 시간은 기록된 서버 처리 시간에서만 계산되고 없으면 null 이다 (DS 2-14)', opts, async () => {
+  const { logTurn, convStats, resetLogs, importTurns, exportTurns } = await importLib('convlog', ['chat', 'storage', 'logger', 'monitoring', 'knowledge', 'normalize', 'rules', 'adminStore', 'slots', 'session', 'llm', 'tenantKB', 'ingest']);
+  resetLogs();
+
+  // 기록이 없으면 0ms 로 단정하지 않는다
+  assert.equal(convStats().avgLatencyMs, null, '표본이 없으면 null');
+  assert.equal(convStats().latencySamples, 0);
+
+  // 지연을 싣지 않은 턴(구버전·측정 실패)은 표본에서 빠진다
+  logTurn({ sessionId: 's1', channel: 'web', message: '안녕', reply: '안녕하세요', intent: 'greeting', source: 'rule', escalate: false });
+  assert.equal(convStats().avgLatencyMs, null, '지연이 없는 턴만 있으면 여전히 null');
+
+  logTurn({ sessionId: 's1', channel: 'web', message: '요금', reply: '안내', intent: 'price', source: 'kb', escalate: false, latencyMs: 120 });
+  logTurn({ sessionId: 's2', channel: 'kakao', message: '취소', reply: '안내', intent: 'cancel', source: 'kb', escalate: false, latencyMs: 380.4 });
+  // 비정상 값(음수·NaN)은 기록하지 않는다
+  logTurn({ sessionId: 's3', channel: 'web', message: '가입', reply: '안내', intent: 'join', source: 'kb', escalate: false, latencyMs: -5 });
+  logTurn({ sessionId: 's3', channel: 'web', message: '문의', reply: '안내', intent: 'ask', source: 'kb', escalate: false, latencyMs: Number.NaN });
+
+  const s = convStats();
+  assert.equal(s.latencySamples, 2, '유효한 지연만 표본에 든다');
+  assert.equal(s.avgLatencyMs, 250, '(120 + 380) / 2 = 250');
+
+  // 스냅샷 복원에서도 지연이 보존되고, 오염된 값은 버려진다
+  const snap = exportTurns();
+  snap.turns[1].latencyMs = 'fast';
+  resetLogs();
+  const r = importTurns(snap);
+  assert.equal(r.ok, true);
+  const after = convStats();
+  assert.equal(after.latencySamples, 1, '문자열 지연은 복원 시 버려진다');
+  assert.equal(after.avgLatencyMs, 380);
+
+  resetLogs();
+});

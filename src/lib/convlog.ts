@@ -16,7 +16,18 @@ export interface ChatTurnLog {
   escalate: boolean;
   /** 엔진 내부 신뢰도(0~1). 자동 전환 판정 근거이며 측정된 정확도 지표가 아니다. */
   confidence?: number;
+  /**
+   * 서버 처리 시간(ms) — 요청을 받아 답을 만들기까지. 네트워크 왕복은 포함하지 않는다.
+   * 기록되지 않은 턴(구버전 로그·측정 실패)은 undefined 로 두고 평균에서 제외한다.
+   */
+  latencyMs?: number;
   at: string; // ISO
+}
+
+/** 정상 범위(0 이상, 유한)의 지연만 받아들인다 — 음수·NaN 은 기록하지 않는다. */
+function sanitizeLatency(v: unknown): number | undefined {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return undefined;
+  return Math.round(v);
 }
 
 const MAX_LOGS = 500;
@@ -29,6 +40,7 @@ export function logTurn(input: Omit<ChatTurnLog, 'id' | 'at'>): ChatTurnLog {
     ...input,
     message: input.message.slice(0, 500),
     reply: input.reply.slice(0, 500),
+    latencyMs: sanitizeLatency(input.latencyMs),
     id: `T-${String(seq).padStart(6, '0')}`,
     at: new Date().toISOString(),
   };
@@ -71,6 +83,7 @@ export function importTurns(input: unknown): { ok: true; count: number } | { ok:
       reply: String(t.reply ?? '').slice(0, 500),
       intent: String(t.intent ?? ''),
       escalate: t.escalate === true,
+      latencyMs: sanitizeLatency(t.latencyMs),
       at: typeof t.at === 'string' && t.at ? t.at : new Date().toISOString(),
     });
   }
@@ -105,6 +118,13 @@ export interface ConvStats {
   daily: DailyBucket[];
   /** 오늘(한국 시간) 집계. */
   today: { turns: number; sessions: number; escalated: number };
+  /**
+   * 평균 서버 처리 시간(ms). 지연이 기록된 턴이 하나도 없으면 null — 0 으로 단정하지 않는다.
+   * 네트워크 왕복을 뺀 값이므로 화면에서는 「서버 처리 기준」임을 밝힌다.
+   */
+  avgLatencyMs: number | null;
+  /** 평균에 들어간 턴 수(표본 크기). */
+  latencySamples: number;
 }
 
 export interface DailyBucket {
@@ -141,7 +161,13 @@ export function convStats(): ConvStats {
   const sessions = new Set<string>();
   let autoHandled = 0;
   let escalatedTurns = 0;
+  let latencySum = 0;
+  let latencySamples = 0;
   for (const l of logs) {
+    if (typeof l.latencyMs === 'number') {
+      latencySum += l.latencyMs;
+      latencySamples += 1;
+    }
     bySource[l.source] = (bySource[l.source] || 0) + 1;
     byChannel[l.channel] = (byChannel[l.channel] || 0) + 1;
     byIntent[l.intent] = (byIntent[l.intent] || 0) + 1;
@@ -186,6 +212,8 @@ export function convStats(): ConvStats {
     escalatedTurns,
     daily: axis.map((d) => byDay.get(d) as DailyBucket),
     today: { turns: todayTurns, sessions: todaySessions.size, escalated: todayEscalated },
+    avgLatencyMs: latencySamples ? Math.round(latencySum / latencySamples) : null,
+    latencySamples,
   };
 }
 
