@@ -886,10 +886,13 @@ test('관리 콘솔·임베드 프레임은 검색 색인에서 제외된다', (
 
 // 화면에 실제로 그려지는 부분만 남긴다 — 한 줄 주석·블록 주석·JSX 주석을 걷어낸다.
 // 주석에 적힌 화살표나 개발 표기까지 결함으로 세면 거짓 실패가 난다.
+// 블록 주석을 먼저 지우고, 그때 남는 빈 JSX 중괄호(`{ }`)를 치운다.
+// 「{ … /* … */ … }」 를 한 번에 잡으려 하면 lazy 매칭이 중괄호를 건너뛰어
+// 파일 중간을 통째로 삼킨다 — 「없어야 한다」 검사가 조용히 통과해 버린다.
 const stripComments = (s) => s
-  .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
   .replace(/\/\*[\s\S]*?\*\//g, '')
-  .replace(/^\s*\/\/.*$/gm, '');
+  .replace(/^\s*\/\/.*$/gm, '')
+  .replace(/\{\s*\}/g, '');
 
 test('랜딩은 위젯을 펼친 채로 띄우지 않는다 (DS 5-1)', () => {
   const s = read('src/app/page.tsx');
@@ -955,4 +958,96 @@ test('상태 배경 틴트가 토큰으로 있다 (DS 5-4)', () => {
   }
   assert.match(css, /\.ac-modal\{/, '확인 대화상자 규격이 토큰 파일에 있어야 한다');
   assert.match(css, /prefers-reduced-motion:reduce\)\{\.ac-modal\{animation:none/, '모션 최소화 설정 존중');
+});
+
+test('위젯 전송 실패는 답변처럼 보이지 않고 다시 보낼 수 있다 (DS 5-5)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  // 코드 구조 검사는 원문 그대로 본다 — stripComments 는 「없어야 한다」 쪽 검사용이다.
+  // 실패 안내를 보통 말풍선으로 그리면 사용자는 챗봇이 "그렇게 답했다"고 읽는다(QUALITY_BAR §3).
+  assert.match(s, /m\.failed !== undefined/, '실패 말풍선을 따로 그리지 않는다');
+  assert.match(s, /role="alert"/, '실패 안내는 즉시 읽혀야 한다');
+  assert.match(s, /var\(--danger-50\)/, '경고 톤은 토큰을 쓴다');
+  assert.match(s, /다시 보내기/, '다시 보낼 수단이 없다 — 사용자가 쓴 글이 사라진다');
+  assert.match(s, /sendText\(failedText, m\.key\)/, '다시 보내기가 원문을 그대로 재전송해야 한다');
+  // 실패 경로 3곳(서버 오류·네트워크 예외·오프라인)이 모두 재전송 문장을 들고 있어야 한다.
+  const fails = s.match(/failed: text/g) || [];
+  assert.ok(fails.length >= 3, `실패 경로에 재전송 문장이 빠져 있다(${fails.length}/3)`);
+  // 하드코딩 색 금지 — 실패·오프라인 표시도 토큰만 쓴다(#fff 제외).
+  const hex = (s.match(/(?:background|borderColor): '#[0-9A-Fa-f]{3,6}'/g) || [])
+    .filter((x) => !x.endsWith("'#fff'"));
+  assert.deepEqual(hex, [], `상태 색이 하드코딩됐다: ${hex.join(' ')}`);
+});
+
+test('위젯이 연결 끊김을 보내기 전에 알린다 (DS 5-5)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  assert.match(s, /window\.addEventListener\('offline', sync\)/, '연결 상태를 듣지 않는다');
+  assert.match(s, /navigator\.onLine === false/, '끊긴 채로 요청을 보내면 무조건 실패한다');
+  assert.match(s, /인터넷 연결이 끊겼습니다/, '연결 끊김 안내 문구가 없다');
+  // 서버 렌더에서는 연결 상태를 알 수 없다 — false 로 시작해야 한다(hydration 불일치 방지).
+  assert.match(s, /const \[offline, setOffline\] = useState\(false\)/, '오프라인 상태 초기값');
+  assert.match(s, /name="offline"/, '연결 끊김도 선 아이콘으로');
+  // 서버 렌더 결과에는 배너가 없어야 한다(연결 상태 미확인).
+  assert.equal(/서버에서.*offline/.test(s), false, '서버 렌더에서 연결 상태를 단정하면 안 된다');
+});
+
+test('위젯이 보내기 전에 글자 수 한계를 알린다 (DS 5-5)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  const route = read('src/app/api/chat/route.ts');
+  const limit = Number(/MAX_MESSAGE_LEN = (\d+)/.exec(route)?.[1]);
+  assert.ok(limit > 0, '서버 길이 한계를 읽지 못했다');
+  const widgetLimit = Number(/MAX_INPUT_LEN = (\d+)/.exec(s)?.[1]);
+  assert.equal(widgetLimit, limit, '위젯과 서버의 길이 한계가 어긋나면 413 으로 거절된다');
+  assert.match(s, /aria-invalid=\{tooLong \|\| undefined\}/, '어느 입력이 틀렸는지 알려야 한다');
+  assert.match(s, /aria-describedby=/, '오류 문구를 입력과 연결해야 한다');
+  assert.match(s, /disabled=\{busy \|\| tooLong \|\| !input\.trim\(\)\}/, '한계를 넘으면 전송을 막는다');
+});
+
+test('건너뛰기 링크로 본문에 바로 닿는다 (DS 5-6)', () => {
+  const css = read('src/app/globals.css');
+  assert.match(css, /\.skip-link\{/, '건너뛰기 링크 규격이 토큰 파일에 없다');
+  // display:none 은 초점을 받지 못한다 — 화면 밖으로 밀어 두고 초점 시 나타나야 한다.
+  assert.match(css, /\.skip-link:focus\{top:12px\}/, '초점을 받으면 보여야 한다');
+  assert.equal(/\.skip-link\{[^}]*display:none/.test(css), false, '숨긴 링크는 초점을 받지 못한다');
+  // 스크롤 위치·사이드바 stacking 과 무관하게 보이도록 고정 배치(콘솔 사이드바 z-index 6, 상단바 20).
+  assert.match(css, /\.skip-link\{position:fixed/, '스크롤하면 화면 밖으로 밀려난다');
+
+  for (const [file, target] of [
+    ['src/app/page.tsx', '#main'],
+    ['src/app/privacy/LegalLayout.tsx', '#main'],
+    ['src/app/admin/page.tsx', '#ac-main'],
+  ]) {
+    const s = read(file);
+    assert.ok(s.includes(`href="${target}" className="skip-link"`), `${file} 에 건너뛰기 링크가 없다`);
+    assert.ok(s.includes(`id="${target.slice(1)}"`), `${file} 의 본문에 도착 지점이 없다`);
+    assert.ok(/tabIndex=\{-1\}/.test(s), `${file} 의 본문이 초점을 받지 못한다`);
+  }
+});
+
+test('랜딩의 main 랜드마크가 상단바·푸터를 삼키지 않는다 (DS 5-6)', () => {
+  const s = read('src/app/page.tsx');
+  const main = s.indexOf('<main id="main"');
+  assert.ok(main > 0, 'main 랜드마크가 없다');
+  // 페이지 전체를 감싼 main 은 스크린리더의 랜드마크 이동을 무의미하게 만든다.
+  assert.ok(s.indexOf('<header') < main, '상단바가 main 안에 있다');
+  assert.ok(s.indexOf('<footer') > s.indexOf('</main>'), '푸터가 main 안에 있다');
+  assert.ok(s.indexOf('<ChatWidget') > s.indexOf('</main>'), '위젯이 main 안에 있다');
+  // 하드코딩 hex 없이 토큰만(DS 4-4 와 같은 규칙).
+  const hex = stripComments(s).match(/#[0-9A-Fa-f]{6}/g) || [];
+  assert.deepEqual(hex, [], `랜딩에 하드코딩 색이 남아 있다: ${hex.join(' ')}`);
+});
+
+test('콘솔은 탭을 바꾸면 본문으로 초점을 옮긴다 (DS 5-6)', () => {
+  const s = read('src/app/admin/page.tsx');
+  assert.match(s, /mainRef\.current\?\.focus\(\)/, '탭을 바꿔도 초점이 사이드바에 남는다');
+  assert.match(s, /\}, \[tab\]\);/, '탭 변경에 반응해야 한다');
+  assert.match(s, /tabMounted/, '첫 렌더에서는 초점을 빼앗지 않아야 한다');
+  assert.match(s, /aria-label=\{currentLabel\}/, '본문에 현재 화면 이름이 붙어야 읽힌다');
+});
+
+test('약관·방침 공개 페이지에 내부 표기가 없다 (DS 5-7)', () => {
+  const rendered = stripComments(read('src/app/privacy/LegalLayout.tsx'));
+  assert.equal(rendered.includes('[승인 필요]'), false, '공개 페이지에 내부 개발 표기가 노출된다');
+  // 초안·[미확정] 안내는 그대로 남아야 한다(법무 검토 전임을 방문자에게 밝히는 문구).
+  assert.ok(rendered.includes('검토 초안'), '초안 표기까지 지우면 안 된다');
+  assert.ok(rendered.includes('[미확정]'), '본문 미확정 표기 안내가 없다');
 });

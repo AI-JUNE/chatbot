@@ -530,7 +530,8 @@ export default function ChatWidget({
                       <button
                         onClick={() => sendText(failedText, m.key)}
                         disabled={busy}
-                        style={{ ...chipStyle, marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--danger)', borderColor: 'var(--danger)', opacity: busy ? .5 : 1 }}
+                        // 복구 동작이라 보조 칩(30px)보다 큰 손가락 목표를 준다(375px 기준).
+                        style={{ ...chipStyle, marginTop: 8, minHeight: 34, padding: '7px 12px', display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--danger)', borderColor: 'var(--danger)', opacity: busy ? .5 : 1 }}
                       >
                         <WIcon name="retry" size={13} /> 다시 보내기
                       </button>
