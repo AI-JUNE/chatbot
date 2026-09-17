@@ -146,9 +146,47 @@ function clock(ms: number): string {
 let msgSeq = 0;
 function nextKey(): number { msgSeq += 1; return msgSeq; }
 
-export default function ChatWidget({ embedded = false, tenant }: { embedded?: boolean; tenant?: WidgetTenant }) {
+/**
+ * 위젯 아이콘 — 16px 뷰박스 선 아이콘(stroke 1.4).
+ * 랜딩(`app/page.tsx`)·관리 콘솔과 같은 규약을 쓴다. 이모지를 쓰지 않는다:
+ * 이모지는 기기·OS마다 모양이 달라 브랜드가 화면마다 어긋나고, 색을 따라오지 않는다.
+ */
+const W_ICONS = {
+  chat: 'M2.5 3.5h11v7.2H7.6l-3.3 2.7v-2.7H2.5z',
+  close: 'M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8',
+  minimize: 'M4 8h8',
+  send: 'M8 13.2V3.4M8 3.4 4.3 7.1M8 3.4l3.7 3.7',
+  clock: 'M8 3.2a4.8 4.8 0 1 0 0 9.6 4.8 4.8 0 0 0 0-9.6M8 5.5v2.8l1.9 1.1',
+  check: 'M3.4 8.3l2.9 2.9 6.3-6.6',
+  external: 'M5.4 10.6 11 5M6.5 5H11v4.5',
+  // 엄지 — 아래 평가는 같은 도형을 180° 돌려 쓴다(모양이 어긋나지 않게).
+  thumb: 'M5.5 13.8V7.2l2.9-4.7a1.6 1.6 0 0 1 1.5 1.6v2.2h3a1.2 1.2 0 0 1 1.2 1.5l-.9 4.2a1.3 1.3 0 0 1-1.3 1.1zM5.5 7.4H2.8v6.4h2.7',
+} as const;
+
+function WIcon({ name, size = 16, flip = false }: { name: keyof typeof W_ICONS; size?: number; flip?: boolean }) {
+  return (
+    <svg aria-hidden="true" focusable="false" width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+      <path
+        d={W_ICONS[name]}
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        {...(flip ? { transform: 'rotate(180 8 8)' } : {})}
+      />
+    </svg>
+  );
+}
+
+export default function ChatWidget({
+  embedded = false,
+  tenant,
+  // 처음에 대화창을 펼친 채로 둘지. 호스트 화면(랜딩)은 `false` 를 넘겨 런처만 보이게 한다 —
+  // 모바일에서 열린 위젯은 전체화면이라, 자동으로 열면 호스트 화면을 첫 로드부터 덮어 버린다(DS 5-1).
+  defaultOpen = !embedded,
+}: { embedded?: boolean; tenant?: WidgetTenant; defaultOpen?: boolean }) {
   const greeting = tenant?.greeting || '안녕하세요! 저는 인공지능(AI) 상담 챗봇입니다. 무엇을 도와드릴까요?';
-  const [open, setOpen] = useState(!embedded);
+  const [open, setOpen] = useState(defaultOpen);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -195,8 +233,13 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, busy, open]);
 
   // 열리면 입력창으로 초점을 옮긴다(키보드 사용자가 바로 입력할 수 있게).
+  // 단, 처음부터 펼쳐진 채로 그려진 경우는 건너뛴다 — 사용자가 열지 않았는데 초점을 빼앗지 않는다
+  // (모바일에서는 화면 키보드가 저절로 올라온다).
+  // 처음부터 펼쳐진 채면 true 로 시작해 그 한 번만 건너뛴다. 닫았다 다시 열면 정상적으로 초점이 간다.
+  const skipAutoFocus = useRef(defaultOpen);
   useEffect(() => {
     if (!open) return;
+    if (skipAutoFocus.current) { skipAutoFocus.current = false; return; }
     const t = setTimeout(() => inputRef.current?.focus(), 60);
     return () => clearTimeout(t);
   }, [open]);
@@ -406,8 +449,8 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
                 <span style={{ fontSize: 10.5, opacity: .88, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tenant?.headerNote || '24시간 상담'}</span>
               </div>
             </div>
-            <button onClick={() => closePanel(false)} aria-label="대화 최소화 (대화 내용 유지)" title="최소화" style={headerBtn}>−</button>
-            <button onClick={() => closePanel(true)} aria-label="대화 닫고 처음으로" title="닫기" style={headerBtn}>×</button>
+            <button onClick={() => closePanel(false)} aria-label="대화 최소화 (대화 내용 유지)" title="최소화" style={headerBtn}><WIcon name="minimize" /></button>
+            <button onClick={() => closePanel(true)} aria-label="대화 닫고 처음으로" title="닫기" style={headerBtn}><WIcon name="close" /></button>
           </header>
 
           {/* ── 대화 목록 ── */}
@@ -486,7 +529,7 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
 
                     {m.queue && (
                       <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--brand-600)', background: 'var(--brand-50)', borderRadius: 10, padding: '7px 11px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span aria-hidden="true">⏳</span>
+                        <WIcon name="clock" size={13} />
                         <span>상담 접수 대기 중 · 접수 순번 {m.queue.position}번 (대기 {m.queue.waiting}건)</span>
                       </div>
                     )}
@@ -505,7 +548,10 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
                         rel="noopener noreferrer"
                         style={{ display: 'inline-block', marginTop: 8, fontSize: 12.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 10, padding: '9px 14px', textDecoration: 'none' }}
                       >
-                        {m.cta.label} ↗
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          {m.cta.label}
+                          <WIcon name="external" size={13} />
+                        </span>
                       </a>
                     )}
 
@@ -609,9 +655,9 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
 
                         {handoff.stage === 'done' && handoff.ticket && (
                           <div role="status" aria-live="polite">
-                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--brand-600)' }}>
-                              <span aria-hidden="true">✓ </span>
-                              {handoff.ticket.created ? '상담원 연결이 접수됐어요' : '이미 접수된 요청이 있어요'}
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--brand-600)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                              <WIcon name="check" size={13} />
+                              <span>{handoff.ticket.created ? '상담원 연결이 접수됐어요' : '이미 접수된 요청이 있어요'}</span>
                             </div>
                             <div style={{ fontSize: 12.5, color: 'var(--ink)', marginTop: 6 }}>
                               접수번호 <strong>{handoff.ticket.id}</strong>
@@ -639,8 +685,8 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
                         {rated[m.key] === undefined && (
                           <>
                             <span>도움이 됐나요?</span>
-                            <button onClick={() => rate(m, 'up')} aria-label="이 답변이 도움이 됐어요" style={{ ...chipStyle, padding: '4px 9px', minHeight: 26 }}>👍</button>
-                            <button onClick={() => rate(m, 'down')} aria-label="이 답변이 도움이 되지 않았어요" style={{ ...chipStyle, padding: '4px 9px', minHeight: 26 }}>👎</button>
+                            <button onClick={() => rate(m, 'up')} aria-label="이 답변이 도움이 됐어요" style={{ ...chipStyle, padding: '4px 9px', minHeight: 26 }}><WIcon name="thumb" size={14} /></button>
+                            <button onClick={() => rate(m, 'down')} aria-label="이 답변이 도움이 되지 않았어요" style={{ ...chipStyle, padding: '4px 9px', minHeight: 26 }}><WIcon name="thumb" size={14} flip /></button>
                           </>
                         )}
                         {rated[m.key] === 'up' && <span role="status">의견 감사합니다.</span>}
@@ -703,9 +749,9 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
               onClick={send}
               disabled={busy || !input.trim()}
               aria-label="메시지 전송"
-              style={{ width: 42, height: 42, flexShrink: 0, borderRadius: '50%', background: 'var(--brand)', color: '#fff', fontWeight: 800, fontSize: 16, opacity: busy || !input.trim() ? .5 : 1 }}
+              style={{ width: 42, height: 42, flexShrink: 0, borderRadius: '50%', background: 'var(--brand)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: busy || !input.trim() ? .5 : 1 }}
             >
-              ↑
+              <WIcon name="send" size={18} />
             </button>
           </div>
           <div style={{ padding: '0 14px 10px', background: 'var(--surface)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--mut)', textAlign: 'center' }}>
@@ -723,11 +769,11 @@ export default function ChatWidget({ embedded = false, tenant }: { embedded?: bo
           aria-expanded={open}
           style={{
             width: 58, height: 58, borderRadius: '50%', background: 'var(--brand)', color: '#fff',
-            fontSize: 23, boxShadow: 'var(--shadow-pop)', marginLeft: 'auto', display: 'flex',
+            boxShadow: 'var(--shadow-pop)', marginLeft: 'auto', display: 'flex',
             alignItems: 'center', justifyContent: 'center',
           }}
         >
-          <span aria-hidden="true">{open ? '×' : '💬'}</span>
+          <WIcon name={open ? 'close' : 'chat'} size={24} />
         </button>
       )}
     </div>

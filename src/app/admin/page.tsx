@@ -171,6 +171,76 @@ function EmptyArt({ kind }: { kind: 'kb' | 'chat' }) {
   );
 }
 
+/** 확인 대화상자에 넘길 내용. `resolve` 는 버튼을 누르면 호출된다. */
+type ConfirmReq = {
+  title: string;
+  body: string;
+  /** 지우는 대상 이름 등, 무엇에 대한 동작인지 한 줄로. 없으면 생략한다. */
+  target?: string;
+  confirmLabel: string;
+  resolve: (ok: boolean) => void;
+};
+
+/**
+ * 확인 대화상자 — 되돌릴 수 없는 동작(삭제·초기화) 앞에 세운다.
+ * 브라우저 기본 `confirm()` 을 대신한다: 기본 대화상자는 브랜드를 따르지 않고 주소가 함께 노출돼
+ * 「같은 회사 제품」으로 보이지 않으며, 무엇을 지우는지 강조할 수단도 없다(DS 5-4).
+ * 기본 초점은 취소에 둔다 — Enter 를 눌러 실수로 지우지 않게.
+ */
+function ConfirmDialog({ req }: { req: ConfirmReq }) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => { cancelRef.current?.focus(); }, []);
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') { e.stopPropagation(); req.resolve(false); return; }
+    if (e.key !== 'Tab' || !panelRef.current) return;
+    const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>('button')).filter((el) => !el.hasAttribute('disabled'));
+    if (items.length === 0) return;
+    const firstEl = items[0];
+    const lastEl = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === firstEl) { e.preventDefault(); lastEl.focus(); }
+    else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); firstEl.focus(); }
+  };
+
+  return (
+    <div className="ac-modal-root">
+      <div className="ac-modal-bg" onClick={() => req.resolve(false)} aria-hidden="true" />
+      <div
+        ref={panelRef}
+        className="ac-modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="ac-confirm-title"
+        aria-describedby="ac-confirm-body"
+        onKeyDown={onKeyDown}
+      >
+        <div className="ac-modal-icon" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" focusable="false">
+            <path d="M8 5.2v3.4M8 11.1h.01M6.9 2.4 1.9 11a1.3 1.3 0 0 0 1.1 1.9h10a1.3 1.3 0 0 0 1.1-1.9L9.1 2.4a1.3 1.3 0 0 0-2.2 0z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <h2 id="ac-confirm-title" style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-.01em' }}>{req.title}</h2>
+        {req.target && (
+          <p style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--ink)', marginTop: 8, background: 'var(--bg)', border: '1px solid var(--line)', borderRadius: 'var(--r-sm)', padding: '8px 10px', wordBreak: 'break-all' }}>
+            {req.target}
+          </p>
+        )}
+        <p id="ac-confirm-body" style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--sub)', marginTop: 8 }}>{req.body}</p>
+        <div className="ac-modal-foot">
+          <button ref={cancelRef} type="button" style={{ ...S.btnGhost, background: 'var(--bg)', color: 'var(--sub)', minHeight: 40 }} onClick={() => req.resolve(false)}>
+            취소
+          </button>
+          <button type="button" style={{ ...S.btn, background: 'var(--danger)', minHeight: 40 }} onClick={() => req.resolve(true)}>
+            {req.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** 최근 대화 상세 서랍 — 같은 대화(세션)의 흐름 전체·주제·근거·상담원 전환 여부를 보여준다. */
 function ConversationDrawer({
   sessionId, turns, ticket, onClose, onOpenTicket, closeRef,
@@ -693,8 +763,8 @@ const STORAGE_HEALTH: Record<StorageNsView['health'], { label: string; hint: str
   ok: { label: '저장됨', hint: '디스크에 반영되었습니다.' },
   empty: { label: '저장분 없음', hint: '아직 저장된 내용이 없습니다. 편집하면 자동 저장됩니다.' },
   disabled: { label: '저장 꺼짐', hint: '배포 설정에서 저장이 꺼져 있어 재시작하면 사라집니다.' },
-  awaiting_approval: { label: '승인 대기', hint: '개인정보가 포함된 데이터라 저장 승인 전까지 디스크에 쓰지 않습니다. [승인 필요]' },
-  readonly: { label: '읽기전용 환경', hint: '배포 환경의 파일시스템이 읽기전용입니다. 백업 API로 내보내 주세요.' },
+  awaiting_approval: { label: '승인 대기', hint: '개인정보가 포함되어 있어, 저장 승인이 나기 전까지는 서버에 보관하지 않습니다.' },
+  readonly: { label: '읽기전용 환경', hint: '이 환경에서는 변경 내용을 서버에 보관할 수 없습니다. 「백업 내려받기」로 파일을 받아 두세요.' },
   error: { label: '저장 실패', hint: '아래 오류를 확인해 주세요. 데이터는 메모리에 남아 있습니다.' },
 };
 
@@ -1518,20 +1588,30 @@ export default function AdminPage() {
 
   const removePartner = async (p: PartnerView) => {
     // 되돌릴 수 없는 동작 — 확인 절차를 거친다(연결 고객사가 있으면 서버가 거절한다).
-    if (!window.confirm(`파트너 "${p.name}"을(를) 삭제할까요? 되돌릴 수 없습니다.`)) return;
-    const res = await fetch(`/api/admin/partners?partnerId=${encodeURIComponent(p.id)}`, {
-      method: 'DELETE',
-      headers: authHeaders(),
+    const ok = await askConfirm({
+      title: '파트너를 삭제할까요?',
+      target: p.name,
+      body: '삭제하면 되돌릴 수 없습니다. 연결된 고객사가 있으면 삭제되지 않습니다.',
+      confirmLabel: '삭제',
     });
-    if (on401(res)) return;
-    const data = await res.json();
-    if (!data.ok) {
-      setPartnerErr(data.message || data.error || '삭제하지 못했습니다.');
-      return;
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/admin/partners?partnerId=${encodeURIComponent(p.id)}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (!data.ok) {
+        setPartnerErr(data.message || data.error || '삭제하지 못했습니다.');
+        return;
+      }
+      if (pForm.id === p.id) setPForm(EMPTY_PARTNER_FORM);
+      await loadPartners(partnerFilter);
+      flash('파트너를 삭제했습니다.');
+    } catch {
+      setPartnerErr('연결이 원활하지 않아 삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.');
     }
-    if (pForm.id === p.id) setPForm(EMPTY_PARTNER_FORM);
-    await loadPartners(partnerFilter);
-    flash('파트너를 삭제했습니다.');
   };
 
   // ---- 정산 리포트 ----
@@ -1698,6 +1778,22 @@ export default function AdminPage() {
     window.setTimeout(() => setNotice(''), 2500);
   };
 
+  // ---- 확인 대화상자 ----
+  // 되돌릴 수 없는 동작은 전부 이 함수를 거친다. `await askConfirm(...)` 가 false 면 아무것도 하지 않는다.
+  const [confirmReq, setConfirmReq] = useState<ConfirmReq | null>(null);
+  const askConfirm = useCallback((opts: Omit<ConfirmReq, 'resolve'>) => new Promise<boolean>((resolve) => {
+    setConfirmReq({ ...opts, resolve: (ok) => { setConfirmReq(null); resolve(ok); } });
+  }), []);
+
+  /**
+   * 실패한 동작을 조용히 넘기지 않는다(QUALITY_BAR §3).
+   * 네트워크 예외·JSON 파싱 실패까지 잡아 사용자가 읽을 수 있는 문구로 알린다.
+   */
+  const failed = (what: string, detail?: unknown) => {
+    const hint = typeof detail === 'string' && detail.trim() ? detail.trim() : '';
+    flash(hint ? `${what}: ${hint}` : `${what}. 잠시 후 다시 시도해 주세요.`);
+  };
+
   const submitKB = async () => {
     const errs: { question?: string; answer?: string } = {};
     if (!form.question.trim()) errs.question = '대표 질문을 입력해 주세요.';
@@ -1727,7 +1823,7 @@ export default function AdminPage() {
       setKbBusy(false);
     }
     if (!data.ok) {
-      flash(`저장 실패: ${data.error}`);
+      failed('저장하지 못했습니다', data.error);
       return;
     }
     setForm(EMPTY_FORM);
@@ -1748,39 +1844,71 @@ export default function AdminPage() {
 
   const removeKB = async (id: string) => {
     // 되돌릴 수 없는 동작 — 확인을 거친다(QUALITY_BAR §3).
-    if (!window.confirm('이 항목을 삭제할까요? 삭제하면 되돌릴 수 없습니다.')) return;
-    const res = await fetch(`/api/admin/kb?id=${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() });
-    const data = await res.json();
-    if (data.ok) {
-      await loadKB();
-      flash('삭제되었습니다.');
-    } else {
-      flash(`삭제 실패: ${data.error}`);
+    const target = entries.find((e) => e.id === id);
+    const ok = await askConfirm({
+      title: '이 안내 자료를 삭제할까요?',
+      ...(target ? { target: target.question } : {}),
+      body: '삭제하면 되돌릴 수 없습니다. 이 자료를 근거로 답하던 질문은 더 이상 답변되지 않습니다.',
+      confirmLabel: '삭제',
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/admin/kb?id=${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (data.ok) {
+        await loadKB();
+        flash('삭제되었습니다.');
+      } else {
+        failed('삭제하지 못했습니다', data.message || data.error);
+      }
+    } catch {
+      failed('삭제하지 못했습니다');
     }
   };
 
   const resetAll = async () => {
-    if (!window.confirm('등록한 항목을 모두 지우고 기본 자료로 되돌릴까요? 되돌릴 수 없습니다.')) return;
-    await fetch('/api/admin/kb', {
-      method: 'POST',
-      headers: authHeaders(true),
-      body: JSON.stringify({ reset: true }),
+    const ok = await askConfirm({
+      title: '기본 자료로 되돌릴까요?',
+      body: '등록한 안내 자료를 모두 지우고 처음 상태로 되돌립니다. 되돌릴 수 없으니, 필요하면 먼저 「백업 내려받기」로 받아 두세요.',
+      confirmLabel: '모두 지우고 초기화',
     });
-    await loadKB();
-    flash('기본 지식베이스로 초기화했습니다.');
+    if (!ok) return;
+    try {
+      const res = await fetch('/api/admin/kb', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({ reset: true }),
+      });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (!data.ok) {
+        failed('초기화하지 못했습니다', data.message || data.error);
+        return;
+      }
+      await loadKB();
+      flash('기본 지식베이스로 초기화했습니다.');
+    } catch {
+      failed('초기화하지 못했습니다');
+    }
   };
 
   const patchRule = async (intent: string, patch: { enabled?: boolean; reply?: string | null }) => {
-    const res = await fetch('/api/admin/rules', {
-      method: 'PATCH',
-      headers: authHeaders(true),
-      body: JSON.stringify({ intent, ...patch }),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      setRules((prev) => prev.map((r) => (r.intent === intent ? data.rule : r)));
-    } else {
-      flash(`저장 실패: ${data.error}`);
+    try {
+      const res = await fetch('/api/admin/rules', {
+        method: 'PATCH',
+        headers: authHeaders(true),
+        body: JSON.stringify({ intent, ...patch }),
+      });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (data.ok) {
+        setRules((prev) => prev.map((r) => (r.intent === intent ? data.rule : r)));
+      } else {
+        failed('저장하지 못했습니다', data.message || data.error);
+      }
+    } catch {
+      failed('저장하지 못했습니다');
     }
   };
 
@@ -1830,23 +1958,34 @@ export default function AdminPage() {
     });
     const data = await res.json();
     if (data.ok) await loadRules();
-    else flash(`변경 실패: ${data.error}`);
+    else failed('변경하지 못했습니다', data.message || data.error);
   };
 
   const removeCustomRule = async (intent: string) => {
     const target = customRules.find((r) => r.intent === intent);
-    if (!window.confirm(`「${target?.label ?? intent}」 규칙을 삭제할까요? 삭제하면 되돌릴 수 없습니다.`)) return;
-    const res = await fetch(`/api/admin/rules?intent=${encodeURIComponent(intent)}`, { method: 'DELETE', headers: authHeaders() });
-    const data = await res.json();
-    if (data.ok) {
-      if (crEditing === intent) {
-        setCrEditing(null);
-        setCrForm(EMPTY_CR_FORM);
+    const ok = await askConfirm({
+      title: '이 규칙을 삭제할까요?',
+      target: target?.label ?? intent,
+      body: '삭제하면 되돌릴 수 없습니다. 이 규칙이 처리하던 질문은 안내 자료 검색으로 넘어갑니다.',
+      confirmLabel: '삭제',
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/admin/rules?intent=${encodeURIComponent(intent)}`, { method: 'DELETE', headers: authHeaders() });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (data.ok) {
+        if (crEditing === intent) {
+          setCrEditing(null);
+          setCrForm(EMPTY_CR_FORM);
+        }
+        await loadRules();
+        flash('규칙을 삭제했습니다.');
+      } else {
+        failed('삭제하지 못했습니다', data.message || data.error);
       }
-      await loadRules();
-      flash('규칙을 삭제했습니다.');
-    } else {
-      flash(`삭제 실패: ${data.error}`);
+    } catch {
+      failed('삭제하지 못했습니다');
     }
   };
 
@@ -1878,7 +2017,7 @@ export default function AdminPage() {
     });
     const data = await res.json();
     if (!data.ok) {
-      flash(`복원 실패: ${data.error}`);
+      failed('복원하지 못했습니다', data.message || data.error);
       return;
     }
     await Promise.all([loadKB(), loadRules()]);
@@ -1898,7 +2037,7 @@ export default function AdminPage() {
         await loadEsc();
         flash(`접수 ${shortTicket(id)} → ${TICKET_STATUS_LABELS[status]}`);
       } else {
-        flash(`상태를 바꾸지 못했습니다: ${data.error}`);
+        failed('상태를 바꾸지 못했습니다', data.message || data.error);
       }
     } catch {
       flash('상태를 바꾸지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.');
@@ -3170,7 +3309,7 @@ export default function AdminPage() {
                   )}
                 </section>
                 <p style={S.tag}>
-                  계약 주체는 고원이고 파트너는 유치와 운영을 맡습니다. 여기에는 어느 고객사를 누가 데려왔는지만 기록하며, 담당자는 이름만 저장합니다. 실제 정산·청구는 계약서 확정 후 [승인 필요].
+                  계약 주체는 고원이고 파트너는 유치와 운영을 맡습니다. 여기에는 어느 고객사를 누가 데려왔는지만 기록하며, 담당자는 이름만 저장합니다. 실제 정산·청구는 계약서가 확정된 뒤에 진행합니다.
                 </p>
               </div>
 
@@ -3333,7 +3472,7 @@ export default function AdminPage() {
                 <button type="button" style={S.btn} onClick={downloadSettlementCsv} disabled={!r || r.rows.length === 0}>CSV 내려받기</button>
               </div>
               <p style={{ ...S.tag, padding: '10px 16px' }}>
-                월 이용료(계약서 입력값) × 수수료율로 산출 근거를 만듭니다. 값이 없는 항목은 0으로 채우지 않고 합계에서 빼며 사유를 표시합니다. 실제 청구·지급은 계약서 확정 후 [승인 필요].
+                월 이용료(계약서 입력값) × 수수료율로 산출 근거를 만듭니다. 값이 없는 항목은 0으로 채우지 않고 합계에서 빼며 사유를 표시합니다. 실제 청구·지급은 계약서가 확정된 뒤에 진행합니다.
               </p>
             </section>
 
@@ -3681,7 +3820,7 @@ export default function AdminPage() {
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
                     <span className="ac-pill">저장 방식 · {storage.driver === 'file' ? '파일' : '메모리'}</span>
                     <span className="ac-pill" style={storage.piiApproved ? { background: '#F0FDF4', color: 'var(--success)' } : { background: '#FFFBEB', color: 'var(--warn)' }}>
-                      개인정보 저장 {storage.piiApproved ? '승인됨' : '미승인 [승인 필요]'}
+                      개인정보 저장 {storage.piiApproved ? '승인됨' : '미승인'}
                     </span>
                   </div>
                   <ul className="ac-nsgrid">
@@ -3906,6 +4045,9 @@ export default function AdminPage() {
           closeRef={drawerCloseRef}
         />
       )}
+
+      {/* 되돌릴 수 없는 동작 확인 — 삭제·초기화는 전부 이 대화상자를 거친다(DS 5-4). */}
+      {confirmReq && <ConfirmDialog req={confirmReq} />}
 
       {/* 저장·삭제 결과 알림(토스트) — 화면 어디에 있든 같은 자리에서 알린다. */}
       {notice && (

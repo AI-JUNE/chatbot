@@ -250,7 +250,8 @@ test('지식베이스가 표(검색·카테고리 필터)+우측 편집 폼으�
   assert.match(kb, /<EmptyArt kind="kb" \/>/, '빈 상태 일러스트');
   assert.match(kb, /검색 결과가 없습니다/, '검색 0건 안내');
   assert.match(kb, /aria-label=\{`삭제: \$\{e\.question\}`\}/, '행 버튼에 대상 이름이 있어야 한다');
-  assert.match(src, /window\.confirm\('이 항목을 삭제할까요/, '삭제는 확인을 거친다');
+  // 확인 절차는 유지하되, 브라우저 기본 대화상자가 아니라 브랜드 대화상자를 거친다(DS 5-4).
+  assert.match(src, /askConfirm\(\{[\s\S]{0,200}이 안내 자료를 삭제할까요/, '삭제는 확인을 거친다');
   assert.match(src, /flash\(editingId \? '수정되었습니다\.' : '추가되었습니다\.'\)/, '저장 토스트');
   const mobile = css.slice(css.indexOf('@media (max-width:900px){'));
   assert.match(mobile, /\.ac-split,\.ac-split-test\{grid-template-columns:minmax\(0,1fr\)\}/, '좁은 화면에서는 한 단');
@@ -299,7 +300,10 @@ test('시나리오 룰이 「조건 → 응답」 카드 빌더와 미리보기�
   // 빈 상태·검색 0건·삭제 확인·토스트
   assert.match(t, /아직 만든 규칙이 없습니다/, '빈 상태');
   assert.match(t, /검색 결과가 없습니다/, '검색 0건');
-  assert.match(src, /window\.confirm\(`「\$\{target\?\.label \?\? intent\}」 규칙을 삭제할까요/, '삭제는 확인을 거친다');
+  // 확인 절차는 유지하되, 브라우저 기본 대화상자가 아니라 브랜드 대화상자를 거친다(DS 5-4).
+  // 무엇을 지우는지(규칙 이름)를 대화상자가 따로 강조한다.
+  assert.match(src, /askConfirm\(\{[\s\S]{0,200}이 규칙을 삭제할까요/, '삭제는 확인을 거친다');
+  assert.match(src, /target: target\?\.label \?\? intent/, '지우는 대상을 밝힌다');
   assert.match(src, /flash\(crEditing \? '규칙을 수정했습니다\.' : '규칙을 추가했습니다\.'\)/, '저장 토스트');
   // 내부 용어(intent·정규식·커스텀 룰)가 화면 문자열에 남지 않는다
   for (const leak of ['커스텀 룰', '정규식', '패턴: /', '({r.intent}', '>{r.intent}']) {
@@ -481,7 +485,8 @@ test('정산 리포트가 조건 툴바·요약 KPI·합계/근거 표·빈 상�
   assert.match(t, /role="status" aria-live="polite"/, '계산 중 안내');
   assert.match(t, /aria-busy=\{settleBusy \|\| undefined\}/, '계산 중 버튼 잠금');
   assert.match(t, /disabled=\{!r \|\| r\.rows\.length === 0\}/, '내려받을 것이 없으면 CSV 버튼 잠금');
-  assert.match(t, /\[승인 필요\]/, '실제 청구·지급은 승인 필요');
+  // 확정본이 아님은 계속 밝히되, 내부 개발 표기([승인 필요])를 화면에 쓰지 않는다(DS 5-3).
+  assert.match(t, /실제 청구·지급은 계약서가 확정된 뒤에 진행합니다/, '확정 아님을 밝힌다');
   assert.equal(/#c0392b|#b26a00/.test(t), false, '색은 토큰만');
   assert.match(t, /className="ac-col-wide"/, '좁은 화면에서 접히는 열');
 });

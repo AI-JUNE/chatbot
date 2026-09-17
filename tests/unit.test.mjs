@@ -881,3 +881,78 @@ test('관리 콘솔·임베드 프레임은 검색 색인에서 제외된다', (
     assert.equal(read(f).includes('index: false'), false, `${f} 는 색인돼야 한다`);
   }
 });
+
+/* ══════════ 5순위 — 백로그 소진 후 재감사 (DS 5-x) ══════════ */
+
+// 화면에 실제로 그려지는 부분만 남긴다 — 한 줄 주석·블록 주석·JSX 주석을 걷어낸다.
+// 주석에 적힌 화살표나 개발 표기까지 결함으로 세면 거짓 실패가 난다.
+const stripComments = (s) => s
+  .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^\s*\/\/.*$/gm, '');
+
+test('랜딩은 위젯을 펼친 채로 띄우지 않는다 (DS 5-1)', () => {
+  const s = read('src/app/page.tsx');
+  assert.match(s, /<ChatWidget\s+defaultOpen=\{false\}/, '랜딩은 런처만 보여야 한다');
+  // 375px에서 열린 위젯은 전체화면(inset:0)이라, 자동으로 열리면 제품 소개를 통째로 덮는다.
+  const w = read('src/components/ChatWidget.tsx');
+  assert.match(w, /defaultOpen = !embedded/, '기본값은 프롭으로 드러나 있어야 한다');
+  assert.match(w, /useState\(defaultOpen\)/, '열림 상태는 프롭에서 와야 한다');
+  // 사용자가 열지 않았는데 초점을 빼앗지 않는다(모바일에서 키보드가 저절로 올라온다).
+  assert.match(w, /skipAutoFocus/, '처음부터 펼쳐진 경우 자동 초점을 건너뛰어야 한다');
+});
+
+test('위젯 아이콘은 이모지가 아니라 선 아이콘이다 (DS 5-2)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  const emoji = stripComments(s).match(/[\u{1F300}-\u{1FAFF}\u{2190}-\u{21FF}\u{2600}-\u{27BF}\u{00D7}\u{2212}]/gu);
+  assert.equal(emoji, null, `위젯에 이모지·문자 글리프 아이콘이 남아 있다: ${emoji && emoji.join(' ')}`);
+  assert.match(s, /function WIcon\(/, '선 아이콘 컴포넌트가 있어야 한다');
+  assert.match(s, /strokeWidth="1\.4"/, '아이콘 굵기는 랜딩·콘솔과 같아야 한다');
+  // 런처는 제품에서 가장 많이 노출되는 요소다 — 여기서 브랜드가 어긋나면 안 된다.
+  assert.match(s, /<WIcon name=\{open \? 'close' : 'chat'\}/, '런처는 선 아이콘이어야 한다');
+});
+
+test('관리 콘솔 화면에 내부 표기 [승인 필요] 가 없다 (DS 5-3)', () => {
+  const s = read('src/app/admin/page.tsx');
+  // 주석에는 남겨 두되(개발 표기), 화면 문구에는 나오지 않아야 한다.
+  const rendered = stripComments(s);
+  assert.equal(rendered.includes('[승인 필요]'), false, '운영자 화면에 내부 개발 표기가 노출된다');
+  // 같이 걷어낸 개발자 문구
+  for (const leak of ['파일시스템', '디스크에 쓰지', '백업 API']) {
+    assert.equal(rendered.includes(leak), false, `화면에 내부 문구 노출: ${leak}`);
+  }
+});
+
+test('되돌릴 수 없는 동작은 브랜드 확인 대화상자를 거친다 (DS 5-4)', () => {
+  const s = read('src/app/admin/page.tsx');
+  // 브라우저 기본 대화상자는 브랜드를 따르지 않고 주소가 함께 노출된다.
+  assert.equal(/window\.(confirm|alert|prompt)\(/.test(s), false, '브라우저 기본 대화상자가 남아 있다');
+  assert.match(s, /function ConfirmDialog\(/, '확인 대화상자 컴포넌트가 있어야 한다');
+  assert.match(s, /role="alertdialog"/, '되돌릴 수 없는 동작은 alertdialog 여야 한다');
+  assert.match(s, /aria-modal="true"/, '모달 표시');
+  assert.match(s, /cancelRef\.current\?\.focus\(\)/, '기본 초점은 취소 — Enter 로 실수로 지우지 않게');
+  // 삭제·초기화 4곳이 전부 확인을 거친다.
+  const asks = s.match(/await askConfirm\(/g) || [];
+  assert.ok(asks.length >= 4, `확인을 거치지 않는 파괴적 동작이 있다(확인 ${asks.length}곳)`);
+});
+
+test('삭제·저장 실패를 조용히 삼키지 않는다 (DS 5-4)', () => {
+  const s = read('src/app/admin/page.tsx');
+  // `저장 실패: ${data.error}` 처럼 폴백 없는 원문 보간은 화면에 undefined 를 띄운다.
+  assert.equal(/\$\{data\.error\}/.test(s), false, '서버 원문을 폴백 없이 화면에 보간한다');
+  assert.match(s, /const failed = \(/, '실패 안내 헬퍼가 있어야 한다');
+  for (const fn of ['removeKB', 'resetAll', 'removeCustomRule', 'removePartner', 'patchRule']) {
+    const body = s.slice(s.indexOf(`const ${fn} = `));
+    const end = body.indexOf('\n  };');
+    assert.ok(/catch\s*\{/.test(body.slice(0, end)), `${fn} 에 네트워크 실패 처리가 없다`);
+  }
+});
+
+test('상태 배경 틴트가 토큰으로 있다 (DS 5-4)', () => {
+  const css = read('src/app/globals.css');
+  for (const t of ['--success-50', '--warn-50', '--danger-50']) {
+    assert.ok(css.includes(t), `${t} 토큰이 없다 — 상태 틴트가 화면마다 하드코딩된다`);
+  }
+  assert.match(css, /\.ac-modal\{/, '확인 대화상자 규격이 토큰 파일에 있어야 한다');
+  assert.match(css, /prefers-reduced-motion:reduce\)\{\.ac-modal\{animation:none/, '모션 최소화 설정 존중');
+});

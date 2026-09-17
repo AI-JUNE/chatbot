@@ -370,7 +370,8 @@ export default function Home() {
         </div>
       </footer>
 
-      <ChatWidget />
+      {/* 랜딩에서는 런처만 띄운다 — 위젯이 저절로 펼쳐지면 375px에서 제품 소개를 통째로 덮는다(DS 5-1). */}
+      <ChatWidget defaultOpen={false} />
     </main>
   );
 }
