@@ -1051,3 +1051,68 @@ test('약관·방침 공개 페이지에 내부 표기가 없다 (DS 5-7)', () =
   assert.ok(rendered.includes('검토 초안'), '초안 표기까지 지우면 안 된다');
   assert.ok(rendered.includes('[미확정]'), '본문 미확정 표기 안내가 없다');
 });
+
+test('내려받기는 관리 토큰을 주소에 싣지 않는다 (DS 5-8)', () => {
+  const s = read('src/app/admin/page.tsx');
+  // 주소에 실린 토큰은 주소창·브라우저 방문 기록·서버 접근 로그에 그대로 남는다(QUALITY_BAR §3).
+  const rendered = stripComments(s);
+  assert.equal(/token=\$\{encodeURIComponent/.test(rendered), false, '관리 토큰이 주소(쿼리)에 실린다');
+  assert.equal(/qs\.set\('token'/.test(rendered), false, '관리 토큰이 주소(쿼리)에 실린다');
+  // window.open 은 실패해도 빈 탭·JSON 오류 본문만 남긴다 — 콘솔에는 아무 안내도 없다(§1).
+  assert.equal(/window\.open\(/.test(rendered), false, '내려받기가 새 탭 열기로 남아 있다');
+  // 헤더 인증 + Blob 저장 경로가 단일 출처여야 한다.
+  assert.match(s, /const downloadFile = async \(/, '내려받기 공통 경로가 없다');
+  const body = s.slice(s.indexOf('const downloadFile = async ('));
+  const fn = body.slice(0, body.indexOf('\n  };'));
+  assert.match(fn, /headers: authHeaders\(\)/, '토큰은 헤더로 보내야 한다');
+  assert.match(fn, /if \(on401\(res\)\) return;/, '세션 만료를 잠금 화면으로 넘겨야 한다');
+  assert.match(fn, /catch \{/, '네트워크 실패를 삼키면 안 된다');
+  assert.match(fn, /createObjectURL/, 'Blob 으로 저장해야 한다');
+  assert.match(fn, /revokeObjectURL/, '만든 URL 을 되돌려줘야 한다');
+  assert.match(fn, /content-disposition/, '서버가 지정한 파일명을 써야 한다');
+  // 내려받기 4곳이 모두 이 경로를 지난다.
+  const calls = s.match(/downloadFile\(/g) || [];
+  assert.ok(calls.length >= 4, `공통 경로를 쓰지 않는 내려받기가 있다(${calls.length}/4)`);
+  for (const url of ['/api/admin/logs/export', '/api/admin/backup', '/api/admin/audit?format=csv']) {
+    assert.ok(s.includes(`downloadFile('${url}'`), `내려받기 누락: ${url}`);
+  }
+  assert.match(s, /downloadFile\(`\/api\/admin\/settlement\?/, '정산 CSV 누락');
+  // 진행 표시 — 멈춘 것처럼 보이지 않게(§1).
+  assert.match(s, /const \[dlBusy, setDlBusy\] = useState\(''\)/, '내려받는 중 상태가 없다');
+  const spins = s.match(/내려받는 중…/g) || [];
+  assert.ok(spins.length >= 4, `진행 표시가 빠진 내려받기 버튼이 있다(${spins.length}/4)`);
+  // 진행 중 버튼을 disabled 로 만들면 키보드로 누른 사용자의 초점이 본문 밖으로 떨어진다.
+  assert.match(s, /function busyBtn\(/, '진행 중 버튼 공통 속성이 없다');
+  const bb = s.slice(s.indexOf('function busyBtn('));
+  assert.match(bb.slice(0, bb.indexOf('\n}')), /'aria-disabled': locked \|\| undefined/, '초점을 잃지 않게 aria-disabled 로 알려야 한다');
+});
+
+test('백업 복원은 덮어쓰기 전에 확인을 거치고 실패를 알린다 (DS 5-9)', () => {
+  const s = read('src/app/admin/page.tsx');
+  const body = s.slice(s.indexOf('const restoreBackup = async'));
+  const fn = body.slice(0, body.indexOf('\n  };'));
+  // 복원은 지금 등록된 자료를 통째로 덮어쓴다 — 되돌릴 수 없는 동작이다(§3).
+  assert.match(fn, /await askConfirm\(/, '덮어쓰기 전에 확인 절차가 없다');
+  assert.match(fn, /target: file\.name/, '무엇으로 덮어쓰는지 밝혀야 한다');
+  assert.match(fn, /if \(!ok\) return;/, '취소하면 아무것도 하지 않아야 한다');
+  assert.match(fn, /if \(on401\(res\)\) return;/, '세션 만료 처리가 없다');
+  assert.match(fn, /catch \{/, '네트워크 실패를 삼키면 안 된다');
+  assert.match(fn, /setRestoreBusy\(true\)/, '복원 중 표시가 없다');
+  assert.match(fn, /finally \{[\s\S]{0,80}setRestoreBusy\(false\)/, '실패해도 진행 표시를 풀어야 한다');
+  assert.match(s, /복원하는 중…/, '복원 중 버튼 표시가 없다');
+});
+
+test('남은 쓰기 동작도 실패를 알리고 세션 만료를 처리한다 (DS 5-10)', () => {
+  const s = read('src/app/admin/page.tsx');
+  // DS 5-4 가 삭제·수정만 손봤던 탓에 스위치·상태 변경·자료 저장에 예외 처리가 빠져 있었다.
+  for (const fn of ['toggleCustomRule', 'patchTicket', 'submitKB', 'restoreBackup']) {
+    const body = s.slice(s.indexOf(`const ${fn} = `));
+    const seg = body.slice(0, body.indexOf('\n  };'));
+    assert.ok(/catch\s*\{/.test(seg), `${fn} 에 네트워크 실패 처리가 없다`);
+    assert.ok(seg.includes('on401(res)'), `${fn} 에 세션 만료 처리가 없다`);
+  }
+  // 관리 API 쓰기 요청은 예외 없이 401 을 확인한다.
+  const writes = s.match(/method: '(POST|PATCH|DELETE)'/g) || [];
+  const guards = s.match(/on401\(res\)/g) || [];
+  assert.ok(guards.length >= writes.length, `401 확인이 빠진 쓰기 경로가 있다(쓰기 ${writes.length} · 확인 ${guards.length})`);
+});

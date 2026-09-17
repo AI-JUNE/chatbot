@@ -1129,6 +1129,21 @@ const S = {
   tag: { fontSize: 12, color: 'var(--mut)' } as const,
 };
 
+/**
+ * 진행 중인 버튼의 공통 속성(내려받기·복원).
+ *
+ * `disabled` 를 쓰지 않는다: 키보드로 누른 버튼이 그 순간 비활성이 되면 **초점이 본문 밖으로 떨어져**
+ * 사용자가 화면 맨 위부터 Tab 을 다시 눌러야 한다. 초점은 그대로 두고 `aria-disabled` 로 알린 뒤,
+ * 실제 중복 실행은 각 처리 함수가 앞단에서 막는다.
+ */
+function busyBtn(busy: boolean, locked: boolean) {
+  return {
+    style: { ...S.btnGhost, ...(locked ? { opacity: 0.55, cursor: busy ? 'progress' : 'not-allowed' } : {}) },
+    'aria-busy': busy || undefined,
+    'aria-disabled': locked || undefined,
+  } as const;
+}
+
 /** 쉼표·줄바꿈으로 나눈 표현 목록(빈 항목·중복 제거). */
 function splitKeywords(raw: string): string[] {
   const out: string[] = [];
@@ -1654,11 +1669,10 @@ export default function AdminPage() {
   }, []);
 
   const downloadSettlementCsv = () => {
-    const t = tokenRef.current;
     const qs = new URLSearchParams({ month: settleMonth, format: 'csv' });
     if (settlePartner) qs.set('partnerId', settlePartner);
-    if (t) qs.set('token', t);
-    window.open(`/api/admin/settlement?${qs.toString()}`, '_blank');
+    // downloadFile 은 아래에서 선언되지만, 이 함수는 사용자가 누를 때 실행되므로 그때는 이미 초기화돼 있다.
+    downloadFile(`/api/admin/settlement?${qs.toString()}`, '정산 리포트', `settlement-${settleMonth}.csv`);
   };
 
   // ---- Audit ----
@@ -1787,6 +1801,11 @@ export default function AdminPage() {
     window.setTimeout(() => setNotice(''), 2500);
   };
 
+  // 내려받는 중인 항목 이름(빈 문자열이면 진행 중 아님) — 버튼에 진행 표시를 달고 중복 클릭을 막는다.
+  const [dlBusy, setDlBusy] = useState('');
+  // 백업 복원 진행 중 — 덮어쓰기는 시간이 걸릴 수 있어 멈춘 것처럼 보이지 않게 한다.
+  const [restoreBusy, setRestoreBusy] = useState(false);
+
   // ---- 확인 대화상자 ----
   // 되돌릴 수 없는 동작은 전부 이 함수를 거친다. `await askConfirm(...)` 가 false 면 아무것도 하지 않는다.
   const [confirmReq, setConfirmReq] = useState<ConfirmReq | null>(null);
@@ -1818,19 +1837,22 @@ export default function AdminPage() {
       keywords: form.keywords,
       answer: form.answer,
     };
-    let data: { ok?: boolean; error?: string };
+    // 세션이 만료된 채로 저장하면 401 이 온다 — 다른 쓰기 경로와 같이 잠금 화면으로 넘긴다
+    // (종전에는 「저장하지 못했습니다: 관리자 토큰이 필요합니다」 라는 내부 문구만 토스트로 떴다).
+    let data: { ok?: boolean; error?: string } | null;
     try {
       const res = await fetch('/api/admin/kb', {
         method: 'POST',
         headers: authHeaders(true),
         body: JSON.stringify(body),
       });
-      data = await res.json();
+      data = on401(res) ? null : await res.json();
     } catch {
       data = { ok: false, error: '연결이 원활하지 않습니다. 잠시 후 다시 시도해 주세요.' };
     } finally {
       setKbBusy(false);
     }
+    if (!data) return;
     if (!data.ok) {
       failed('저장하지 못했습니다', data.error);
       return;
@@ -1959,15 +1981,26 @@ export default function AdminPage() {
     }
   };
 
+  // 규칙 켜기/끄기 스위치. DS 5-4 가 삭제·수정만 손봤던 탓에 여기만 예외 처리가 빠져 있었다 —
+  // 오프라인·서버 오류에서 예외가 그대로 사라져, 스위치는 되돌아가는데 **왜 안 됐는지 아무 말이 없었다**(§3).
   const toggleCustomRule = async (r: CustomRuleView) => {
-    const res = await fetch('/api/admin/rules', {
-      method: 'POST',
-      headers: authHeaders(true),
-      body: JSON.stringify({ intent: r.intent, enabled: !r.enabled }),
-    });
-    const data = await res.json();
-    if (data.ok) await loadRules();
-    else failed('변경하지 못했습니다', data.message || data.error);
+    try {
+      const res = await fetch('/api/admin/rules', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify({ intent: r.intent, enabled: !r.enabled }),
+      });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (data.ok) {
+        await loadRules();
+        flash(r.enabled ? `「${r.label}」 규칙을 껐습니다.` : `「${r.label}」 규칙을 켰습니다.`);
+      } else {
+        failed('변경하지 못했습니다', data.message || data.error);
+      }
+    } catch {
+      failed('변경하지 못했습니다', '연결을 확인한 뒤 다시 시도해 주세요.');
+    }
   };
 
   const removeCustomRule = async (intent: string) => {
@@ -1998,39 +2031,102 @@ export default function AdminPage() {
     }
   };
 
-  const downloadLogsCsv = () => {
-    const t = tokenRef.current;
-    window.open('/api/admin/logs/export' + (t ? `?token=${encodeURIComponent(t)}` : ''), '_blank');
+  // ---- 내려받기 ----
+  /**
+   * 파일 내려받기 공통 경로.
+   *
+   * 종전에는 `window.open('...?token=…')` 으로 열었다. 두 가지가 잘못이다.
+   *  1) **관리 토큰이 주소창·브라우저 방문 기록·서버 접근 로그에 그대로 남는다.** 콘솔을 잠깐 빌려준
+   *     사람도 기록에서 토큰을 그대로 읽을 수 있다(QUALITY_BAR §3 — 자격 증명 노출).
+   *  2) 실패하면 **빈 탭이나 JSON 오류 본문**이 뜬다. 사용자는 무엇이 잘못됐는지 알 수 없고,
+   *     콘솔에는 아무 안내도 남지 않는다(§1 — 오류 시 사용자가 이해할 수 있는 안내).
+   *
+   * 헤더로 인증해 받은 뒤 Blob 으로 저장한다 — 주소에는 아무것도 싣지 않는다.
+   * 서버의 `?token=` 지원은 그대로 둔다(외부 스크립트 호환 — API 계약 무변경).
+   */
+  const downloadFile = async (url: string, what: string, fallbackName: string) => {
+    if (dlBusy) return;
+    setDlBusy(what);
+    try {
+      const res = await fetch(url, { headers: authHeaders(), cache: 'no-store' });
+      if (on401(res)) return;
+      if (!res.ok) {
+        // 오류 본문은 JSON 이 아닐 수도 있다(프록시 HTML 등) — 파싱 실패로 안내까지 잃지 않게 감싼다.
+        let detail = '';
+        try {
+          const d = await res.json();
+          detail = typeof d?.message === 'string' ? d.message : typeof d?.error === 'string' ? d.error : '';
+        } catch { /* 본문을 읽지 못해도 아래에서 일반 안내를 보여준다 */ }
+        failed(`${what}을(를) 내려받지 못했습니다`, detail);
+        return;
+      }
+      const blob = await res.blob();
+      // 서버가 지정한 파일명을 그대로 쓴다(없으면 대체 이름).
+      const cd = res.headers.get('content-disposition') || '';
+      const m = /filename="?([^";]+)"?/.exec(cd);
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = m?.[1] || fallbackName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(href);
+      flash(`${what}을(를) 내려받았습니다.`);
+    } catch {
+      failed(`${what}을(를) 내려받지 못했습니다`, '연결을 확인한 뒤 다시 시도해 주세요.');
+    } finally {
+      setDlBusy('');
+    }
   };
+
+  const downloadLogsCsv = () => downloadFile('/api/admin/logs/export', '대화 기록', 'chat-logs.csv');
 
   // ---- 관리 콘텐츠 백업·복원(KB·룰 — 개인정보 없음) ----
   const restoreInputRef = useRef<HTMLInputElement | null>(null);
 
-  const downloadBackup = () => {
-    const t = tokenRef.current;
-    window.open('/api/admin/backup' + (t ? `?token=${encodeURIComponent(t)}` : ''), '_blank');
-  };
+  const downloadBackup = () => downloadFile('/api/admin/backup', '백업', 'chatbot-admin-backup.json');
 
+  /**
+   * 백업 복원 — 지금 등록된 안내 자료·규칙을 파일 내용으로 **덮어쓴다**. 되돌릴 수 없다.
+   * 종전에는 파일을 고르는 즉시 덮어썼고(§3 「되돌릴 수 없는 동작에 확인 절차 없음」),
+   * 네트워크가 끊기면 예외가 조용히 사라져 **복원된 줄 알고 떠나는** 경로가 있었다(§3).
+   */
   const restoreBackup = async (file: File) => {
     let parsed: unknown;
     try {
       parsed = JSON.parse(await file.text());
     } catch {
-      flash('복원 실패: JSON 파일이 아닙니다.');
+      failed('복원하지 못했습니다', '선택한 파일이 백업 파일(JSON) 형식이 아닙니다.');
       return;
     }
-    const res = await fetch('/api/admin/backup', {
-      method: 'POST',
-      headers: authHeaders(true),
-      body: JSON.stringify(parsed),
+    const ok = await askConfirm({
+      title: '이 파일로 덮어쓸까요?',
+      target: file.name,
+      body: '지금 등록된 안내 자료와 규칙이 파일의 내용으로 바뀝니다. 되돌릴 수 없으니, 먼저 「백업 내려받기」로 현재 상태를 받아 두세요.',
+      confirmLabel: '덮어쓰기',
     });
-    const data = await res.json();
-    if (!data.ok) {
-      failed('복원하지 못했습니다', data.message || data.error);
-      return;
+    if (!ok) return;
+    setRestoreBusy(true);
+    try {
+      const res = await fetch('/api/admin/backup', {
+        method: 'POST',
+        headers: authHeaders(true),
+        body: JSON.stringify(parsed),
+      });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (!data.ok) {
+        failed('복원하지 못했습니다', data.message || data.error);
+        return;
+      }
+      await Promise.all([loadKB(), loadRules()]);
+      flash(`복원 완료: 안내 자료 ${data.kb}건 · 규칙 ${data.customRules}건 · 기본 규칙 답변 수정 ${data.overrides}건`);
+    } catch {
+      failed('복원하지 못했습니다', '연결을 확인한 뒤 다시 시도해 주세요. 기존 자료는 그대로입니다.');
+    } finally {
+      setRestoreBusy(false);
     }
-    await Promise.all([loadKB(), loadRules()]);
-    flash(`복원 완료: 안내 자료 ${data.kb}건 · 규칙 ${data.customRules}건 · 기본 규칙 답변 수정 ${data.overrides}건`);
   };
 
   const patchTicket = async (id: string, status: TicketView['status']) => {
@@ -2041,6 +2137,7 @@ export default function AdminPage() {
         headers: authHeaders(true),
         body: JSON.stringify({ id, status }),
       });
+      if (on401(res)) return;
       const data = await res.json();
       if (data.ok) {
         await loadEsc();
@@ -2351,10 +2448,20 @@ export default function AdminPage() {
         <>
           <section style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
             <h2 style={{ ...S.h2, marginRight: 'auto' }}>오늘의 응대 현황</h2>
-            <button style={S.btnGhost} onClick={loadEsc}>새로고침</button>
-            <button style={S.btnGhost} onClick={downloadLogsCsv}>대화 기록 내려받기</button>
-            <button style={S.btnGhost} onClick={downloadBackup}>백업 내려받기</button>
-            <button style={S.btnGhost} onClick={() => restoreInputRef.current?.click()}>백업 복원</button>
+            <button type="button" style={S.btnGhost} onClick={loadEsc}>새로고침</button>
+            <button type="button" {...busyBtn(dlBusy === '대화 기록', dlBusy !== '')} onClick={downloadLogsCsv}>
+              {dlBusy === '대화 기록' ? '내려받는 중…' : '대화 기록 내려받기'}
+            </button>
+            <button type="button" {...busyBtn(dlBusy === '백업', dlBusy !== '')} onClick={downloadBackup}>
+              {dlBusy === '백업' ? '내려받는 중…' : '백업 내려받기'}
+            </button>
+            <button
+              type="button"
+              {...busyBtn(restoreBusy, restoreBusy)}
+              onClick={() => { if (!restoreBusy) restoreInputRef.current?.click(); }}
+            >
+              {restoreBusy ? '복원하는 중…' : '백업 복원'}
+            </button>
             <input
               ref={restoreInputRef}
               type="file"
@@ -3481,7 +3588,16 @@ export default function AdminPage() {
                   {settleBusy ? '계산하는 중…' : r ? `${r.periodStart} ~ ${r.periodEnd}` : ''}
                 </span>
                 <button type="button" style={S.btnGhost} onClick={() => loadSettlement(settleMonth, settlePartner)} disabled={settleBusy} aria-busy={settleBusy || undefined}>다시 계산</button>
-                <button type="button" style={S.btn} onClick={downloadSettlementCsv} disabled={!r || r.rows.length === 0}>CSV 내려받기</button>
+                <button
+                  type="button"
+                  style={{ ...S.btn, ...(dlBusy ? { opacity: 0.55, cursor: 'progress' } : {}) }}
+                  onClick={downloadSettlementCsv}
+                  disabled={!r || r.rows.length === 0}
+                  aria-disabled={dlBusy !== '' || undefined}
+                  aria-busy={dlBusy === '정산 리포트' || undefined}
+                >
+                  {dlBusy === '정산 리포트' ? '내려받는 중…' : 'CSV 내려받기'}
+                </button>
               </div>
               <p style={{ ...S.tag, padding: '10px 16px' }}>
                 월 이용료(계약서 입력값) × 수수료율로 산출 근거를 만듭니다. 값이 없는 항목은 0으로 채우지 않고 합계에서 빼며 사유를 표시합니다. 실제 청구·지급은 계약서가 확정된 뒤에 진행합니다.
@@ -3749,12 +3865,13 @@ export default function AdminPage() {
                 </select>
                 <span style={S.tag}>{shown.length}/{auditEvents.length}건</span>
                 <button type="button" style={S.btnGhost} onClick={loadAudit}>새로고침</button>
-                <a
-                  style={{ ...S.btnGhost, textDecoration: 'none' }}
-                  href={`/api/admin/audit?format=csv${adminToken ? `&token=${encodeURIComponent(adminToken)}` : ''}`}
+                <button
+                  type="button"
+                  {...busyBtn(dlBusy === '변경 이력', dlBusy !== '')}
+                  onClick={() => downloadFile('/api/admin/audit?format=csv', '변경 이력', 'chatbot-audit.csv')}
                 >
-                  CSV 내려받기
-                </a>
+                  {dlBusy === '변경 이력' ? '내려받는 중…' : 'CSV 내려받기'}
+                </button>
               </div>
               {auditEvents.length === 0 && phase.audit !== 'done' ? (
                 <LoadState phase={phase.audit} busy="변경 이력을 불러오는 중입니다" fail="변경 이력을 불러오지 못했습니다" onRetry={loadAudit} rows={4} />

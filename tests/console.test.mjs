@@ -485,6 +485,7 @@ test('정산 리포트가 조건 툴바·요약 KPI·합계/근거 표·빈 상�
   assert.match(t, /role="status" aria-live="polite"/, '계산 중 안내');
   assert.match(t, /aria-busy=\{settleBusy \|\| undefined\}/, '계산 중 버튼 잠금');
   assert.match(t, /disabled=\{!r \|\| r\.rows\.length === 0\}/, '내려받을 것이 없으면 CSV 버튼 잠금');
+  assert.match(t, /aria-disabled=\{dlBusy !== '' \|\| undefined\}/, '내려받는 중에는 중복 실행을 막는다');
   // 확정본이 아님은 계속 밝히되, 내부 개발 표기([승인 필요])를 화면에 쓰지 않는다(DS 5-3).
   assert.match(t, /실제 청구·지급은 계약서가 확정된 뒤에 진행합니다/, '확정 아님을 밝힌다');
   assert.equal(/#c0392b|#b26a00/.test(t), false, '색은 토큰만');
