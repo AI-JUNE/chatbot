@@ -1173,6 +1173,15 @@ const INSTALL_OPTIONS: [string, string][] = [
 
 export default function AdminPage() {
   const [tab, setTab] = useState<TabKey>('dash');
+  // 탭을 바꾸면 화면 전체가 바뀌는데 초점은 사이드바 버튼에 남아 있었다 — 키보드 사용자는
+  // 새 화면에 닿으려고 다시 Tab 을 눌러야 했고, 스크린리더는 바뀐 사실조차 알리지 않았다.
+  // 본문으로 초점을 옮기면 aria-label(현재 화면 이름)이 읽힌다. 첫 렌더에서는 옮기지 않는다.
+  const mainRef = useRef<HTMLElement | null>(null);
+  const tabMounted = useRef(false);
+  useEffect(() => {
+    if (!tabMounted.current) { tabMounted.current = true; return; }
+    mainRef.current?.focus();
+  }, [tab]);
   // 설치 코드에 넣을 배포 주소 — 브라우저가 보고 있는 주소를 그대로 쓴다(하드코딩 금지).
   const [origin, setOrigin] = useState('');
   const [copied, setCopied] = useState('');
@@ -2256,6 +2265,9 @@ export default function AdminPage() {
 
   return (
     <div className="ac-shell">
+      {/* 키보드 사용자는 메뉴 10개·전역 검색·인증 버튼을 지나야 본문에 닿는다 — 건너뛰기 링크(DS 5-6). */}
+      <a href="#ac-main" className="skip-link">본문 바로가기</a>
+
       {/* ── 좌측 내비게이션(좁은 화면에서는 상단 가로 스크롤 바) ── */}
       <aside className="ac-side">
         <div className="ac-brand">
@@ -2334,7 +2346,7 @@ export default function AdminPage() {
           </div>
         )}
 
-        <main className="ac-body">
+        <main id="ac-main" ref={mainRef} tabIndex={-1} aria-label={currentLabel} className="ac-body">
       {tab === 'dash' && (
         <>
           <section style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>

@@ -23,6 +23,17 @@ input,textarea{font-family:inherit}
 /* 키보드 사용자에게 초점 위치를 항상 보이게 한다(마우스 클릭에는 표시하지 않는다). */
 :focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:6px}
 
+/* 본문 바로가기 — 키보드·스크린리더 사용자가 상단바(랜딩)·사이드바 10개 메뉴(콘솔)를
+ * Tab 으로 통과하지 않고 본문으로 건너뛴다. 평소에는 보이지 않다가 초점을 받으면 나타난다.
+ * display:none 이 아니라 화면 밖 배치 — 숨김 요소는 초점을 받지 못한다. */
+.skip-link{position:absolute;left:12px;top:-60px;z-index:100;background:var(--brand);color:#fff;
+  font-size:13.5px;font-weight:700;border-radius:10px;padding:10px 16px;
+  box-shadow:var(--shadow-pop);transition:top .12s ease-out}
+.skip-link:focus{top:12px}
+/* 건너뛴 본문은 초점을 받을 수 있어야 하지만(tabindex="-1") 윤곽선까지 그릴 필요는 없다. */
+main:focus{outline:none}
+@media (prefers-reduced-motion: reduce){.skip-link{transition:none}}
+
 /* ── 위젯 모션 ── */
 @keyframes gw-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 @keyframes gw-blink{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}

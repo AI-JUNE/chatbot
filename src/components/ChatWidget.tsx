@@ -28,6 +28,11 @@ interface Msg {
   text: string;
   /** 표시 시각(ms). 서버·클라이언트 시간대 차이로 인한 hydration 불일치를 피해 마운트 후에만 렌더한다. */
   at: number;
+  /**
+   * 전송이 실패해 만들어진 안내 말풍선. 값은 **다시 보낼 사용자 문장**이다.
+   * 정상 답변과 같은 모양으로 그리면 사용자는 챗봇이 그렇게 "답했다"고 읽는다(QUALITY_BAR §3).
+   */
+  failed?: string;
   escalate?: boolean;
   suggestions?: Suggestion[];
   ticketId?: string;
@@ -109,6 +114,14 @@ export const EMBED_SIZE = { open: { w: 400, h: 660 }, closed: { w: 104, h: 104 }
 // 이 폭 이하에서는 전체화면 시트로 전환한다(모바일 375px 기준).
 const MOBILE_MAX = 480;
 
+/**
+ * 한 번에 보낼 수 있는 글자 수 — 서버(`api/chat` MAX_MESSAGE_LEN)와 같은 값.
+ * 보내고 나서 413 으로 거절하면 사용자는 이유도 모르고 쓴 글도 잃는다 → 보내기 전에 알린다.
+ */
+export const MAX_INPUT_LEN = 2000;
+/** 남은 글자 수를 보여주기 시작하는 지점(평소에는 숨겨 입력창을 어지럽히지 않는다). */
+const COUNT_FROM = MAX_INPUT_LEN - 200;
+
 // 보조 동작 칩(빠른 답장·접수 진행 이전/건너뛰기/취소·평가) 공통 모양.
 const chipStyle: CSSProperties = {
   fontSize: 12, fontWeight: 600, color: 'var(--brand-600)', background: '#fff',
@@ -159,6 +172,12 @@ const W_ICONS = {
   clock: 'M8 3.2a4.8 4.8 0 1 0 0 9.6 4.8 4.8 0 0 0 0-9.6M8 5.5v2.8l1.9 1.1',
   check: 'M3.4 8.3l2.9 2.9 6.3-6.6',
   external: 'M5.4 10.6 11 5M6.5 5H11v4.5',
+  // 전송 실패 말풍선 — 정상 답변과 한눈에 구분되게 한다.
+  alert: 'M8 2.6 1.9 13.2h12.2zM8 6.6v3.2M8 11.6v.4',
+  // 다시 보내기 — 원형 화살표.
+  retry: 'M13 8a5 5 0 1 1-1.6-3.7M13.2 2.6v2.9h-2.9',
+  // 연결 끊김 — 끊어진 신호.
+  offline: 'M2 2l12 12M5.6 10.4a3.3 3.3 0 0 1 4.6 0M3.3 7.9a6.6 6.6 0 0 1 2.6-1.6M8 5.2a9.2 9.2 0 0 1 6.5 2.7M8 13.1v.3',
   // 엄지 — 아래 평가는 같은 도형을 180° 돌려 쓴다(모양이 어긋나지 않게).
   thumb: 'M5.5 13.8V7.2l2.9-4.7a1.6 1.6 0 0 1 1.5 1.6v2.2h3a1.2 1.2 0 0 1 1.2 1.5l-.9 4.2a1.3 1.3 0 0 1-1.3 1.1zM5.5 7.4H2.8v6.4h2.7',
 } as const;
@@ -191,6 +210,8 @@ export default function ChatWidget({
   const [busy, setBusy] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [mobile, setMobile] = useState(false);
+  // 연결이 끊겼는지 — 서버 렌더에서는 알 수 없으므로 false 로 시작한다(콘솔 DS 4-3 과 같은 방식).
+  const [offline, setOffline] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([{ key: nextKey(), role: 'bot', text: greeting, at: 0 }]);
   // 답변 평가 상태 — 메시지 key → 보낸 평가('up'|'down') 또는 'error'(재시도 안내).
   const [rated, setRated] = useState<Record<number, 'up' | 'down' | 'error'>>({});
@@ -231,6 +252,19 @@ export default function ChatWidget({
   }, [embedded]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, busy, open]);
+
+  // 연결 상태 — 끊긴 채로 보내면 요청은 무조건 실패한다. 보내기 전에 알린다.
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') return;
+    const sync = () => setOffline(!navigator.onLine);
+    sync();
+    window.addEventListener('online', sync);
+    window.addEventListener('offline', sync);
+    return () => {
+      window.removeEventListener('online', sync);
+      window.removeEventListener('offline', sync);
+    };
+  }, []);
 
   // 열리면 입력창으로 초점을 옮긴다(키보드 사용자가 바로 입력할 수 있게).
   // 단, 처음부터 펼쳐진 채로 그려진 경우는 건너뛴다 — 사용자가 열지 않았는데 초점을 빼앗지 않는다
@@ -298,13 +332,26 @@ export default function ChatWidget({
     setMsgs((m) => [...m, { key: nextKey(), role: 'bot', at: Date.now(), ...patch }]);
   }
 
-  // 메시지 전송(입력창·빠른 답장 칩 공용)
-  async function sendText(raw: string) {
+  /**
+   * 메시지 전송(입력창·빠른 답장 칩·「다시 보내기」 공용).
+   * @param retryOf 다시 보내기인 경우 지울 안내 말풍선의 key — 사용자 말풍선은 이미 위에 있으므로 다시 그리지 않는다.
+   */
+  async function sendText(raw: string, retryOf?: number) {
     const text = raw.trim();
     if (!text || busy) return;
-    setInput('');
+    if (text.length > MAX_INPUT_LEN) return;
+    if (retryOf !== undefined) {
+      setMsgs((m) => m.filter((x) => x.key !== retryOf));
+    } else {
+      setInput('');
+      setMsgs((m) => [...m, { key: nextKey(), role: 'user', text, at: Date.now() }]);
+    }
     lastUserRef.current = text;
-    setMsgs((m) => [...m, { key: nextKey(), role: 'user', text, at: Date.now() }]);
+    // 연결이 끊긴 상태: 요청을 보내 봐야 실패한다 — 원인을 밝히고 바로 다시 보낼 수단을 준다.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      pushBot({ text: '인터넷 연결이 끊겨 메시지를 보내지 못했습니다. 연결이 돌아오면 다시 보내 주세요.', failed: text });
+      return;
+    }
     setBusy(true);
     try {
       const r = await fetch('/api/chat', {
@@ -314,7 +361,7 @@ export default function ChatWidget({
       });
       const data = await r.json();
       if (!r.ok || data?.ok === false || typeof data?.reply !== 'string') {
-        pushBot({ text: errorText(data, r) });
+        pushBot({ text: errorText(data, r), failed: text });
         return;
       }
       pushBot({
@@ -328,13 +375,14 @@ export default function ChatWidget({
         cta: isCTA(data.cta) ? data.cta : undefined,
       });
     } catch {
-      pushBot({ text: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' });
+      pushBot({ text: '연결이 원활하지 않아 메시지를 보내지 못했습니다. 잠시 후 다시 보내 주세요.', failed: text });
     } finally {
       setBusy(false);
     }
   }
 
-  function send() { sendText(input); }
+  const tooLong = input.length > MAX_INPUT_LEN;
+  function send() { if (!tooLong) sendText(input); }
 
   // 답변 평가(👍/👎) — 평가값과 근거 라벨만 보낸다(대화 본문은 보내지 않는다).
   async function rate(m: Msg, verdict: 'up' | 'down') {
@@ -463,6 +511,33 @@ export default function ChatWidget({
           >
             {msgs.map((m) => {
               const mine = m.role === 'user';
+              // 전송 실패 안내는 답변이 아니다 — 아바타 없이 경고 톤 카드로 그리고 곧바로 다시 보낼 수 있게 한다.
+              if (m.failed !== undefined) {
+                const failedText = m.failed;
+                return (
+                  <div
+                    key={m.key}
+                    className="gw-rise"
+                    role="alert"
+                    style={{
+                      background: 'var(--danger-50)', border: '1px solid var(--danger)', borderRadius: 12,
+                      padding: '11px 13px', display: 'flex', gap: 9, alignItems: 'flex-start',
+                    }}
+                  >
+                    <span style={{ color: 'var(--danger)', display: 'flex', marginTop: 1 }}><WIcon name="alert" size={15} /></span>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--ink)' }}>{m.text}</div>
+                      <button
+                        onClick={() => sendText(failedText, m.key)}
+                        disabled={busy}
+                        style={{ ...chipStyle, marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--danger)', borderColor: 'var(--danger)', opacity: busy ? .5 : 1 }}
+                      >
+                        <WIcon name="retry" size={13} /> 다시 보내기
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
               return (
                 <div key={m.key} className="gw-rise" style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexDirection: mine ? 'row-reverse' : 'row' }}>
                   {!mine && (
@@ -734,8 +809,24 @@ export default function ChatWidget({
             </div>
           )}
 
+          {/* ── 연결 끊김 안내 — 보내기 전에 알린다(보내고 실패하면 쓴 글을 잃는다) ── */}
+          {offline && (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                display: 'flex', gap: 7, alignItems: 'center', background: 'var(--warn-50)',
+                borderTop: '1px solid var(--line)', color: 'var(--warn)', padding: '9px 14px',
+                fontSize: 11.5, fontWeight: 600, lineHeight: 1.45,
+              }}
+            >
+              <WIcon name="offline" size={14} />
+              <span style={{ color: 'var(--ink)', fontWeight: 500 }}>인터넷 연결이 끊겼습니다. 연결이 돌아오면 다시 보내 주세요.</span>
+            </div>
+          )}
+
           {/* ── 입력 ── */}
-          <div style={{ display: 'flex', gap: 8, padding: '12px 14px 8px', background: 'var(--surface)', borderTop: showStarters ? 'none' : '1px solid var(--line)' }}>
+          <div style={{ display: 'flex', gap: 8, padding: '12px 14px 8px', background: 'var(--surface)', borderTop: showStarters || offline ? 'none' : '1px solid var(--line)' }}>
             <input
               ref={inputRef}
               value={input}
@@ -743,17 +834,31 @@ export default function ChatWidget({
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) send(); }}
               placeholder="메시지를 입력하세요"
               aria-label="메시지 입력"
-              style={{ flex: 1, minWidth: 0, border: '1px solid var(--line-2)', borderRadius: 999, padding: '11px 15px', fontSize: 13.5, color: 'var(--ink)', background: 'var(--bg)', outline: 'none' }}
+              aria-invalid={tooLong || undefined}
+              aria-describedby={input.length > COUNT_FROM ? 'gw-count' : undefined}
+              style={{ flex: 1, minWidth: 0, border: `1px solid ${tooLong ? 'var(--danger)' : 'var(--line-2)'}`, borderRadius: 999, padding: '11px 15px', fontSize: 13.5, color: 'var(--ink)', background: 'var(--bg)', outline: 'none' }}
             />
             <button
               onClick={send}
-              disabled={busy || !input.trim()}
+              disabled={busy || tooLong || !input.trim()}
               aria-label="메시지 전송"
-              style={{ width: 42, height: 42, flexShrink: 0, borderRadius: '50%', background: 'var(--brand)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: busy || !input.trim() ? .5 : 1 }}
+              style={{ width: 42, height: 42, flexShrink: 0, borderRadius: '50%', background: 'var(--brand)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: busy || tooLong || !input.trim() ? .5 : 1 }}
             >
               <WIcon name="send" size={18} />
             </button>
           </div>
+          {/* 글자 수 — 한계에 가까워질 때만 나타난다. 넘으면 이유를 밝히고 전송을 막는다(서버 413 대신). */}
+          {input.length > COUNT_FROM && (
+            <div
+              id="gw-count"
+              role={tooLong ? 'alert' : undefined}
+              style={{ padding: '0 16px 2px', background: 'var(--surface)', fontSize: 11, fontWeight: 600, textAlign: 'right', color: tooLong ? 'var(--danger)' : 'var(--mut)' }}
+            >
+              {tooLong
+                ? `한 번에 ${MAX_INPUT_LEN}자까지 보낼 수 있습니다 (현재 ${input.length}자)`
+                : `${input.length} / ${MAX_INPUT_LEN}자`}
+            </div>
+          )}
           <div style={{ padding: '0 14px 10px', background: 'var(--surface)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--mut)', textAlign: 'center' }}>
             {tenant?.aiNotice || 'AI 자동응답 · 정확한 확인이 필요하면 상담원을 연결해 주세요'}
           </div>

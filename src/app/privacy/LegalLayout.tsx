@@ -42,6 +42,9 @@ export default function LegalLayout({
   const { nodes, toc } = indexSections(children);
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+      {/* 목차 링크가 여러 개라 키보드 사용자는 본문까지 Tab 을 여러 번 눌러야 한다. */}
+      <a href="#main" className="skip-link">본문 바로가기</a>
+
       {/* 상단바 — 랜딩과 같은 규격 */}
       <header className="lg-top">
         <div className="lg-wrap lg-topin">
@@ -53,7 +56,7 @@ export default function LegalLayout({
         </div>
       </header>
 
-      <main className="lg-wrap lg-main">
+      <main id="main" tabIndex={-1} className="lg-wrap lg-main">
         {toc.length > 0 && (
           <nav aria-label="목차" className="lg-toc">
             <div className="lg-toc-title">목차</div>
@@ -76,9 +79,10 @@ export default function LegalLayout({
           {draft && (
             <p className="legal-notice">
               <AlertIcon />
+              {/* 저장소 안의 개발 표기(「[승인 필요]」)를 공개 페이지에 그대로 싣지 않는다 — 뜻은 문장으로(DS 5-7). */}
               <span>
-                [승인 필요] 본 문서는 상용화 준비용 <strong>검토 초안</strong>입니다. 정식 게시 전 법무 검토가
-                필요하며, 본문에 <span className="todo">[미확정]</span>으로 표시된 항목은 실제 운영정책·사업자등록
+                본 문서는 상용화 준비용 <strong>검토 초안</strong>입니다. 정식 게시 전 법무 검토를 거치며,
+                본문에 <span className="todo">[미확정]</span>으로 표시된 항목은 실제 운영정책·사업자등록
                 정보에 맞춰 확정한 뒤 게시합니다.
               </span>
             </p>

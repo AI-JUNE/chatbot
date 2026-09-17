@@ -150,7 +150,10 @@ const wrap = { maxWidth: 1080, margin: '0 auto', padding: '0 22px' } as const;
 
 export default function Home() {
   return (
-    <main style={{ minHeight: '100vh' }}>
+    <div style={{ minHeight: '100vh' }}>
+      {/* 키보드 사용자가 상단바(로고·메뉴 6개·CTA)를 매번 Tab 으로 통과하지 않게 한다. */}
+      <a href="#main" className="skip-link">본문 바로가기</a>
+
       {/* ── 상단바 ── */}
       <header style={{ position: 'sticky', top: 0, zIndex: 20, background: 'rgba(255,255,255,.86)', backdropFilter: 'blur(10px)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ ...wrap, height: 62, display: 'flex', alignItems: 'center', gap: 18 }}>
@@ -169,6 +172,9 @@ export default function Home() {
         </div>
       </header>
 
+      {/* 본문 랜드마크 — 상단바·푸터·위젯은 밖에 둔다(main 이 페이지 전체를 삼키면
+        * 스크린리더의 랜드마크 이동이 아무 데도 데려다주지 못한다). */}
+      <main id="main" tabIndex={-1}>
       {/* ── 히어로 ── */}
       <section style={{ background: 'linear-gradient(180deg,var(--brand-50) 0%,var(--bg) 62%)', padding: '64px 0 56px' }}>
         <div className="lp-hero" style={wrap}>
@@ -352,15 +358,16 @@ export default function Home() {
           <h2 style={{ fontSize: 'clamp(22px,3vw,30px)', fontWeight: 800, letterSpacing: '-.025em', margin: 0 }}>
             가지고 계신 FAQ로 먼저 확인해 보세요
           </h2>
-          <p style={{ fontSize: 15, color: '#CBD5E1', lineHeight: 1.7, margin: '14px auto 24px', maxWidth: 520 }}>
+          <p style={{ fontSize: 15, color: 'var(--line-2)', lineHeight: 1.7, margin: '14px auto 24px', maxWidth: 520 }}>
             운영 중인 안내 자료를 그대로 등록해 실제 문의에 어떻게 답하는지 보여 드립니다. 파일럿 기간의 집계값으로 도입을 판단하실 수 있습니다.
           </p>
           <a href="mailto:contact@example.com?subject=GOWON%20Chat%20%EB%8F%84%EC%9E%85%20%EB%AC%B8%EC%9D%98" style={{ display: 'inline-block', fontSize: 15, fontWeight: 700, color: 'var(--ink)', background: '#fff', borderRadius: 12, padding: '14px 26px' }}>
             도입 문의 보내기
           </a>
-          <p style={{ fontSize: 12, color: '#94A3B8', margin: '16px 0 0' }}>데모 환경입니다 — 문의 주소는 도입 시 고객사 담당 창구로 바뀝니다.</p>
+          <p style={{ fontSize: 12, color: 'var(--mut)', margin: '16px 0 0' }}>데모 환경입니다 — 문의 주소는 도입 시 고객사 담당 창구로 바뀝니다.</p>
         </div>
       </section>
+      </main>
 
       <footer style={{ borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
         <div style={{ ...wrap, padding: '26px 22px 34px', textAlign: 'center', fontSize: 12.5, color: 'var(--mut)' }}>
@@ -372,6 +379,6 @@ export default function Home() {
 
       {/* 랜딩에서는 런처만 띄운다 — 위젯이 저절로 펼쳐지면 375px에서 제품 소개를 통째로 덮는다(DS 5-1). */}
       <ChatWidget defaultOpen={false} />
-    </main>
+    </div>
   );
 }
