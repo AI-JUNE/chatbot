@@ -637,7 +637,7 @@ test('위젯 상담원 전환이 버튼→연락처 카드→접수 완료 흐�
   assert.match(s, /stage: 'form' \| 'sending' \| 'done' \| 'error'/, '4개 상태를 모두 다뤄야 한다');
   assert.match(s, /aria-label="상담원 연결 접수"/, '카드에 이름이 있어야 한다(스크린리더)');
   assert.match(s, /htmlFor="gw-handoff-contact"/, '연락처 입력에 라벨이 있어야 한다');
-  assert.match(s, /aria-describedby="gw-handoff-hint"/, '이용 목적 안내가 입력과 연결돼야 한다');
+  assert.match(s, /'gw-handoff-err gw-handoff-hint' : 'gw-handoff-hint'/, '이용 목적 안내가 입력과 연결돼야 한다');
   assert.match(s, /role="alert"/, '실패는 즉시 안내돼야 한다');
   assert.match(s, /다시 시도/, '실패 시 재시도 경로가 있어야 한다');
   assert.match(s, /접수번호/, '완료 상태에 접수번호가 보여야 한다');
@@ -649,8 +649,9 @@ test('위젯 상담원 전환이 버튼→연락처 카드→접수 완료 흐�
 test('상담원 전환은 접수 중 중복 전송을 막는다', () => {
   const s = read('src/components/ChatWidget.tsx');
   assert.match(s, /if \(!handoff \|\| handoff\.stage === 'sending'\) return;/, '전송 중 재진입 차단');
-  assert.match(s, /disabled=\{handoff\.stage === 'sending'/, '전송 중에는 버튼이 잠겨야 한다');
-  assert.match(s, /aria-busy=\{handoff\.stage === 'sending'\}/, '진행 상태를 알려야 한다');
+  // 잠그되 초점은 빼앗지 않는다(DS 8-2) — `disabled` 는 그 순간 초점을 위젯 밖으로 떨어뜨린다.
+  assert.match(s, /aria-disabled=\{handoff\.stage === 'sending' \|\| undefined\}/, '전송 중에는 버튼이 잠긴 모양이어야 한다');
+  assert.match(s, /aria-busy=\{handoff\.stage === 'sending' \|\| undefined\}/, '진행 상태를 알려야 한다');
 });
 
 test('임베드 스니펫이 첫 로드 깜빡임 없이 나타난다 (DS 1-6)', () => {
@@ -999,7 +1000,8 @@ test('위젯이 보내기 전에 글자 수 한계를 알린다 (DS 5-5)', () =>
   assert.equal(widgetLimit, limit, '위젯과 서버의 길이 한계가 어긋나면 413 으로 거절된다');
   assert.match(s, /aria-invalid=\{tooLong \|\| undefined\}/, '어느 입력이 틀렸는지 알려야 한다');
   assert.match(s, /aria-describedby=/, '오류 문구를 입력과 연결해야 한다');
-  assert.match(s, /disabled=\{busy \|\| tooLong \|\| !input\.trim\(\)\}/, '한계를 넘으면 전송을 막는다');
+  assert.match(s, /aria-disabled=\{busy \|\| tooLong \|\| !input\.trim\(\) \|\| undefined\}/, '한계를 넘으면 전송을 막는다');
+  assert.match(s, /function send\(\) \{ if \(!tooLong\) sendText\(input\); \}/, '실제 차단은 처리 함수 앞단이 한다');
 });
 
 test('건너뛰기 링크로 본문에 바로 닿는다 (DS 5-6)', () => {
@@ -1272,4 +1274,66 @@ test('전체화면 위젯 뒤에서 페이지가 따라 움직이지 않는다 (
   // data-tenant·data-position 옵션 계약은 그대로여야 한다.
   assert.match(e, /attr\('data-position', 'right'\)/, 'data-position 옵션 계약이 깨졌다');
   assert.match(e, /attr\('data-tenant', ''\)/, 'data-tenant 옵션 계약이 깨졌다');
+});
+
+
+/* ══════════ 8순위 — 백로그 소진 후 5차 재감사 (DS 8-x) ══════════ */
+
+test('동작 버튼을 비활성으로 만들지 않는다 — 키보드 초점이 본문 밖으로 떨어진다 (DS 8-1·8-2)', () => {
+  // `disabled` 가 붙는 순간 그 버튼에 있던 초점은 <body> 로 간다. 키보드 사용자는
+  // 「저장」을 누른 뒤 화면 맨 위부터 Tab 을 다시 눌러야 하고, 서랍(role=dialog) 안에서는
+  // 초점 가두기가 참조할 대상이 사라져 **뒤 페이지로 새어 나간다**.
+  for (const f of ['src/app/admin/page.tsx', 'src/components/ChatWidget.tsx']) {
+    const rendered = stripComments(read(f));
+    const bad = [...rendered.matchAll(/<button[\s\S]{0,400}?>/g)].filter((m) => /\sdisabled=/.test(m[0]));
+    assert.equal(bad.length, 0, `${f} 의 버튼 ${bad.length}곳이 아직 disabled 로 초점을 떨어뜨린다`);
+  }
+  // 대신 쓰는 짝: 모양·보조기술 표기는 `busyBtn`(콘솔)·`aria-disabled`(위젯)로.
+  const admin = read('src/app/admin/page.tsx');
+  assert.match(admin, /'aria-disabled': locked \|\| undefined/, 'busyBtn 이 aria-disabled 를 달지 않는다');
+  // 중복 실행은 처리 함수 앞단이 막는다 — state 는 같은 틱의 두 번째 클릭을 못 막으므로 ref 로.
+  assert.match(admin, /function useRunOnce\(\)/, '중복 실행 차단 헬퍼가 없다');
+  assert.match(admin, /const running = useRef<Record<string, boolean>>\(\{\}\)/, 'state 로 막으면 같은 틱의 두 번째 클릭이 새어 나간다');
+  const claims = (admin.match(/claim\('[a-z]+'\)/g) || []).length;
+  const releases = (admin.match(/release\('[a-z]+'\)/g) || []).length;
+  assert.ok(claims >= 7, `중복 실행을 막는 경로가 ${claims}곳뿐이다`);
+  assert.equal(claims, releases, '집었는데 놓지 않는 경로가 있다 — 그 버튼은 영영 동작하지 않는다');
+  // 서랍의 초점 가두기는 `aria-disabled` 를 목록에서 빼지 않아야 순환이 끊기지 않는다.
+  assert.equal(/filter\(\(el\) => !el\.hasAttribute\('aria-disabled'\)\)/.test(admin), false, 'aria-disabled 를 빼면 진행 중에 순환이 끊긴다');
+});
+
+test('접수 연락처는 잠그지 않고 무엇이 틀렸는지 알려준다 (DS 8-2)', async () => {
+  const s = read('src/components/ChatWidget.tsx');
+  assert.match(s, /export function contactError\(v: string\): string/, '왜 못 보내는지 알려줄 함수가 없다');
+  // 버튼을 형식 때문에 잠그면 「왜 안 눌리지」로 끝난다 — QUALITY_BAR §1.
+  assert.equal(/aria-disabled=\{[^}]*validContact/.test(s), false, '형식 때문에 버튼을 잠그면 이유를 말할 기회가 없다');
+  // Enter 도 삼키지 않는다(눌러야 이유를 알려줄 수 있다).
+  assert.match(s, /if \(e\.key === 'Enter' && !e\.nativeEvent\.isComposing\) submitHandoff\(handoff\.contact\);/, 'Enter 를 조용히 삼킨다');
+  // 오류는 stage 와 무관하게(형식 오류는 stage=form 이다) 인라인으로 뜨고 입력과 묶인다.
+  assert.match(s, /\{handoff\.error && \(/, '형식 오류가 화면에 뜨지 않는다');
+  assert.match(s, /id="gw-handoff-err" role="alert"/, '오류가 보조기술에 전달되지 않는다');
+  assert.match(s, /aria-describedby=\{handoff\.error \? 'gw-handoff-err gw-handoff-hint' : 'gw-handoff-hint'\}/, '오류가 입력 칸과 묶이지 않았다');
+  assert.match(s, /aria-invalid=\{handoff\.error \? 'true' : undefined\}/, '틀린 칸이 표시되지 않는다');
+  assert.match(s, /contactRef\.current\?\.focus\(\)/, '틀린 칸으로 초점을 돌려주지 않는다(화면 밖일 수 있다)');
+  // 보내는 중에는 disabled 가 아니라 readOnly — 비활성은 초점을 떨어뜨린다.
+  assert.match(s, /readOnly=\{handoff\.stage === 'sending'\}/, '보내는 중 입력 칸이 초점을 잃는다');
+  // 「연락처 없이 접수」는 그대로 통과해야 한다(검증 대상이 아니다).
+  assert.match(s, /submitHandoff\('', true\)/, '연락처 없이 접수가 형식 검사에 막힌다');
+});
+
+test('모션 최소화 설정에서 화면이 미끄러지지 않는다 (DS 8-3)', () => {
+  // CSS 의 `@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}` 는
+  // JS 가 behavior:'smooth' 를 **직접 넘기면 무시된다** — 설정은 켜 두었는데 화면만 미끄러진다.
+  for (const f of ['src/app/admin/page.tsx', 'src/components/ChatWidget.tsx']) {
+    const s = read(f);
+    assert.equal(s.includes("behavior: 'smooth'"), false, `${f} 가 모션 설정을 무시하고 미끄러진다`);
+    assert.match(s, /function scrollBehavior\(\): ScrollBehavior/, `${f} 에 모션 설정을 읽는 경로가 없다`);
+    assert.match(s, /'\(prefers-reduced-motion: reduce\)'\)\.matches\) return 'auto'/, `${f} 가 설정을 읽지 않는다`);
+    // matchMedia 가 없는 환경에서 예외로 죽으면 스크롤 자체가 멈춘다.
+    assert.match(s, /\} catch \{ \/\* matchMedia 미지원/, `${f} 의 모션 판정이 예외를 삼키지 않는다`);
+  }
+  const w = read('src/components/ChatWidget.tsx');
+  assert.match(w, /endRef\.current\?\.scrollIntoView\(\{ behavior: scrollBehavior\(\) \}\)/, '대화 자동 스크롤이 설정을 따르지 않는다');
+  const a = read('src/app/admin/page.tsx');
+  assert.equal((a.match(/behavior: scrollBehavior\(\), block: 'start'/g) || []).length, 3, '폼으로 스크롤하는 3곳이 모두 설정을 따라야 한다');
 });

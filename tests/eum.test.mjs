@@ -264,7 +264,7 @@ test('관리 콘솔 테넌트 탭은 편집 UI 없이 빈 상태·오류·로딩
   assert.match(page, /표시할 테넌트가 없습니다/, '빈 상태 화면이 없다');
   assert.match(page, /테넌트 지식을 불러오지 못했습니다/, '오류 화면이 없다');
   assert.match(page, /htmlFor="tenant-select"/, '선택 상자에 라벨이 없다(스크린리더)');
-  assert.match(page, /aria-busy=\{tenantBusy\}/, '진행 상태를 알리지 않는다');
+  assert.match(page, /busyBtn\(tenantBusy, tenantBusy\)/, '진행 상태를 알리지 않는다');
   // 읽기 전용 — 이 탭에서 테넌트 API를 쓰기 메서드로 호출하지 않는다
   assert.equal(/api\/admin\/tenants[^\n]*method:\s*'(POST|PUT|DELETE)'/.test(page), false, '테넌트 편집 호출이 있다');
 });

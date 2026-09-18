@@ -129,6 +129,29 @@ const chipStyle: CSSProperties = {
   minHeight: 30,
 };
 
+/**
+ * 모션 최소화 설정을 존중하는 스크롤 동작(DS 8-3).
+ * CSS 의 `@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}` 는
+ * **JS 가 `behavior:'smooth'` 를 직접 넘기면 무시된다** — 설정은 켜 두었는데 화면만 미끄러진다.
+ * 전정 장애가 있는 사용자에게는 이 미끄러짐 자체가 증상을 일으킨다.
+ */
+function scrollBehavior(): ScrollBehavior {
+  try {
+    if (typeof window !== 'undefined' && window.matchMedia
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 'auto';
+  } catch { /* matchMedia 미지원 — 기본값으로 둔다 */ }
+  return 'smooth';
+}
+
+/**
+ * 진행 중인 칩 — 모양만 잠긴 것처럼 보이게 하고 초점은 그대로 둔다(DS 8-2).
+ * `disabled` 를 붙이면 키보드로 누른 그 순간 초점이 위젯 밖으로 떨어져,
+ * 답이 도착해도 사용자는 화면 맨 위부터 Tab 을 다시 눌러야 한다.
+ */
+function chip(busy: boolean, extra: CSSProperties = {}): CSSProperties {
+  return { ...chipStyle, ...(busy ? { opacity: 0.5, cursor: 'progress' } : {}), ...extra };
+}
+
 // 헤더 우측 아이콘 버튼(최소화·닫기) 공통 모양.
 const headerBtn: CSSProperties = {
   width: 28, height: 28, borderRadius: 8, color: '#fff', background: 'rgba(255,255,255,.16)',
@@ -145,6 +168,21 @@ export function validContact(v: string): boolean {
   if (t.length < 5 || t.length > 100) return false;
   if (/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(t)) return true;
   return /^[0-9][0-9\s()+-]{7,}$/.test(t) && t.replace(/\D/g, '').length >= 9;
+}
+
+/**
+ * 연락처가 왜 통과하지 못했는지 사람 말로 돌려준다(통과하면 빈 문자열).
+ * 버튼을 잠가 두기만 하면 **무엇이 틀렸는지** 알 수 없다 — QUALITY_BAR §1
+ * 「잘못된 입력에 어느 항목이 왜 틀렸는지 인라인으로 알려준다」.
+ */
+export function contactError(v: string): string {
+  const t = v.trim();
+  if (!t) return '연락 받으실 전화번호나 이메일을 입력해 주세요. 남기지 않으시려면 「연락처 없이 접수」를 눌러 주세요.';
+  if (validContact(t)) return '';
+  if (t.length > 100) return '연락처가 너무 깁니다. 전화번호나 이메일 주소 하나만 남겨 주세요.';
+  if (t.includes('@')) return '이메일 주소 형식이 아닙니다. name@example.com 처럼 입력해 주세요.';
+  if (/\d/.test(t)) return '전화번호 자릿수가 맞지 않습니다. 010-0000-0000 처럼 입력해 주세요.';
+  return '전화번호(010-0000-0000) 또는 이메일(name@example.com) 형식으로 입력해 주세요.';
 }
 
 /** 표시 시각 — 오전/오후 h:mm. 마운트 이후에만 호출한다. */
@@ -315,6 +353,8 @@ export default function ChatWidget({
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const launcherRef = useRef<HTMLButtonElement>(null);
+  // 접수 연락처 칸 — 형식이 틀리면 이 칸으로 초점을 돌려준다(화면 밖일 수 있다).
+  const contactRef = useRef<HTMLInputElement>(null);
 
   // 대화를 저장·복원할 때 쓰는 열쇠 — 테넌트마다 따로 둔다(다른 안내 챗봇의 대화가 섞이지 않게).
   const threadId = tenant?.id || 'default';
@@ -362,7 +402,9 @@ export default function ChatWidget({
     return () => mq.removeEventListener('change', sync);
   }, [embedded]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, busy, open]);
+  // 새 말풍선으로 따라 내려간다. 모션 최소화 설정에서는 미끄러지지 않고 곧장 옮긴다(DS 8-3) —
+  // 대화는 말할 때마다 움직이므로 제품에서 가장 잦은 모션이다.
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: scrollBehavior() }); }, [msgs, busy, open]);
 
   // 연결 상태 — 끊긴 채로 보내면 요청은 무조건 실패한다. 보내기 전에 알린다.
   useEffect(() => {
@@ -537,10 +579,19 @@ export default function ChatWidget({
     setHandoff({ key, stage: 'form', contact: '', error: '' });
   }
 
-  // 접수 요청. 연락처는 비워도 접수되지만, 그때는 대화창으로만 안내가 돌아간다.
-  async function submitHandoff(contact: string) {
+  // 접수 요청. 연락처는 비워도 접수되지만(`skipContact`), 그때는 대화창으로만 안내가 돌아간다.
+  async function submitHandoff(contact: string, skipContact = false) {
     if (!handoff || handoff.stage === 'sending') return;
     const trimmed = contact.trim();
+    // 버튼을 잠그는 대신(초점이 떨어진다) 여기서 막고, 무엇이 틀렸는지 칸 아래에 밝힌다.
+    if (!skipContact) {
+      const why = contactError(trimmed);
+      if (why) {
+        setHandoff({ ...handoff, contact, stage: 'form', error: why });
+        setTimeout(() => contactRef.current?.focus(), 0);
+        return;
+      }
+    }
     setHandoff({ ...handoff, contact, stage: 'sending', error: '' });
     try {
       const r = await fetch('/api/escalation', {
@@ -668,9 +719,9 @@ export default function ChatWidget({
                       <div style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--ink)' }}>{m.text}</div>
                       <button
                         onClick={() => sendText(failedText, m.key)}
-                        disabled={busy}
+                        aria-disabled={busy || undefined}
                         // 복구 동작이라 보조 칩(30px)보다 큰 손가락 목표를 준다(375px 기준).
-                        style={{ ...chipStyle, marginTop: 8, minHeight: 34, padding: '7px 12px', display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--danger)', borderColor: 'var(--danger)', opacity: busy ? .5 : 1 }}
+                        style={chip(busy, { marginTop: 8, minHeight: 34, padding: '7px 12px', display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--danger)', borderColor: 'var(--danger)' })}
                       >
                         <WIcon name="retry" size={13} /> 다시 보내기
                       </button>
@@ -731,12 +782,12 @@ export default function ChatWidget({
                         {m.key === lastKey && (
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                             {m.form.step > 1 && (
-                              <button onClick={() => sendText('이전')} disabled={busy} aria-label="이전 항목으로 돌아가기" style={chipStyle}>이전</button>
+                              <button onClick={() => sendText('이전')} aria-disabled={busy || undefined} aria-label="이전 항목으로 돌아가기" style={chip(busy)}>이전</button>
                             )}
                             {m.form.canSkip && (
-                              <button onClick={() => sendText('건너뛰기')} disabled={busy} aria-label="이 항목 건너뛰기" style={chipStyle}>건너뛰기</button>
+                              <button onClick={() => sendText('건너뛰기')} aria-disabled={busy || undefined} aria-label="이 항목 건너뛰기" style={chip(busy)}>건너뛰기</button>
                             )}
-                            <button onClick={() => sendText('취소')} disabled={busy} aria-label={`${m.form.title} 중단하기`} style={chipStyle}>취소</button>
+                            <button onClick={() => sendText('취소')} aria-disabled={busy || undefined} aria-label={`${m.form.title} 중단하기`} style={chip(busy)}>취소</button>
                           </div>
                         )}
                       </div>
@@ -773,7 +824,7 @@ export default function ChatWidget({
                     {m.suggestions && m.suggestions.length > 0 && (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                         {m.suggestions.map((s) => (
-                          <button key={s.id} onClick={() => sendText(s.question)} disabled={busy} style={chipStyle}>{s.question}</button>
+                          <button key={s.id} onClick={() => sendText(s.question)} aria-disabled={busy || undefined} style={chip(busy)}>{s.question}</button>
                         ))}
                       </div>
                     )}
@@ -815,52 +866,56 @@ export default function ChatWidget({
                               연락처 (전화번호 또는 이메일)
                             </label>
                             <input
+                              ref={contactRef}
                               id="gw-handoff-contact"
                               value={handoff.contact}
                               onChange={(e) => setHandoff({ ...handoff, contact: e.target.value, error: '' })}
                               onKeyDown={(e) => {
-                                if (e.key === 'Enter' && !e.nativeEvent.isComposing && validContact(handoff.contact)) submitHandoff(handoff.contact);
+                                // 형식이 틀려도 Enter 를 삼키지 않는다 — 눌러야 이유를 알려줄 수 있다.
+                                if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitHandoff(handoff.contact);
                               }}
-                              disabled={handoff.stage === 'sending'}
+                              // 보내는 중에는 `disabled` 가 아니라 `readOnly` — 비활성이 되면 초점이 위젯 밖으로 떨어진다.
+                              readOnly={handoff.stage === 'sending'}
                               inputMode="text"
                               autoComplete="off"
-                              aria-describedby="gw-handoff-hint"
+                              aria-invalid={handoff.error ? 'true' : undefined}
+                              aria-describedby={handoff.error ? 'gw-handoff-err gw-handoff-hint' : 'gw-handoff-hint'}
                               placeholder="010-0000-0000 또는 name@example.com"
                               style={{
-                                width: '100%', border: '1px solid var(--line-2)', borderRadius: 10,
+                                width: '100%', border: `1px solid ${handoff.error ? 'var(--danger)' : 'var(--line-2)'}`, borderRadius: 10,
                                 padding: '9px 11px', fontSize: 13, color: 'var(--ink)', background: 'var(--bg)', outline: 'none',
                               }}
                             />
                             <p id="gw-handoff-hint" style={{ fontSize: 10.5, lineHeight: 1.5, color: 'var(--mut)', marginTop: 5 }}>
                               회신 목적으로만 사용하고, 상담이 끝나면 파기합니다.
                             </p>
-                            {handoff.stage === 'error' && (
-                              <p role="alert" style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 6 }}>{handoff.error}</p>
+                            {handoff.error && (
+                              <p id="gw-handoff-err" role="alert" style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--danger)', marginTop: 6 }}>{handoff.error}</p>
                             )}
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 9 }}>
                               <button
                                 onClick={() => submitHandoff(handoff.contact)}
-                                disabled={handoff.stage === 'sending' || !validContact(handoff.contact)}
-                                aria-busy={handoff.stage === 'sending'}
+                                aria-busy={handoff.stage === 'sending' || undefined}
+                                aria-disabled={handoff.stage === 'sending' || undefined}
                                 style={{
                                   fontSize: 12.5, fontWeight: 700, color: '#fff', background: 'var(--brand)',
                                   borderRadius: 10, padding: '9px 14px', minHeight: 36,
-                                  opacity: handoff.stage === 'sending' || !validContact(handoff.contact) ? 0.5 : 1,
+                                  opacity: handoff.stage === 'sending' ? 0.5 : 1,
                                 }}
                               >
                                 {handoff.stage === 'sending' ? '접수 중…' : handoff.stage === 'error' ? '다시 시도' : '접수하기'}
                               </button>
                               <button
-                                onClick={() => submitHandoff('')}
-                                disabled={handoff.stage === 'sending'}
-                                style={chipStyle}
+                                onClick={() => submitHandoff('', true)}
+                                aria-disabled={handoff.stage === 'sending' || undefined}
+                                style={chip(handoff.stage === 'sending')}
                               >
                                 연락처 없이 접수
                               </button>
                               <button
-                                onClick={() => setHandoff(null)}
-                                disabled={handoff.stage === 'sending'}
-                                style={{ ...chipStyle, color: 'var(--mut)' }}
+                                onClick={() => { if (handoff.stage !== 'sending') setHandoff(null); }}
+                                aria-disabled={handoff.stage === 'sending' || undefined}
+                                style={chip(handoff.stage === 'sending', { color: 'var(--mut)' })}
                               >
                                 취소
                               </button>
@@ -943,7 +998,7 @@ export default function ChatWidget({
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--mut)', marginBottom: 7 }}>이런 걸 물어보실 수 있어요</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {starters.map((q) => (
-                  <button key={q} onClick={() => sendText(q)} disabled={busy} style={chipStyle}>{q}</button>
+                  <button key={q} onClick={() => sendText(q)} aria-disabled={busy || undefined} style={chip(busy)}>{q}</button>
                 ))}
               </div>
             </div>
@@ -980,7 +1035,8 @@ export default function ChatWidget({
             />
             <button
               onClick={send}
-              disabled={busy || tooLong || !input.trim()}
+              aria-busy={busy || undefined}
+              aria-disabled={busy || tooLong || !input.trim() || undefined}
               aria-label="메시지 전송"
               style={{ width: 42, height: 42, flexShrink: 0, borderRadius: '50%', background: 'var(--brand)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: busy || tooLong || !input.trim() ? .5 : 1 }}
             >

@@ -267,7 +267,7 @@ test('응답 테스트가 좌 입력·근거 / 우 상담창 미리보기로 분
   assert.match(t, /aria-label="상담창 미리보기"/, '미리보기 영역 이름');
   assert.match(t, /role="log" aria-live="polite"/, '미리보기 대화는 live region');
   assert.match(t, /htmlFor="ac-test-msg"/, '입력 라벨');
-  assert.match(t, /aria-busy=\{testBusy/, '응답 대기 표시');
+  assert.match(t, /busyBtn\(testBusy, testBusy/, '응답 대기 표시');
   assert.match(t, /gw-dot/, '타이핑 인디케이터(위젯과 같은 것)');
   assert.match(t, /INTENT_LABELS\[t\.intent\]/, '주제는 사람 말로');
   assert.match(t, /SOURCE_VIEW_LABELS\[t\.source\]/, '근거는 사람 말로');
@@ -293,7 +293,7 @@ test('시나리오 룰이 「조건 → 응답」 카드 빌더와 미리보기�
   }
   assert.match(t, /aria-invalid=\{crErr\.keywords/, '인라인 검증(표현)');
   assert.match(t, /aria-describedby=\{crErr\.reply/, '오류 문구 연결(답변)');
-  assert.match(t, /aria-busy=\{crBusy/, '저장 중 잠금');
+  assert.match(t, /busyBtn\(crBusy, crBusy/, '저장 중 잠금');
   // 미리보기: 시험 문장 → 적용 여부 + 말풍선, 최종 판정은 응답 테스트로 안내
   assert.match(t, /role="log" aria-live="polite"/, '미리보기는 live region');
   assert.match(t, /표현으로 이 규칙이 적용됩니다/, '적용 근거를 보여준다');
@@ -328,7 +328,7 @@ test('관리 토큰 입력이 브랜드 로그인 화면으로 옮겨졌다 (DS 
   assert.match(login, /aria-pressed=\{showToken\}/, '토글 상태 알림');
   assert.match(login, /role="alert" className="ac-err"/, '오류는 alert');
   assert.match(login, /aria-invalid=\{authMsg \? 'true' : undefined\}/, '오류 시 입력에 표시');
-  assert.match(login, /aria-busy=\{authBusy/, '확인 중 잠금');
+  assert.match(login, /busyBtn\(authBusy, authBusy/, '확인 중 잠금');
   assert.match(login, /로그인하지 않고 돌아가기/, '인증이 필수가 아닐 때 돌아갈 수 있어야 한다');
   assert.equal(/🔒|localStorage|401/.test(login), false, '이모지·내부 문구 없음');
   // 헤더: 로그아웃은 토큰을 지운다
@@ -363,7 +363,7 @@ test('상담원 요청이 요약 KPI·상태 필터·표·상세 서랍으로 �
   assert.match(d, /role="dialog" aria-modal="true" aria-labelledby="ac-ticket-title"/, '서랍 dialog');
   assert.match(d, /showContact \? t\.contact : maskContact\(t\.contact\)/, '연락처는 기본 마스킹');
   assert.match(d, /aria-pressed=\{showContact\}/, '보기/가리기 토글 상태');
-  assert.match(d, /aria-busy=\{busy\}/, '상태 변경 중 잠금');
+  assert.match(d, /busyBtn\(busy, busy/, '상태 변경 중 잠금');
   assert.match(src, /e\.key === 'Escape'\) closeTicket\(\)/, 'ESC 로 닫힌다');
   assert.match(src, /ticketReturnRef\.current = from/, '닫으면 연 행으로 초점 복귀');
   // 마스킹 함수가 실제로 가린다
@@ -442,7 +442,7 @@ test('파트너·귀속이 요약 KPI·고객사/파트너 표·우측 폼·상�
   for (const f of ['aErr.name', 'aErr.partnerId', 'aErr.contractedAt', 'aErr.monthlyFeeKrw', 'pErr.name', 'pErr.feeRatePct']) {
     assert.ok(t.includes(`aria-invalid={${f} ? 'true' : undefined}`), `인라인 오류 표시 누락: ${f}`);
   }
-  assert.match(t, /aria-busy=\{partnerSaving \|\| undefined\}/, '저장 중 잠금');
+  assert.match(t, /busyBtn\(partnerSaving, partnerSaving/, '저장 중 잠금');
   assert.match(t, /type="date"/, '계약일은 날짜 입력');
   assert.match(t, /수수료율\(%\)/, '수수료율은 %로 입력');
   // 검증·변환 로직
@@ -485,11 +485,20 @@ test('정산 리포트가 조건 툴바·요약 KPI·합계/근거 표·빈 상�
   assert.match(t, /정산 대상 고객사가 없습니다[\s\S]*파트너·귀속 열기/, '빈 상태 + 다음 행동');
   assert.match(t, /role="alert"[\s\S]{0,400}다시 시도/, '오류에는 다시 시도');
   assert.match(t, /role="status" aria-live="polite"/, '계산 중 안내');
-  assert.match(t, /aria-busy=\{settleBusy \|\| undefined\}/, '계산 중 버튼 잠금');
-  assert.match(t, /disabled=\{!r \|\| r\.rows\.length === 0\}/, '내려받을 것이 없으면 CSV 버튼 잠금');
-  assert.match(t, /aria-disabled=\{dlBusy !== '' \|\| undefined\}/, '내려받는 중에는 중복 실행을 막는다');
+  assert.match(t, /busyBtn\(settleBusy, settleBusy/, '계산 중 버튼 잠금');
+  assert.match(t, /busyBtn\(dlBusy === '정산 리포트', dlBusy !== '' \|\| !r \|\| r\.rows\.length === 0/, '내려받을 것이 없거나 진행 중이면 잠긴 모양이 된다');
   // 확정본이 아님은 계속 밝히되, 내부 개발 표기([승인 필요])를 화면에 쓰지 않는다(DS 5-3).
   assert.match(t, /실제 청구·지급은 계약서가 확정된 뒤에 진행합니다/, '확정 아님을 밝힌다');
   assert.equal(/#c0392b|#b26a00/.test(t), false, '색은 토큰만');
   assert.match(t, /className="ac-col-wide"/, '좁은 화면에서 접히는 열');
 });
+
+test('렌더된 화면에 비활성 버튼이 없다 — 초점을 떨어뜨리지 않는다 (DS 8-1)', opts, async () => {
+  const html = await render();
+  const bad = (html.match(/<button[^>]*\sdisabled[^>]*>/g) || []);
+  assert.equal(bad.length, 0, `비활성 버튼 ${bad.length}곳: ${bad.slice(0, 2).join(' / ')}`);
+  // 첫 렌더에는 진행 중인 동작이 없으므로 aria-disabled 도 없어야 한다 —
+  // 아무것도 누르지 않았는데 잠겨 보이면 그 자체가 결함이다.
+  assert.equal(/aria-disabled="true"/.test(html), false, '아무 동작도 하지 않았는데 잠긴 버튼이 있다');
+});
+

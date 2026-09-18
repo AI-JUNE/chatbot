@@ -281,6 +281,7 @@ function ConversationDrawer({
   // 초점 순환(Tab/Shift+Tab 이 서랍 밖으로 나가지 않는다). ESC 는 부모가 처리한다.
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Tab' || !panelRef.current) return;
+    // `aria-disabled` 버튼은 초점을 받을 수 있으므로 목록에 남긴다 — 진행 중에도 순환이 끊기지 않는다(DS 8-1).
     const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>('button,[href],input,textarea,select,[tabindex]:not([tabindex="-1"])'))
       .filter((el) => !el.hasAttribute('disabled'));
     if (items.length === 0) return;
@@ -373,6 +374,7 @@ function TicketDrawer({
   const t = ticket;
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Tab' || !panelRef.current) return;
+    // `aria-disabled` 버튼은 초점을 받을 수 있으므로 목록에 남긴다 — 진행 중에도 순환이 끊기지 않는다(DS 8-1).
     const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>('button,[href],input,textarea,select,[tabindex]:not([tabindex="-1"])'))
       .filter((el) => !el.hasAttribute('disabled'));
     if (items.length === 0) return;
@@ -451,16 +453,16 @@ function TicketDrawer({
 
         <div className="ac-drawer-foot" style={{ flexWrap: 'wrap' }}>
           {t.status === 'open' && (
-            <button type="button" style={S.btn} disabled={busy} aria-busy={busy} onClick={() => onStatus('in_progress')}>상담 시작</button>
+            <button type="button" {...busyBtn(busy, busy, S.btn)} onClick={() => onStatus('in_progress')}>상담 시작</button>
           )}
           {t.status === 'in_progress' && (
-            <button type="button" style={S.btn} disabled={busy} aria-busy={busy} onClick={() => onStatus('resolved')}>완료 처리</button>
+            <button type="button" {...busyBtn(busy, busy, S.btn)} onClick={() => onStatus('resolved')}>완료 처리</button>
           )}
           {(t.status === 'open' || t.status === 'in_progress') && (
-            <button type="button" className="ac-linkbtn" data-tone="danger" disabled={busy} onClick={() => onStatus('canceled')}>취소</button>
+            <button type="button" className="ac-linkbtn" data-tone="danger" {...busyBtn(busy, busy, {})} onClick={() => onStatus('canceled')}>취소</button>
           )}
           {(t.status === 'resolved' || t.status === 'canceled') && (
-            <button type="button" style={S.btnGhost} disabled={busy} aria-busy={busy} onClick={() => onStatus('open')}>다시 열기</button>
+            <button type="button" {...busyBtn(busy, busy)} onClick={() => onStatus('open')}>다시 열기</button>
           )}
           {hasConversation && (
             <button type="button" className="ac-linkbtn" onClick={onOpenConversation}>대화 전체 보기</button>
@@ -487,6 +489,7 @@ function AccountDrawer({
   const a = account;
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Tab' || !panelRef.current) return;
+    // `aria-disabled` 버튼은 초점을 받을 수 있으므로 목록에 남긴다 — 진행 중에도 순환이 끊기지 않는다(DS 8-1).
     const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>('button,[href],input,textarea,select,[tabindex]:not([tabindex="-1"])'))
       .filter((el) => !el.hasAttribute('disabled'));
     if (items.length === 0) return;
@@ -1174,6 +1177,35 @@ function busyBtn(busy: boolean, locked: boolean, base: React.CSSProperties = S.b
   } as const;
 }
 
+/**
+ * 중복 실행 차단 — `disabled` 를 쓰지 않는 대신(DS 5-8·8-1) 실행만 앞단에서 막는다.
+ * 진행 중 state(`...Busy`)가 아니라 ref 를 쓴다: 같은 틱에 두 번 눌리면 state 는 아직 바뀌지 않았다.
+ */
+function useRunOnce() {
+  const running = useRef<Record<string, boolean>>({});
+  const claim = useCallback((key: string) => {
+    if (running.current[key]) return false;
+    running.current[key] = true;
+    return true;
+  }, []);
+  const release = useCallback((key: string) => { running.current[key] = false; }, []);
+  return { claim, release };
+}
+
+/**
+ * 모션 최소화 설정을 존중하는 스크롤 동작(DS 8-3).
+ * CSS 의 `@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}` 는
+ * **JS 가 `behavior:'smooth'` 를 직접 넘기면 무시된다** — 설정은 켜 두었는데 화면만 미끄러진다.
+ * 전정 장애가 있는 사용자에게는 이 미끄러짐 자체가 증상을 일으킨다.
+ */
+function scrollBehavior(): ScrollBehavior {
+  try {
+    if (typeof window !== 'undefined' && window.matchMedia
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 'auto';
+  } catch { /* matchMedia 미지원 — 기본값으로 둔다 */ }
+  return 'smooth';
+}
+
 /** 쉼표·줄바꿈으로 나눈 표현 목록(빈 항목·중복 제거). */
 function splitKeywords(raw: string): string[] {
   const out: string[] = [];
@@ -1306,6 +1338,8 @@ export default function AdminPage() {
     authed: boolean;
   }
   const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null);
+  // 버튼을 비활성으로 만드는 대신(초점이 본문 밖으로 떨어진다) 실행만 막는다 — DS 8-1.
+  const { claim, release } = useRunOnce();
   const [authBusy, setAuthBusy] = useState(false);
   const [authMsg, setAuthMsg] = useState('');
   const [loginOpen, setLoginOpen] = useState(false);
@@ -1575,6 +1609,7 @@ export default function AdminPage() {
   }, [accountId, closeAccount]);
 
   const loadPartners = useCallback(async (filter = '') => {
+    if (!claim('partners')) return;
     setPartnerBusy(true);
     setPartnerErr('');
     try {
@@ -1595,13 +1630,14 @@ export default function AdminPage() {
       setPartnerErr('네트워크 오류로 파트너 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
       setPartnerBusy(false);
+      release('partners');
     }
-  }, []);
+  }, [claim, release]);
 
   /** 폼으로 스크롤(좁은 화면에서는 폼이 목록 아래에 있다). */
   const focusPartnerForm = (kind: 'account' | 'partner') => {
     setPartnerFormKind(kind);
-    window.setTimeout(() => partnerFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+    window.setTimeout(() => partnerFormRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }), 0);
   };
   const editPartner = (p: PartnerView) => {
     setPForm({ id: p.id, name: p.name, managerName: p.managerName ?? '', feeRatePct: p.feeRateBp === null ? '' : bpToPct(p.feeRateBp), status: p.status, memo: p.memo ?? '' });
@@ -1730,6 +1766,7 @@ export default function AdminPage() {
   const [settleBusy, setSettleBusy] = useState(false);
 
   const loadSettlement = useCallback(async (month: string, partnerId: string) => {
+    if (!claim('settlement')) return;
     setSettleBusy(true);
     setSettleErr('');
     try {
@@ -1749,10 +1786,16 @@ export default function AdminPage() {
       setSettleErr('네트워크 오류로 정산 리포트를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
       setSettleBusy(false);
+      release('settlement');
     }
-  }, []);
+  }, [claim, release]);
 
   const downloadSettlementCsv = () => {
+    // 잠긴 버튼도 눌러 볼 수 있다(초점을 잃지 않으려고 `disabled` 를 쓰지 않는다) — 이유를 밝힌다.
+    if (!settleReport || settleReport.rows.length === 0) {
+      flash('내려받을 산출 근거가 없습니다. 기준월을 바꾸거나 「다시 계산」을 눌러 주세요.');
+      return;
+    }
     const qs = new URLSearchParams({ month: settleMonth, format: 'csv' });
     if (settlePartner) qs.set('partnerId', settlePartner);
     // downloadFile 은 아래에서 선언되지만, 이 함수는 사용자가 누를 때 실행되므로 그때는 이미 초기화돼 있다.
@@ -1779,6 +1822,7 @@ export default function AdminPage() {
   const [storageErr, setStorageErr] = useState('');
   const [storageBusy, setStorageBusy] = useState(false);
   const loadStorage = useCallback(async () => {
+    if (!claim('storage')) return;
     setStorageBusy(true);
     setStorageErr('');
     try {
@@ -1796,8 +1840,9 @@ export default function AdminPage() {
       setStorageErr('네트워크 오류로 저장소 상태를 확인하지 못했습니다.');
     } finally {
       setStorageBusy(false);
+      release('storage');
     }
-  }, []);
+  }, [claim, release]);
 
   // ---- 테넌트 지식(읽기 전용) ----
   // 편집 화면이 아니다. "지금 배포본이 무엇을 근거로 답하는가"를 확인하는 창구다.
@@ -1807,6 +1852,7 @@ export default function AdminPage() {
   const [tenantErr, setTenantErr] = useState('');
   const [tenantBusy, setTenantBusy] = useState(false);
   const loadTenant = useCallback(async (id: string) => {
+    if (!claim('tenant')) return;
     setTenantBusy(true);
     setTenantErr('');
     try {
@@ -1829,11 +1875,13 @@ export default function AdminPage() {
       setTenantErr('네트워크 오류로 테넌트 지식을 불러오지 못했습니다.');
     } finally {
       setTenantBusy(false);
+      release('tenant');
     }
-  }, []);
+  }, [claim, release]);
 
   /** 토큰 검증(/api/admin/auth) 후 통과 시 데이터 로드. 실패 시 잠금 화면 + 사유 표시. */
   const verifyAuth = useCallback(async () => {
+    if (!claim('auth')) return;
     setAuthBusy(true);
     try {
       const res = await fetch('/api/admin/auth', { headers: authHeaders() });
@@ -1861,8 +1909,9 @@ export default function AdminPage() {
       setAuthMsg('네트워크 오류로 인증 상태를 확인하지 못했습니다.');
     } finally {
       setAuthBusy(false);
+      release('auth');
     }
-  }, [loadKB, loadRules, loadEsc, loadAudit, loadStorage]);
+  }, [loadKB, loadRules, loadEsc, loadAudit, loadStorage, claim, release]);
 
   useEffect(() => {
     verifyAuth();
@@ -1954,7 +2003,7 @@ export default function AdminPage() {
     setForm({ id: e.id, category: e.category, question: e.question, keywords: e.keywords.join(', '), answer: e.answer });
     goTab('kb');
     // 좁은 화면에서는 편집 폼이 표 아래에 있으므로 보이는 곳으로 옮긴다.
-    window.setTimeout(() => kbFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+    window.setTimeout(() => kbFormRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }), 0);
   };
 
   const removeKB = async (id: string) => {
@@ -2034,6 +2083,7 @@ export default function AdminPage() {
     if (!crForm.reply.trim()) errs.reply = '고객에게 보낼 답변을 입력해 주세요.';
     setCrErr(errs);
     if (Object.keys(errs).length) return;
+    if (!claim('rule')) return;
     const body = {
       ...(crEditing ? { intent: crEditing } : {}),
       label: crForm.label,
@@ -2062,6 +2112,7 @@ export default function AdminPage() {
       flash('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
       setCrBusy(false);
+      release('rule');
     }
   };
 
@@ -2214,6 +2265,7 @@ export default function AdminPage() {
   };
 
   const patchTicket = async (id: string, status: TicketView['status']) => {
+    if (!claim('ticket')) return;
     setTicketBusy(true);
     try {
       const res = await fetch('/api/admin/escalations', {
@@ -2233,6 +2285,7 @@ export default function AdminPage() {
       flash('상태를 바꾸지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.');
     } finally {
       setTicketBusy(false);
+      release('ticket');
     }
   };
 
@@ -2337,7 +2390,7 @@ export default function AdminPage() {
               <p id="ac-login-help" className="ac-rulehint">토큰은 이 브라우저에만 저장되며, 서버에는 확인할 때만 전송됩니다.</p>
             )}
           </div>
-          <button type="submit" style={{ ...S.btn, width: '100%', padding: '11px 14px', opacity: authBusy ? 0.6 : 1 }} disabled={authBusy} aria-busy={authBusy || undefined}>
+          <button type="submit" {...busyBtn(authBusy, authBusy, { ...S.btn, width: '100%', padding: '11px 14px' })}>
             {authBusy ? '확인 중…' : '로그인'}
           </button>
           {canReturn && (
@@ -2949,7 +3002,7 @@ export default function AdminPage() {
                   </details>
                 )}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button type="button" style={{ ...S.btn, opacity: kbBusy ? 0.6 : 1 }} onClick={submitKB} disabled={kbBusy} aria-busy={kbBusy || undefined}>
+                  <button type="button" {...busyBtn(kbBusy, kbBusy, S.btn)} onClick={submitKB}>
                     {kbBusy ? '저장 중…' : editingId ? '수정 저장' : '추가'}
                   </button>
                   {editingId && (
@@ -2988,7 +3041,7 @@ export default function AdminPage() {
           setCrEditing(r.intent);
           setCrForm({ label: r.label, keywords: r.keywords.join(', '), reply: r.reply, escalate: r.escalate });
           setCrErr({});
-          ruleFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          ruleFormRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
         };
         return (
         <div className="ac-split">
@@ -3224,7 +3277,7 @@ export default function AdminPage() {
               </div>
 
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-                <button type="button" style={{ ...S.btn, opacity: crBusy ? 0.6 : 1 }} onClick={submitCustomRule} disabled={crBusy} aria-busy={crBusy || undefined}>
+                <button type="button" {...busyBtn(crBusy, crBusy, S.btn)} onClick={submitCustomRule}>
                   {crBusy ? '저장 중…' : crEditing ? '수정 저장' : '규칙 추가'}
                 </button>
                 {crEditing && (
@@ -3354,8 +3407,7 @@ export default function AdminPage() {
                             <button
                               type="button"
                               className="ac-linkbtn"
-                              style={act.primary ? { background: 'var(--brand)', color: '#fff' } : undefined}
-                              disabled={ticketBusy}
+                              {...busyBtn(ticketBusy, ticketBusy, act.primary ? { background: 'var(--brand)', color: '#fff' } : {})}
                               aria-label={`접수 ${shortTicket(t.id)} ${act.label}`}
                               onClick={() => patchTicket(t.id, act.status)}
                             >
@@ -3436,7 +3488,7 @@ export default function AdminPage() {
                       {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
                     <span style={{ ...S.tag, marginLeft: 'auto' }} aria-live="polite">{filteredAccounts.length}/{accounts.length}곳</span>
-                    <button type="button" style={S.btnGhost} onClick={() => loadPartners(partnerFilter)} disabled={partnerBusy} aria-busy={partnerBusy || undefined}>
+                    <button type="button" {...busyBtn(partnerBusy, partnerBusy)} onClick={() => loadPartners(partnerFilter)}>
                       {partnerBusy ? '불러오는 중…' : '새로고침'}
                     </button>
                   </div>
@@ -3635,7 +3687,7 @@ export default function AdminPage() {
                           <input id="a-note" style={S.input} value={aForm.attributionNote} placeholder="예: 파트너 소개로 최초 미팅(2026-08-20)" onChange={(e) => setAForm({ ...aForm, attributionNote: e.target.value })} />
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <button type="submit" style={{ ...S.btn, opacity: partnerSaving ? 0.6 : 1 }} disabled={partnerSaving} aria-busy={partnerSaving || undefined}>
+                          <button type="submit" {...busyBtn(partnerSaving, partnerSaving, S.btn)}>
                             {partnerSaving ? '저장 중…' : aForm.id ? '수정 저장' : '고객사 등록'}
                           </button>
                           {aForm.id && <button type="button" style={S.btnGhost} onClick={() => { setAForm(EMPTY_ACCOUNT_FORM); setAErr({}); }}>취소</button>}
@@ -3676,7 +3728,7 @@ export default function AdminPage() {
                           <input id="p-memo" style={S.input} value={pForm.memo} placeholder="예: 경기 남부 병의원 전담" onChange={(e) => setPForm({ ...pForm, memo: e.target.value })} />
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <button type="submit" style={{ ...S.btn, opacity: partnerSaving ? 0.6 : 1 }} disabled={partnerSaving} aria-busy={partnerSaving || undefined}>
+                          <button type="submit" {...busyBtn(partnerSaving, partnerSaving, S.btn)}>
                             {partnerSaving ? '저장 중…' : pForm.id ? '수정 저장' : '파트너 등록'}
                           </button>
                           {pForm.id && <button type="button" style={S.btnGhost} onClick={() => { setPForm(EMPTY_PARTNER_FORM); setPErr({}); }}>취소</button>}
@@ -3724,14 +3776,11 @@ export default function AdminPage() {
                 <span role="status" aria-live="polite" style={{ ...S.tag, marginLeft: 'auto' }}>
                   {settleBusy ? '계산하는 중…' : r ? `${r.periodStart} ~ ${r.periodEnd}` : ''}
                 </span>
-                <button type="button" style={S.btnGhost} onClick={() => loadSettlement(settleMonth, settlePartner)} disabled={settleBusy} aria-busy={settleBusy || undefined}>다시 계산</button>
+                <button type="button" {...busyBtn(settleBusy, settleBusy)} onClick={() => loadSettlement(settleMonth, settlePartner)}>다시 계산</button>
                 <button
                   type="button"
-                  style={{ ...S.btn, ...(dlBusy ? { opacity: 0.55, cursor: 'progress' } : {}) }}
+                  {...busyBtn(dlBusy === '정산 리포트', dlBusy !== '' || !r || r.rows.length === 0, S.btn)}
                   onClick={downloadSettlementCsv}
-                  disabled={!r || r.rows.length === 0}
-                  aria-disabled={dlBusy !== '' || undefined}
-                  aria-busy={dlBusy === '정산 리포트' || undefined}
                 >
                   {dlBusy === '정산 리포트' ? '내려받는 중…' : 'CSV 내려받기'}
                 </button>
@@ -3878,7 +3927,7 @@ export default function AdminPage() {
                     <option key={id} value={id}>{id}</option>
                   ))}
                 </select>
-                <button style={S.btnGhost} onClick={() => loadTenant(tenantId)} disabled={tenantBusy} aria-busy={tenantBusy}>
+                <button type="button" {...busyBtn(tenantBusy, tenantBusy)} onClick={() => loadTenant(tenantId)}>
                   {tenantBusy ? '불러오는 중…' : '새로고침'}
                 </button>
               </div>
@@ -4062,7 +4111,7 @@ export default function AdminPage() {
                   <h2 id="storage-h" style={S.h2}>저장소 상태</h2>
                   <p style={{ ...S.tag, marginTop: 2 }}>데이터가 어디에 저장되는지와 최근 저장 결과입니다. 저장이 막혀도 서비스는 계속 동작하며, 사유가 여기에 표시됩니다.</p>
                 </div>
-                <button style={S.btnGhost} onClick={loadStorage} disabled={storageBusy} aria-busy={storageBusy}>
+                <button type="button" {...busyBtn(storageBusy, storageBusy)} onClick={loadStorage}>
                   {storageBusy ? '확인 중…' : '새로고침'}
                 </button>
               </div>
@@ -4140,7 +4189,7 @@ export default function AdminPage() {
                 }}
               />
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <button type="button" style={{ ...S.btn, opacity: testBusy ? 0.6 : 1 }} onClick={runTest} disabled={testBusy} aria-busy={testBusy || undefined}>
+                <button type="button" {...busyBtn(testBusy, testBusy, S.btn)} onClick={runTest}>
                   {testBusy ? '답변 기다리는 중…' : '보내기'}
                 </button>
                 <span style={S.tag}>Enter 로 보내고 Shift+Enter 로 줄을 바꿉니다.</span>

@@ -231,3 +231,30 @@ test('서버 렌더에는 이어가기 표시가 없다 (DS 7-1)', opts, async (
   const html = await render({ tenant: TENANT });
   assert.equal(html.includes('이전 대화를 이어서 보고 있습니다'), false, '저장소를 읽기 전에 이어간다고 단정한다');
 });
+
+test('렌더된 위젯에 비활성 버튼이 없다 (DS 8-2)', opts, async () => {
+  const html = await render({ tenant: TENANT, defaultOpen: true });
+  const bad = (html.match(/<button[^>]*\sdisabled[^>]*>/g) || []);
+  assert.equal(bad.length, 0, `비활성 버튼 ${bad.length}곳: ${bad.slice(0, 2).join(' / ')}`);
+});
+
+test('연락처 형식 오류를 사람 말로 구분해 알려준다 (DS 8-2)', opts, async () => {
+  const m = await loadModule();
+  // 통과해야 하는 값
+  for (const ok of ['010-1234-5678', 'name@example.com', '02 123 4567']) {
+    assert.equal(m.contactError(ok), '', `막으면 안 되는 값: ${ok}`);
+    assert.equal(m.validContact(ok), true, `막으면 안 되는 값: ${ok}`);
+  }
+  // 막아야 하는 값은 **왜** 막았는지가 서로 달라야 한다 — 한 문장으로 뭉치면 고칠 수가 없다.
+  assert.match(m.contactError(''), /입력해 주세요/, '비었을 때');
+  assert.match(m.contactError('  '), /연락처 없이 접수/, '비었을 때는 남기지 않는 길도 알려준다');
+  assert.match(m.contactError('name@example'), /name@example\.com/, '이메일 형식');
+  assert.match(m.contactError('010-12'), /010-0000-0000/, '전화번호 자릿수');
+  assert.match(m.contactError('아무개'), /전화번호.*또는 이메일|이메일.*또는 전화번호/, '형식을 알 수 없을 때');
+  assert.match(m.contactError('a'.repeat(120)), /너무 깁니다/, '너무 길 때');
+  // contactError 와 validContact 가 어긋나면 「눌러도 안 되는데 오류도 없는」 상태가 된다.
+  for (const v of ['010-1234-5678', 'name@example.com', '', '010-12', '아무개', 'x'.repeat(120)]) {
+    assert.equal(m.contactError(v) === '', m.validContact(v.trim()), `판정이 어긋난다: ${v.slice(0, 12)}`);
+  }
+});
+
