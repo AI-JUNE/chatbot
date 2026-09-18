@@ -1142,7 +1142,10 @@ test('문서 업로드 폼이 라벨·인라인 검증·실패 처리를 갖춘�
   const form = s.slice(s.indexOf('<div className="ac-grid3">'), s.indexOf('먼저 「미리보기」로'));
   assert.equal(/disabled=\{impBusy/.test(s), false, '진행 중 버튼을 disabled 로 잠그면 초점이 떨어진다');
   assert.match(s, /busyBtn\(impBusy === 'commit'/, '등록 버튼에 진행 표시가 없다');
-  assert.match(s, /등록하는 중…/, '등록 중 표시가 없다');
+  // 주석에 적힌 문구로 통과하지 않게 렌더 구간만 본다(DS 5-6 에서 겪은 거짓 통과).
+  const rendered = stripComments(s);
+  assert.match(rendered, /등록하는 중…/, '등록 중 표시가 없다');
+  assert.match(rendered, /미리보기 만드는 중…/, '미리보기 중 표시가 없다');
   assert.ok(form.includes('aria-required="true"'), '필수 항목 표시가 없다');
 });
 
@@ -1198,6 +1201,7 @@ test('콘솔 탭이 주소에 남아 새로고침·뒤로가기에서 유지된�
   const after = s.slice(s.indexOf('\n  }, [setTab]);', s.indexOf('const goTab = useCallback')));
   assert.equal(/\bsetTab\(/.test(after), false, '주소를 거치지 않고 탭을 바꾸는 경로가 있다');
   assert.ok((after.match(/\bgoTab\(/g) || []).length >= 10, '탭 전환 경로가 goTab 으로 모이지 않았다');
-  // 깊은 링크로 막 들어왔을 때는 초점을 가로채지 않는다.
+  // 깊은 링크로 막 들어왔을 때는 초점을 가로채지 않는다(뒤로/앞으로는 사용자의 이동이므로 옮긴다).
+  assert.match(s, /if \(initial\) skipTabFocus\.current = true;/, '첫 진입 표시를 세우지 않는다');
   assert.match(s, /if \(skipTabFocus\.current\) \{ skipTabFocus\.current = false; return; \}/, '첫 진입에서 초점을 빼앗는다');
 });
