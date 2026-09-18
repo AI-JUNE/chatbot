@@ -159,6 +159,96 @@ function clock(ms: number): string {
 let msgSeq = 0;
 function nextKey(): number { msgSeq += 1; return msgSeq; }
 
+/** 새 대화 세션 식별자 — 서버 세션(`lib/session.ts`) 키가 된다. */
+function newSessionId(): string {
+  return `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * ── 대화 이어가기 ──
+ * 임베드 위젯은 호스트 페이지가 이동할 때마다(목록 → 상세 → 장바구니) iframe 이 통째로 다시 로드된다.
+ * 저장해 두지 않으면 **한 번 클릭할 때마다 대화가 처음부터**이고, 멀티턴 접수(예약·장애 신고)를
+ * 절반 진행한 사람은 서버 세션이 멀쩡히 살아 있는데도 같은 질문을 처음부터 다시 받는다.
+ *
+ * `localStorage` 가 아니라 **`sessionStorage`** 를 쓴다 — 탭을 닫으면 사라지므로 공용 PC 에
+ * 다음 사람이 읽을 대화가 남지 않는다. 저장 범위도 위젯 출처(iframe) 안이라 호스트 페이지는 읽지 못한다.
+ */
+const THREAD_KEY = 'gowon-chat-thread';
+const THREAD_VER = 1;
+/**
+ * 이 시간이 지난 대화는 복원하지 않는다 — 서버 세션 TTL(`lib/session.ts` TTL_MS)과 **같은 값**.
+ * 서버 문맥이 이미 지워졌는데 화면만 이어 보이면 「아까 말한 그거요」가 통하지 않는다.
+ */
+export const THREAD_TTL_MS = 30 * 60 * 1000;
+/** 복원할 최대 말풍선 수 — 저장 용량과 첫 렌더 비용의 상한. */
+const THREAD_MAX_MSGS = 40;
+/** 저장 상한(직렬화 길이). 넘으면 저장을 건너뛴다 — 저장소를 가득 채워 호스트 페이지를 망가뜨리지 않는다. */
+const THREAD_MAX_BYTES = 100_000;
+
+export interface SavedThread { v: number; id: string; at: number; msgs: Msg[] }
+
+/**
+ * 저장소 접근 **자체가 예외를 던질 수 있다** — 서드파티 쿠키를 막은 브라우저의 iframe,
+ * 사생활 보호 모드가 그렇다. 임베드 위젯에서는 드문 일이 아니므로 없으면 없는 대로 동작한다.
+ */
+function threadStore(): Storage | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    return window.sessionStorage || null;
+  } catch {
+    return null;
+  }
+}
+
+function threadKey(tenantId: string): string { return `${THREAD_KEY}:${tenantId}`; }
+
+/** 저장된 대화를 읽는다. 없거나·형식이 다르거나·서버 세션이 만료됐으면 `null`(새 대화로 시작). */
+export function loadThread(tenantId: string, now: number = Date.now()): SavedThread | null {
+  const st = threadStore();
+  if (!st) return null;
+  try {
+    const raw = st.getItem(threadKey(tenantId));
+    if (!raw) return null;
+    const d = JSON.parse(raw) as Partial<SavedThread>;
+    if (d?.v !== THREAD_VER || typeof d.id !== 'string' || !d.id || typeof d.at !== 'number') return null;
+    if (!Array.isArray(d.msgs) || d.msgs.length === 0) return null;
+    // 서버 문맥이 이미 사라진 대화는 이어 보이면 안 된다.
+    if (now - d.at > THREAD_TTL_MS) { clearThread(tenantId); return null; }
+    const msgs = d.msgs.filter(
+      (m): m is Msg => !!m && (m.role === 'bot' || m.role === 'user') && typeof m.text === 'string',
+    );
+    if (msgs.length === 0) return null;
+    return { v: THREAD_VER, id: d.id, at: d.at, msgs };
+  } catch {
+    // 남의 데이터·깨진 JSON — 새 대화로 시작한다(사용자에게 알릴 실패가 아니다).
+    return null;
+  }
+}
+
+/** 대화를 저장한다. 실패(용량 초과·차단)해도 대화 자체는 계속된다. */
+export function saveThread(tenantId: string, id: string, msgs: Msg[], now: number = Date.now()): void {
+  const st = threadStore();
+  if (!st) return;
+  try {
+    // 전송 실패 안내는 **그때의 상황**이다 — 다시 열었을 때 남아 있으면 지나간 오류를 현재로 읽는다.
+    const keep = msgs.filter((m) => m.failed === undefined).slice(-THREAD_MAX_MSGS);
+    // 인사말 하나뿐이면 이어갈 대화가 없다.
+    if (keep.length <= 1) { st.removeItem(threadKey(tenantId)); return; }
+    const raw = JSON.stringify({ v: THREAD_VER, id, at: now, msgs: keep } satisfies SavedThread);
+    if (raw.length > THREAD_MAX_BYTES) return;
+    st.setItem(threadKey(tenantId), raw);
+  } catch {
+    /* 저장 공간 초과·저장소 차단 — 이어가기만 못 할 뿐 대화는 계속된다 */
+  }
+}
+
+/** 저장된 대화를 지운다(「닫고 처음으로」·만료). */
+export function clearThread(tenantId: string): void {
+  const st = threadStore();
+  if (!st) return;
+  try { st.removeItem(threadKey(tenantId)); } catch { /* noop */ }
+}
+
 /**
  * 위젯 아이콘 — 16px 뷰박스 선 아이콘(stroke 1.4).
  * 랜딩(`app/page.tsx`)·관리 콘솔과 같은 규약을 쓴다. 이모지를 쓰지 않는다:
@@ -217,18 +307,39 @@ export default function ChatWidget({
   const [rated, setRated] = useState<Record<number, 'up' | 'down' | 'error'>>({});
   // 상담원 전환 — 한 번에 한 건만 진행한다(중복 접수 방지).
   const [handoff, setHandoff] = useState<HandoffState | null>(null);
-  const [sessionId] = useState(() => `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
+  const [sessionId, setSessionId] = useState(newSessionId);
+  // 저장된 대화를 되살렸는지 — 되살렸다면 왜 지난 말풍선이 있는지 화면에 밝힌다.
+  const [resumed, setResumed] = useState(false);
   const lastUserRef = useRef('');
   const endRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const launcherRef = useRef<HTMLButtonElement>(null);
 
+  // 대화를 저장·복원할 때 쓰는 열쇠 — 테넌트마다 따로 둔다(다른 안내 챗봇의 대화가 섞이지 않게).
+  const threadId = tenant?.id || 'default';
+
   // 시각 표기는 마운트 이후에만 — 서버 렌더 결과와 어긋나지 않게 한다.
+  // 같은 방문에서 이어가던 대화가 있으면 여기서 되살린다(서버 렌더에는 저장소가 없다).
   useEffect(() => {
     setMounted(true);
+    const saved = loadThread(threadId);
+    if (saved) {
+      setSessionId(saved.id);
+      // 화면 안 일련번호는 이 렌더에서 다시 매긴다(저장된 번호와 겹치지 않게).
+      setMsgs(saved.msgs.map((m) => ({ ...m, key: nextKey() })));
+      setResumed(true);
+      return;
+    }
     setMsgs((m) => m.map((x) => (x.at === 0 ? { ...x, at: Date.now() } : x)));
-  }, []);
+  }, [threadId]);
+
+  // 대화가 바뀔 때마다 저장한다. 복원 전(서버 렌더 직후)에는 쓰지 않는다 —
+  // 인사말만 있는 상태로 덮어써 이어갈 대화를 지워 버리면 안 된다.
+  useEffect(() => {
+    if (!mounted) return;
+    saveThread(threadId, sessionId, msgs);
+  }, [mounted, threadId, sessionId, msgs]);
 
   // 전체화면 전환 판단.
   // - 일반 페이지: 실제 뷰포트 폭으로 판단한다.
@@ -302,9 +413,13 @@ export default function ChatWidget({
       setHandoff(null);
       setInput('');
       lastUserRef.current = '';
+      // 사용자가 명시적으로 지운 대화다 — 저장분도 지우고, 서버 문맥으로도 이어지지 않게 새 세션으로 간다.
+      clearThread(threadId);
+      setSessionId(newSessionId());
+      setResumed(false);
     }
     setTimeout(() => launcherRef.current?.focus(), 0);
-  }, [greeting]);
+  }, [greeting, threadId]);
 
   // ESC로 닫고, Tab은 위젯 안에서 순환시킨다(뒤 페이지로 초점이 새지 않게).
   function onPanelKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
