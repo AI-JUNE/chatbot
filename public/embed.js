@@ -1,7 +1,11 @@
-/* GOWON Chat 임베드 스니펫 (v0.5)
+/* GOWON Chat 임베드 스니펫 (v0.6)
  * 사용법: <script src="https://<배포도메인>/embed.js" async></script>
  * 옵션(선택): data-position="left" | data-offset="24" | data-z="2147483000"
  *            data-tenant="eum"  ← 테넌트 프리셋(문구·색·FAQ 지식)을 바꿔 끼운다
+ *
+ * v0.6 변경점
+ * - 전체화면(모바일)으로 열린 동안 호스트 페이지 스크롤을 잠근다 — 위젯 뒤에서 페이지가 밀리면
+ *   닫았을 때 읽던 자리가 아니다. 닫으면 원래 스타일과 스크롤 위치를 그대로 되돌린다.
  *
  * v0.5 변경점
  * - 첫 로드 깜빡임 제거: iframe을 투명하게 붙였다가 위젯이 "준비됨"을 알릴 때 부드럽게 나타낸다.
@@ -91,6 +95,27 @@
   var lastOpen = false;
   var lastFull = false;
 
+  // 전체화면(모바일)으로 열린 동안 호스트 페이지가 위젯 뒤에서 스크롤되지 않게 잠근다.
+  // 잠글 때의 스크롤 위치와 원래 스타일을 기억해 두었다가 풀 때 그대로 되돌린다
+  // (호스트 페이지가 자기 스타일로 overflow 를 쓰고 있을 수 있다).
+  var locked = false;
+  var lockY = 0;
+  var prevOverflow = '';
+  function lockHost(on) {
+    if (on === locked || !document.body) return;
+    try {
+      if (on) {
+        lockY = window.scrollY || window.pageYOffset || 0;
+        prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+      } else {
+        document.body.style.overflow = prevOverflow;
+        window.scrollTo(0, lockY);
+      }
+      locked = on;
+    } catch (e) { /* noop */ }
+  }
+
   // 전체화면(모바일): 가장자리 여백을 지우고 화면 전체를 덮는다. 아니면 원래 위치로 되돌린다.
   function applyPlacement(full) {
     if (full) {
@@ -133,6 +158,7 @@
     lastOpen = !!d.open;
     lastFull = !!d.fullscreen;
     applyPlacement(lastFull);
+    lockHost(lastFull);
     if (lastFull) {
       applySize(window.innerWidth, window.innerHeight);
       return;
@@ -156,6 +182,7 @@
     tenant: tenant || null,
     element: function () { return iframe; },
     remove: function () {
+      lockHost(false);
       if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
       window.__gowonChatLoaded = false;
     }

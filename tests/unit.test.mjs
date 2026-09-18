@@ -1205,3 +1205,71 @@ test('콘솔 탭이 주소에 남아 새로고침·뒤로가기에서 유지된�
   assert.match(s, /if \(initial\) skipTabFocus\.current = true;/, '첫 진입 표시를 세우지 않는다');
   assert.match(s, /if \(skipTabFocus\.current\) \{ skipTabFocus\.current = false; return; \}/, '첫 진입에서 초점을 빼앗는다');
 });
+
+
+/* ══════════ 7순위 — 4차 재감사 (DS 7-x) ══════════ */
+
+test('위젯이 같은 방문 안에서 대화를 이어간다 (DS 7-1)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  // 세션 식별자가 마운트마다 새로 생기면, 호스트 페이지를 한 번 옮길 때마다 대화가 처음부터다.
+  assert.match(s, /const \[sessionId, setSessionId\] = useState\(newSessionId\)/, '세션을 이어받을 수 없다');
+  assert.match(s, /setSessionId\(saved\.id\)/, '복원한 대화가 서버 문맥과 이어지지 않는다');
+  assert.match(s, /const saved = loadThread\(threadId\)/, '마운트 후 복원 경로가 없다');
+  assert.match(s, /saveThread\(threadId, sessionId, msgs\)/, '대화가 저장되지 않는다');
+  // 공용 PC 에 다음 사람이 읽을 대화를 남기지 않는다 — 탭을 닫으면 사라지는 저장소여야 한다.
+  assert.match(s, /window\.sessionStorage/, '세션 저장소를 쓰지 않는다');
+  // 주석은 「localStorage 가 아니라 sessionStorage 를 쓴다」고 적혀 있다 — 실제 코드만 본다.
+  assert.equal(/localStorage/.test(stripComments(s)), false, '대화를 영구 저장소에 남기면 공용 PC 에서 다음 사람이 읽는다');
+  // 저장소 접근 자체가 예외를 던지는 환경(쿠키 차단 iframe·사생활 보호 모드)에서 위젯이 죽으면 안 된다.
+  const store = s.slice(s.indexOf('function threadStore('));
+  assert.match(store.slice(0, store.indexOf('\n}')), /catch \{/, '저장소 접근 실패를 감싸지 않는다');
+  for (const fn of ['loadThread', 'saveThread', 'clearThread']) {
+    const body = s.slice(s.indexOf(`export function ${fn}(`));
+    assert.match(body.slice(0, body.indexOf('\n}')), /catch/, `${fn} 에 실패 처리가 없다`);
+  }
+  // 서버 세션이 이미 지워진 대화를 이어 보이면 「아까 말한 그거요」가 통하지 않는다.
+  const ttl = /THREAD_TTL_MS = (\d+) \* (\d+) \* (\d+)/.exec(s);
+  assert.ok(ttl, '복원 유효 시간이 없다');
+  const widgetTtl = Number(ttl[1]) * Number(ttl[2]) * Number(ttl[3]);
+  const session = read('src/lib/session.ts');
+  const srv = /TTL_MS = (\d+) \* (\d+) \* (\d+)/.exec(session);
+  assert.ok(srv, '서버 세션 TTL 을 읽지 못했다');
+  assert.equal(widgetTtl, Number(srv[1]) * Number(srv[2]) * Number(srv[3]), '위젯 복원 창과 서버 세션 TTL 이 어긋난다');
+  // 전송 실패 안내는 그때의 상황이다 — 다시 열었을 때 남아 있으면 지나간 오류를 현재로 읽는다.
+  assert.match(s, /msgs\.filter\(\(m\) => m\.failed === undefined\)/, '지나간 오류 안내까지 저장한다');
+  // 「닫고 처음으로」는 저장분까지 지운다(사용자가 명시적으로 지운 대화다).
+  assert.match(s, /clearThread\(threadId\);\n      setSessionId\(newSessionId\(\)\);/, '지운 대화가 다시 살아난다');
+  // 왜 지난 말풍선이 남아 있는지 화면에 밝힌다.
+  assert.match(s, /이전 대화를 이어서 보고 있습니다/, '이어가기 표시가 없다');
+});
+
+test('위젯이 비모달일 때 키보드 초점을 가두지 않는다 (DS 7-2)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  // aria-modal 은 전체화면일 때만 붙는다 — 그렇다면 초점 가두기도 그때만이어야 한다.
+  assert.match(s, /aria-modal=\{fullscreen \? true : undefined\}/, '모달 표시 조건이 바뀌었다');
+  const fn = s.slice(s.indexOf('function onPanelKeyDown('));
+  const body = fn.slice(0, fn.indexOf('\n  }'));
+  assert.match(body, /if \(!\(open && mobile\)\) return;/, '비모달 위젯이 키보드 초점을 가둔다');
+  // 가두기 조건은 Tab 검사 뒤, 초점 목록을 뒤지기 전에 와야 한다(ESC 는 두 경우 모두 동작한다).
+  assert.ok(body.indexOf("e.key !== 'Tab'") < body.indexOf('if (!(open && mobile)) return;'), '검사 순서가 어긋났다');
+  assert.ok(body.indexOf('if (!(open && mobile)) return;') < body.indexOf('FOCUSABLE'), '가두기 전에 걸러야 한다');
+  assert.match(body, /e\.key === 'Escape'/, 'ESC 로 닫는 경로가 사라졌다');
+});
+
+test('전체화면 위젯 뒤에서 페이지가 따라 움직이지 않는다 (DS 7-3)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  assert.match(s, /body\.style\.overflow = 'hidden'/, '전체화면일 때 뒤 페이지가 스크롤된다');
+  assert.match(s, /return \(\) => \{ body\.style\.overflow = prev; \};/, '원래 스타일을 되돌리지 않는다');
+  assert.match(s, /overscrollBehavior: 'contain'/, '목록 끝에서 스크롤이 뒤 페이지로 넘어간다');
+  // 임베드 모드는 호스트 문서가 따로 있다 — 위젯이 아니라 embed.js 가 잠근다.
+  assert.match(s, /if \(embedded \|\| typeof document === 'undefined'\) return;/, '임베드에서 자기 문서를 잠그면 소용이 없다');
+  const e = read('public/embed.js');
+  assert.match(e, /function lockHost\(on\)/, '호스트 스크롤 잠금이 없다');
+  assert.match(e, /lockHost\(lastFull\)/, '전체화면 신호에 잠그지 않는다');
+  assert.match(e, /window\.scrollTo\(0, lockY\)/, '풀 때 읽던 자리로 되돌리지 않는다');
+  assert.match(e, /document\.body\.style\.overflow = prevOverflow/, '호스트의 원래 스타일을 되돌리지 않는다');
+  assert.match(e, /lockHost\(false\);\n      if \(iframe\.parentNode\)/, '위젯을 걷어낼 때 잠금이 남는다');
+  // data-tenant·data-position 옵션 계약은 그대로여야 한다.
+  assert.match(e, /attr\('data-position', 'right'\)/, 'data-position 옵션 계약이 깨졌다');
+  assert.match(e, /attr\('data-tenant', ''\)/, 'data-tenant 옵션 계약이 깨졌다');
+});

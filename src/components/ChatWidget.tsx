@@ -405,6 +405,18 @@ export default function ChatWidget({
     );
   }, [embedded, open, mobile]);
 
+  // 전체화면(모바일)일 때 뒤 페이지가 따라 움직이지 않게 잠근다 — 대화 목록 끝에서 스크롤을 이어가면
+  // 뒤 화면이 밀려, 위젯을 닫았을 때 읽던 자리가 아니다. 닫으면 원래 값을 그대로 되돌린다.
+  // 임베드 모드는 호스트 문서가 따로 있어 `embed.js` 가 같은 일을 한다.
+  useEffect(() => {
+    if (embedded || typeof document === 'undefined') return;
+    if (!(open && mobile)) return;
+    const body = document.body;
+    const prev = body.style.overflow;
+    body.style.overflow = 'hidden';
+    return () => { body.style.overflow = prev; };
+  }, [embedded, open, mobile]);
+
   const closePanel = useCallback((reset: boolean) => {
     setOpen(false);
     if (reset) {
@@ -429,6 +441,11 @@ export default function ChatWidget({
       return;
     }
     if (e.key !== 'Tab') return;
+    // 초점을 가두는 것은 **모달일 때만**(전체화면 = `aria-modal`).
+    // 데스크톱에서는 위젯을 열어 둔 채 페이지를 계속 읽는 것이 정상 사용인데, 여기서 가두면
+    // 키보드 사용자는 위젯 밖으로 나가지 못한다. `aria-modal` 을 붙이지 않은 화면에서 초점만 가두면
+    // 스크린리더에 알린 것(배경도 쓸 수 있다)과 실제 동작이 어긋난다.
+    if (!(open && mobile)) return;
     const nodes = panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
     if (!nodes || nodes.length === 0) return;
     const list = Array.from(nodes);
@@ -622,8 +639,15 @@ export default function ChatWidget({
             aria-live="polite"
             aria-relevant="additions text"
             aria-label="대화 내용"
-            style={{ flex: 1, overflowY: 'auto', padding: '16px 14px', background: 'var(--bg)', display: 'flex', flexDirection: 'column', gap: 12 }}
+            // overscrollBehavior: 목록 끝에서 스크롤이 뒤 페이지로 넘어가지 않게 한다.
+            style={{ flex: 1, overflowY: 'auto', overscrollBehavior: 'contain', padding: '16px 14px', background: 'var(--bg)', display: 'flex', flexDirection: 'column', gap: 12 }}
           >
+            {/* 이어가기 표시 — 지난 말풍선이 왜 남아 있는지 밝힌다(설명 없이 대화가 이어져 있으면 혼란스럽다). */}
+            {resumed && (
+              <p style={{ textAlign: 'center', fontSize: 10.5, fontWeight: 600, color: 'var(--mut)', margin: 0 }}>
+                이전 대화를 이어서 보고 있습니다
+              </p>
+            )}
             {msgs.map((m) => {
               const mine = m.role === 'user';
               // 전송 실패 안내는 답변이 아니다 — 아바타 없이 경고 톤 카드로 그리고 곧바로 다시 보낼 수 있게 한다.
