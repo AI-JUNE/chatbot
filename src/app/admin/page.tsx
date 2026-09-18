@@ -27,6 +27,14 @@ interface ImportForm {
 
 const EMPTY_IMPORT: ImportForm = { title: '', category: '문서', maxChars: '500', text: '' };
 
+/** 서버와 같은 한계값 — 보내기 전에 이유를 밝히려면 화면도 알고 있어야 한다.
+ *  원본은 `src/lib/ingest.ts`(MAX_DOC_CHARS)와 `src/app/api/admin/kb/import/route.ts`(청크 clamp)이며,
+ *  콘솔은 lib 을 불러오지 않으므로(클라이언트 번들) 여기에 옮겨 적고 테스트가 두 값을 맞춰 고정한다.
+ *  어긋나면 화면은 통과시켰는데 서버가 거절하거나, 서버가 조용히 값을 바꿔 버린다. */
+const MAX_DOC_CHARS = 100_000;
+const MIN_CHUNK_CHARS = 120;
+const MAX_CHUNK_CHARS = 2000;
+
 interface RuleView {
   intent: string;
   label: string;
@@ -137,12 +145,24 @@ function maskContact(raw: string): string {
   return v.length > 2 ? `${v.slice(0, 2)}${'*'.repeat(v.length - 2)}` : '**';
 }
 
+/** 상태 톤 — 「배경 틴트 + 본문색」 짝. 콘솔의 모든 상태 pill·배너가 여기만 참조한다.
+ *  DS 5-4 가 globals.css 에 틴트 토큰(--success-50/--warn-50/--danger-50)을 단일 출처로 세웠지만,
+ *  콘솔 화면에는 같은 값이 hex 로 18곳 흩어져 있었다 — 토큰을 바꿔도 따라오지 않는 색들이다.
+ *  묶어 두면 「AICC Portal 과 같은 색인가」를 한 곳에서 판단할 수 있다. */
+const TONE = {
+  ok: { background: 'var(--success-50)', color: 'var(--success)' },
+  warn: { background: 'var(--warn-50)', color: 'var(--warn)' },
+  danger: { background: 'var(--danger-50)', color: 'var(--danger)' },
+  brand: { background: 'var(--brand-50)', color: 'var(--brand-600)' },
+  mute: { background: 'var(--bg)', color: 'var(--mut)' },
+} as const;
+
 /** 처리 상태 pill 색 — 토큰만 쓴다(성공/경고/기본). */
 const TICKET_STATUS_TONE: Record<TicketView['status'], { background: string; color: string }> = {
-  open: { background: '#FFFBEB', color: 'var(--warn)' },
-  in_progress: { background: 'var(--brand-50)', color: 'var(--brand-600)' },
-  resolved: { background: '#F0FDF4', color: 'var(--success)' },
-  canceled: { background: 'var(--bg)', color: 'var(--mut)' },
+  open: TONE.warn,
+  in_progress: TONE.brand,
+  resolved: TONE.ok,
+  canceled: TONE.mute,
 };
 
 function timeLabel(iso: string): string {
@@ -296,7 +316,7 @@ function ConversationDrawer({
 
         <div className="ac-drawer-meta">
           <span className="ac-pill">주고받은 메시지 {turns.length}쌍</span>
-          <span className="ac-pill" style={escalated ? { background: '#FFFBEB', color: 'var(--warn)' } : { background: '#F0FDF4', color: 'var(--success)' }}>
+          <span className="ac-pill" style={escalated ? TONE.warn : TONE.ok}>
             {escalated ? '상담원 제안됨' : '자동 응대로 완료'}
           </span>
           {ticket && <span className="ac-pill">접수 {TICKET_STATUS_LABELS[ticket.status]}</span>}
@@ -315,7 +335,7 @@ function ConversationDrawer({
                 <div className="ac-bubble-tags">
                   <span className="ac-pill">{INTENT_LABELS[t.intent] || t.intent}</span>
                   <span className="ac-pill">{SOURCE_VIEW_LABELS[t.source] || t.source}</span>
-                  {t.escalate && <span className="ac-pill" style={{ background: '#FFFBEB', color: 'var(--warn)' }}>상담원 제안</span>}
+                  {t.escalate && <span className="ac-pill" style={TONE.warn}>상담원 제안</span>}
                   <span style={{ fontSize: 11, color: 'var(--mut)', marginLeft: 'auto' }}>{timeLabel(t.at)}</span>
                 </div>
               </div>
@@ -384,7 +404,7 @@ function TicketDrawer({
         <div className="ac-drawer-meta">
           <span className="ac-pill" style={TICKET_STATUS_TONE[t.status]}>{TICKET_STATUS_LABELS[t.status]}</span>
           <span className="ac-pill">사유 · {reasonLabel}</span>
-          {t.contact ? <span className="ac-pill">연락처 남김</span> : <span className="ac-pill" style={{ background: 'var(--bg)', color: 'var(--mut)' }}>연락처 없음</span>}
+          {t.contact ? <span className="ac-pill">연락처 남김</span> : <span className="ac-pill" style={TONE.mute}>연락처 없음</span>}
         </div>
 
         <div className="ac-drawer-body">
@@ -496,7 +516,7 @@ function AccountDrawer({
         <div className="ac-drawer-meta">
           <span className="ac-pill" style={ACCOUNT_STATUS_TONE[a.status]}>{ACCOUNT_STATUS_LABELS[a.status]}</span>
           <span className="ac-pill">{a.contractedAt ? `계약일 ${a.contractedAt}` : '계약일 없음'}</span>
-          <span className="ac-pill" style={typeof a.monthlyFeeKrw === 'number' ? undefined : { background: 'var(--bg)', color: 'var(--mut)' }}>
+          <span className="ac-pill" style={typeof a.monthlyFeeKrw === 'number' ? undefined : TONE.mute}>
             월 {wonLabel(a.monthlyFeeKrw)}
           </span>
         </div>
@@ -526,7 +546,7 @@ function AccountDrawer({
                         {partnerName(h.fromPartnerId)} <span aria-hidden="true" style={{ color: 'var(--mut)' }}>→</span><span className="ac-srhide">에서</span> {partnerName(h.toPartnerId)}
                       </span>
                       <span className="ac-pill" style={{ background: 'var(--bg)', color: 'var(--sub)' }}>{SOURCE_LABELS[h.source] ?? '미확인'}</span>
-                      {h.authed && <span className="ac-pill" style={{ background: '#F0FDF4', color: 'var(--success)' }}>인증됨</span>}
+                      {h.authed && <span className="ac-pill" style={TONE.ok}>인증됨</span>}
                     </div>
                     {h.note && <p style={{ fontSize: 12.5, color: 'var(--sub)', marginTop: 3, whiteSpace: 'pre-wrap' }}>{h.note}</p>}
                   </div>
@@ -888,13 +908,13 @@ function bpToPct(bp: number): string {
 
 /** 계약 상태 pill 색 — 토큰만 쓴다. */
 const ACCOUNT_STATUS_TONE: Record<AccountView['status'], { background: string; color: string }> = {
-  prospect: { background: '#FFFBEB', color: 'var(--warn)' },
-  contracted: { background: '#F0FDF4', color: 'var(--success)' },
-  churned: { background: 'var(--bg)', color: 'var(--mut)' },
+  prospect: TONE.warn,
+  contracted: TONE.ok,
+  churned: TONE.mute,
 };
 const PARTNER_STATUS_TONE: Record<PartnerView['status'], { background: string; color: string }> = {
-  active: { background: '#F0FDF4', color: 'var(--success)' },
-  paused: { background: 'var(--bg)', color: 'var(--mut)' },
+  active: TONE.ok,
+  paused: TONE.mute,
 };
 
 // ── 콘솔 내비게이션 ──
@@ -907,6 +927,16 @@ const TAB_GROUPS: { group: string; tabs: readonly (readonly [TabKey, string])[] 
   { group: '사업', tabs: [['partner', '파트너·귀속'], ['settle', '정산 리포트']] },
   { group: '설정', tabs: [['install', '설치'], ['audit', '감사 로그']] },
 ];
+
+/** 주소(해시)에 쓰는 탭 이름. 메뉴에 없는 값이 오면 대시보드로 되돌린다. */
+const TAB_KEYS: readonly TabKey[] = TAB_GROUPS.flatMap((g) => g.tabs.map(([k]) => k));
+const isTabKey = (v: string): v is TabKey => (TAB_KEYS as readonly string[]).includes(v);
+/** 주소 뒤 `#kb` → 'kb'. 값이 없거나 모르는 이름이면 'dash'.
+ *  page.tsx 는 Next 가 export 를 검사하므로 내보내지 않는다(라우트 파일 규칙과 같은 이유). */
+function tabFromHash(hash: string): TabKey {
+  const raw = decodeURIComponent((hash || '').replace(/^#/, ''));
+  return isTabKey(raw) ? raw : 'dash';
+}
 
 /** 상단 헤더에 쓰는 탭 설명 — 이 화면에서 무엇을 하는지 한 줄로 알린다. */
 const TAB_DESC: Record<TabKey, string> = {
@@ -1136,9 +1166,9 @@ const S = {
  * 사용자가 화면 맨 위부터 Tab 을 다시 눌러야 한다. 초점은 그대로 두고 `aria-disabled` 로 알린 뒤,
  * 실제 중복 실행은 각 처리 함수가 앞단에서 막는다.
  */
-function busyBtn(busy: boolean, locked: boolean) {
+function busyBtn(busy: boolean, locked: boolean, base: React.CSSProperties = S.btnGhost) {
   return {
-    style: { ...S.btnGhost, ...(locked ? { opacity: 0.55, cursor: busy ? 'progress' : 'not-allowed' } : {}) },
+    style: { ...base, ...(locked ? { opacity: 0.55, cursor: busy ? 'progress' : 'not-allowed' } : {}) },
     'aria-busy': busy || undefined,
     'aria-disabled': locked || undefined,
   } as const;
@@ -1187,16 +1217,51 @@ const INSTALL_OPTIONS: [string, string][] = [
 ];
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<TabKey>('dash');
+  // 보고 있는 화면이 주소에 남지 않았다 — 새로고침하면 어느 탭에 있었든 대시보드로 돌아갔고,
+  // 뒤로가기는 이전 탭이 아니라 콘솔 자체를 벗어났다. 화면 링크를 남에게 보낼 수도 없었다.
+  // 주소 뒤에 `#settle` 처럼 남겨 세 가지를 한꺼번에 푼다(QUALITY_BAR §1 「새로고침·뒤로가기」).
+  // 해시는 서버로 가지 않으므로 서버 렌더는 항상 'dash' 로 시작하고, 마운트 후 주소에 맞춘다.
+  const [tab, setTabState] = useState<TabKey>('dash');
+  const tabRef = useRef<TabKey>('dash');
+  const setTab = useCallback((next: TabKey) => {
+    tabRef.current = next;
+    setTabState(next);
+  }, []);
   // 탭을 바꾸면 화면 전체가 바뀌는데 초점은 사이드바 버튼에 남아 있었다 — 키보드 사용자는
   // 새 화면에 닿으려고 다시 Tab 을 눌러야 했고, 스크린리더는 바뀐 사실조차 알리지 않았다.
   // 본문으로 초점을 옮기면 aria-label(현재 화면 이름)이 읽힌다. 첫 렌더에서는 옮기지 않는다.
   const mainRef = useRef<HTMLElement | null>(null);
   const tabMounted = useRef(false);
+  const skipTabFocus = useRef(false);
   useEffect(() => {
     if (!tabMounted.current) { tabMounted.current = true; return; }
+    // 깊은 링크(`/admin#settle`)로 막 들어온 경우까지 초점을 가로채지 않는다 — 사용자가 탭을
+    // 바꿔서 화면이 바뀐 것이 아니기 때문이다. 뒤로/앞으로는 사용자의 이동이므로 옮긴다.
+    if (skipTabFocus.current) { skipTabFocus.current = false; return; }
     mainRef.current?.focus();
   }, [tab]);
+  // 주소 → 화면. 첫 렌더(깊은 링크)와 뒤로/앞으로(hashchange) 둘 다 여기로 들어온다.
+  useEffect(() => {
+    const sync = (initial: boolean) => {
+      const next = tabFromHash(window.location.hash);
+      if (next === tabRef.current) return;
+      if (initial) skipTabFocus.current = true;
+      setTab(next);
+    };
+    sync(true);
+    const onHash = () => sync(false);
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, [setTab]);
+  /** 화면 → 주소. 탭 전환은 모두 이 문을 지난다(pushState 는 hashchange 를 일으키지 않는다). */
+  const goTab = useCallback((next: TabKey) => {
+    setTab(next);
+    try {
+      if (tabFromHash(window.location.hash) !== next) window.history.pushState(null, '', `#${next}`);
+    } catch {
+      /* 주소를 바꾸지 못하는 환경에서도 화면 전환 자체는 막지 않는다 */
+    }
+  }, [setTab]);
   // 설치 코드에 넣을 배포 주소 — 브라우저가 보고 있는 주소를 그대로 쓴다(하드코딩 금지).
   const [origin, setOrigin] = useState('');
   const [copied, setCopied] = useState('');
@@ -1298,14 +1363,30 @@ export default function AdminPage() {
   // ---- 문서 업로드(청킹 → KB 후보) ----
   const [imp, setImp] = useState<ImportForm>(EMPTY_IMPORT);
   const [candidates, setCandidates] = useState<KBCandidateView[] | null>(null);
-  const [impBusy, setImpBusy] = useState(false);
+  // 어느 버튼이 도는지 구분해야 「미리보기 하는 중…」·「등록하는 중…」을 제자리에 쓸 수 있다.
+  const [impBusy, setImpBusy] = useState<'' | 'preview' | 'commit'>('');
+  const [impErr, setImpErr] = useState<{ title?: string; text?: string; maxChars?: string }>({});
+  const clearImpErr = (k: keyof typeof impErr) => setImpErr((p) => (p[k] ? { ...p, [k]: undefined } : p));
 
   const runImport = async (commit: boolean) => {
-    if (!imp.title.trim() || !imp.text.trim()) {
-      flash('문서명과 본문을 입력해 주세요.');
+    if (impBusy) return; // 버튼을 비활성화하지 않으므로(초점 유지) 중복 실행은 여기서 막는다
+    // 어느 항목이 왜 틀렸는지 그 칸 아래에서 밝힌다 — 토스트 한 줄은 어느 칸인지 알려주지 못했다.
+    const errs: typeof impErr = {};
+    if (!imp.title.trim()) errs.title = '문서명을 입력해 주세요. 답변에 출처로 표시됩니다.';
+    if (!imp.text.trim()) errs.text = '문서 본문을 붙여넣어 주세요.';
+    else if (imp.text.length > MAX_DOC_CHARS) errs.text = `본문이 ${MAX_DOC_CHARS.toLocaleString('ko-KR')}자를 넘습니다. 장을 나눠 올려주세요.`;
+    const chunk = Number(imp.maxChars);
+    if (imp.maxChars.trim() === '' || !Number.isFinite(chunk) || chunk < MIN_CHUNK_CHARS || chunk > MAX_CHUNK_CHARS) {
+      errs.maxChars = `${MIN_CHUNK_CHARS}~${MAX_CHUNK_CHARS} 사이 숫자로 적어주세요.`;
+    }
+    setImpErr(errs);
+    if (Object.keys(errs).length > 0) {
+      // 화면 밖에 있는 칸이 틀렸을 수 있으므로 첫 오류 칸으로 초점을 옮긴다.
+      const first = errs.title ? 'kb-imp-title' : errs.maxChars ? 'kb-imp-chunk' : 'kb-imp-text';
+      document.getElementById(first)?.focus();
       return;
     }
-    setImpBusy(true);
+    setImpBusy(commit ? 'commit' : 'preview');
     try {
       const res = await fetch('/api/admin/kb/import', {
         method: 'POST',
@@ -1313,7 +1394,7 @@ export default function AdminPage() {
         body: JSON.stringify({
           title: imp.title.trim(),
           category: imp.category.trim() || '문서',
-          maxChars: Number(imp.maxChars) || 500,
+          maxChars: chunk,
           text: imp.text,
           commit,
         }),
@@ -1331,10 +1412,13 @@ export default function AdminPage() {
         flash(`문서 등록 완료: 신규 ${data.created} · 갱신 ${data.updated}${data.errors?.length ? ` · 실패 ${data.errors.length}` : ''}`);
       } else {
         setCandidates(data.candidates as KBCandidateView[]);
-        flash(`미리보기 ${data.count}개 — 확인 후 "등록"을 눌러주세요.`);
+        flash(`미리보기 ${data.count}개 — 확인한 뒤 「등록」을 누르세요.`);
       }
+    } catch {
+      // catch 가 없어 오프라인·서버 끊김에서 예외가 조용히 사라졌다 — 사용자는 등록된 줄 알고 떠났다.
+      flash(commit ? '네트워크 오류로 등록하지 못했습니다. 기존 자료는 그대로입니다.' : '네트워크 오류로 미리보기를 만들지 못했습니다.');
     } finally {
-      setImpBusy(false);
+      setImpBusy('');
     }
   };
 
@@ -1868,7 +1952,7 @@ export default function AdminPage() {
     setEditingId(e.id);
     setKbErr({});
     setForm({ id: e.id, category: e.category, question: e.question, keywords: e.keywords.join(', '), answer: e.answer });
-    setTab('kb');
+    goTab('kb');
     // 좁은 화면에서는 편집 폼이 표 아래에 있으므로 보이는 곳으로 옮긴다.
     window.setTimeout(() => kbFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
   };
@@ -2281,7 +2365,7 @@ export default function AdminPage() {
         kind: '화면' as const,
         title: label,
         detail: TAB_DESC[key],
-        run: () => setTab(key),
+        run: () => goTab(key),
       })));
 
     take(tickets
@@ -2291,7 +2375,7 @@ export default function AdminPage() {
         kind: '상담원 요청' as const,
         title: `${shortTicket(t.id)} · ${TICKET_STATUS_LABELS[t.status]}`,
         detail: clip(t.message),
-        run: (from: HTMLElement | null) => { setTab('esc'); setEscFilter('all'); setEscQuery(''); openTicket(t.id, from); },
+        run: (from: HTMLElement | null) => { goTab('esc'); setEscFilter('all'); setEscQuery(''); openTicket(t.id, from); },
       })));
 
     take(recentTurns
@@ -2301,7 +2385,7 @@ export default function AdminPage() {
         kind: '최근 대화' as const,
         title: clip(t.message, 48),
         detail: `${timeLabel(t.at)} · 대화 ${shortSession(t.sessionId)} · ${t.escalate ? '상담원 제안' : '자동 응대'}`,
-        run: (from: HTMLElement | null) => { setTab('dash'); openDrawer(t.sessionId, from); },
+        run: (from: HTMLElement | null) => { goTab('dash'); openDrawer(t.sessionId, from); },
       })));
 
     take(entries
@@ -2311,7 +2395,7 @@ export default function AdminPage() {
         kind: '지식베이스' as const,
         title: clip(e.question, 48),
         detail: `${e.category || '분류 없음'} · ${clip(e.answer, 56)}`,
-        run: () => { setTab('kb'); setKbCat(''); setKbQuery(e.question); },
+        run: () => { goTab('kb'); setKbCat(''); setKbQuery(e.question); },
       })));
 
     take([
@@ -2322,7 +2406,7 @@ export default function AdminPage() {
           kind: '시나리오 룰' as const,
           title: r.label,
           detail: `내가 만든 규칙 · ${r.keywords.slice(0, 4).join(', ')}`,
-          run: () => { setTab('rules'); setRuleQuery(r.label); },
+          run: () => { goTab('rules'); setRuleQuery(r.label); },
         })),
       ...rules
         .filter((r) => searchMatch(term, r.label, patternExamples(r.pattern).join(' '), r.effectiveReply))
@@ -2331,7 +2415,7 @@ export default function AdminPage() {
           kind: '시나리오 룰' as const,
           title: r.label,
           detail: `기본 규칙 · ${patternExamples(r.pattern).slice(0, 4).join(', ')}`,
-          run: () => { setTab('rules'); setRuleQuery(r.label); },
+          run: () => { goTab('rules'); setRuleQuery(r.label); },
         })),
     ]);
 
@@ -2342,7 +2426,7 @@ export default function AdminPage() {
         kind: '고객사' as const,
         title: a.name,
         detail: `${ACCOUNT_STATUS_LABELS[a.status]} · ${a.partnerId ? `${partners.find((p) => p.id === a.partnerId)?.name ?? '이름 없는 파트너'} 귀속` : '직접 계약'}`,
-        run: () => { setTab('partner'); setAccountQuery(a.name); },
+        run: () => { goTab('partner'); setAccountQuery(a.name); },
       })));
 
     take(partners
@@ -2352,7 +2436,7 @@ export default function AdminPage() {
         kind: '파트너' as const,
         title: p.name,
         detail: `파트너 · ${p.status === 'active' ? '운영 중' : '일시 중지'}${p.managerName ? ` · 담당 ${p.managerName}` : ''}`,
-        run: () => { setTab('partner'); setAccountQuery(''); setPartnerFormKind('partner'); },
+        run: () => { goTab('partner'); setAccountQuery(''); setPartnerFormKind('partner'); },
       })));
 
     return hits.slice(0, SEARCH_MAX);
@@ -2384,7 +2468,7 @@ export default function AdminPage() {
                   type="button"
                   className="ac-navbtn"
                   aria-current={tab === key ? 'page' : undefined}
-                  onClick={() => setTab(key)}
+                  onClick={() => goTab(key)}
                 >
                   <NavIcon tab={key} />
                   <span>{label}</span>
@@ -2603,7 +2687,7 @@ export default function AdminPage() {
                 <EmptyArt kind="chat" />
                 <p style={{ fontSize: 14, fontWeight: 700 }}>아직 기록된 대화가 없습니다</p>
                 <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>홈페이지의 상담창이나 「응답 테스트」에서 대화하면 여기에 쌓입니다.</p>
-                <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => setTab('test')}>응답 테스트 열기</button>
+                <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => goTab('test')}>응답 테스트 열기</button>
               </div>
             ) : (
               <ul className="ac-rows" aria-label="최근 대화 목록">
@@ -2623,7 +2707,7 @@ export default function AdminPage() {
                       <span style={{ fontSize: 11.5, color: 'var(--mut)', whiteSpace: 'nowrap' }}>{timeLabel(t.at)}</span>
                       <span className="ac-pill">{INTENT_LABELS[t.intent] || t.intent}</span>
                       <span className="ac-pill">{SOURCE_VIEW_LABELS[t.source] || t.source}</span>
-                      {t.escalate && <span className="ac-pill" style={{ background: '#FFFBEB', color: 'var(--warn)' }}>상담원 제안</span>}
+                      {t.escalate && <span className="ac-pill" style={TONE.warn}>상담원 제안</span>}
                     </span>
                   </button>
                   </li>
@@ -2724,24 +2808,77 @@ export default function AdminPage() {
               안내문·약관·매뉴얼 텍스트를 붙여넣으면 제목·문단 단위로 잘라 FAQ 후보를 만듭니다. 미리보기로 확인한 뒤 등록하세요.
               등록된 항목은 답변에 <strong>출처(근거)</strong>가 함께 표시됩니다. 키워드는 자동 추출값이므로 등록 후 보정하는 것을 권장합니다.
             </p>
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8 }}>
-              <input style={S.input} placeholder="문서명(출처로 표시됨, 예: 2026 이용안내)" value={imp.title} onChange={(e) => setImp({ ...imp, title: e.target.value })} />
-              <input style={S.input} placeholder="카테고리" value={imp.category} onChange={(e) => setImp({ ...imp, category: e.target.value })} />
-              <input style={S.input} placeholder="청크 길이(120~2000)" value={imp.maxChars} onChange={(e) => setImp({ ...imp, maxChars: e.target.value })} />
+            <div className="ac-grid3">
+              <div className="ac-field">
+                <label htmlFor="kb-imp-title">문서명 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span> <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(답변에 출처로 표시)</span></label>
+                <input
+                  id="kb-imp-title"
+                  style={{ ...S.input, ...(impErr.title ? { borderColor: 'var(--danger)' } : {}) }}
+                  placeholder="예: 2026 이용안내"
+                  value={imp.title}
+                  maxLength={120}
+                  aria-required="true"
+                  aria-invalid={impErr.title ? 'true' : undefined}
+                  aria-describedby={impErr.title ? 'kb-imp-title-err' : undefined}
+                  onChange={(e) => { setImp({ ...imp, title: e.target.value }); clearImpErr('title'); }}
+                />
+                {impErr.title && <p id="kb-imp-title-err" className="ac-err">{impErr.title}</p>}
+              </div>
+              <div className="ac-field">
+                <label htmlFor="kb-imp-cat">카테고리</label>
+                <input id="kb-imp-cat" style={S.input} placeholder="예: 문서" value={imp.category} maxLength={40} onChange={(e) => setImp({ ...imp, category: e.target.value })} />
+              </div>
+              <div className="ac-field">
+                <label htmlFor="kb-imp-chunk">한 항목 길이 <span style={{ color: 'var(--mut)', fontWeight: 500 }}>({MIN_CHUNK_CHARS}~{MAX_CHUNK_CHARS}자)</span></label>
+                <input
+                  id="kb-imp-chunk"
+                  type="number"
+                  inputMode="numeric"
+                  min={MIN_CHUNK_CHARS}
+                  max={MAX_CHUNK_CHARS}
+                  style={{ ...S.input, ...(impErr.maxChars ? { borderColor: 'var(--danger)' } : {}) }}
+                  value={imp.maxChars}
+                  aria-invalid={impErr.maxChars ? 'true' : undefined}
+                  aria-describedby={impErr.maxChars ? 'kb-imp-chunk-err' : undefined}
+                  onChange={(e) => { setImp({ ...imp, maxChars: e.target.value }); clearImpErr('maxChars'); }}
+                />
+                {impErr.maxChars && <p id="kb-imp-chunk-err" className="ac-err">{impErr.maxChars}</p>}
+              </div>
             </div>
-            <textarea
-              style={{ ...S.input, minHeight: 150, fontFamily: 'inherit' }}
-              placeholder={'문서 본문을 붙여넣으세요.\n# 제목, ## 소제목, "1. 항목", "제1조" 형식을 구분 기준으로 인식합니다.'}
-              value={imp.text}
-              onChange={(e) => setImp({ ...imp, text: e.target.value })}
-            />
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button style={S.btnGhost} disabled={impBusy} onClick={() => runImport(false)}>미리보기</button>
-              <button style={S.btn} disabled={impBusy || !candidates} onClick={() => runImport(true)}>등록</button>
+            <div className="ac-field">
+              <label htmlFor="kb-imp-text">문서 본문 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span></label>
+              <textarea
+                id="kb-imp-text"
+                style={{ ...S.input, minHeight: 150, fontFamily: 'inherit', ...(impErr.text ? { borderColor: 'var(--danger)' } : {}) }}
+                placeholder={'문서 본문을 붙여넣으세요.\n# 제목, ## 소제목, "1. 항목", "제1조" 형식을 구분 기준으로 인식합니다.'}
+                value={imp.text}
+                aria-required="true"
+                aria-invalid={impErr.text ? 'true' : undefined}
+                aria-describedby={`kb-imp-count${impErr.text ? ' kb-imp-text-err' : ''}`}
+                onChange={(e) => { setImp({ ...imp, text: e.target.value }); clearImpErr('text'); }}
+              />
+              {impErr.text && <p id="kb-imp-text-err" className="ac-err">{impErr.text}</p>}
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button type="button" {...busyBtn(impBusy === 'preview', impBusy !== '')} onClick={() => runImport(false)}>
+                {impBusy === 'preview' ? '미리보기 만드는 중…' : '미리보기'}
+              </button>
+              <button type="button" {...busyBtn(impBusy === 'commit', impBusy !== '' || !candidates, S.btn)} onClick={() => runImport(true)}>
+                {impBusy === 'commit' ? '등록하는 중…' : '등록'}
+              </button>
               {candidates && (
-                <button style={S.btnGhost} onClick={() => setCandidates(null)}>미리보기 지우기</button>
+                <button type="button" style={S.btnGhost} onClick={() => setCandidates(null)}>미리보기 지우기</button>
               )}
-              <span style={{ ...S.tag, marginLeft: 'auto' }}>{imp.text.length.toLocaleString()}자</span>
+              {!candidates && impBusy === '' && (
+                <span style={S.tag}>먼저 「미리보기」로 잘린 결과를 확인하세요.</span>
+              )}
+              {/* 본문 길이는 서버 한계(MAX_DOC_CHARS)와 같은 값으로 미리 알린다 — 보낸 뒤 거절당하지 않게. */}
+              <span
+                id="kb-imp-count"
+                style={{ ...S.tag, marginLeft: 'auto', ...(imp.text.length > MAX_DOC_CHARS ? { color: 'var(--danger)', fontWeight: 700 } : {}) }}
+              >
+                {imp.text.length.toLocaleString('ko-KR')} / {MAX_DOC_CHARS.toLocaleString('ko-KR')}자
+              </span>
             </div>
             {candidates && (
               <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
@@ -2887,7 +3024,7 @@ export default function AdminPage() {
                     <li key={r.intent} className="ac-rulecard" data-editing={crEditing === r.intent ? 'true' : undefined} data-off={r.enabled ? undefined : 'true'}>
                       <div className="ac-rulehead">
                         <strong className="ac-rulename">{r.label}</strong>
-                        {r.escalate && <span className="ac-pill" style={{ background: '#FFFBEB', color: 'var(--warn)' }}>상담원 연결</span>}
+                        {r.escalate && <span className="ac-pill" style={TONE.warn}>상담원 연결</span>}
                         <button
                           type="button"
                           role="switch"
@@ -2942,7 +3079,7 @@ export default function AdminPage() {
                       <li key={r.intent} className="ac-rulecard" data-off={r.enabled ? undefined : 'true'}>
                         <div className="ac-rulehead">
                           <strong className="ac-rulename">{r.label}</strong>
-                          {r.escalate && <span className="ac-pill" style={{ background: '#FFFBEB', color: 'var(--warn)' }}>상담원 연결</span>}
+                          {r.escalate && <span className="ac-pill" style={TONE.warn}>상담원 연결</span>}
                           {r.replyOverride && <span className="ac-pill">답변 수정됨</span>}
                           <button
                             type="button"
@@ -3171,7 +3308,7 @@ export default function AdminPage() {
                   <EmptyArt kind="chat" />
                   <p style={{ fontSize: 14, fontWeight: 700 }}>접수된 상담원 연결 요청이 없습니다</p>
                   <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>고객이 상담창에서 「상담원 연결하기」를 누르거나 챗봇이 답하지 못하면 여기에 쌓입니다.</p>
-                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => setTab('test')}>응답 테스트에서 시험해 보기</button>
+                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => goTab('test')}>응답 테스트에서 시험해 보기</button>
                 </div>
               ) : filtered.length === 0 ? (
                 <div className="ac-empty">
@@ -3416,7 +3553,7 @@ export default function AdminPage() {
                         {directRollup && directRollup.total > 0 && (
                           <tr>
                             <td style={{ fontWeight: 700, color: 'var(--sub)' }}>직접 계약</td>
-                            <td><span className="ac-pill" style={{ background: 'var(--bg)', color: 'var(--mut)' }}>고원 직접</span></td>
+                            <td><span className="ac-pill" style={TONE.mute}>고원 직접</span></td>
                             <td style={{ color: 'var(--mut)' }}>—</td>
                             <td className="ac-col-wide" style={{ color: 'var(--mut)' }}>—</td>
                             <td style={{ whiteSpace: 'nowrap' }}>{directRollup.total}곳<span style={{ ...S.tag, marginLeft: 4 }}>계약 {directRollup.contracted}</span></td>
@@ -3560,7 +3697,7 @@ export default function AdminPage() {
         const feeTotal = !r ? MEASURING : r.rows.length === 0 ? '대상 없음' : r.totals.billable === 0 ? '산출 불가' : won(r.totals.feeAmountKrw);
         const feeEmpty = !r || r.rows.length === 0 || r.totals.billable === 0;
         const monthLabel = r ? `${r.month.slice(0, 4)}년 ${Number(r.month.slice(5, 7))}월` : '';
-        const ISSUE_TONE = { background: '#FFFBEB', color: 'var(--warn)' } as const;
+        const ISSUE_TONE = TONE.warn;
         return (
           <>
             <section style={{ ...S.card, padding: 0 }} aria-labelledby="settle-h">
@@ -3605,7 +3742,7 @@ export default function AdminPage() {
             </section>
 
             {settleErr && (
-              <div role="alert" style={{ ...S.card, borderColor: '#FECACA', background: '#FEF2F2', padding: '12px 16px', fontSize: 13, color: 'var(--danger)', fontWeight: 600 }}>
+              <div role="alert" style={{ ...S.card, borderColor: 'var(--danger-200)', background: 'var(--danger-50)', padding: '12px 16px', fontSize: 13, color: 'var(--danger)', fontWeight: 600 }}>
                 {settleErr}
                 <button type="button" className="ac-linkbtn" style={{ marginLeft: 8 }} onClick={() => loadSettlement(settleMonth, settlePartner)}>다시 시도</button>
               </div>
@@ -3619,7 +3756,7 @@ export default function AdminPage() {
             </div>
 
             {r && r.totals.partial && (
-              <p role="alert" style={{ ...S.card, borderColor: '#FDE68A', background: '#FFFBEB', padding: '12px 16px', fontSize: 13, color: 'var(--warn)', fontWeight: 600 }}>
+              <p role="alert" style={{ ...S.card, borderColor: 'var(--warn-200)', background: 'var(--warn-50)', padding: '12px 16px', fontSize: 13, color: 'var(--warn)', fontWeight: 600 }}>
                 근거가 부족한 {r.totals.incomplete}건이 합계에서 빠져 있습니다. 이 합계는 확정 금액이 아닙니다. 「파트너·귀속」에서 월 이용료와 수수료율을 채우면 다시 계산됩니다.
               </p>
             )}
@@ -3630,7 +3767,7 @@ export default function AdminPage() {
                   <EmptyArt kind="kb" />
                   <p style={{ fontSize: 14, fontWeight: 700 }}>{monthLabel}에 정산 대상 고객사가 없습니다</p>
                   <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>파트너 귀속 고객사를 「계약」 상태로 두고 계약일을 입력하면 그 달부터 여기에 나타납니다.</p>
-                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => setTab('partner')}>파트너·귀속 열기</button>
+                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => goTab('partner')}>파트너·귀속 열기</button>
                 </div>
               </section>
             )}
@@ -3775,14 +3912,14 @@ export default function AdminPage() {
                     <div className="ac-statlabel">적재된 FAQ</div>
                     <div className="ac-statvalue">
                       {tenantView.status.entries}건
-                      {tenantView.status.skipped > 0 && <span className="ac-pill" style={{ marginLeft: 6, background: '#FEF2F2', color: 'var(--danger)' }}>제외 {tenantView.status.skipped}건</span>}
+                      {tenantView.status.skipped > 0 && <span className="ac-pill" style={{ marginLeft: 6, ...TONE.danger }}>제외 {tenantView.status.skipped}건</span>}
                     </div>
                   </div>
                   <div className="ac-stat">
                     <div className="ac-statlabel">신청 버튼 주소</div>
                     <div className="ac-statvalue">
                       <a href={tenantView.status.ctaUrl} target="_blank" rel="noreferrer noopener">{tenantView.status.ctaUrl}</a>
-                      <span className="ac-pill" style={{ marginLeft: 6, ...(tenantView.status.ctaFromEnv ? { background: '#F0FDF4', color: 'var(--success)' } : { background: '#FFFBEB', color: 'var(--warn)' }) }}>
+                      <span className="ac-pill" style={{ marginLeft: 6, ...(tenantView.status.ctaFromEnv ? TONE.ok : TONE.warn) }}>
                         {tenantView.status.ctaFromEnv ? '배포 설정 적용됨' : '기본값 — 배포 설정 미등록'}
                       </span>
                     </div>
@@ -3880,7 +4017,7 @@ export default function AdminPage() {
                   <EmptyArt kind="kb" />
                   <p style={{ fontSize: 14, fontWeight: 700 }}>기록된 관리 작업이 없습니다</p>
                   <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>지식베이스나 규칙을 수정하면 누가 언제 무엇을 바꿨는지 이곳에 남습니다.</p>
-                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => setTab('kb')}>지식베이스 열기</button>
+                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => goTab('kb')}>지식베이스 열기</button>
                 </div>
               ) : shown.length === 0 ? (
                 <div className="ac-empty">
@@ -3908,7 +4045,7 @@ export default function AdminPage() {
                           {!e.target && !e.detail && <span style={{ color: 'var(--mut)' }}>—</span>}
                         </td>
                         <td className="ac-col-wide">
-                          <span className="ac-pill" style={e.authed ? { background: '#F0FDF4', color: 'var(--success)' } : { background: '#FFFBEB', color: 'var(--warn)' }}>
+                          <span className="ac-pill" style={e.authed ? TONE.ok : TONE.warn}>
                             {e.authed ? '로그인됨' : '인증 없이 수행'}
                           </span>
                         </td>
@@ -3948,17 +4085,17 @@ export default function AdminPage() {
                 <>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
                     <span className="ac-pill">저장 방식 · {storage.driver === 'file' ? '파일' : '메모리'}</span>
-                    <span className="ac-pill" style={storage.piiApproved ? { background: '#F0FDF4', color: 'var(--success)' } : { background: '#FFFBEB', color: 'var(--warn)' }}>
+                    <span className="ac-pill" style={storage.piiApproved ? TONE.ok : TONE.warn}>
                       개인정보 저장 {storage.piiApproved ? '승인됨' : '미승인'}
                     </span>
                   </div>
                   <ul className="ac-nsgrid">
                     {storage.namespaces.map((n) => {
                       const meta = STORAGE_HEALTH[n.health] ?? STORAGE_HEALTH.empty;
-                      const tone = n.health === 'ok' ? { background: '#F0FDF4', color: 'var(--success)' }
-                        : n.health === 'error' || n.health === 'readonly' ? { background: '#FEF2F2', color: 'var(--danger)' }
+                      const tone = n.health === 'ok' ? TONE.ok
+                        : n.health === 'error' || n.health === 'readonly' ? TONE.danger
                         : n.health === 'empty' ? undefined
-                        : { background: '#FFFBEB', color: 'var(--warn)' };
+                        : TONE.warn;
                       return (
                         <li key={n.ns} className="ac-nscard" data-health={n.health}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
@@ -4077,7 +4214,7 @@ export default function AdminPage() {
           <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: '8px 0 14px' }}>
             아래 한 줄을 홈페이지 <code>&lt;body&gt;</code> 끝에 넣으면 상담창이 나타납니다. 닫혀 있을 때는 버튼만 차지하므로 기존 페이지 클릭을 방해하지 않습니다.
           </p>
-          <pre style={{ background: 'var(--ink)', color: '#E2E8F0', fontSize: 12.5, borderRadius: 'var(--r-sm)', padding: '14px 16px', overflowX: 'auto', margin: 0 }}>
+          <pre style={{ background: 'var(--ink)', color: 'var(--line)', fontSize: 12.5, borderRadius: 'var(--r-sm)', padding: '14px 16px', overflowX: 'auto', margin: 0 }}>
             <code>{installSnippet(origin)}</code>
           </pre>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
@@ -4169,7 +4306,7 @@ export default function AdminPage() {
           onClose={closeDrawer}
           onOpenTicket={() => {
             closeDrawer();
-            setTab('esc');
+            goTab('esc');
           }}
           closeRef={drawerCloseRef}
         />

@@ -8,6 +8,8 @@
   --success:#16A34A; --warn:#D97706; --danger:#DC2626;
   /* 상태 배경 틴트 — 상태 칩·배너가 쓴다. 본문색(--success/--warn/--danger)과 짝이다. */
   --success-50:#F0FDF4; --warn-50:#FFFBEB; --danger-50:#FEF2F2;
+  /* 같은 계열의 테두리 — 틴트 배경 위에 얹는 경고·오류 배너가 쓴다(배경보다 한 단 진하다). */
+  --warn-200:#FDE68A; --danger-200:#FECACA;
   --r:16px; --r-sm:10px; --r-lg:18px;
   --shadow-card:0 1px 2px rgba(15,23,42,.04), 0 12px 30px -18px rgba(15,23,42,.18);
   --shadow-pop:0 10px 15px -3px rgba(15,23,42,.08), 0 30px 60px -30px rgba(15,23,42,.45);
@@ -117,6 +119,9 @@ main:focus{outline:none}
 .ac-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line)}
 .ac-search{border:1px solid var(--line-2);border-radius:10px;padding:7px 11px;font-size:13px;width:220px;background:var(--bg);color:var(--ink)}
 .ac-select{border:1px solid var(--line-2);border-radius:10px;padding:7px 10px;font-size:13px;background:var(--surface);color:var(--ink);font-family:inherit}
+/* 가로 3칸 입력 줄(문서 업로드 머리말). 375px 에서는 3칸이 그대로 눌려 라벨이 줄바꿈되고
+   숫자 칸이 손가락보다 좁아졌다 — 좁은 화면에서는 한 칸씩 쌓는다. */
+.ac-grid3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;align-items:start}
 .ac-field{margin-bottom:10px}
 .ac-field label{display:block;font-size:12.5px;font-weight:700;color:var(--sub);margin-bottom:4px}
 .ac-field input,.ac-field textarea{margin-bottom:0!important}
@@ -268,6 +273,7 @@ main:focus{outline:none}
   .ac-token{width:150px}
   .ac-toast{right:12px;left:12px;bottom:12px;max-width:none}
   .ac-split,.ac-split-test{grid-template-columns:minmax(0,1fr)}
+  .ac-grid3{grid-template-columns:minmax(0,1fr)}
   .ac-sticky{position:static}
   .ac-search{width:100%}
   .ac-col-wide{display:none}

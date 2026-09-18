@@ -1116,3 +1116,88 @@ test('남은 쓰기 동작도 실패를 알리고 세션 만료를 처리한다 
   const guards = s.match(/on401\(res\)/g) || [];
   assert.ok(guards.length >= writes.length, `401 확인이 빠진 쓰기 경로가 있다(쓰기 ${writes.length} · 확인 ${guards.length})`);
 });
+
+/* ══════════ 6순위 — 백로그 소진 후 3차 재감사 (DS 6-x) ══════════ */
+
+test('문서 업로드 폼이 라벨·인라인 검증·실패 처리를 갖춘다 (DS 6-1)', () => {
+  const s = read('src/app/admin/page.tsx');
+  // 라벨 — placeholder 는 라벨이 아니다(글자를 넣으면 사라지고 스크린리더가 읽지 못한다).
+  for (const id of ['kb-imp-title', 'kb-imp-cat', 'kb-imp-chunk', 'kb-imp-text']) {
+    assert.match(s, new RegExp(`htmlFor="${id}"`), `라벨 누락: ${id}`);
+    assert.match(s, new RegExp(`id="${id}"`), `입력 누락: ${id}`);
+  }
+  // 어느 칸이 왜 틀렸는지 그 칸 아래에서 밝힌다(§1) — 토스트 한 줄로는 알 수 없었다.
+  for (const f of ['impErr.title', 'impErr.maxChars', 'impErr.text']) {
+    assert.ok(s.includes(`aria-invalid={${f} ? 'true' : undefined}`), `인라인 오류 표시 누락: ${f}`);
+  }
+  assert.match(s, /className="ac-err">\{impErr\.title\}/, '문서명 오류 문구가 화면에 없다');
+  const body = s.slice(s.indexOf('const runImport = async'));
+  const fn = body.slice(0, body.indexOf('\n  };'));
+  assert.equal(/flash\('문서명과 본문을 입력해 주세요/.test(fn), false, '검증이 토스트로 남아 있다');
+  assert.match(fn, /document\.getElementById\(first\)\?\.focus\(\)/, '첫 오류 칸으로 초점을 옮겨야 한다');
+  assert.match(fn, /catch \{/, '네트워크 실패를 삼키면 안 된다(§3)');
+  assert.match(fn, /기존 자료는 그대로입니다/, '등록 실패 시 무엇이 남았는지 밝혀야 한다');
+  assert.match(fn, /if \(impBusy\) return;/, '버튼을 잠그지 않으므로 중복 실행을 함수가 막아야 한다');
+  // 진행 표시는 disabled 가 아니라 aria — 키보드로 누른 버튼에서 초점이 떨어지지 않게(DS 5-8).
+  const form = s.slice(s.indexOf('<div className="ac-grid3">'), s.indexOf('먼저 「미리보기」로'));
+  assert.equal(/disabled=\{impBusy/.test(s), false, '진행 중 버튼을 disabled 로 잠그면 초점이 떨어진다');
+  assert.match(s, /busyBtn\(impBusy === 'commit'/, '등록 버튼에 진행 표시가 없다');
+  assert.match(s, /등록하는 중…/, '등록 중 표시가 없다');
+  assert.ok(form.includes('aria-required="true"'), '필수 항목 표시가 없다');
+});
+
+test('문서 업로드의 길이 한계가 서버와 같은 값이다 (DS 6-1)', () => {
+  const s = read('src/app/admin/page.tsx');
+  // 화면이 서버보다 느슨하면 보낸 뒤에야 거절당하고, 빡빡하면 멀쩡한 문서를 막는다.
+  const ingest = read('src/lib/ingest.ts');
+  const docMax = /MAX_DOC_CHARS = ([\d_]+)/.exec(ingest);
+  assert.ok(docMax, 'ingest 의 본문 한계를 찾지 못했다');
+  assert.match(s, new RegExp(`const MAX_DOC_CHARS = ${docMax[1]};`), '본문 한계가 서버와 다르다');
+  const route = read('src/app/api/admin/kb/import/route.ts');
+  const clamp = /Math\.min\(Math\.max\(Math\.trunc\(rawMax\), (\d+)\), (\d+)\)/.exec(route);
+  assert.ok(clamp, '라우트의 청크 clamp 를 찾지 못했다');
+  assert.match(s, new RegExp(`const MIN_CHUNK_CHARS = ${clamp[1]};`), '청크 최솟값이 서버와 다르다');
+  assert.match(s, new RegExp(`const MAX_CHUNK_CHARS = ${clamp[2]};`), '청크 최댓값이 서버와 다르다');
+  // 남은 글자 수를 미리 보여 준다.
+  assert.match(s, /id="kb-imp-count"/, '본문 글자 수 표시가 없다');
+  assert.match(s, /aria-describedby=\{`kb-imp-count/, '글자 수가 입력과 묶여 읽히지 않는다');
+});
+
+test('콘솔 상태 색이 토큰 단일 출처를 지킨다 (DS 6-2)', () => {
+  const s = read('src/app/admin/page.tsx');
+  // DS 5-4 가 세운 틴트 토큰이 콘솔에는 hex 로 흩어져 있어, 토큰을 바꿔도 따라오지 않았다.
+  const hex = stripComments(s).match(/#[0-9A-Fa-f]{6}/g) || [];
+  assert.deepEqual(hex, [], `콘솔에 하드코딩 색이 남아 있다: ${hex.join(' ')}`);
+  assert.match(s, /^const TONE = \{$/m, '상태 톤 단일 출처가 없다');
+  for (const k of ['ok', 'warn', 'danger', 'brand', 'mute']) {
+    assert.match(s, new RegExp(`^  ${k}: \\{ background: 'var\\(--`, 'm'), `TONE.${k} 가 토큰이 아니다`);
+  }
+  // 상태 pill 은 모두 TONE 을 지난다.
+  assert.equal(/style=\{\{ background: '(?!var)/.test(s), false, '인라인 배경색이 토큰을 우회한다');
+  const css = read('src/app/globals.css');
+  for (const t of ['--warn-200', '--danger-200']) {
+    assert.match(css, new RegExp(`${t}:#`), `토큰 정의 누락: ${t}`);
+  }
+});
+
+test('콘솔 탭이 주소에 남아 새로고침·뒤로가기에서 유지된다 (DS 6-3)', () => {
+  const s = read('src/app/admin/page.tsx');
+  assert.match(s, /function tabFromHash\(hash: string\): TabKey/, '주소 → 탭 변환이 없다');
+  assert.equal(/^export function tabFromHash/m.test(s), false, 'page.tsx 에서 내보내면 안 된다');
+  assert.match(s, /const TAB_KEYS: readonly TabKey\[\] = TAB_GROUPS/, '탭 목록이 메뉴와 같은 출처여야 한다');
+  assert.match(s, /return isTabKey\(raw\) \? raw : 'dash';/, '모르는 이름은 대시보드로 되돌려야 한다');
+  // 서버 렌더는 해시를 알 수 없다 — 초기값이 하드코딩 'dash' 여야 hydration 이 어긋나지 않는다.
+  assert.match(s, /useState<TabKey>\('dash'\)/, '서버 렌더 초기 탭이 고정이어야 한다');
+  assert.match(s, /window\.addEventListener\('hashchange', onHash\)/, '뒤로/앞으로를 듣지 않는다');
+  assert.match(s, /window\.removeEventListener\('hashchange', onHash\)/, '이벤트를 정리하지 않는다');
+  const go = s.slice(s.indexOf('const goTab = useCallback'));
+  const fn = go.slice(0, go.indexOf('\n  }, [setTab]);'));
+  assert.match(fn, /window\.history\.pushState\(null, '', `#\$\{next\}`\)/, '탭 전환이 방문 기록에 남지 않는다');
+  assert.match(fn, /catch \{/, '주소를 못 바꿔도 화면 전환은 막지 않아야 한다');
+  // 탭을 바꾸는 모든 경로가 goTab 을 지난다(setTab 직접 호출은 해시 동기화 구간에만 있다).
+  const after = s.slice(s.indexOf('\n  }, [setTab]);', s.indexOf('const goTab = useCallback')));
+  assert.equal(/\bsetTab\(/.test(after), false, '주소를 거치지 않고 탭을 바꾸는 경로가 있다');
+  assert.ok((after.match(/\bgoTab\(/g) || []).length >= 10, '탭 전환 경로가 goTab 으로 모이지 않았다');
+  // 깊은 링크로 막 들어왔을 때는 초점을 가로채지 않는다.
+  assert.match(s, /if \(skipTabFocus\.current\) \{ skipTabFocus\.current = false; return; \}/, '첫 진입에서 초점을 빼앗는다');
+});
