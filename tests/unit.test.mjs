@@ -834,7 +834,8 @@ test('약관·방침 레이아웃은 랜딩과 같은 셸(상단바·브랜드 �
   const css = read('src/app/globals.css');
   assert.match(css, /@media \(max-width:900px\)\{[^}]*\.lg-main\{grid-template-columns:minmax\(0,1fr\)/);
   assert.match(css, /\.lg-toc-list\{flex-direction:row;flex-wrap:nowrap;overflow-x:auto/);
-  assert.match(css, /\.legal-body h2\{[^}]*scroll-margin-top/);
+  // 앵커 착지 여백은 DS 10-2 에서 html{scroll-padding-top} 한 곳으로 옮겼다(화면마다 적으면 둘이 더해진다).
+  assert.match(css, /html\{[^}]*scroll-padding-top:\d+px/);
 });
 
 test('약관·방침 페이지에 설명 메타가 있고 제목은 문자열이라 목차에 잡힌다', () => {
@@ -1337,4 +1338,83 @@ test('모션 최소화 설정에서 화면이 미끄러지지 않는다 (DS 8-3)
   assert.match(w, /endRef\.current\?\.scrollIntoView\(\{ behavior: scrollBehavior\(\) \}\)/, '대화 자동 스크롤이 설정을 따르지 않는다');
   const a = read('src/app/admin/page.tsx');
   assert.equal((a.match(/behavior: scrollBehavior\(\), block: 'start'/g) || []).length, 3, '폼으로 스크롤하는 3곳이 모두 설정을 따라야 한다');
+});
+
+
+/* ══════════ 디자인 스프린트 — 7차 재감사 (DS 10-1·10-2·10-3) ══════════ */
+
+/** globals.css :root 에서 토큰 hex 를 읽는다(단일 출처를 실제로 파싱한다). */
+function tokens() {
+  const root = read('src/app/globals.css').split(':root{')[1].split('\n}')[0];
+  const out = {};
+  for (const [, k, v] of root.matchAll(/(--[a-z0-9-]+)\s*:\s*(#[0-9A-Fa-f]{6})/g)) out[k] = v;
+  return out;
+}
+
+/** WCAG 2.1 상대 휘도 → 대비비. 눈대중이 아니라 계산으로 고정한다. */
+function contrast(a, b) {
+  const lum = (hex) => {
+    const ch = [1, 3, 5].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+test('보조 문구 색이 모든 배경에서 WCAG AA(4.5:1)를 넘는다 (DS 10-1)', () => {
+  const t = tokens();
+  // 화면에 실제로 깔리는 밝은 면 — 흰 카드·페이지 배경·상태 틴트 4종(편집 중 행은 --brand-50 이다).
+  const lightBgs = ['--surface', '--bg', '--brand-50', '--success-50', '--warn-50', '--danger-50'];
+  for (const fg of ['--sub', '--mut']) {
+    for (const bg of lightBgs) {
+      const r = contrast(t[fg], t[bg]);
+      assert.ok(r >= 4.5, `${fg}(${t[fg]}) on ${bg}(${t[bg]}) = ${r.toFixed(2)}:1 — AA 미달`);
+    }
+  }
+  // 어두운 면 위에서는 --mut 가 반대로 어둡다 → 짝 토큰이 따로 있어야 한다.
+  assert.ok(t['--mut-on-ink'], '어두운 배경용 보조 문구 토큰이 없다');
+  assert.ok(contrast(t['--mut-on-ink'], t['--ink']) >= 4.5, '--mut-on-ink 가 --ink 위에서 AA 미달');
+  assert.ok(contrast(t['--mut'], t['--ink']) < 4.5, '--mut 가 어두운 면에서도 통과하면 짝 토큰이 필요 없다 — 전제가 바뀌었다');
+  // 위계는 유지한다(mut 가 sub 보다 연해 보여야 보조 문구로 읽힌다).
+  assert.ok(contrast(t['--mut'], t['--surface']) < contrast(t['--sub'], t['--surface']), '--mut 가 --sub 보다 진하다');
+  // 어두운 카드(최종 CTA)는 --mut 를 쓰지 않는다.
+  const cta = (read('src/app/page.tsx').split('<section id="contact"')[1] || '').split('</section>')[0];
+  assert.ok(cta, '랜딩 최종 CTA 섹션을 찾지 못했다');
+  assert.equal(/var\(--mut\)/.test(cta), false, '어두운 CTA 카드가 밝은 면용 --mut 를 쓴다');
+  assert.match(cta, /var\(--mut-on-ink\)/, '어두운 CTA 카드가 짝 토큰을 쓰지 않는다');
+});
+
+test('앵커가 스티키 상단바 아래로 숨지 않는다 (DS 10-2)', () => {
+  const css = read('src/app/globals.css');
+  const m = css.match(/html\{[^}]*scroll-padding-top:(\d+)px/);
+  assert.ok(m, 'html 에 scroll-padding-top 이 없다 — 앵커가 상단바 뒤로 들어간다');
+  assert.ok(Number(m[1]) >= 63, `상단바(62px + 테두리)보다 작다: ${m[1]}px`);
+  // 화면마다 scroll-margin 을 적으면 둘이 더해져 착지점이 두 배로 내려간다(DS 6-2 단일 출처).
+  assert.equal(/scroll-margin-top/.test(css), false, 'scroll-padding-top 과 scroll-margin-top 이 겹친다');
+  // 랜딩 메뉴·CTA 가 가리키는 앵커가 실제로 존재해야 한다(죽은 링크도 같이 막는다).
+  const page = read('src/app/page.tsx');
+  for (const [, id] of page.matchAll(/href="#([a-z][a-z0-9-]*)"/g)) {
+    assert.ok(page.includes(`id="${id}"`), `랜딩에 #${id} 앵커 대상이 없다`);
+  }
+});
+
+test('이름 붙인 상자가 보조기술에 전달된다 — generic div 금지 (DS 10-3)', () => {
+  // `<div aria-label>` 은 역할이 generic 이라 이름이 노출되지 않는다(ARIA 금지 대상).
+  for (const f of ['src/app/page.tsx', 'src/app/admin/page.tsx', 'src/components/ChatWidget.tsx']) {
+    const s = read(f);
+    for (const [tag] of s.matchAll(/<div[^>]*aria-label(?:by)?=[^>]*>/g)) {
+      assert.match(tag, /role="/, `${f}: 이름만 있고 역할이 없는 div — ${tag.slice(0, 90)}`);
+    }
+  }
+  // 랜딩 히어로 예시는 figure/figcaption 으로 묶여 「예시」임이 먼저 전달된다.
+  const page = read('src/app/page.tsx');
+  assert.match(page, /<figure aria-label="상담 화면 예시 — 실제 답변은 등록한 자료에 따라 달라집니다"/, '히어로 예시가 figure 가 아니다');
+  assert.match(page, /<figcaption/, '예시 안내문이 figcaption 으로 묶이지 않았다');
+  // 콘솔 미리보기의 타이핑 표시는 위젯과 같은 규격(role="status")이어야 들린다.
+  const admin = read('src/app/admin/page.tsx');
+  assert.match(admin, /<div role="status" className="ac-pv-bot" aria-label="답변을 작성하고 있습니다">/, '콘솔 타이핑 표시가 위젯 규격을 따르지 않는다');
+  assert.match(read('src/components/ChatWidget.tsx'), /role="status"\n\s+aria-label="답변을 작성하고 있습니다"/, '위젯 타이핑 표시 규격이 바뀌었다');
 });

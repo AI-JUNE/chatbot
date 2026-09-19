@@ -3,7 +3,10 @@
  * 테넌트 색(예: 이음 #BE5535)은 위젯이 --brand 계열만 인라인으로 덮어쓴다. */
 :root{
   --bg:#F8FAFC; --surface:#FFFFFF; --line:#E2E8F0; --line-2:#CBD5E1;
-  --ink:#0F172A; --sub:#475569; --mut:#94A3B8;
+  --ink:#0F172A; --sub:#475569; --mut:#5F6E85;
+  /* 어두운 배경(--ink) 위 보조 문구 — --mut 의 짝. --mut 는 밝은 면(surface·bg·틴트)에서
+   * 4.5:1 을 넘기려고 어둡게 잡았으므로 어두운 면 위에서는 이 토큰을 쓴다. */
+  --mut-on-ink:#94A3B8;
   --brand:#2563EB; --brand-600:#1D4ED8; --brand-50:#EFF6FF;
   --success:#16A34A; --warn:#D97706; --danger:#DC2626;
   /* 상태 배경 틴트 — 상태 칩·배너가 쓴다. 본문색(--success/--warn/--danger)과 짝이다. */
@@ -16,7 +19,9 @@
   --font:'Pretendard Variable',Pretendard,-apple-system,system-ui,'Malgun Gothic',sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html{scroll-behavior:smooth}
+/* 스티키 상단바(62px) 높이만큼 앵커 착지점을 내린다 — 없으면 #trust·#faq 같은 링크가
+ * 섹션 제목을 상단바 아래로 밀어 넣는다. 화면마다 scroll-margin 을 적는 대신 여기 한 곳. */
+html{scroll-behavior:smooth;scroll-padding-top:78px}
 body{background:var(--bg);color:var(--ink);font-family:var(--font);-webkit-font-smoothing:antialiased;line-height:1.6;word-break:keep-all}
 a{color:inherit;text-decoration:none}
 button{font-family:inherit;cursor:pointer;border:none;background:none}
@@ -325,7 +330,7 @@ main:focus{outline:none}
 .lg-pill[data-tone="warn"]{color:var(--warn);border-color:#FDE68A;background:#FFFBEB}
 .legal-notice{display:flex;gap:9px;margin:18px 0 0;padding:13px 15px;border-radius:var(--r-sm);font-size:13.5px;line-height:1.65;background:#FFFBEB;border:1px solid #FDE68A;color:var(--warn)}
 .legal-body{margin-top:26px;font-size:14.5px;line-height:1.75;color:var(--ink)}
-.legal-body h2{font-size:16.5px;font-weight:800;margin:28px 0 8px;letter-spacing:-.01em;scroll-margin-top:84px}
+.legal-body h2{font-size:16.5px;font-weight:800;margin:28px 0 8px;letter-spacing:-.01em}
 .legal-body h2:first-child{margin-top:0}
 .legal-body p{margin:0 0 10px;color:var(--sub)}
 .legal-body a{color:var(--brand-600);font-weight:600}

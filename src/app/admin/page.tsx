@@ -3326,7 +3326,7 @@ export default function AdminPage() {
                     <p id="cr-keywords-help" className="ac-rulehint">한 표현만 들어 있어도 규칙이 적용됩니다.</p>
                   )}
                   {formKeywords.length > 0 && (
-                    <div className="ac-chips" style={{ marginTop: 6 }} aria-label="입력한 표현">
+                    <div role="group" className="ac-chips" style={{ marginTop: 6 }} aria-label="입력한 표현">
                       {formKeywords.map((k) => <span key={k} className="ac-chip" data-hit={probeHits.includes(k) ? 'true' : undefined}>{k}</span>)}
                     </div>
                   )}
@@ -3356,7 +3356,7 @@ export default function AdminPage() {
               </div>
 
               {/* 미리보기: 시험 문장 → 규칙 적용 여부 + 고객에게 보일 말풍선 */}
-              <div className="ac-rulepreview" aria-labelledby="ac-rule-pv">
+              <div role="group" className="ac-rulepreview" aria-labelledby="ac-rule-pv">
                 <div className="ac-field" style={{ marginBottom: 8 }}>
                   <label id="ac-rule-pv" htmlFor="cr-probe">미리보기 — 고객이 보낼 말을 적어 보세요</label>
                   <input id="cr-probe" style={S.input} placeholder="예: 택배가 언제 오나요?" value={ruleProbe} onChange={(e) => setRuleProbe(e.target.value)} />
@@ -4360,7 +4360,7 @@ export default function AdminPage() {
                   </div>
                 ))}
                 {testBusy && (
-                  <div className="ac-pv-bot" aria-label="답변을 작성하고 있습니다">
+                  <div role="status" className="ac-pv-bot" aria-label="답변을 작성하고 있습니다">
                     <span className="gw-dot" /> <span className="gw-dot" /> <span className="gw-dot" />
                   </div>
                 )}

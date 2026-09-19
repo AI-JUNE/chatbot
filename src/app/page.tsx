@@ -202,8 +202,10 @@ export default function Home() {
             </p>
           </div>
 
-          {/* 대화 예시 — 실제 위젯 화면과 같은 구성(값은 예시 문구) */}
-          <div style={{ ...card, borderRadius: 'var(--r-lg)', overflow: 'hidden', boxShadow: 'var(--shadow-pop)' }} aria-label="상담 화면 예시">
+          {/* 대화 예시 — 실제 위젯 화면과 같은 구성(값은 예시 문구).
+            * `<div aria-label>` 은 역할이 generic 이라 스크린리더가 이름으로 읽지 않는다.
+            * `<figure>` 로 둬야 「그림: 상담 화면 예시」로 들어오고, 안내문은 figcaption 으로 묶인다. */}
+          <figure aria-label="상담 화면 예시 — 실제 답변은 등록한 자료에 따라 달라집니다" style={{ ...card, borderRadius: 'var(--r-lg)', overflow: 'hidden', boxShadow: 'var(--shadow-pop)' }}>
             <div style={{ background: 'var(--brand)', color: '#fff', padding: '13px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
               <span aria-hidden="true" style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(255,255,255,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14 }}>G</span>
               <div style={{ lineHeight: 1.25 }}>
@@ -222,9 +224,11 @@ export default function Home() {
                 <div style={{ fontWeight: 700, color: 'var(--brand-600)', fontSize: 11 }}>근거 · 안내문 4. 환불 규정</div>
                 <div style={{ marginTop: 3 }}>“수령일로부터 7일 이내 신청 가능”</div>
               </div>
-              <div style={{ fontSize: 11, color: 'var(--mut)', textAlign: 'center', paddingTop: 2 }}>화면 예시입니다 — 실제 답변은 등록한 자료에 따라 달라집니다.</div>
             </div>
-          </div>
+            <figcaption style={{ background: 'var(--bg)', padding: '0 14px 14px', fontSize: 11, color: 'var(--mut)', textAlign: 'center' }}>
+              화면 예시입니다 — 실제 답변은 등록한 자료에 따라 달라집니다.
+            </figcaption>
+          </figure>
         </div>
       </section>
 
@@ -364,7 +368,7 @@ export default function Home() {
           <a href="mailto:contact@example.com?subject=GOWON%20Chat%20%EB%8F%84%EC%9E%85%20%EB%AC%B8%EC%9D%98" style={{ display: 'inline-block', fontSize: 15, fontWeight: 700, color: 'var(--ink)', background: '#fff', borderRadius: 12, padding: '14px 26px' }}>
             도입 문의 보내기
           </a>
-          <p style={{ fontSize: 12, color: 'var(--mut)', margin: '16px 0 0' }}>데모 환경입니다 — 문의 주소는 도입 시 고객사 담당 창구로 바뀝니다.</p>
+          <p style={{ fontSize: 12, color: 'var(--mut-on-ink)', margin: '16px 0 0' }}>데모 환경입니다 — 문의 주소는 도입 시 고객사 담당 창구로 바뀝니다.</p>
         </div>
       </section>
       </main>
