@@ -99,6 +99,10 @@ main:focus{outline:none}
 .ac-kpivalue[data-empty="true"]{font-size:17px;color:var(--mut);letter-spacing:0}
 .ac-kpinote{font-size:11.5px;color:var(--mut);margin-top:5px}
 .ac-pill{display:inline-block;font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;background:var(--brand-50);color:var(--brand-600)}
+/* 가로로 넘치는 영역(표·코드 블록) — 넘침을 화면 밖이 아니라 이 상자 안에 가둔다(DS 9-1).
+   넘치는 동안에는 tabindex 가 붙어 키보드로도 스크롤할 수 있다(초점 테두리를 반드시 보인다). */
+.ac-scrollx{overflow-x:auto;overscroll-behavior-x:contain}
+.ac-scrollx:focus-visible{outline:2px solid var(--brand);outline-offset:-2px;border-radius:var(--r-sm)}
 .ac-table{width:100%;border-collapse:collapse;font-size:13px}
 .ac-table th{font-size:11.5px;font-weight:800;letter-spacing:.04em;color:var(--mut);text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
 .ac-table td{padding:10px;border-bottom:1px solid var(--line);color:var(--ink);vertical-align:top}

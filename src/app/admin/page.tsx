@@ -2,7 +2,7 @@
 
 // 관리 콘솔(MVP): 지식베이스(FAQ) CRUD · 시나리오 룰 편집 · 응답 테스트.
 // 저장은 인메모리 스텁 — [승인 필요] DB 영구 저장·관리자 인증(현재 ADMIN_TOKEN 미설정 시 개방).
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 
 interface KBEntryView {
   id: string;
@@ -601,6 +601,53 @@ function SkeletonRows({ rows = 4, label }: { rows?: number; label: string }) {
           <Skeleton w="12%" h={11} />
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * 가로로 넘칠 수 있는 영역(표·코드 블록)의 공통 껍데기 — DS 9-1.
+ *
+ * 좁은 화면에서 표는 칸을 줄일 수 없는 지점이 있다(버튼·배지·날짜는 줄바꿈하면 더 나빠진다).
+ * 넘치는 것 자체는 막을 수 없으므로 **넘치는 곳을 화면 밖이 아니라 이 상자 안에서** 넘치게 한다.
+ * 넘치는 순간 이 상자는 스크롤 영역이 되고, 스크롤 영역은 키보드로 닿을 수 있어야 한다
+ * (안에 초점 받을 것이 없는 칸 — 숫자·날짜 — 만 가려져 있으면 Tab 으로는 영영 볼 수 없다).
+ *
+ * 초점을 받을지는 실제로 넘치는지를 재서 정한다 — 넘치지 않는데 Tab 이 멈추면 그 자체가 방해다.
+ * 서버 렌더·측정 전에는 **닿을 수 있는 쪽**을 기본값으로 둔다(JS 가 죽어도 스크롤은 남는다).
+ */
+function ScrollX({ label, children, style }: { label: string; children: ReactNode; style?: CSSProperties }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [scrollable, setScrollable] = useState(true);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setScrollable(el.scrollWidth - el.clientWidth > 1);
+    measure();
+    let ro: ResizeObserver | null = null;
+    try {
+      if (typeof ResizeObserver !== 'undefined') {
+        ro = new ResizeObserver(measure);
+        ro.observe(el);
+        if (el.firstElementChild) ro.observe(el.firstElementChild);
+      }
+    } catch {
+      ro = null; // 관찰을 못 걸어도 창 크기 변화로는 따라간다
+    }
+    window.addEventListener('resize', measure);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
+  return (
+    <div
+      ref={ref}
+      className="ac-scrollx"
+      style={style}
+      {...(scrollable ? { role: 'region', tabIndex: 0, 'aria-label': `${label} — 가로로 스크롤할 수 있습니다` } : {})}
+    >
+      {children}
     </div>
   );
 }
@@ -2821,7 +2868,7 @@ export default function AdminPage() {
                     <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => { setKbQuery(''); setKbCat(''); }}>필터 지우기</button>
                   </div>
                 ) : (
-                  <div style={{ overflowX: 'auto' }}>
+                  <ScrollX label="안내 자료 목록">
                     <table className="ac-table">
                       <thead>
                         <tr>
@@ -2851,7 +2898,7 @@ export default function AdminPage() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </ScrollX>
                 )}
               </section>
 
@@ -3369,56 +3416,58 @@ export default function AdminPage() {
                   <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => { setEscFilter('all'); setEscQuery(''); }}>필터 지우기</button>
                 </div>
               ) : (
-                <table className="ac-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">접수</th>
-                      <th scope="col">상태</th>
-                      <th scope="col">고객이 마지막으로 한 말</th>
-                      <th scope="col" className="ac-col-wide">사유</th>
-                      <th scope="col" className="ac-col-wide">접수 시각</th>
-                      <th scope="col"><span className="ac-srhide">처리</span></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map((t) => {
-                      const act = nextAction(t);
-                      return (
-                        <tr key={t.id}>
-                          <td style={{ whiteSpace: 'nowrap' }}>
-                            <button
-                              type="button"
-                              className="ac-linkbtn"
-                              aria-haspopup="dialog"
-                              aria-label={`접수 ${shortTicket(t.id)} 상세 보기`}
-                              onClick={(e) => openTicket(t.id, e.currentTarget)}
-                            >
-                              {shortTicket(t.id)}
-                            </button>
-                          </td>
-                          <td><span className="ac-pill" style={TICKET_STATUS_TONE[t.status]}>{TICKET_STATUS_LABELS[t.status]}</span></td>
-                          <td style={{ minWidth: 160 }}>
-                            <span className="ac-clamp" style={{ color: t.message ? 'var(--ink)' : 'var(--mut)' }}>{t.message || '남긴 메시지 없음'}</span>
-                            {t.contact && <span style={{ ...S.tag, display: 'block', marginTop: 2 }}>연락처 남김</span>}
-                          </td>
-                          <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{t.reasonCode ? (HANDOFF_REASON_LABELS[t.reasonCode] ?? t.reasonCode) : t.reason}</td>
-                          <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{timeLabel(t.createdAt)}</td>
-                          <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
-                            <button
-                              type="button"
-                              className="ac-linkbtn"
-                              {...busyBtn(ticketBusy, ticketBusy, act.primary ? { background: 'var(--brand)', color: '#fff' } : {})}
-                              aria-label={`접수 ${shortTicket(t.id)} ${act.label}`}
-                              onClick={() => patchTicket(t.id, act.status)}
-                            >
-                              {act.label}
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                <ScrollX label="상담원 요청 목록">
+                  <table className="ac-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">접수</th>
+                        <th scope="col">상태</th>
+                        <th scope="col">고객이 마지막으로 한 말</th>
+                        <th scope="col" className="ac-col-wide">사유</th>
+                        <th scope="col" className="ac-col-wide">접수 시각</th>
+                        <th scope="col"><span className="ac-srhide">처리</span></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((t) => {
+                        const act = nextAction(t);
+                        return (
+                          <tr key={t.id}>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              <button
+                                type="button"
+                                className="ac-linkbtn"
+                                aria-haspopup="dialog"
+                                aria-label={`접수 ${shortTicket(t.id)} 상세 보기`}
+                                onClick={(e) => openTicket(t.id, e.currentTarget)}
+                              >
+                                {shortTicket(t.id)}
+                              </button>
+                            </td>
+                            <td><span className="ac-pill" style={TICKET_STATUS_TONE[t.status]}>{TICKET_STATUS_LABELS[t.status]}</span></td>
+                            <td style={{ minWidth: 160 }}>
+                              <span className="ac-clamp" style={{ color: t.message ? 'var(--ink)' : 'var(--mut)' }}>{t.message || '남긴 메시지 없음'}</span>
+                              {t.contact && <span style={{ ...S.tag, display: 'block', marginTop: 2 }}>연락처 남김</span>}
+                            </td>
+                            <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{t.reasonCode ? (HANDOFF_REASON_LABELS[t.reasonCode] ?? t.reasonCode) : t.reason}</td>
+                            <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{timeLabel(t.createdAt)}</td>
+                            <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+                              <button
+                                type="button"
+                                className="ac-linkbtn"
+                                {...busyBtn(ticketBusy, ticketBusy, act.primary ? { background: 'var(--brand)', color: '#fff' } : {})}
+                                aria-label={`접수 ${shortTicket(t.id)} ${act.label}`}
+                                onClick={() => patchTicket(t.id, act.status)}
+                              >
+                                {act.label}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </ScrollX>
               )}
             </section>
             {ticketsPersisted === false && (
@@ -3508,48 +3557,50 @@ export default function AdminPage() {
                       <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => { setAccountQuery(''); if (partnerFilter) { setPartnerFilter(''); loadPartners(''); } }}>필터 지우기</button>
                     </div>
                   ) : (
-                    <table className="ac-table">
-                      <thead>
-                        <tr>
-                          <th scope="col">고객사</th>
-                          <th scope="col">귀속</th>
-                          <th scope="col">상태</th>
-                          <th scope="col" className="ac-col-wide">유입 경로</th>
-                          <th scope="col" className="ac-col-wide">계약일</th>
-                          <th scope="col" className="ac-col-wide">월 이용료</th>
-                          <th scope="col"><span className="ac-srhide">동작</span></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredAccounts.map((a) => (
-                          <tr key={a.id} data-editing={aForm.id === a.id ? 'true' : undefined}>
-                            <td style={{ minWidth: 140 }}>
-                              <button
-                                type="button"
-                                className="ac-linkbtn"
-                                style={{ padding: '2px 0', minHeight: 0, fontSize: 13.5, color: 'var(--ink)' }}
-                                aria-haspopup="dialog"
-                                aria-label={`${a.name} 상세 보기`}
-                                onClick={(e) => openAccount(a.id, e.currentTarget)}
-                              >
-                                {a.name}
-                              </button>
-                              {a.ownerName && <span style={{ ...S.tag, display: 'block', marginTop: 2 }}>담당 {a.ownerName}</span>}
-                            </td>
-                            <td style={{ color: a.partnerId ? 'var(--ink)' : 'var(--sub)' }}>{partnerName(a.partnerId)}</td>
-                            <td><span className="ac-pill" style={ACCOUNT_STATUS_TONE[a.status]}>{ACCOUNT_STATUS_LABELS[a.status]}</span></td>
-                            <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{SOURCE_LABELS[a.source] ?? '미확인'}</td>
-                            <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{a.contractedAt || '—'}</td>
-                            <td className="ac-col-wide" style={{ whiteSpace: 'nowrap', color: typeof a.monthlyFeeKrw === 'number' ? 'var(--ink)' : 'var(--mut)' }}>{wonLabel(a.monthlyFeeKrw)}</td>
-                            <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
-                              {canWrite && (
-                                <button type="button" className="ac-linkbtn" aria-label={`${a.name} 수정`} onClick={() => editAccount(a)}>수정</button>
-                              )}
-                            </td>
+                    <ScrollX label="고객사 목록">
+                      <table className="ac-table">
+                        <thead>
+                          <tr>
+                            <th scope="col">고객사</th>
+                            <th scope="col">귀속</th>
+                            <th scope="col">상태</th>
+                            <th scope="col" className="ac-col-wide">유입 경로</th>
+                            <th scope="col" className="ac-col-wide">계약일</th>
+                            <th scope="col" className="ac-col-wide">월 이용료</th>
+                            <th scope="col"><span className="ac-srhide">동작</span></th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {filteredAccounts.map((a) => (
+                            <tr key={a.id} data-editing={aForm.id === a.id ? 'true' : undefined}>
+                              <td style={{ minWidth: 140 }}>
+                                <button
+                                  type="button"
+                                  className="ac-linkbtn"
+                                  style={{ padding: '2px 0', minHeight: 0, fontSize: 13.5, color: 'var(--ink)' }}
+                                  aria-haspopup="dialog"
+                                  aria-label={`${a.name} 상세 보기`}
+                                  onClick={(e) => openAccount(a.id, e.currentTarget)}
+                                >
+                                  {a.name}
+                                </button>
+                                {a.ownerName && <span style={{ ...S.tag, display: 'block', marginTop: 2 }}>담당 {a.ownerName}</span>}
+                              </td>
+                              <td style={{ color: a.partnerId ? 'var(--ink)' : 'var(--sub)' }}>{partnerName(a.partnerId)}</td>
+                              <td><span className="ac-pill" style={ACCOUNT_STATUS_TONE[a.status]}>{ACCOUNT_STATUS_LABELS[a.status]}</span></td>
+                              <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{SOURCE_LABELS[a.source] ?? '미확인'}</td>
+                              <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{a.contractedAt || '—'}</td>
+                              <td className="ac-col-wide" style={{ whiteSpace: 'nowrap', color: typeof a.monthlyFeeKrw === 'number' ? 'var(--ink)' : 'var(--mut)' }}>{wonLabel(a.monthlyFeeKrw)}</td>
+                              <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+                                {canWrite && (
+                                  <button type="button" className="ac-linkbtn" aria-label={`${a.name} 수정`} onClick={() => editAccount(a)}>수정</button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </ScrollX>
                   )}
                 </section>
 
@@ -3568,52 +3619,54 @@ export default function AdminPage() {
                       {canWrite && <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => focusPartnerForm('partner')}>첫 파트너 등록</button>}
                     </div>
                   ) : (
-                    <table className="ac-table">
-                      <thead>
-                        <tr>
-                          <th scope="col">파트너</th>
-                          <th scope="col">상태</th>
-                          <th scope="col">수수료율</th>
-                          <th scope="col" className="ac-col-wide">담당</th>
-                          <th scope="col">고객사</th>
-                          <th scope="col"><span className="ac-srhide">동작</span></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {partners.map((p) => {
-                          const r = rollupOf(p.id);
-                          return (
-                            <tr key={p.id} data-editing={pForm.id === p.id ? 'true' : undefined}>
-                              <td style={{ fontWeight: 700 }}>{p.name}</td>
-                              <td><span className="ac-pill" style={PARTNER_STATUS_TONE[p.status]}>{p.status === 'active' ? '운영 중' : '중지'}</span></td>
-                              <td style={{ color: p.feeRateBp === null ? 'var(--mut)' : 'var(--ink)', whiteSpace: 'nowrap' }}>{feeLabel(p.feeRateBp)}</td>
-                              <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{p.managerName || '—'}</td>
-                              <td style={{ whiteSpace: 'nowrap' }}>
-                                {r ? <>{r.total}곳<span style={{ ...S.tag, marginLeft: 4 }}>계약 {r.contracted}</span></> : <span style={S.tag}>0곳</span>}
-                              </td>
-                              <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
-                                {canWrite && (
-                                  <>
-                                    <button type="button" className="ac-linkbtn" aria-label={`${p.name} 수정`} onClick={() => editPartner(p)}>수정</button>
-                                    <button type="button" className="ac-linkbtn" data-tone="danger" aria-label={`${p.name} 삭제`} onClick={() => removePartner(p)}>삭제</button>
-                                  </>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                        {directRollup && directRollup.total > 0 && (
+                    <ScrollX label="파트너 목록">
+                      <table className="ac-table">
+                        <thead>
                           <tr>
-                            <td style={{ fontWeight: 700, color: 'var(--sub)' }}>직접 계약</td>
-                            <td><span className="ac-pill" style={TONE.mute}>고원 직접</span></td>
-                            <td style={{ color: 'var(--mut)' }}>—</td>
-                            <td className="ac-col-wide" style={{ color: 'var(--mut)' }}>—</td>
-                            <td style={{ whiteSpace: 'nowrap' }}>{directRollup.total}곳<span style={{ ...S.tag, marginLeft: 4 }}>계약 {directRollup.contracted}</span></td>
-                            <td />
+                            <th scope="col">파트너</th>
+                            <th scope="col">상태</th>
+                            <th scope="col">수수료율</th>
+                            <th scope="col" className="ac-col-wide">담당</th>
+                            <th scope="col">고객사</th>
+                            <th scope="col"><span className="ac-srhide">동작</span></th>
                           </tr>
-                        )}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {partners.map((p) => {
+                            const r = rollupOf(p.id);
+                            return (
+                              <tr key={p.id} data-editing={pForm.id === p.id ? 'true' : undefined}>
+                                <td style={{ fontWeight: 700 }}>{p.name}</td>
+                                <td><span className="ac-pill" style={PARTNER_STATUS_TONE[p.status]}>{p.status === 'active' ? '운영 중' : '중지'}</span></td>
+                                <td style={{ color: p.feeRateBp === null ? 'var(--mut)' : 'var(--ink)', whiteSpace: 'nowrap' }}>{feeLabel(p.feeRateBp)}</td>
+                                <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{p.managerName || '—'}</td>
+                                <td style={{ whiteSpace: 'nowrap' }}>
+                                  {r ? <>{r.total}곳<span style={{ ...S.tag, marginLeft: 4 }}>계약 {r.contracted}</span></> : <span style={S.tag}>0곳</span>}
+                                </td>
+                                <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+                                  {canWrite && (
+                                    <>
+                                      <button type="button" className="ac-linkbtn" aria-label={`${p.name} 수정`} onClick={() => editPartner(p)}>수정</button>
+                                      <button type="button" className="ac-linkbtn" data-tone="danger" aria-label={`${p.name} 삭제`} onClick={() => removePartner(p)}>삭제</button>
+                                    </>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {directRollup && directRollup.total > 0 && (
+                            <tr>
+                              <td style={{ fontWeight: 700, color: 'var(--sub)' }}>직접 계약</td>
+                              <td><span className="ac-pill" style={TONE.mute}>고원 직접</span></td>
+                              <td style={{ color: 'var(--mut)' }}>—</td>
+                              <td className="ac-col-wide" style={{ color: 'var(--mut)' }}>—</td>
+                              <td style={{ whiteSpace: 'nowrap' }}>{directRollup.total}곳<span style={{ ...S.tag, marginLeft: 4 }}>계약 {directRollup.contracted}</span></td>
+                              <td />
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </ScrollX>
                   )}
                 </section>
                 <p style={S.tag}>
@@ -3828,30 +3881,32 @@ export default function AdminPage() {
                     <h2 id="settle-sum-h" style={S.h2}>파트너별 합계</h2>
                     <span style={S.tag}>근거가 갖춰진 건만 합산</span>
                   </div>
-                  <table className="ac-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">파트너</th>
-                        <th scope="col">대상</th>
-                        <th scope="col">산출</th>
-                        <th scope="col">미산출</th>
-                        <th scope="col" className="ac-col-wide">기준금액</th>
-                        <th scope="col" style={{ textAlign: 'right' }}>수수료</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {r.partnerTotals.map((t) => (
-                        <tr key={t.partnerId}>
-                          <td style={{ fontWeight: 700 }}>{t.partnerName}</td>
-                          <td>{t.accounts}</td>
-                          <td>{t.billable}</td>
-                          <td>{t.incomplete > 0 ? <span className="ac-pill" style={ISSUE_TONE}>{t.incomplete}건</span> : <span style={{ color: 'var(--mut)' }}>0</span>}</td>
-                          <td className="ac-col-wide" style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{won(t.baseAmountKrw)}</td>
-                          <td style={{ whiteSpace: 'nowrap', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{won(t.feeAmountKrw)}</td>
+                  <ScrollX label="파트너별 합계">
+                    <table className="ac-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">파트너</th>
+                          <th scope="col">대상</th>
+                          <th scope="col">산출</th>
+                          <th scope="col">미산출</th>
+                          <th scope="col" className="ac-col-wide">기준금액</th>
+                          <th scope="col" style={{ textAlign: 'right' }}>수수료</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {r.partnerTotals.map((t) => (
+                          <tr key={t.partnerId}>
+                            <td style={{ fontWeight: 700 }}>{t.partnerName}</td>
+                            <td>{t.accounts}</td>
+                            <td>{t.billable}</td>
+                            <td>{t.incomplete > 0 ? <span className="ac-pill" style={ISSUE_TONE}>{t.incomplete}건</span> : <span style={{ color: 'var(--mut)' }}>0</span>}</td>
+                            <td className="ac-col-wide" style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{won(t.baseAmountKrw)}</td>
+                            <td style={{ whiteSpace: 'nowrap', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{won(t.feeAmountKrw)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </ScrollX>
                 </section>
 
                 <section style={{ ...S.card, padding: 0 }} aria-labelledby="settle-rows-h">
@@ -3859,35 +3914,37 @@ export default function AdminPage() {
                     <h2 id="settle-rows-h" style={S.h2}>고객사별 산출 근거</h2>
                     <span style={S.tag}>{r.rows.length}건</span>
                   </div>
-                  <table className="ac-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">고객사</th>
-                        <th scope="col">파트너</th>
-                        <th scope="col" className="ac-col-wide">계약일</th>
-                        <th scope="col" className="ac-col-wide">월 이용료</th>
-                        <th scope="col" className="ac-col-wide">수수료율</th>
-                        <th scope="col" style={{ textAlign: 'right' }}>수수료</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {r.rows.map((row) => (
-                        <tr key={row.accountId}>
-                          <td style={{ fontWeight: 700, minWidth: 120 }}>
-                            {row.accountName}
-                            {row.issue !== 'none' && <span className="ac-pill" style={{ ...ISSUE_TONE, display: 'block', width: 'fit-content', marginTop: 4 }}>{ISSUE_LABELS[row.issue]}</span>}
-                          </td>
-                          <td style={{ color: 'var(--sub)' }}>{row.partnerName}</td>
-                          <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{row.contractedAt}</td>
-                          <td className="ac-col-wide" style={{ whiteSpace: 'nowrap', color: row.baseAmountKrw === null ? 'var(--mut)' : 'var(--ink)' }}>{wonLabel(row.baseAmountKrw)}</td>
-                          <td className="ac-col-wide" style={{ color: row.feeRateBp === null ? 'var(--mut)' : 'var(--ink)' }}>{feeLabel(row.feeRateBp)}</td>
-                          <td style={{ whiteSpace: 'nowrap', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: row.feeAmountKrw === null ? 500 : 700, color: row.feeAmountKrw === null ? 'var(--mut)' : 'var(--ink)' }}>
-                            {row.feeAmountKrw === null ? '산출 불가' : won(row.feeAmountKrw)}
-                          </td>
+                  <ScrollX label="고객사별 산출 근거">
+                    <table className="ac-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">고객사</th>
+                          <th scope="col">파트너</th>
+                          <th scope="col" className="ac-col-wide">계약일</th>
+                          <th scope="col" className="ac-col-wide">월 이용료</th>
+                          <th scope="col" className="ac-col-wide">수수료율</th>
+                          <th scope="col" style={{ textAlign: 'right' }}>수수료</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {r.rows.map((row) => (
+                          <tr key={row.accountId}>
+                            <td style={{ fontWeight: 700, minWidth: 120 }}>
+                              {row.accountName}
+                              {row.issue !== 'none' && <span className="ac-pill" style={{ ...ISSUE_TONE, display: 'block', width: 'fit-content', marginTop: 4 }}>{ISSUE_LABELS[row.issue]}</span>}
+                            </td>
+                            <td style={{ color: 'var(--sub)' }}>{row.partnerName}</td>
+                            <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{row.contractedAt}</td>
+                            <td className="ac-col-wide" style={{ whiteSpace: 'nowrap', color: row.baseAmountKrw === null ? 'var(--mut)' : 'var(--ink)' }}>{wonLabel(row.baseAmountKrw)}</td>
+                            <td className="ac-col-wide" style={{ color: row.feeRateBp === null ? 'var(--mut)' : 'var(--ink)' }}>{feeLabel(row.feeRateBp)}</td>
+                            <td style={{ whiteSpace: 'nowrap', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: row.feeAmountKrw === null ? 500 : 700, color: row.feeAmountKrw === null ? 'var(--mut)' : 'var(--ink)' }}>
+                              {row.feeAmountKrw === null ? '산출 불가' : won(row.feeAmountKrw)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </ScrollX>
                   <details style={{ padding: '12px 16px' }}>
                     <summary style={{ fontSize: 12.5, color: 'var(--mut)', cursor: 'pointer' }}>산출 기준·한계 {r.notes.length}건</summary>
                     <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 12.5, color: 'var(--sub)' }}>
@@ -4002,29 +4059,31 @@ export default function AdminPage() {
                   <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>이 상태에서는 답변 근거가 없어 모든 질문이 담당자 연결로 넘어갑니다. 배포 파일의 FAQ 자료를 확인해 주세요.</p>
                 </div>
               ) : (
-                <table className="ac-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">근거</th>
-                      <th scope="col">질문</th>
-                      <th scope="col" className="ac-col-wide">답변</th>
-                      <th scope="col" className="ac-col-wide">표현</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tenantView.faq.map((f) => (
-                      <tr key={f.id}>
-                        <td style={{ whiteSpace: 'nowrap' }}><span className="ac-pill">{f.citation}</span></td>
-                        <td style={{ minWidth: 160 }}>
-                          <span style={{ fontWeight: 700 }}>{f.question}</span>
-                          {f.category && <span style={{ ...S.tag, display: 'block', marginTop: 2 }}>{f.category}</span>}
-                        </td>
-                        <td className="ac-col-wide" style={{ color: 'var(--sub)', maxWidth: 420 }}><span className="ac-clamp">{f.answer}</span></td>
-                        <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{f.keywords.length}개</td>
+                <ScrollX label="테넌트 FAQ 목록">
+                  <table className="ac-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">근거</th>
+                        <th scope="col">질문</th>
+                        <th scope="col" className="ac-col-wide">답변</th>
+                        <th scope="col" className="ac-col-wide">표현</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {tenantView.faq.map((f) => (
+                        <tr key={f.id}>
+                          <td style={{ whiteSpace: 'nowrap' }}><span className="ac-pill">{f.citation}</span></td>
+                          <td style={{ minWidth: 160 }}>
+                            <span style={{ fontWeight: 700 }}>{f.question}</span>
+                            {f.category && <span style={{ ...S.tag, display: 'block', marginTop: 2 }}>{f.category}</span>}
+                          </td>
+                          <td className="ac-col-wide" style={{ color: 'var(--sub)', maxWidth: 420 }}><span className="ac-clamp">{f.answer}</span></td>
+                          <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{f.keywords.length}개</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </ScrollX>
               )}
             </section>
           )}
@@ -4074,34 +4133,36 @@ export default function AdminPage() {
                   <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => setAuditFilter('all')}>필터 지우기</button>
                 </div>
               ) : (
-                <table className="ac-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">시각</th>
-                      <th scope="col">작업</th>
-                      <th scope="col">대상·내용</th>
-                      <th scope="col" className="ac-col-wide">인증</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shown.map((e) => (
-                      <tr key={e.id}>
-                        <td style={{ whiteSpace: 'nowrap', color: 'var(--sub)' }}>{timeLabel(e.at)}</td>
-                        <td style={{ whiteSpace: 'nowrap' }}><span className="ac-pill">{AUDIT_ACTION_LABELS[e.action] || e.action}</span></td>
-                        <td style={{ minWidth: 160 }}>
-                          {e.target && <span style={{ fontWeight: 700 }}>{e.target}</span>}
-                          {e.detail && <span className="ac-clamp" style={{ color: 'var(--sub)', display: 'block' }}>{e.detail}</span>}
-                          {!e.target && !e.detail && <span style={{ color: 'var(--mut)' }}>—</span>}
-                        </td>
-                        <td className="ac-col-wide">
-                          <span className="ac-pill" style={e.authed ? TONE.ok : TONE.warn}>
-                            {e.authed ? '로그인됨' : '인증 없이 수행'}
-                          </span>
-                        </td>
+                <ScrollX label="관리 작업 기록">
+                  <table className="ac-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">시각</th>
+                        <th scope="col">작업</th>
+                        <th scope="col">대상·내용</th>
+                        <th scope="col" className="ac-col-wide">인증</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {shown.map((e) => (
+                        <tr key={e.id}>
+                          <td style={{ whiteSpace: 'nowrap', color: 'var(--sub)' }}>{timeLabel(e.at)}</td>
+                          <td style={{ whiteSpace: 'nowrap' }}><span className="ac-pill">{AUDIT_ACTION_LABELS[e.action] || e.action}</span></td>
+                          <td style={{ minWidth: 160 }}>
+                            {e.target && <span style={{ fontWeight: 700 }}>{e.target}</span>}
+                            {e.detail && <span className="ac-clamp" style={{ color: 'var(--sub)', display: 'block' }}>{e.detail}</span>}
+                            {!e.target && !e.detail && <span style={{ color: 'var(--mut)' }}>—</span>}
+                          </td>
+                          <td className="ac-col-wide">
+                            <span className="ac-pill" style={e.authed ? TONE.ok : TONE.warn}>
+                              {e.authed ? '로그인됨' : '인증 없이 수행'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </ScrollX>
               )}
             </section>
 
@@ -4263,9 +4324,12 @@ export default function AdminPage() {
           <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: '8px 0 14px' }}>
             아래 한 줄을 홈페이지 <code>&lt;body&gt;</code> 끝에 넣으면 상담창이 나타납니다. 닫혀 있을 때는 버튼만 차지하므로 기존 페이지 클릭을 방해하지 않습니다.
           </p>
-          <pre style={{ background: 'var(--ink)', color: 'var(--line)', fontSize: 12.5, borderRadius: 'var(--r-sm)', padding: '14px 16px', overflowX: 'auto', margin: 0 }}>
-            <code>{installSnippet(origin)}</code>
-          </pre>
+          {/* 한 줄짜리 스니펫이라 좁은 화면에서는 반드시 넘친다 — 마우스 휠 없이도 끝까지 볼 수 있어야 한다. */}
+          <ScrollX label="설치 코드">
+            <pre style={{ background: 'var(--ink)', color: 'var(--line)', fontSize: 12.5, borderRadius: 'var(--r-sm)', padding: '14px 16px', margin: 0, width: 'max-content', minWidth: '100%' }}>
+              <code>{installSnippet(origin)}</code>
+            </pre>
+          </ScrollX>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
             <button
               style={S.btn}
@@ -4285,22 +4349,26 @@ export default function AdminPage() {
           {copied && <p role="status" style={{ fontSize: 13, color: 'var(--brand-600)', marginTop: 10 }}>{copied}</p>}
 
           <h3 style={{ fontSize: 14, fontWeight: 800, margin: '22px 0 8px' }}>선택 옵션</h3>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ textAlign: 'left', color: 'var(--sub)' }}>
-                <th style={{ padding: '8px 6px', borderBottom: '1px solid var(--line)', width: 150 }}>옵션</th>
-                <th style={{ padding: '8px 6px', borderBottom: '1px solid var(--line)' }}>설명</th>
-              </tr>
-            </thead>
-            <tbody>
-              {INSTALL_OPTIONS.map(([opt, desc]) => (
-                <tr key={opt}>
-                  <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--line)' }}><code>{opt}</code></td>
-                  <td style={{ padding: '8px 6px', borderBottom: '1px solid var(--line)', color: 'var(--sub)' }}>{desc}</td>
+          {/* 콘솔의 다른 표와 같은 규격(.ac-table)을 쓴다 — 여기만 테두리·여백을 따로 적어 두면
+              표 규격을 손볼 때 이 화면만 어긋난다(DS 6-2 「단일 출처」와 같은 종류, DS 9-2). */}
+          <ScrollX label="설치 선택 옵션">
+            <table className="ac-table">
+              <thead>
+                <tr>
+                  <th scope="col" style={{ width: 150 }}>옵션</th>
+                  <th scope="col">설명</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {INSTALL_OPTIONS.map(([opt, desc]) => (
+                  <tr key={opt}>
+                    <td><code style={{ whiteSpace: 'nowrap' }}>{opt}</code></td>
+                    <td style={{ color: 'var(--sub)' }}>{desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ScrollX>
           <p style={{ ...S.tag, marginTop: 14 }}>
             설치 코드는 운영자용 정보라 홈페이지에는 표시하지 않습니다. 이 화면에서만 확인해 주세요.
           </p>
