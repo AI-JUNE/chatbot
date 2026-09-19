@@ -812,6 +812,9 @@ export default function ChatWidget({
                         href={m.cta.url}
                         target="_blank"
                         rel="noopener noreferrer"
+                        // 위젯은 고객사 사이트 위 iframe 안이라 새 탭이 열려도 창 테두리로는 알 수 없다.
+                        // 보는 사람에게는 아래 external 표시가, 듣는 사람에게는 이름 뒤 고지가 알린다(DS 11-3).
+                        aria-label={`${m.cta.label} — 새 창에서 열립니다`}
                         style={{ display: 'inline-block', marginTop: 8, fontSize: 12.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 10, padding: '9px 14px', textDecoration: 'none' }}
                       >
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>

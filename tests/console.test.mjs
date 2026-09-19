@@ -138,7 +138,8 @@ test('인터넷이 끊기면 헤더 아래 배너로 알린다 (DS 4-3)', opts, 
   const html = await render();
   assert.equal(html.includes('ac-offline'), false, '서버 렌더(연결 상태 미확인)에서는 배너를 그리지 않는다');
   const css = readFileSync(path.join(REPO, 'src', 'app', 'globals.css'), 'utf8');
-  assert.match(css, /\.ac-offline\{[^}]*#FFFBEB/, '경고 톤');
+  // 경고 톤은 토큰으로만 나온다(DS 11-2 — 틴트 하드코딩 금지).
+  assert.match(css, /\.ac-offline\{[^}]*background:var\(--warn-50\)[^}]*color:var\(--warn\)/, '경고 톤');
   const mobile = css.slice(css.indexOf('@media (max-width:900px)'));
   assert.match(mobile, /\.ac-offline\{padding:9px 16px\}/, '375px 여백');
 });

@@ -1418,3 +1418,56 @@ test('이름 붙인 상자가 보조기술에 전달된다 — generic div 금�
   assert.match(admin, /<div role="status" className="ac-pv-bot" aria-label="답변을 작성하고 있습니다">/, '콘솔 타이핑 표시가 위젯 규격을 따르지 않는다');
   assert.match(read('src/components/ChatWidget.tsx'), /role="status"\n\s+aria-label="답변을 작성하고 있습니다"/, '위젯 타이핑 표시 규격이 바뀌었다');
 });
+
+
+/* ══════════ 디자인 스프린트 — 8차 재감사 (DS 11-1·11-2·11-3) ══════════ */
+
+test('상태 본문색(성공·경고·오류)이 밝은 면 전부에서 WCAG AA 를 넘는다 (DS 11-1)', () => {
+  const t = tokens();
+  // DS 10-1 이 --sub·--mut 만 고쳤다. 상태색도 같은 자리(11.5~13.5px 본문)에 글자로 쓰인다.
+  const lightBgs = ['--surface', '--bg', '--brand-50', '--success-50', '--warn-50', '--danger-50'];
+  for (const fg of ['--success', '--warn', '--danger']) {
+    for (const bg of lightBgs) {
+      const r = contrast(t[fg], t[bg]);
+      assert.ok(r >= 4.5, `${fg}(${t[fg]}) on ${bg}(${t[bg]}) = ${r.toFixed(2)}:1 — AA 미달`);
+    }
+  }
+  // 상태색은 채워진 면으로도 쓰인다(삭제 버튼 배경·스위치 켜짐) — 그 위 흰 글자/손잡이도 확인한다.
+  for (const fg of ['--success', '--warn', '--danger']) {
+    assert.ok(contrast(t[fg], '#FFFFFF') >= 4.5, `${fg} 면 위의 흰 글자가 AA 미달`);
+  }
+});
+
+test('상태 틴트는 토큰 한 곳에서만 나온다 — 하드코딩 금지 (DS 11-2)', () => {
+  const css = read('src/app/globals.css');
+  const root = css.split(':root{')[1].split('\n}')[0];
+  const t = tokens();
+  // 테두리 틴트는 세 계열이 짝을 갖춘다(성공 쪽만 빠져 있어서 #BBF7D0 이 화면에 박혀 있었다).
+  for (const k of ['--success-50', '--warn-50', '--danger-50', '--success-200', '--warn-200', '--danger-200']) {
+    assert.ok(t[k], `${k} 토큰이 없다`);
+  }
+  // :root 바깥(= 실제 화면 규칙)에는 색 리터럴이 남아 있으면 안 된다. #fff 는 예외(중립).
+  const body = css.replace(root, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  const stray = [...body.matchAll(/#[0-9A-Fa-f]{3,8}\b/g)].map((m) => m[0]).filter((h) => h !== '#fff');
+  assert.deepEqual(stray, [], `틴트가 토큰을 우회했다: ${stray.join(', ')}`);
+});
+
+test('새 창으로 열리는 링크는 그 사실을 알린다 (DS 11-3)', () => {
+  const admin = read('src/app/admin/page.tsx');
+  const widget = read('src/components/ChatWidget.tsx');
+  const landing = read('src/app/page.tsx');
+  for (const [name, src] of [['콘솔', admin], ['위젯', widget], ['랜딩', landing]]) {
+    const blanks = (src.match(/target="_blank"/g) || []).length;
+    const notices = (src.match(/새 창에서 열립니다/g) || []).length;
+    assert.equal(notices, blanks, `${name}: 새 창 링크 ${blanks}곳 중 고지 ${notices}곳`);
+    // 새 탭 링크는 opener 도 함께 끊는다(기존 규약 유지).
+    if (blanks) assert.match(src, /rel="noopener noreferrer"/, `${name}: rel 규약이 빠졌다`);
+  }
+  // 콘솔은 링크마다 적지 않고 한 곳(ExternalLink)에서만 만든다 — 표시와 고지가 갈라지지 않게.
+  assert.equal((admin.match(/target="_blank"/g) || []).length, 1, '콘솔에 ExternalLink 를 거치지 않는 새 창 링크가 있다');
+  assert.match(admin, /function ExternalLink\(/, '콘솔 새 창 링크 공통 껍데기가 없다');
+  assert.equal((admin.match(/<ExternalLink /g) || []).length, 2, '콘솔 새 창 링크 수가 바뀌었다');
+  // 접근 이름은 보이는 글자로 시작해야 음성 입력이 이름으로 누를 수 있다(WCAG 2.5.3).
+  assert.match(admin, /aria-label=\{`\$\{label\} — 새 창에서 열립니다`\}/, '콘솔 접근 이름이 보이는 글자로 시작하지 않는다');
+  assert.match(widget, /aria-label=\{`\$\{m\.cta\.label\} — 새 창에서 열립니다`\}/, '위젯 접근 이름이 보이는 글자로 시작하지 않는다');
+});
