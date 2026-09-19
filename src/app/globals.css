@@ -8,11 +8,14 @@
    * 4.5:1 을 넘기려고 어둡게 잡았으므로 어두운 면 위에서는 이 토큰을 쓴다. */
   --mut-on-ink:#94A3B8;
   --brand:#2563EB; --brand-600:#1D4ED8; --brand-50:#EFF6FF;
-  --success:#16A34A; --warn:#D97706; --danger:#DC2626;
+  /* 상태 본문색 — 상태 칩·배너·오류 문구가 글자색으로 쓴다. Tailwind 기본값(500~600)은
+   * 밝은 면에서 3:1 안팎이라 AA(4.5:1)에 못 미친다 — DS 10-1 과 같은 기준으로 한 단 내렸다.
+   * 밝은 면 6종(surface·bg·brand-50·success-50·warn-50·danger-50) 전부에서 최소 4.59:1. */
+  --success:#15803D; --warn:#B45309; --danger:#C42121;
   /* 상태 배경 틴트 — 상태 칩·배너가 쓴다. 본문색(--success/--warn/--danger)과 짝이다. */
   --success-50:#F0FDF4; --warn-50:#FFFBEB; --danger-50:#FEF2F2;
   /* 같은 계열의 테두리 — 틴트 배경 위에 얹는 경고·오류 배너가 쓴다(배경보다 한 단 진하다). */
-  --warn-200:#FDE68A; --danger-200:#FECACA;
+  --success-200:#BBF7D0; --warn-200:#FDE68A; --danger-200:#FECACA;
   --r:16px; --r-sm:10px; --r-lg:18px;
   --shadow-card:0 1px 2px rgba(15,23,42,.04), 0 12px 30px -18px rgba(15,23,42,.18);
   --shadow-pop:0 10px 15px -3px rgba(15,23,42,.08), 0 30px 60px -30px rgba(15,23,42,.45);
@@ -75,8 +78,8 @@ main:focus{outline:none}
 .ac-top{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line);padding:14px 24px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .ac-body{padding:20px 24px 72px;max-width:1180px}
 .ac-badge{font-size:11.5px;font-weight:700;border-radius:999px;padding:4px 10px;border:1px solid var(--line);color:var(--sub);background:var(--bg);white-space:nowrap}
-.ac-badge[data-tone="on"]{color:var(--success);border-color:#BBF7D0;background:#F0FDF4}
-.ac-badge[data-tone="warn"]{color:var(--warn);border-color:#FDE68A;background:#FFFBEB}
+.ac-badge[data-tone="on"]{color:var(--success);border-color:var(--success-200);background:var(--success-50)}
+.ac-badge[data-tone="warn"]{color:var(--warn);border-color:var(--warn-200);background:var(--warn-50)}
 .ac-token{border:1px solid var(--line-2);border-radius:10px;padding:7px 11px;font-size:13px;width:180px;background:var(--bg);color:var(--ink)}
 /* 헤더 전역 검색(combobox + listbox) */
 .ac-gsearch{position:relative;flex:0 1 320px;min-width:200px}
@@ -117,7 +120,7 @@ main:focus{outline:none}
 .ac-linkbtn{font-size:12.5px;font-weight:700;color:var(--brand-600);padding:6px 8px;border-radius:8px;min-height:32px}
 .ac-linkbtn:hover{background:var(--brand-50)}
 .ac-linkbtn[data-tone="danger"]{color:var(--danger)}
-.ac-linkbtn[data-tone="danger"]:hover{background:#FEF2F2}
+.ac-linkbtn[data-tone="danger"]:hover{background:var(--danger-50)}
 .ac-iconbtn{width:34px;height:34px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;color:var(--sub);flex-shrink:0}
 .ac-iconbtn:hover{background:var(--bg);color:var(--ink)}
 
@@ -149,7 +152,7 @@ main:focus{outline:none}
 .ac-skelchart .ac-skel{flex:1;border-radius:6px 6px 0 0}
 
 /* ── 오프라인 안내 배너 (DS 4-3) ── */
-.ac-offline{display:flex;align-items:center;gap:10px;background:#FFFBEB;color:#92400E;border-bottom:1px solid #FDE68A;padding:9px 24px;font-size:13px;font-weight:600}
+.ac-offline{display:flex;align-items:center;gap:10px;background:var(--warn-50);color:var(--warn);border-bottom:1px solid var(--warn-200);padding:9px 24px;font-size:13px;font-weight:600}
 
 /* 대시보드 최근 대화 행 → 상세 서랍 */
 .ac-rows{list-style:none;border-top:1px solid var(--line)}
@@ -239,8 +242,8 @@ main:focus{outline:none}
 .ac-summary{white-space:pre-wrap;font-size:12.5px;line-height:1.55;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-family:inherit}
 .ac-nsgrid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));list-style:none;margin-top:12px}
 .ac-nscard{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--bg)}
-.ac-nscard[data-health="error"],.ac-nscard[data-health="readonly"]{border-color:#FECACA;background:#FEF2F2}
-.ac-nscard[data-health="awaiting_approval"],.ac-nscard[data-health="disabled"]{border-color:#FDE68A;background:#FFFBEB}
+.ac-nscard[data-health="error"],.ac-nscard[data-health="readonly"]{border-color:var(--danger-200);background:var(--danger-50)}
+.ac-nscard[data-health="awaiting_approval"],.ac-nscard[data-health="disabled"]{border-color:var(--warn-200);background:var(--warn-50)}
 .ac-statgrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:12px}
 .ac-stat{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--bg);min-width:0}
 .ac-statlabel{font-size:11.5px;font-weight:800;letter-spacing:.04em;color:var(--mut)}
@@ -327,8 +330,8 @@ main:focus{outline:none}
 .lg-title{font-size:clamp(24px,3.4vw,32px);font-weight:800;letter-spacing:-.025em;line-height:1.25;margin:8px 0 14px}
 .lg-meta{display:flex;flex-wrap:wrap;gap:6px}
 .lg-pill{font-size:11.5px;font-weight:700;border-radius:999px;padding:4px 10px;border:1px solid var(--line);color:var(--sub);background:var(--bg);line-height:1.4}
-.lg-pill[data-tone="warn"]{color:var(--warn);border-color:#FDE68A;background:#FFFBEB}
-.legal-notice{display:flex;gap:9px;margin:18px 0 0;padding:13px 15px;border-radius:var(--r-sm);font-size:13.5px;line-height:1.65;background:#FFFBEB;border:1px solid #FDE68A;color:var(--warn)}
+.lg-pill[data-tone="warn"]{color:var(--warn);border-color:var(--warn-200);background:var(--warn-50)}
+.legal-notice{display:flex;gap:9px;margin:18px 0 0;padding:13px 15px;border-radius:var(--r-sm);font-size:13.5px;line-height:1.65;background:var(--warn-50);border:1px solid var(--warn-200);color:var(--warn)}
 .legal-body{margin-top:26px;font-size:14.5px;line-height:1.75;color:var(--ink)}
 .legal-body h2{font-size:16.5px;font-weight:800;margin:28px 0 8px;letter-spacing:-.01em}
 .legal-body h2:first-child{margin-top:0}
@@ -336,7 +339,7 @@ main:focus{outline:none}
 .legal-body a{color:var(--brand-600);font-weight:600}
 .legal-body ul{margin:0 0 10px;padding-left:18px;color:var(--sub)}
 .legal-body li{margin:0 0 4px}
-.todo{font-weight:800;color:var(--warn);background:#FFFBEB;border:1px solid #FDE68A;border-radius:5px;padding:0 5px;font-size:.93em;white-space:nowrap}
+.todo{font-weight:800;color:var(--warn);background:var(--warn-50);border:1px solid var(--warn-200);border-radius:5px;padding:0 5px;font-size:.93em;white-space:nowrap}
 .lg-foot{border-top:1px solid var(--line);background:var(--surface)}
 @media (max-width:900px){
   .lg-main{grid-template-columns:minmax(0,1fr);gap:16px;padding-top:20px;padding-bottom:56px}

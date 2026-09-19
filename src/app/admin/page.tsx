@@ -1043,6 +1043,31 @@ function BrandMark({ size = 30 }: { size?: number }) {
   );
 }
 
+/** 새 창으로 열리는 링크 — 보는 사람에게는 이 표시가, 듣는 사람에게는 이름 뒤 고지가 그 사실을 알린다.
+ *  두 안내가 갈라지지 않게 한 곳에서만 만든다(DS 11-3). */
+function ExternalLink({ href, label, className, style, children }: {
+  href: string; label: string; className?: string; style?: CSSProperties; children?: ReactNode;
+}) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      // 접근 이름은 보이는 글자로 시작한다(음성 입력이 이름으로 누를 수 있어야 한다).
+      aria-label={`${label} — 새 창에서 열립니다`}
+      {...(className ? { className } : {})}
+      {...(style ? { style } : {})}
+    >
+      {children ?? label}
+      <svg aria-hidden="true" focusable="false" width="12" height="12" viewBox="0 0 16 16" fill="none"
+        style={{ display: 'inline-block', verticalAlign: '-1px', marginLeft: 4, flexShrink: 0 }}>
+        <path d="M6.5 3.5H3.2v9.3h9.3V9.5M9.6 2.8h3.6v3.6M13.2 2.8L7.6 8.4"
+          stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </a>
+  );
+}
+
 function NavIcon({ tab }: { tab: TabKey }) {
   return (
     <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
@@ -4078,7 +4103,7 @@ export default function AdminPage() {
                   <div className="ac-stat">
                     <div className="ac-statlabel">신청 버튼 주소</div>
                     <div className="ac-statvalue">
-                      <a href={tenantView.status.ctaUrl} target="_blank" rel="noreferrer noopener">{tenantView.status.ctaUrl}</a>
+                      <ExternalLink href={tenantView.status.ctaUrl} label={tenantView.status.ctaUrl} />
                       <span className="ac-pill" style={{ marginLeft: 6, ...(tenantView.status.ctaFromEnv ? TONE.ok : TONE.warn) }}>
                         {tenantView.status.ctaFromEnv ? '배포 설정 적용됨' : '기본값 — 배포 설정 미등록'}
                       </span>
@@ -4398,7 +4423,7 @@ export default function AdminPage() {
             >
               설치 코드 복사
             </button>
-            <a style={{ ...S.btnGhost, display: 'inline-block' }} href="/" target="_blank" rel="noopener noreferrer">동작 화면 보기</a>
+            <ExternalLink href="/" label="동작 화면 보기" style={{ ...S.btnGhost, display: 'inline-flex', alignItems: 'center' }} />
           </div>
           {copied && <p role="status" style={{ fontSize: 13, color: 'var(--brand-600)', marginTop: 10 }}>{copied}</p>}
 
