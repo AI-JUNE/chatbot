@@ -502,3 +502,88 @@ test('렌더된 화면에 비활성 버튼이 없다 — 초점을 떨어뜨리�
   assert.equal(/aria-disabled="true"/.test(html), false, '아무 동작도 하지 않았는데 잠긴 버튼이 있다');
 });
 
+
+test('가로로 넘치는 표·코드 블록이 키보드로 닿는 스크롤 영역 안에 있다 (DS 9-1)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+
+  // ① 표는 예외 없이 ScrollX 안에 있다. 하나라도 밖에 있으면 375px 에서 그 표가
+  //    카드를 밀어내 화면 전체가 가로로 흐른다(상단바·사이드바가 어긋난다).
+  const lines = src.split('\n');
+  const tables = [];
+  lines.forEach((ln, i) => {
+    if (ln.includes('<table className="ac-table">')) tables.push(i);
+  });
+  assert.ok(tables.length >= 9, `콘솔 표가 ${tables.length}개뿐이다 — 표가 공통 규격을 벗어났는지 확인`);
+  for (const i of tables) {
+    let j = i - 1;
+    while (j >= 0 && lines[j].trim() === '') j -= 1;
+    assert.match(lines[j], /<ScrollX label="/, `${i + 1}행 표가 스크롤 영역 밖에 있다: ${lines[j].trim().slice(0, 60)}`);
+  }
+  // ② 넘침 처리는 한 곳(.ac-scrollx)만 쓴다 — 화면마다 따로 적으면 키보드 처리가 또 빠진다.
+  assert.equal(/overflowX:\s*'auto'/.test(src), false, '표·코드 블록이 ScrollX 를 우회해 직접 overflowX 를 쓴다');
+  assert.match(css, /\.ac-scrollx\{[^}]*overflow-x:auto/, '.ac-scrollx 가 없다');
+  assert.match(css, /\.ac-scrollx:focus-visible\{[^}]*outline:/, '초점 테두리가 없으면 어디에 있는지 알 수 없다');
+
+  // ③ 스크롤 영역은 넘치는 동안 초점을 받는다(넘치지 않으면 Tab 을 막지 않는다).
+  const comp = src.slice(src.indexOf('function ScrollX'), src.indexOf('type LoadPhase'));
+  assert.match(comp, /useState\(true\)/, '측정 전·서버 렌더에서는 닿을 수 있는 쪽이 기본값이어야 한다');
+  assert.match(comp, /scrollWidth - el\.clientWidth > 1/, '실제로 넘치는지를 재서 정한다');
+  assert.match(comp, /scrollable \? \{ role: 'region', tabIndex: 0, 'aria-label'/, '조건부 role·tabIndex·이름');
+  assert.match(comp, /가로로 스크롤할 수 있습니다/, '스크린리더가 무엇을 할 수 있는지 알려준다');
+  assert.match(comp, /ResizeObserver/, '칸 수가 바뀌면 다시 잰다');
+  assert.match(comp, /addEventListener\('resize'/, 'ResizeObserver 가 없는 환경에서는 창 크기로 따라간다');
+  assert.match(comp, /ro = null;/, '관찰을 걸지 못해도 예외가 새지 않는다');
+
+  // ④ 설치 스니펫은 한 줄이라 좁은 화면에서 반드시 넘친다.
+  assert.match(src, /<ScrollX label="설치 코드">[\s\S]{0,400}<code>\{installSnippet\(origin\)\}<\/code>/, '설치 코드 블록이 스크롤 영역 밖에 있다');
+  assert.match(src, /width: 'max-content', minWidth: '100%'/, '스크롤해도 코드 블록 배경이 끊기지 않아야 한다');
+});
+
+test('설치 「선택 옵션」 표가 콘솔 공통 표 규격을 따른다 (DS 9-2)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // 테두리·여백을 화면마다 따로 적어 두면 표 규격을 손볼 때 이 화면만 어긋난다(DS 6-2 와 같은 종류).
+  assert.equal(/borderCollapse/.test(src), false, '표 하나가 .ac-table 을 우회해 직접 표 스타일을 적는다');
+  const block = src.slice(src.indexOf('선택 옵션</h3>'));
+  const head = block.slice(0, 900);
+  assert.match(head, /<table className="ac-table">/, '공통 표 규격');
+  assert.equal((head.match(/scope="col"/g) || []).length, 2, '머리칸마다 scope 가 있어야 어느 열인지 읽힌다');
+  assert.match(head, /<code style=\{\{ whiteSpace: 'nowrap' \}\}>\{opt\}/, '옵션 이름은 줄바꿈하지 않는다');
+});
+
+test('정산 기준월·파트너 조건이 주소에 남아 새로고침·링크 공유에서 살아남는다 (DS 9-3)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+
+  // 탭 이름과 조건을 같은 해시에서 읽는다(DS 6-3 이 세운 「주소가 화면의 출처」를 넓힌 것).
+  assert.match(src, /function viewFromHash\(hash: string\): \{ tab: TabKey; params: URLSearchParams \}/, 'viewFromHash');
+  assert.match(src, /function tabFromHash\(hash: string\): TabKey \{\s*return viewFromHash\(hash\)\.tab;/, 'tabFromHash 는 같은 파서를 쓴다');
+  // page.tsx 는 기본 내보내기만 허용된다(라우트 파일 규칙과 같은 이유).
+  assert.equal(/^export (?:function|const) (?:viewFromHash|tabFromHash|MONTH_RE)/m.test(src), false, '헬퍼를 내보내면 안 된다');
+
+  // 주소에서 온 값은 믿지 않는다.
+  const m = src.match(/const MONTH_RE = (\/.*\/);/);
+  assert.ok(m, 'MONTH_RE 가 없다');
+  const re = new RegExp(m[1].slice(1, -1));
+  for (const good of ['2026-01', '2026-09', '1999-12']) assert.equal(re.test(good), true, `기준월로 받아야 한다: ${good}`);
+  for (const bad of ['2026-13', '2026-00', '26-09', '2026-9', '2026-09-01', '', 'abcd-ef']) {
+    assert.equal(re.test(bad), false, `기준월로 받으면 안 된다: ${bad}`);
+  }
+  assert.match(src, /MONTH_RE\.test\(m\) \? m : settleCond\.current\.month/, '이상한 값이면 보던 달을 지킨다');
+  assert.match(src, /\(params\.get\('p'\) \?\? ''\)\.slice\(0, 64\)/, '파트너 식별자 길이를 자른다');
+
+  // 주소 → 조건: 첫 진입과 뒤로/앞으로 둘 다.
+  const reader = src.slice(src.indexOf("const { tab: t, params } = viewFromHash"), src.indexOf("// 조건 → 주소"));
+  assert.match(reader, /if \(t !== 'settle'\) return;/, '다른 탭의 해시에는 손대지 않는다');
+  assert.match(reader, /setSettleReport\(null\);/, '조건이 달라지면 이전 달의 표를 그대로 두지 않는다');
+  assert.match(reader, /addEventListener\('hashchange', apply\)/, '뒤로/앞으로도 조건을 되받는다');
+  assert.match(reader, /removeEventListener\('hashchange', apply\)/, '리스너를 걷는다');
+
+  // 조건 → 주소: 기준월 변경은 방문 기록을 쌓지 않는다(뒤로가기는 탭 이동으로 남는다).
+  const writer = src.slice(src.indexOf('// 조건 → 주소'));
+  const w = writer.slice(0, 900);
+  assert.match(w, /replaceState\(null, '', next\)/, '조건은 replaceState 로 남긴다');
+  assert.equal(/pushState/.test(w), false, '기준월을 바꿀 때마다 방문 기록이 쌓이면 뒤로가기가 쓸모없어진다');
+  assert.match(w, /`#settle\?\$\{qs\.toString\(\)\}`/, '해시 형식');
+  assert.match(w, /if \(settlePartner\) qs\.set\('p', settlePartner\)/, '전체 조회일 때는 빈 값을 주소에 싣지 않는다');
+  assert.match(w, /catch \{[\s\S]{0,160}정산 계산 자체는 막지 않는다/, '주소를 바꾸지 못해도 계산은 계속된다');
+});

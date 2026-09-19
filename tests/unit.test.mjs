@@ -1190,7 +1190,8 @@ test('콘솔 탭이 주소에 남아 새로고침·뒤로가기에서 유지된�
   assert.match(s, /function tabFromHash\(hash: string\): TabKey/, '주소 → 탭 변환이 없다');
   assert.equal(/^export function tabFromHash/m.test(s), false, 'page.tsx 에서 내보내면 안 된다');
   assert.match(s, /const TAB_KEYS: readonly TabKey\[\] = TAB_GROUPS/, '탭 목록이 메뉴와 같은 출처여야 한다');
-  assert.match(s, /return isTabKey\(raw\) \? raw : 'dash';/, '모르는 이름은 대시보드로 되돌려야 한다');
+  // DS 9-3 에서 조건(`#settle?m=…`)까지 같은 파서로 읽게 넓혔다 — 되돌리는 규칙은 그대로다.
+  assert.match(s, /tab: isTabKey\(name\) \? name : 'dash'/, '모르는 이름은 대시보드로 되돌려야 한다');
   // 서버 렌더는 해시를 알 수 없다 — 초기값이 하드코딩 'dash' 여야 hydration 이 어긋나지 않는다.
   assert.match(s, /useState<TabKey>\('dash'\)/, '서버 렌더 초기 탭이 고정이어야 한다');
   assert.match(s, /window\.addEventListener\('hashchange', onHash\)/, '뒤로/앞으로를 듣지 않는다');

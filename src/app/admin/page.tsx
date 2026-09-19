@@ -981,12 +981,26 @@ const TAB_GROUPS: { group: string; tabs: readonly (readonly [TabKey, string])[] 
 /** 주소(해시)에 쓰는 탭 이름. 메뉴에 없는 값이 오면 대시보드로 되돌린다. */
 const TAB_KEYS: readonly TabKey[] = TAB_GROUPS.flatMap((g) => g.tabs.map(([k]) => k));
 const isTabKey = (v: string): v is TabKey => (TAB_KEYS as readonly string[]).includes(v);
-/** 주소 뒤 `#kb` → 'kb'. 값이 없거나 모르는 이름이면 'dash'.
+/** 주소 뒤 `#kb` → 'kb', `#settle?m=2026-08&p=ptr_1` → 탭 + 그 탭이 읽는 조건.
+ *  해시는 서버로 가지 않으므로 이 값들은 브라우저 안에서만 산다(서버 렌더는 항상 기본값).
  *  page.tsx 는 Next 가 export 를 검사하므로 내보내지 않는다(라우트 파일 규칙과 같은 이유). */
-function tabFromHash(hash: string): TabKey {
-  const raw = decodeURIComponent((hash || '').replace(/^#/, ''));
-  return isTabKey(raw) ? raw : 'dash';
+function viewFromHash(hash: string): { tab: TabKey; params: URLSearchParams } {
+  const raw = (hash || '').replace(/^#/, '');
+  const q = raw.indexOf('?');
+  let name = q === -1 ? raw : raw.slice(0, q);
+  try {
+    name = decodeURIComponent(name);
+  } catch {
+    /* 반쯤 잘린 %-표기는 원문 그대로 두고 아래에서 걸러진다 */
+  }
+  return { tab: isTabKey(name) ? name : 'dash', params: new URLSearchParams(q === -1 ? '' : raw.slice(q + 1)) };
 }
+function tabFromHash(hash: string): TabKey {
+  return viewFromHash(hash).tab;
+}
+
+/** 정산 기준월 — 주소에서 받은 값은 믿지 않는다(`?m=2026-13` 이면 지금 달로 되돌린다). */
+const MONTH_RE = /^\d{4}-(?:0[1-9]|1[0-2])$/;
 
 /** 상단 헤더에 쓰는 탭 설명 — 이 화면에서 무엇을 하는지 한 줄로 알린다. */
 const TAB_DESC: Record<TabKey, string> = {
@@ -1811,6 +1825,46 @@ export default function AdminPage() {
   const [settleReport, setSettleReport] = useState<SettlementReportView | null>(null);
   const [settleErr, setSettleErr] = useState('');
   const [settleBusy, setSettleBusy] = useState(false);
+  // 지금 화면이 보고 있는 조건. 주소를 읽을 때 「이미 같은 조건인가」를 판단하는 기준이다.
+  const settleCond = useRef({ month: settleMonth, partnerId: settlePartner });
+
+  // DS 6-3 은 탭만 주소에 남겼다 — 그래서 「정산 화면 좀 봐주세요」로 보낸 `#settle` 링크는
+  // 받는 사람에게 **언제나 이번 달**로 열렸고, 지난달을 보다 F5 를 누르면 조건이 사라졌다(DS 9-3).
+  // 주소 → 조건. 깊은 링크(첫 진입)와 뒤로/앞으로(hashchange) 둘 다 여기로 들어온다.
+  useEffect(() => {
+    const apply = () => {
+      const { tab: t, params } = viewFromHash(window.location.hash);
+      if (t !== 'settle') return;
+      const m = params.get('m') ?? '';
+      const pid = (params.get('p') ?? '').slice(0, 64);
+      const month = MONTH_RE.test(m) ? m : settleCond.current.month;
+      if (month === settleCond.current.month && pid === settleCond.current.partnerId) return;
+      settleCond.current = { month, partnerId: pid };
+      setSettleMonth(month);
+      setSettlePartner(pid);
+      // 조건이 달라졌으니 이전 달의 표를 그대로 두지 않는다 — 비우면 탭 진입 로더가 새 조건으로 계산한다.
+      setSettleReport(null);
+      setSettleErr('');
+    };
+    apply();
+    window.addEventListener('hashchange', apply);
+    return () => window.removeEventListener('hashchange', apply);
+  }, []);
+
+  // 조건 → 주소. 정산 탭을 보고 있는 동안에는 조건이 항상 주소에 남는다(메뉴로 들어와도 마찬가지).
+  useEffect(() => {
+    if (tab !== 'settle') return;
+    settleCond.current = { month: settleMonth, partnerId: settlePartner };
+    try {
+      const qs = new URLSearchParams({ m: settleMonth });
+      if (settlePartner) qs.set('p', settlePartner);
+      const next = `#settle?${qs.toString()}`;
+      // 기준월을 바꾸는 것은 「이동」이 아니다 — 방문 기록을 쌓지 않아 뒤로가기는 이전 탭으로 간다(DS 6-3).
+      if (window.location.hash !== next) window.history.replaceState(null, '', next);
+    } catch {
+      /* 주소를 바꾸지 못하는 환경에서도 정산 계산 자체는 막지 않는다 */
+    }
+  }, [tab, settleMonth, settlePartner]);
 
   const loadSettlement = useCallback(async (month: string, partnerId: string) => {
     if (!claim('settlement')) return;
