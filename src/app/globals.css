@@ -318,9 +318,10 @@ main:focus{outline:none}
     overscroll-behavior-x:contain;padding-bottom:2px}
   .lp-nav a{white-space:nowrap;font-size:12.5px;padding:7px 10px;background:var(--bg);
     border-radius:8px;min-height:34px;display:inline-flex;align-items:center}
-  /* 두 줄이 된 상단바(1행 56px + 2행 44px)만큼 앵커 착지점도 함께 내린다 —
-     DS 10-2 가 세운 단일 출처를 이 화면 폭에서만 다시 잡는다(scroll-margin 은 쓰지 않는다). */
-  html{scroll-padding-top:112px}
+  /* 두 줄이 된 상단바(라이브 375px 실측 104px)만큼 앵커 착지점도 함께 내린다 —
+     DS 10-2 가 세운 단일 출처를 이 화면 폭에서만 다시 잡는다(scroll-margin 은 쓰지 않는다).
+     104px + 여유 16px — 넓은 화면(63px + 15px = 78px)과 같은 비율의 여유다. */
+  html{scroll-padding-top:120px}
   .lp-hero{grid-template-columns:1fr;gap:28px}
 }
 
