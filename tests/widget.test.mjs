@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, existsSync, writeFileSync, renameSync, symlinkSync } from 'node:fs';
+import { cpSync, mkdtempSync, existsSync, writeFileSync, renameSync, symlinkSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -258,3 +258,60 @@ test('연락처 형식 오류를 사람 말로 구분해 알려준다 (DS 8-2)',
   }
 });
 
+
+test('연락처 칸이 자동 채우기 쓰임새를 알리고 모바일 자판이 맞다 (DS 12-2)', opts, async () => {
+  const mod = await loadModule();
+  const { contactPurpose } = mod;
+  assert.equal(typeof contactPurpose, 'function', 'contactPurpose 를 내보내야 한다');
+
+  // 빈 칸은 전화번호로 둔다(안내 문구가 전화번호를 앞에 놓는다). 토큰이 비는 상태가 없어야 한다.
+  for (const v of ['', '010', '010-1234-5678', '01012345678', '02 123 4567', '+82 10 1234 5678']) {
+    assert.equal(contactPurpose(v), 'tel', `전화번호로 봐야 한다: "${v}"`);
+  }
+  for (const v of ['name@example.com', 'name', 'a', '010@', '홍길동 name@x.kr']) {
+    assert.equal(contactPurpose(v), 'email', `이메일로 봐야 한다: "${v}"`);
+  }
+  // 한글만으로는 이메일이 될 수 없다 — 영문/`@` 가 나타나야 바꾼다.
+  assert.equal(contactPurpose('전화'), 'tel', '한글은 아직 이메일 신호가 아니다');
+
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  const field = src.slice(src.indexOf('id="gw-handoff-contact"'), src.indexOf('id="gw-handoff-hint"'));
+  assert.equal(/autoComplete="off"/.test(field), false, '자기 연락처 칸에 자동 채우기를 막지 않는다(WCAG 1.3.5)');
+  assert.match(field, /autoComplete=\{contactPurpose\(handoff\.contact\)\}/, '쓰임새를 적은 내용에서 고른다');
+  // `tel` 자판에는 글자가 없어 이메일을 칠 수 없다 — 둘 다 칠 수 있는 자판은 `email` 뿐이다.
+  assert.match(field, /inputMode="email"/, '전화번호·이메일을 둘 다 칠 수 있는 자판');
+  assert.match(field, /autoCapitalize="off"/, 'iOS 가 name@ 를 Name@ 으로 바꾸지 않게');
+  assert.match(field, /autoCorrect="off"/, '자동 고침이 주소를 건드리지 않게');
+  assert.match(field, /spellCheck=\{false\}/, '맞춤법 밑줄을 긋지 않는다');
+});
+
+test('호스트 화면의 「상담창 열기」가 실제로 상담창을 연다 (DS 12-3)', opts, () => {
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  const land = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+
+  // 위젯이 위임 방식으로 듣는다 — 호스트(랜딩)는 서버 컴포넌트 그대로 두고 속성만 붙인다.
+  const eff = src.slice(src.indexOf('// 호스트 화면의 「상담창 열기」 단추'));
+  const body = eff.slice(0, 900);
+  assert.match(body, /if \(embedded \|\| typeof document === 'undefined'\) return;/, '임베드 프레임 안에서는 호스트 단추가 없다');
+  assert.match(body, /closest\('\[data-gowon-open\]'\)/, '속성 하나가 출처다');
+  assert.match(body, /document\.addEventListener\('click', onClick\)/, '듣는다');
+  assert.match(body, /document\.removeEventListener\('click', onClick\)/, '리스너를 걷는다');
+  assert.match(body, /inputRef\.current\?\.focus\(\)/, '이미 열려 있으면 입력창으로 초점을 옮긴다');
+  assert.equal(/preventDefault/.test(body), false, '기본 이동을 막으면 스크립트가 죽었을 때 갈 곳이 없다');
+
+  // 랜딩: 히어로 CTA 는 링크를 유지한 채(스크립트 없이도 섹션으로 간다) 상담창을 연다.
+  const hero = land.slice(land.indexOf('상담창 열어보기') - 400, land.indexOf('상담창 열어보기'));
+  assert.match(hero, /<a href="#demo" data-gowon-open/, '히어로 CTA 가 적힌 대로 동작한다');
+
+  // 체험 섹션: 「오른쪽 아래」 같은 위치 안내만으로 시작하게 두지 않는다(WCAG 1.3.3).
+  assert.match(land, /<button type="button" data-gowon-open[\s\S]{0,320}상담창 열기/, '누를 수 있는 단추가 있다');
+  assert.equal(/오른쪽 아래 상담창/.test(land), false, '위치로만 안내하는 문구를 남기지 않는다');
+  assert.equal(/화면 오른쪽 아래에서 지금 물어보세요/.test(land), false, '제목도 위치에 기대지 않는다');
+
+  // 속성을 붙인 곳은 전부 누를 수 있는 요소여야 한다(div 에 붙이면 키보드로 닿지 않는다).
+  const marks = land.match(/<(\w+)[^>]*data-gowon-open/g) || [];
+  assert.ok(marks.length >= 2, '랜딩에 상담창을 여는 자리가 둘 이상');
+  for (const m of marks) {
+    assert.match(m, /^<(a|button)\b/, `키보드로 닿지 않는 요소에 붙였다: ${m}`);
+  }
+});

@@ -190,7 +190,8 @@ export default function Home() {
               확인이 필요한 문의는 대화 요약과 함께 상담원에게 넘깁니다.
             </p>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 26 }}>
-              <a href="#demo" style={{ fontSize: 14.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 12, padding: '13px 22px' }}>
+              {/* 적힌 대로 **상담창을 연다**(DS 12-3). `href` 는 그대로 둬 스크립트가 죽어도 체험 섹션으로는 간다. */}
+              <a href="#demo" data-gowon-open style={{ fontSize: 14.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 12, padding: '13px 22px' }}>
                 상담창 열어보기
               </a>
               <a href="#contact" style={{ fontSize: 14.5, fontWeight: 700, color: 'var(--ink)', background: 'var(--surface)', border: '1px solid var(--line-2)', borderRadius: 12, padding: '13px 22px' }}>
@@ -331,14 +332,16 @@ export default function Home() {
         <div style={{ ...card, padding: '30px 26px', display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ maxWidth: 560 }}>
             <span style={sectionLabel}>체험</span>
-            <h2 style={{ ...h2, fontSize: 'clamp(21px,2.6vw,27px)', margin: '8px 0 8px' }}>화면 오른쪽 아래에서 지금 물어보세요</h2>
+            <h2 style={{ ...h2, fontSize: 'clamp(21px,2.6vw,27px)', margin: '8px 0 8px' }}>지금 바로 물어보세요</h2>
             <p style={{ ...lead, fontSize: 14.5 }}>
               이 페이지에 떠 있는 상담창이 실제 제품입니다. 답변에 붙는 근거 표시와 상담원 전환까지 그대로 확인하실 수 있습니다.
             </p>
           </div>
-          <div aria-hidden="true" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5, fontWeight: 700, color: 'var(--brand-600)' }}>
-            <span>오른쪽 아래 상담창</span><Icon name="arrow" size={20} />
-          </div>
+          {/* 「오른쪽 아래를 보세요」는 화면을 보는 사람에게만 닿는 안내였다(WCAG 1.3.3) — 누를 수 있는
+            * 단추로 바꿔 위치를 몰라도 시작할 수 있게 한다. 누르면 상담창이 열리고 입력창으로 초점이 간다. */}
+          <button type="button" data-gowon-open style={{ display: 'inline-flex', alignItems: 'center', gap: 9, fontSize: 14.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 12, padding: '13px 22px', minHeight: 44 }}>
+            상담창 열기 <Icon name="arrow" size={17} />
+          </button>
         </div>
       </section>
 

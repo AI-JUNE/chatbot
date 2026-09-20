@@ -185,6 +185,15 @@ export function contactError(v: string): string {
   return '전화번호(010-0000-0000) 또는 이메일(name@example.com) 형식으로 입력해 주세요.';
 }
 
+/**
+ * 연락처 칸의 자동 채우기 쓰임새(HTML autofill 토큰). 한 칸이 전화번호와 이메일을 함께 받으므로
+ * **적힌 내용**을 보고 고른다 — 글자나 `@` 가 있으면 이메일, 아니면 전화번호다.
+ * 빈 칸은 `tel` 로 둔다(안내 문구가 전화번호를 앞에 놓는다). 토큰은 어느 상태에서도 비지 않는다.
+ */
+export function contactPurpose(v: string): 'tel' | 'email' {
+  return /[@a-zA-Z]/.test(v) ? 'email' : 'tel';
+}
+
 /** 표시 시각 — 오전/오후 h:mm. 마운트 이후에만 호출한다. */
 function clock(ms: number): string {
   try {
@@ -430,6 +439,24 @@ export default function ChatWidget({
     const t = setTimeout(() => inputRef.current?.focus(), 60);
     return () => clearTimeout(t);
   }, [open]);
+
+  // 호스트 화면의 「상담창 열기」 단추 — `data-gowon-open` 이 붙은 요소를 누르면 위젯이 열린다.
+  // 위임 방식이라 호스트(랜딩)는 서버 컴포넌트 그대로 두고 속성만 붙이면 된다. 단추가 `<a href="#demo">`
+  // 인 경우 기본 이동은 막지 않는다 — 스크립트가 죽어도 섹션으로는 가야 한다.
+  // 이미 열려 있으면 다시 열지 않고 입력창으로 초점만 옮긴다(누른 사람이 기대하는 자리다).
+  useEffect(() => {
+    if (embedded || typeof document === 'undefined') return;
+    const onClick = (ev: MouseEvent) => {
+      const el = ev.target instanceof Element ? ev.target.closest('[data-gowon-open]') : null;
+      if (!el) return;
+      setOpen((o) => {
+        if (o) setTimeout(() => inputRef.current?.focus(), 0);
+        return true;
+      });
+    };
+    document.addEventListener('click', onClick);
+    return () => document.removeEventListener('click', onClick);
+  }, [embedded]);
 
   // 임베드 모드: 위젯이 그려졌음을 부모(embed.js)에 알린다 → 그때 iframe이 나타난다(첫 로드 깜빡임 제거).
   useEffect(() => {
@@ -879,8 +906,16 @@ export default function ChatWidget({
                               }}
                               // 보내는 중에는 `disabled` 가 아니라 `readOnly` — 비활성이 되면 초점이 위젯 밖으로 떨어진다.
                               readOnly={handoff.stage === 'sending'}
-                              inputMode="text"
-                              autoComplete="off"
+                              // 고객 **자신의** 전화번호·이메일을 받는 칸이다 — 쓰임새를 프로그램이 알 수 있어야 하고
+                              // (WCAG 1.3.5), 자동 채우기를 막을 이유가 없다. `off` 는 둘 다 어겼다.
+                              // 키보드는 `email` 하나로 둔다 — 글자·숫자·`@`·`.` 가 모두 있는 유일한 자판이라
+                              // 전화번호와 이메일을 **둘 다** 칠 수 있다(`tel` 로 두면 이메일을 칠 수 없다).
+                              inputMode="email"
+                              autoComplete={contactPurpose(handoff.contact)}
+                              // iOS 는 첫 글자를 대문자로 바꾼다 — `name@…` 이 `Name@…` 이 되어 다시 지우게 된다.
+                              autoCapitalize="off"
+                              autoCorrect="off"
+                              spellCheck={false}
                               aria-invalid={handoff.error ? 'true' : undefined}
                               aria-describedby={handoff.error ? 'gw-handoff-err gw-handoff-hint' : 'gw-handoff-hint'}
                               placeholder="010-0000-0000 또는 name@example.com"

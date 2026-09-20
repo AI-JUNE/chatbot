@@ -588,3 +588,35 @@ test('정산 기준월·파트너 조건이 주소에 남아 새로고침·링�
   assert.match(w, /if \(settlePartner\) qs\.set\('p', settlePartner\)/, '전체 조회일 때는 빈 값을 주소에 싣지 않는다');
   assert.match(w, /catch \{[\s\S]{0,160}정산 계산 자체는 막지 않는다/, '주소를 바꾸지 못해도 계산은 계속된다');
 });
+
+test('탭마다 브라우저 제목이 달라진다 — 북마크·방문 기록에서 열 화면이 구분된다 (DS 12-1)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+
+  // 라벨은 사이드바 정의(TAB_GROUPS) 하나에서만 나온다 — 헤더 h1·본문 이름·브라우저 제목이 같은 값을 본다.
+  assert.match(src, /const TAB_LABEL = Object\.fromEntries\(TAB_GROUPS\.flatMap\(\(g\) => g\.tabs\)\)/, 'TAB_LABEL 단일 출처');
+  assert.match(src, /const currentLabel = TAB_LABEL\[tab\]/, '헤더 제목도 같은 출처를 본다');
+  assert.match(src, /function docTitle\(tab: TabKey\): string \{[\s\S]{0,140}TAB_LABEL\[tab\]/, 'docTitle');
+  // page.tsx 는 기본 내보내기만 허용된다(라우트 파일 규칙과 같은 이유).
+  assert.equal(/^export (?:function|const) (?:docTitle|TAB_LABEL)/m.test(src), false, '헬퍼를 내보내면 안 된다');
+
+  // 탭이 바뀔 때마다 제목을 다시 쓴다. 의존 배열이 [tab] 이 아니면 첫 화면 제목에 머문다.
+  const eff = src.slice(src.indexOf('// 화면 → 브라우저 제목'));
+  assert.match(eff.slice(0, 400), /document\.title = docTitle\(tab\);/, '탭에서 제목을 만든다');
+  assert.match(eff.slice(0, 400), /\}, \[tab\]\);/, '탭이 바뀌면 다시 쓴다');
+  assert.match(eff.slice(0, 400), /catch \{/, '제목을 못 바꾸는 환경에서도 화면은 그대로 쓴다');
+
+  // TabKey 열 개가 전부 사이드바에 있어야 docTitle 이 기본값으로 떨어지지 않는다.
+  const keys = (src.match(/^type TabKey = (.+);$/m) || [])[1];
+  assert.ok(keys, 'TabKey 정의를 찾지 못했다');
+  const tabKeys = keys.split('|').map((s) => s.trim().replace(/'/g, ''));
+  assert.equal(tabKeys.length, 10, '탭 수');
+  const groups = src.slice(src.indexOf('const TAB_GROUPS'), src.indexOf('/** 주소(해시)에 쓰는 탭 이름'));
+  const labelled = new Map((groups.match(/\['(\w+)', '([^']+)'\]/g) || []).map((p) => {
+    const [, k, v] = p.match(/\['(\w+)', '([^']+)'\]/);
+    return [k, v];
+  }));
+  for (const k of tabKeys) assert.ok(labelled.get(k), `사이드바에 라벨이 없는 탭: ${k}`);
+  // 열 개의 제목이 서로 달라야 목록에서 구분된다.
+  const titles = new Set(tabKeys.map((k) => `${labelled.get(k)} — 관리 콘솔 · GOWON Chat`));
+  assert.equal(titles.size, tabKeys.length, '같은 제목을 쓰는 탭이 있다');
+});

@@ -1002,6 +1002,15 @@ function tabFromHash(hash: string): TabKey {
 /** 정산 기준월 — 주소에서 받은 값은 믿지 않는다(`?m=2026-13` 이면 지금 달로 되돌린다). */
 const MONTH_RE = /^\d{4}-(?:0[1-9]|1[0-2])$/;
 
+/** 사이드바 라벨의 단일 출처 — 헤더 제목(h1)·본문 이름(aria-label)·브라우저 제목이 같은 값을 본다. */
+const TAB_LABEL = Object.fromEntries(TAB_GROUPS.flatMap((g) => g.tabs)) as Record<TabKey, string>;
+
+/** 브라우저 제목. 탭마다 다르게 둔다 — 주소(`#kb`)는 탭을 가리키는데 제목이 하나면
+ *  북마크·방문 기록·탭 목록에 열 줄이 전부 같은 글자로 쌓인다(WCAG 2.4.2 Page Titled). */
+function docTitle(tab: TabKey): string {
+  return `${TAB_LABEL[tab] ?? '대시보드'} — 관리 콘솔 · GOWON Chat`;
+}
+
 /** 상단 헤더에 쓰는 탭 설명 — 이 화면에서 무엇을 하는지 한 줄로 알린다. */
 const TAB_DESC: Record<TabKey, string> = {
   dash: '오늘의 응대 현황과 최근 대화를 확인합니다.',
@@ -1380,6 +1389,11 @@ export default function AdminPage() {
       /* 주소를 바꾸지 못하는 환경에서도 화면 전환 자체는 막지 않는다 */
     }
   }, [setTab]);
+  // 화면 → 브라우저 제목. 탭이 주소에 남는 만큼(DS 6-3) 제목도 같이 따라가야 북마크·방문 기록·
+  // 탭 목록에서 열 화면이 구분된다. 스크린리더는 창을 옮길 때마다 이 제목을 읽는다.
+  useEffect(() => {
+    try { document.title = docTitle(tab); } catch { /* 제목을 못 바꿔도 화면은 그대로 쓴다 */ }
+  }, [tab]);
   // 설치 코드에 넣을 배포 주소 — 브라우저가 보고 있는 주소를 그대로 쓴다(하드코딩 금지).
   const [origin, setOrigin] = useState('');
   const [copied, setCopied] = useState('');
@@ -2621,7 +2635,7 @@ export default function AdminPage() {
     return hits.slice(0, SEARCH_MAX);
   };
 
-  const currentLabel = TAB_GROUPS.flatMap((g) => g.tabs).find(([k]) => k === tab)?.[1] ?? '대시보드';
+  const currentLabel = TAB_LABEL[tab] ?? '대시보드';
 
   return (
     <div className="ac-shell">
