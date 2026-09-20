@@ -620,3 +620,30 @@ test('탭마다 브라우저 제목이 달라진다 — 북마크·방문 기록
   const titles = new Set(tabKeys.map((k) => `${labelled.get(k)} — 관리 콘솔 · GOWON Chat`));
   assert.equal(titles.size, tabKeys.length, '같은 제목을 쓰는 탭이 있다');
 });
+
+test('콘솔 표 9곳에 접근 이름이 있다 — 이름은 스크롤 영역과 같은 출처 (DS 13-3)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const lines = src.split('\n');
+  // DS 9-1 이 붙인 이름(「… — 가로로 스크롤할 수 있습니다」)은 **넘칠 때만** 나온다.
+  // 넓은 화면에서는 표에 이름이 하나도 없어, 표 목록으로 이동하면 무엇의 표인지 알 수 없다.
+  let tables = 0;
+  lines.forEach((ln, i) => {
+    if (!ln.includes('<table className="ac-table">')) return;
+    tables += 1;
+    let j = i - 1;
+    while (j >= 0 && lines[j].trim() === '') j -= 1;
+    const label = (lines[j].match(/<ScrollX label="([^"]+)">/) || [])[1];
+    assert.ok(label, `${i + 1}행 표가 ScrollX 밖에 있다`);
+    // 이름은 스크롤 영역 라벨과 **같은 글자**여야 한다 — 두 출처가 갈라지면 읽히는 이름이 둘이 된다.
+    assert.equal(
+      lines[i + 1].trim(),
+      `<caption className="ac-srhide">${label}</caption>`,
+      `${i + 1}행 표(${label})에 접근 이름이 없거나 스크롤 영역 라벨과 다르다`,
+    );
+  });
+  assert.ok(tables >= 9, `콘솔 표가 ${tables}개뿐이다`);
+  assert.equal((src.match(/<caption className="ac-srhide">/g) || []).length, tables, '이름 없는 표가 남아 있다');
+  // 이름은 화면에 글자로 나타나지 않는다(표 위 제목과 두 번 보이지 않게) — 기존 숨김 규격을 그대로 쓴다.
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  assert.match(css, /\.ac-srhide\{[^}]*clip:rect\(0 0 0 0\)/, '스크린리더 전용 숨김 규격이 없다');
+});

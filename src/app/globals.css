@@ -301,7 +301,9 @@ main:focus{outline:none}
 }
 
 /* ── 랜딩 레이아웃 (인라인 스타일로 표현할 수 없는 반응형만 클래스로) ── */
+.lp-topin{max-width:1080px;margin:0 auto;padding:0 22px;height:62px;display:flex;align-items:center;gap:18px}
 .lp-nav{display:flex;gap:20px;margin-left:12px}
+.lp-topcta{margin-left:auto;display:inline-flex;align-items:center;min-height:38px;white-space:nowrap}
 .lp-hero{display:grid;grid-template-columns:minmax(320px,1fr) minmax(280px,380px);gap:44px;align-items:center}
 .lp-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(272px,1fr))}
 .lp-kpi{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
@@ -309,7 +311,16 @@ main:focus{outline:none}
 .lp-faq summary::after{content:'+';float:right;color:var(--brand-600);font-weight:800}
 .lp-faq[open] summary::after{content:'−'}
 @media (max-width:900px){
-  .lp-nav{display:none}
+  /* 상단바가 두 줄이 된다: 1행 = 로고 + 「도입 문의」, 2행 = 섹션 메뉴(가로 스크롤 칩).
+     메뉴를 display:none 으로 지우면 좁은 화면에는 섹션으로 가는 수단이 아예 없어진다. */
+  .lp-topin{height:auto;padding:10px 22px 8px;flex-wrap:wrap;row-gap:8px}
+  .lp-nav{order:3;flex:1 0 100%;margin-left:0;gap:4px;flex-wrap:nowrap;overflow-x:auto;
+    overscroll-behavior-x:contain;padding-bottom:2px}
+  .lp-nav a{white-space:nowrap;font-size:12.5px;padding:7px 10px;background:var(--bg);
+    border-radius:8px;min-height:34px;display:inline-flex;align-items:center}
+  /* 두 줄이 된 상단바(1행 56px + 2행 44px)만큼 앵커 착지점도 함께 내린다 —
+     DS 10-2 가 세운 단일 출처를 이 화면 폭에서만 다시 잡는다(scroll-margin 은 쓰지 않는다). */
+  html{scroll-padding-top:112px}
   .lp-hero{grid-template-columns:1fr;gap:28px}
 }
 

@@ -397,6 +397,11 @@ export default function ChatWidget({
     if (typeof window === 'undefined') return;
     if (embedded) {
       const onHost = (ev: MessageEvent) => {
+        // 이 값 하나가 전체화면 전환을 결정한다 — 화면을 통째로 덮는 상태다.
+        // `d.source` 는 보내는 쪽이 스스로 적는 이름이라 누구나 흉내 낼 수 있으므로,
+        // **보낸 창이 우리를 띄운 부모인지**를 먼저 본다(위조할 수 없는 검사).
+        // 호스트 출처는 고객사마다 달라 위젯이 미리 알 수 없다 — 창 검사가 여기서는 유일한 경계다.
+        if (ev.source !== window.parent) return;
         const d = ev.data as { source?: string; type?: string; width?: number } | null;
         if (!d || d.source !== 'gowon-chat-host' || d.type !== 'viewport') return;
         if (typeof d.width === 'number') setMobile(d.width <= MOBILE_MAX);

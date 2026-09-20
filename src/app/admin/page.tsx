@@ -2963,6 +2963,7 @@ export default function AdminPage() {
                 ) : (
                   <ScrollX label="안내 자료 목록">
                     <table className="ac-table">
+                      <caption className="ac-srhide">안내 자료 목록</caption>
                       <thead>
                         <tr>
                           <th scope="col" style={{ width: 96 }}>카테고리</th>
@@ -3511,6 +3512,7 @@ export default function AdminPage() {
               ) : (
                 <ScrollX label="상담원 요청 목록">
                   <table className="ac-table">
+                    <caption className="ac-srhide">상담원 요청 목록</caption>
                     <thead>
                       <tr>
                         <th scope="col">접수</th>
@@ -3652,6 +3654,7 @@ export default function AdminPage() {
                   ) : (
                     <ScrollX label="고객사 목록">
                       <table className="ac-table">
+                        <caption className="ac-srhide">고객사 목록</caption>
                         <thead>
                           <tr>
                             <th scope="col">고객사</th>
@@ -3714,6 +3717,7 @@ export default function AdminPage() {
                   ) : (
                     <ScrollX label="파트너 목록">
                       <table className="ac-table">
+                        <caption className="ac-srhide">파트너 목록</caption>
                         <thead>
                           <tr>
                             <th scope="col">파트너</th>
@@ -3976,6 +3980,7 @@ export default function AdminPage() {
                   </div>
                   <ScrollX label="파트너별 합계">
                     <table className="ac-table">
+                      <caption className="ac-srhide">파트너별 합계</caption>
                       <thead>
                         <tr>
                           <th scope="col">파트너</th>
@@ -4009,6 +4014,7 @@ export default function AdminPage() {
                   </div>
                   <ScrollX label="고객사별 산출 근거">
                     <table className="ac-table">
+                      <caption className="ac-srhide">고객사별 산출 근거</caption>
                       <thead>
                         <tr>
                           <th scope="col">고객사</th>
@@ -4154,6 +4160,7 @@ export default function AdminPage() {
               ) : (
                 <ScrollX label="테넌트 FAQ 목록">
                   <table className="ac-table">
+                    <caption className="ac-srhide">테넌트 FAQ 목록</caption>
                     <thead>
                       <tr>
                         <th scope="col">근거</th>
@@ -4228,6 +4235,7 @@ export default function AdminPage() {
               ) : (
                 <ScrollX label="관리 작업 기록">
                   <table className="ac-table">
+                    <caption className="ac-srhide">관리 작업 기록</caption>
                     <thead>
                       <tr>
                         <th scope="col">시각</th>
@@ -4446,6 +4454,7 @@ export default function AdminPage() {
               표 규격을 손볼 때 이 화면만 어긋난다(DS 6-2 「단일 출처」와 같은 종류, DS 9-2). */}
           <ScrollX label="설치 선택 옵션">
             <table className="ac-table">
+              <caption className="ac-srhide">설치 선택 옵션</caption>
               <thead>
                 <tr>
                   <th scope="col" style={{ width: 150 }}>옵션</th>

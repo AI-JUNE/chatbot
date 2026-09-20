@@ -1,7 +1,14 @@
-/* GOWON Chat 임베드 스니펫 (v0.6)
+/* GOWON Chat 임베드 스니펫 (v0.7)
  * 사용법: <script src="https://<배포도메인>/embed.js" async></script>
  * 옵션(선택): data-position="left" | data-offset="24" | data-z="2147483000"
  *            data-tenant="eum"  ← 테넌트 프리셋(문구·색·FAQ 지식)을 바꿔 끼운다
+ *
+ * v0.7 변경점
+ * - 위젯 메시지의 출처를 창 단위로 확인한다(ev.source === iframe.contentWindow). 종전에는
+ *   `{source:'gowon-chat'}` 이라는 자칭 이름만 보고 받아들였고, 스크립트 주소를 읽지 못하면
+ *   출처 검사 자체를 건너뛰었다 — 호스트 페이지의 다른 스크립트·광고 프레임이 전체화면 신호를
+ *   흉내 내 상담창으로 페이지를 덮을 수 있었다.
+ * - 호스트 뷰포트 크기를 `'*'` 로 뿌리지 않고 위젯 프레임의 출처로만 보낸다.
  *
  * v0.6 변경점
  * - 전체화면(모바일)으로 열린 동안 호스트 페이지 스크롤을 잠근다 — 위젯 뒤에서 페이지가 밀리면
@@ -55,6 +62,15 @@
   iframe.title = '상담 챗봇';
   iframe.setAttribute('allowtransparency', 'true');
   iframe.setAttribute('loading', 'lazy');
+
+  // 위젯 프레임의 실제 출처 — 주고받는 메시지를 이 출처로 한정한다.
+  // script.src 를 읽지 못해 origin 이 비어도(상대 경로 /widget → 호스트와 같은 출처)
+  // 여기서 제대로 풀린다. http(s) 가 아니면(file: 등) 지정할 출처가 없으므로 '*' 로 둔다.
+  var frameOrigin = '*';
+  try {
+    var resolved = new URL(iframe.src, window.location.href).origin;
+    if (/^https?:\/\//.test(resolved)) frameOrigin = resolved;
+  } catch (e) { /* noop */ }
 
   function applySize(w, h) {
     iframe.style.width = Math.min(w, window.innerWidth) + 'px';
@@ -139,7 +155,7 @@
       type: 'viewport',
       width: window.innerWidth,
       height: window.innerHeight
-    }, origin || '*');
+    }, frameOrigin);
   }
 
   iframe.addEventListener('load', function () {
@@ -149,7 +165,10 @@
   });
 
   window.addEventListener('message', function (ev) {
-    if (origin && ev.origin !== origin) return;
+    // 자칭 이름(`d.source`)은 누구나 적을 수 있다 — **보낸 창**이 우리 iframe 인지를 먼저 본다.
+    // 이 검사는 위조할 수 없다. 출처 문자열 비교는 그 위에 덧대는 2차 확인이다.
+    if (ev.source !== iframe.contentWindow) return;
+    if (frameOrigin !== '*' && ev.origin !== frameOrigin) return;
     var d = ev.data;
     if (!d || d.source !== 'gowon-chat') return;
     if (d.type === 'ready') { reveal(); sendViewport(); return; }

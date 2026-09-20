@@ -1471,3 +1471,67 @@ test('새 창으로 열리는 링크는 그 사실을 알린다 (DS 11-3)', () =
   assert.match(admin, /aria-label=\{`\$\{label\} — 새 창에서 열립니다`\}/, '콘솔 접근 이름이 보이는 글자로 시작하지 않는다');
   assert.match(widget, /aria-label=\{`\$\{m\.cta\.label\} — 새 창에서 열립니다`\}/, '위젯 접근 이름이 보이는 글자로 시작하지 않는다');
 });
+
+
+/* ══════════ 13순위 — 백로그 소진 후 10차 재감사 (DS 13-x) ══════════ */
+
+test('임베드 메시지는 자칭 이름이 아니라 보낸 창으로 가린다 (DS 13-1)', () => {
+  const e = read('public/embed.js');
+  // `{source:'gowon-chat'}` 은 누구나 적을 수 있는 자칭 이름이다. 위조할 수 없는 검사는
+  // "보낸 창이 우리 iframe 인가" 하나뿐이고, 이 신호 하나가 전체화면 전환을 결정한다.
+  assert.match(e, /if \(ev\.source !== iframe\.contentWindow\) return;/, '호스트가 보낸 창을 확인하지 않는다');
+  assert.match(e, /if \(frameOrigin !== '\*' && ev\.origin !== frameOrigin\) return;/, '출처 2차 확인이 없다');
+  // 종전의 `origin && ev.origin !== origin` 은 주소를 읽지 못하면 검사를 통째로 건너뛰었다.
+  assert.equal(/if \(origin && ev\.origin !== origin\) return;/.test(e), false, '출처를 못 읽으면 검사를 건너뛰는 경로가 남아 있다');
+  // 호스트 뷰포트 크기를 아무 출처로나 뿌리지 않는다.
+  assert.match(e, /var frameOrigin = '\*';/, '위젯 프레임 출처를 따로 풀지 않는다');
+  assert.match(e, /new URL\(iframe\.src, window\.location\.href\)\.origin/, '프레임 출처는 iframe 주소에서 풀어야 한다');
+  const targets = [...e.matchAll(/\}, ([^)]+)\);/g)].map((m) => m[1].trim());
+  assert.ok(targets.includes('frameOrigin'), 'sendViewport 가 프레임 출처로 보내지 않는다');
+  assert.equal(targets.includes("origin || '*'"), false, "호스트 뷰포트를 '*' 로 뿌린다");
+
+  // 위젯 쪽도 같은 경계를 갖는다 — 이 값이 전체화면(화면을 통째로 덮는 상태)을 정한다.
+  // 호스트 출처는 고객사마다 달라 미리 알 수 없으므로 창 검사가 유일한 경계다.
+  const w = read('src/components/ChatWidget.tsx');
+  assert.match(w, /if \(ev\.source !== window\.parent\) return;/, '위젯이 부모가 보낸 메시지인지 확인하지 않는다');
+  const onHost = w.slice(w.indexOf('const onHost ='), w.indexOf("window.addEventListener('message', onHost)"));
+  assert.ok(onHost.indexOf('ev.source !== window.parent') < onHost.indexOf("d.source !== 'gowon-chat-host'"),
+    '창 검사가 자칭 이름 검사보다 뒤에 있다');
+  // 공개 계약은 그대로.
+  assert.match(e, /attr\('data-tenant', ''\)/, 'data-tenant 옵션 계약이 깨졌다');
+  assert.match(e, /attr\('data-position', 'right'\)/, 'data-position 옵션 계약이 깨졌다');
+});
+
+test('랜딩 섹션 메뉴가 좁은 화면에서 사라지지 않는다 (DS 13-2)', () => {
+  const css = read('src/app/globals.css');
+  const page = read('src/app/page.tsx');
+  // 약관 페이지 목차(DS 4-4)는 ≤900px 에서 가로 스크롤 칩으로 접힌다. 같은 셸을 쓰는
+  // 랜딩만 메뉴를 통째로 지우면, 좁은 화면에는 섹션으로 가는 수단이 아예 없다.
+  assert.equal(/\.lp-nav\{display:none\}/.test(css), false, '좁은 화면에서 랜딩 메뉴를 지운다');
+  const mq = (css.match(/@media \(max-width:900px\)\{[^@]*?\.lp-nav\{[\s\S]*?\n\}/) || [])[0];
+  assert.ok(mq, '랜딩 메뉴의 좁은 화면 규칙이 없다');
+  assert.match(mq, /\.lp-nav\{[^}]*overflow-x:auto/, '메뉴가 가로로 스크롤되지 않는다');
+  assert.match(mq, /\.lp-nav\{[^}]*flex-wrap:nowrap/, '칩이 여러 줄로 쌓이면 상단바가 화면을 덮는다');
+  // 손가락 목표는 약관 목차 칩과 같은 규격(34px).
+  const chip = (mq.match(/\.lp-nav a\{[^}]*\}/) || [])[0] || '';
+  const toc = (css.match(/\.lg-toc-list a\{[^}]*min-height:(\d+)px/) || [])[1];
+  assert.match(chip, new RegExp(`min-height:${toc}px`), `칩 손가락 목표가 약관 목차(${toc}px)와 다르다`);
+
+  // 상단바가 두 줄이 되므로 앵커 착지점도 같이 내려가야 한다(DS 10-2 의 단일 출처).
+  const wide = Number((css.match(/^html\{[^}]*scroll-padding-top:(\d+)px/m) || [])[1]);
+  const narrow = Number((mq.match(/html\{scroll-padding-top:(\d+)px\}/) || [])[1]);
+  assert.ok(narrow > wide, `두 줄 상단바인데 착지 여백이 그대로다: ${narrow}px ≤ ${wide}px`);
+  assert.equal(/scroll-margin-top/.test(css), false, 'scroll-padding-top 과 scroll-margin-top 이 겹친다');
+
+  // 인라인으로 적은 값은 미디어 쿼리가 이기지 못한다 — 폭·높이·여백을 전부 클래스로 내보낸다.
+  // (`wrap` 의 padding:'0 22px' 하나가 두 줄 상단바의 세로 여백을 통째로 막는다.)
+  assert.match(page, /<div className="lp-topin">/, '상단바가 여전히 인라인 레이아웃을 쓴다');
+  assert.equal(/height: 62/.test(page), false, '인라인 높이가 남아 있어 두 줄로 접히지 않는다');
+  const topin = (css.match(/\.lp-topin\{[^}]*\}/) || [])[0] || '';
+  for (const prop of ['max-width', 'padding', 'height:62px']) {
+    assert.ok(topin.includes(prop), `상단바 ${prop} 가 클래스에 없다`);
+  }
+  assert.match(mq, /\.lp-topin\{[^}]*padding:10px 22px 8px/, '두 줄 상단바의 세로 여백이 없다');
+  // 메뉴 칩은 전부 링크라 Tab 으로 닿는다 — 스크롤 영역에 별도 tabindex 를 두지 않는다(DS 9-1 단서).
+  assert.match(page, /<nav aria-label="주요 섹션" className="lp-nav">/, '메뉴 랜드마크 이름이 사라졌다');
+});

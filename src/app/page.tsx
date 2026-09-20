@@ -156,17 +156,22 @@ export default function Home() {
 
       {/* ── 상단바 ── */}
       <header style={{ position: 'sticky', top: 0, zIndex: 20, background: 'rgba(255,255,255,.86)', backdropFilter: 'blur(10px)', borderBottom: '1px solid var(--line)' }}>
-        <div style={{ ...wrap, height: 62, display: 'flex', alignItems: 'center', gap: 18 }}>
+        {/* 폭·높이·정렬을 전부 클래스로 옮겼다(`wrap` 인라인을 쓰지 않는다) — 좁은 화면에서는
+          * 메뉴가 둘째 줄로 접혀 높이와 세로 여백이 달라지는데, 인라인으로 적은 값은
+          * 미디어 쿼리가 이기지 못한다(`padding:'0 22px'` 하나가 세로 여백을 통째로 막는다). */}
+        <div className="lp-topin">
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9, fontWeight: 800, fontSize: 16, letterSpacing: '-.02em' }}>
             <BrandMark size={28} />
             GOWON Chat
           </span>
+          {/* 좁은 화면에서 숨기지 않는다 — 약관 페이지 목차(DS 4-4)와 같은 가로 스크롤 칩으로 접는다.
+            * 칩은 전부 링크라 Tab 으로 차례차례 닿으므로 스크롤 영역에 tabindex 를 따로 두지 않는다. */}
           <nav aria-label="주요 섹션" className="lp-nav">
             {NAV.map(([href, label]) => (
               <a key={href} href={href} style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--sub)' }}>{label}</a>
             ))}
           </nav>
-          <a href="#contact" style={{ marginLeft: 'auto', fontSize: 13.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 10, padding: '9px 16px' }}>
+          <a href="#contact" className="lp-topcta" style={{ fontSize: 13.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 10, padding: '9px 16px' }}>
             도입 문의
           </a>
         </div>
