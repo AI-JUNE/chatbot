@@ -766,7 +766,9 @@ test('404·오류 화면이 브랜드 규격으로 있고 내부 오류 내용�
   }
   const ge = read('src/app/global-error.tsx');
   assert.match(ge, /<html lang="ko">/, 'global-error 는 루트 레이아웃을 대체하므로 lang 을 직접 준다');
-  assert.match(ge, /'--brand': '#2563EB'/, 'globals.css 가 없으므로 토큰을 인라인으로');
+  // 토큰 사본은 SystemPage 의 SYSTEM_TOKENS 한 벌뿐이다(DS 16-1) — global-error 는 그것을 body 에 얹는다.
+  assert.match(ge, /SYSTEM_TOKENS/, 'globals.css 가 없으므로 토큰을 직접 얹어야 한다');
+  assert.match(sys, /'--brand': '#2563EB'/, '토큰 사본이 SystemPage 에 있어야 한다');
 });
 
 /* ══════════ 랜딩 — 상용 수준 구조 & 운영자 정보 비노출 ══════════ */
@@ -1670,5 +1672,91 @@ test('헤더 규칙 매칭: 위젯만 프레임이 열리고 나머지는 전부
   // 콘솔·관리 API 는 구형 브라우저에도 못을 박는다.
   for (const p of ['/admin', '/admin/x', '/api/admin/backup', '/api/admin/logs/export']) {
     assert.ok(keysFor(p).includes('X-Frame-Options'), `${p} 에 X-Frame-Options 가 빠졌다`);
+  }
+});
+
+/* ══════════ 디자인 스프린트 — 13차 재감사 (DS 16-1·16-2) ══════════ */
+
+/**
+ * 최후 오류 화면(global-error)은 `globals.css` 가 실리지 않는 유일한 화면이라 토큰 값을 직접 들어야 한다.
+ * 그 사본이 둘이 되면(종전: global-error 의 토큰표 + SystemPage 의 `var(--x, 기본값)`) 단일 출처가 갈라져
+ * DS 10-1 처럼 토큰을 내린 뒤에도 **이 화면에서만** 옛 값이 남는다. 사본은 한 벌이고, 그 한 벌은 :root 와 같아야 한다.
+ */
+test('시스템 화면 토큰 사본이 :root 와 한 글자도 다르지 않다 (DS 16-1)', () => {
+  const sys = read('src/components/SystemPage.tsx');
+  const t = tokens();
+
+  // 사본 한 벌 — SYSTEM_TOKENS.
+  const table = sys.split('export const SYSTEM_TOKENS = {')[1]?.split('} as CSSProperties')[0];
+  assert.ok(table, 'SystemPage 가 토큰 사본(SYSTEM_TOKENS)을 내보내지 않는다');
+  const copy = {};
+  for (const [, k, v] of table.matchAll(/'(--[a-z0-9-]+)':\s*(?:'([^']*)'|"([^"]*)")/g)) copy[k] = (v ?? '').trim();
+  for (const [, k, v] of table.matchAll(/'(--[a-z0-9-]+)':\s*"([^"]*)"/g)) copy[k] = v.trim();
+
+  // hex 토큰은 :root 값과 같아야 한다(대소문자 무시 — #FFFFFF/#ffffff 는 같은 색이다).
+  for (const [k, v] of Object.entries(copy)) {
+    if (!/^#[0-9A-Fa-f]{6}$/.test(v)) continue;
+    assert.ok(t[k], `:root 에 없는 토큰을 사본이 들고 있다: ${k}`);
+    assert.equal(v.toLowerCase(), t[k].toLowerCase(), `${k} 사본(${v})이 :root(${t[k]})와 다르다 — 최후 화면만 옛 값으로 남는다`);
+  }
+  // DS 10-1 이 내린 값이 여기서 되돌아가지 않게 못을 박는다.
+  assert.equal(copy['--mut'].toLowerCase(), t['--mut'].toLowerCase(), '--mut 사본이 AA 미달 옛 값으로 되돌아갔다');
+
+  // 그림자·글꼴처럼 hex 가 아닌 토큰도 :root 원문과 같아야 한다(종전 사본은 그림자 두 겹 중 한 겹만 들었다).
+  const root = read('src/app/globals.css').split(':root{')[1].split('\n}')[0];
+  for (const k of ['--shadow-card', '--font']) {
+    const m = root.match(new RegExp(`${k}\\s*:\\s*([^;]+);`));
+    assert.ok(m, `:root 에 ${k} 가 없다`);
+    const want = m[1].trim().replace(/\s+/g, ' ');
+    const got = (copy[k] || '').replace(/\s+/g, ' ');
+    assert.equal(got, want, `${k} 사본이 :root 와 다르다 — 최후 화면만 다른 규격으로 보인다`);
+  }
+
+  // 화면은 기본값 없는 var() 로만 참조한다 — 기본값을 쓰면 사본이 다시 둘이 된다.
+  for (const f of ['src/components/SystemPage.tsx', 'src/components/BrandMark.tsx']) {
+    const body = read(f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    assert.equal(/var\(\s*--[a-z0-9-]+\s*,/.test(body), false, `${f} 에 var(--x, 기본값) 이 남아 있다`);
+  }
+
+  // 최후 화면이 참조하는 토큰은 **전부** 사본에 있어야 한다(하나라도 빠지면 그 값만 브라우저 기본으로 떨어진다).
+  const used = new Set();
+  for (const f of ['src/components/SystemPage.tsx', 'src/components/BrandMark.tsx']) {
+    const body = read(f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    for (const [, k] of body.matchAll(/var\((--[a-z0-9-]+)\)/g)) used.add(k);
+  }
+  for (const k of used) assert.ok(k in copy, `최후 화면이 쓰는 ${k} 가 토큰 사본에 없다`);
+
+  // global-error 는 제 사본을 만들지 않고 그 한 벌을 그대로 쓴다.
+  const ge = read('src/app/global-error.tsx');
+  assert.match(ge, /import SystemPage, \{ SYSTEM_TOKENS \}/, 'global-error 가 토큰 사본을 따로 들고 있다');
+  assert.match(ge, /\{ \.\.\.SYSTEM_TOKENS/, 'global-error 가 사본을 body 에 얹지 않는다');
+  assert.equal(/'--[a-z0-9-]+':/.test(ge), false, 'global-error 에 토큰 정의가 다시 생겼다');
+});
+
+/**
+ * 약관·방침으로 가는 길은 두 푸터의 링크 두 개뿐인데(DS 15-3), 글자만 있는 12.5px 링크라
+ * 누를 수 있는 높이가 15px 였다 — 같은 화면의 다른 링크는 34~42px 를 지킨다.
+ */
+test('푸터 법무 링크가 손가락으로 누를 수 있는 규격을 지킨다 (DS 16-2)', () => {
+  const css = read('src/app/globals.css');
+  const rule = css.match(/\.lp-footlink\{([^}]*)\}/);
+  assert.ok(rule, '.lp-footlink 규격이 없다 — 화면마다 인라인으로 적으면 좁은 화면 규칙이 이기지 못한다');
+  const h = rule[1].match(/min-height:(\d+)px/);
+  assert.ok(h && Number(h[1]) >= 44, `누를 면이 44px 미만이다: ${rule[1]}`);
+  assert.match(rule[1], /display:inline-flex/, '높이를 주려면 inline 이 아니어야 한다(inline 요소는 높이를 받지 않는다)');
+  assert.match(rule[1], /align-items:center/, '글자가 위로 붙는다');
+  // 같은 화면의 다른 터치 규격보다 작지 않아야 한다(목차 칩 34px — DS 13-2).
+  const chip = css.match(/\.lg-toc-list a\{[^}]*min-height:(\d+)px/);
+  assert.ok(chip && Number(h[1]) >= Number(chip[1]), '법무 링크가 목차 칩보다 작다');
+
+  // 두 푸터가 같은 규격을 본다 — 인라인으로 갈라지지 않게.
+  for (const f of ['src/app/page.tsx', 'src/app/privacy/LegalLayout.tsx']) {
+    const src = read(f);
+    for (const href of ['/terms', '/privacy']) {
+      const m = src.match(new RegExp(`href="${href}"[^>]*>`));
+      assert.ok(m, `${f} 에 ${href} 링크가 없다`);
+      assert.match(m[0], /className="lp-footlink"/, `${f} 의 ${href} 링크가 공용 규격을 쓰지 않는다`);
+      assert.equal(/style=\{\{/.test(m[0]), false, `${f} 의 ${href} 링크에 인라인 스타일이 남아 있다`);
+    }
   }
 });

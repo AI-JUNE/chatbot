@@ -734,3 +734,42 @@ test('관리 토큰은 탭을 닫으면 지워진다 — 공용 PC 에 남지 �
   // 화면 안내가 실제 보관 기간과 어긋나면 안 된다(「이 브라우저에만 저장」은 사실이 아니었다).
   assert.match(src, /이 탭에만 보관되고 브라우저를 닫으면 지워집니다/, '보관 기간을 밝혀야 한다');
 });
+
+/* ══════════ 디자인 스프린트 — 13차 재감사 (DS 16-3) ══════════ */
+
+/**
+ * 연락처 파기(escalation.updateTicket)는 tests/runtime.test.mjs 가 실제로 실행해 확인한다.
+ * 여기서는 **화면과 기록**을 본다: 파기했다는 사실이 운영자에게 보이는가, 지우기 전에 묻는가,
+ * 감사 로그에 남는가. 지워 놓고 말하지 않으면 운영자는 연락처가 원래 없었다고 오해한다.
+ */
+test('연락처 파기가 화면·확인·기록에 드러난다 (DS 16-3)', () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+
+  // 1) 「처음부터 없음」과 「받았다가 파기함」을 다르게 말한다.
+  const d = src.slice(src.indexOf('function TicketDrawer'), src.indexOf('function KpiCard'));
+  assert.match(d, /t\.contactPurgedAt \? '연락처 파기됨' : '연락처 없음'/, '상세 머리에서 두 상태가 구분되지 않는다');
+  assert.match(d, /timeLabel\(t\.contactPurgedAt\)/, '언제 파기했는지 보여야 한다');
+  assert.match(d, /개인정보처리방침 4조/, '무슨 근거로 지웠는지 밝혀야 한다');
+  assert.match(d, /되살릴 수 없습니다/, '되돌릴 수 없다는 사실을 알려야 한다');
+  // 목록에서도 같은 구분을 한다.
+  assert.match(src, /연락처 파기됨<\/span>[\s\S]{0,120}: null/, '목록 셀에서 파기 상태가 빠졌다');
+
+  // 2) 지우기 전에 묻는다 — 되돌릴 수 없는 동작은 전부 askConfirm 을 거친다(DS 5-4 규약).
+  const patch = src.slice(src.indexOf('const patchTicket ='), src.indexOf('const patchTicket =') + 1600);
+  assert.match(patch, /status === 'resolved' \|\| status === 'canceled'/, '완료·취소에만 걸려야 한다');
+  assert.match(patch, /target\?\.contact/, '지울 것이 없는 접수에는 묻지 않아야 한다');
+  assert.match(patch, /askConfirm\(\{[\s\S]{0,400}연락처를 파기합니다/, '파기 전에 확인을 받지 않는다');
+  assert.match(patch, /maskContact\(target\.contact\)/, '확인 대화상자에 연락처 원문을 싣지 말 것');
+  assert.match(patch, /if \(!agreed\) return;/, '취소를 눌러도 진행된다');
+  assert.match(patch, /연락처 파기'/, '무엇이 사라졌는지 토스트로 알려야 한다');
+
+  // 3) 개인정보 파기는 감사 로그에 남는다 — 단, 연락처 원문은 싣지 않는다(§10.3).
+  const route = readFileSync(new URL('../src/app/api/admin/escalations/route.ts', import.meta.url), 'utf8');
+  assert.match(route, /const hadContact = Boolean\(getTicket\(id\.value\)\?\.contact\)/, '바꾸기 전 상태를 읽지 않으면 파기 여부를 알 수 없다');
+  assert.match(route, /parts\.push\('연락처 파기'\)/, '파기가 감사 로그에 남지 않는다');
+  assert.equal(/detail:[^\n]*\.contact\b/.test(route), false, '감사 로그에 연락처 원문이 실린다');
+
+  // 4) 방침 문안과 동작이 어긋나지 않는다(문안을 고치면 이 테스트가 먼저 깨진다).
+  const privacy = readFileSync(new URL('../src/app/privacy/page.tsx', import.meta.url), 'utf8');
+  assert.match(privacy, /연락처는 상담[\s\S]{0,20}완료 후 지체 없이 파기합니다/, '방침의 파기 약속 문장을 찾지 못했다');
+});

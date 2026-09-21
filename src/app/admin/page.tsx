@@ -81,6 +81,8 @@ interface TicketView {
   summary?: string;
   message: string;
   contact?: string;
+  /** 연락처를 파기한 시각(완료·취소 처리 시 서버가 지운다). 「처음부터 없음」과 구분해 보여준다. */
+  contactPurgedAt?: string;
   status: 'open' | 'in_progress' | 'resolved' | 'canceled';
   note?: string;
   createdAt: string;
@@ -406,7 +408,9 @@ function TicketDrawer({
         <div className="ac-drawer-meta">
           <span className="ac-pill" style={TICKET_STATUS_TONE[t.status]}>{TICKET_STATUS_LABELS[t.status]}</span>
           <span className="ac-pill">사유 · {reasonLabel}</span>
-          {t.contact ? <span className="ac-pill">연락처 남김</span> : <span className="ac-pill" style={TONE.mute}>연락처 없음</span>}
+          {t.contact
+            ? <span className="ac-pill">연락처 남김</span>
+            : <span className="ac-pill" style={TONE.mute}>{t.contactPurgedAt ? '연락처 파기됨' : '연락처 없음'}</span>}
         </div>
 
         <div className="ac-drawer-body">
@@ -432,6 +436,10 @@ function TicketDrawer({
                 </button>
                 <span style={{ fontSize: 11.5, color: 'var(--mut)', flexBasis: '100%' }}>연락 목적으로만 쓰고 다른 곳에 옮겨 적지 마세요.</span>
               </>
+            ) : t.contactPurgedAt ? (
+              <span style={{ fontSize: 13, color: 'var(--sub)' }}>
+                상담이 끝나 <strong style={{ fontWeight: 700 }}>{timeLabel(t.contactPurgedAt)}</strong> 에 파기했습니다(개인정보처리방침 4조). 되살릴 수 없습니다.
+              </span>
             ) : (
               <span style={{ fontSize: 13, color: 'var(--mut)' }}>고객이 연락처 없이 접수했습니다. 대화 기록으로 맥락을 확인하세요.</span>
             )}
@@ -2446,6 +2454,18 @@ export default function AdminPage() {
   };
 
   const patchTicket = async (id: string, status: TicketView['status']) => {
+    // 완료·취소는 서버에서 연락처를 파기한다(방침 4조) — 되돌릴 수 없으므로 먼저 확인을 받는다.
+    // 아직 연락처가 없는 접수에는 묻지 않는다(지울 것이 없는데 경고를 띄우면 다음부터 안 읽는다).
+    const target = tickets.find((t) => t.id === id);
+    if ((status === 'resolved' || status === 'canceled') && target?.contact) {
+      const agreed = await askConfirm({
+        title: status === 'resolved' ? '완료로 바꾸면 연락처를 파기합니다' : '취소로 바꾸면 연락처를 파기합니다',
+        target: `접수 ${shortTicket(id)} · ${maskContact(target.contact)}`,
+        body: '상담이 끝난 연락처는 지체 없이 파기한다고 개인정보처리방침에 약속했습니다. 파기한 연락처는 다시 열어도 되살릴 수 없습니다. 이관 사유·요약·대화 기록은 그대로 남습니다.',
+        confirmLabel: '파기하고 바꾸기',
+      });
+      if (!agreed) return;
+    }
     if (!claim('ticket')) return;
     setTicketBusy(true);
     try {
@@ -2458,7 +2478,9 @@ export default function AdminPage() {
       const data = await res.json();
       if (data.ok) {
         await loadEsc();
-        flash(`접수 ${shortTicket(id)} → ${TICKET_STATUS_LABELS[status]}`);
+        // 파기는 조용히 하지 않는다 — 무엇이 사라졌는지 운영자가 알아야 한다.
+        const purged = (status === 'resolved' || status === 'canceled') && Boolean(target?.contact);
+        flash(`접수 ${shortTicket(id)} → ${TICKET_STATUS_LABELS[status]}${purged ? ' · 연락처 파기' : ''}`);
       } else {
         failed('상태를 바꾸지 못했습니다', data.message || data.error);
       }
@@ -3583,7 +3605,11 @@ export default function AdminPage() {
                             <td><span className="ac-pill" style={TICKET_STATUS_TONE[t.status]}>{TICKET_STATUS_LABELS[t.status]}</span></td>
                             <td style={{ minWidth: 160 }}>
                               <span className="ac-clamp" style={{ color: t.message ? 'var(--ink)' : 'var(--mut)' }}>{t.message || '남긴 메시지 없음'}</span>
-                              {t.contact && <span style={{ ...S.tag, display: 'block', marginTop: 2 }}>연락처 남김</span>}
+                              {t.contact
+                                ? <span style={{ ...S.tag, display: 'block', marginTop: 2 }}>연락처 남김</span>
+                                : t.contactPurgedAt
+                                  ? <span style={{ ...S.tag, display: 'block', marginTop: 2, color: 'var(--mut)' }}>연락처 파기됨</span>
+                                  : null}
                             </td>
                             <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{t.reasonCode ? (HANDOFF_REASON_LABELS[t.reasonCode] ?? t.reasonCode) : t.reason}</td>
                             <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{timeLabel(t.createdAt)}</td>

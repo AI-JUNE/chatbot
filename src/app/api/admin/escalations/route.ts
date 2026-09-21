@@ -1,7 +1,7 @@
 // 관리 콘솔 에스컬레이션 API — 목록·상태 변경 + 운영 통계(자동처리율).
 // 인증: lib/http requireAdmin. 시크릿은 Vercel 환경변수로만.
 import { NextRequest } from 'next/server';
-import { listTickets, updateTicket, escalationStats, ESCALATION_STATUSES, EscalationStatus } from '@/lib/escalation';
+import { listTickets, updateTicket, getTicket, escalationStats, ESCALATION_STATUSES, EscalationStatus } from '@/lib/escalation';
 import { convStats, listTurns } from '@/lib/convlog';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, reqStr, optStr, requireAdmin, isAdminAuthed } from '@/lib/http';
@@ -47,12 +47,17 @@ export async function PATCH(req: NextRequest) {
     note = n.value;
   }
 
+  // 파기 여부를 남기려면 바꾸기 **전**의 상태를 알아야 한다(완료·취소 시 연락처가 지워진다).
+  const hadContact = Boolean(getTicket(id.value)?.contact);
+
   const result = updateTicket(id.value, { status, note });
   if (!result.ok) return fail('not_found', result.error);
 
   const parts: string[] = [];
   if (status !== undefined) parts.push(`상태→${status}`);
   if (note !== undefined) parts.push('메모 변경');
+  // 개인정보 파기는 감사 로그에 남는다 — 연락처 원문은 싣지 않는다(§10.3).
+  if (hadContact && !result.ticket.contact) parts.push('연락처 파기');
   logAudit({ action: 'escalation.update', target: id.value, detail: parts.join(', '), authed: isAdminAuthed(req) });
   return ok({ ticket: result.ticket });
 }

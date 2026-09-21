@@ -383,8 +383,9 @@ export default function Home() {
 
       <footer style={{ borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
         <div style={{ ...wrap, padding: '26px 22px 34px', textAlign: 'center', fontSize: 12.5, color: 'var(--mut)' }}>
-          <a href="/terms" style={{ color: 'var(--sub)', fontWeight: 600, marginRight: 16 }}>이용약관</a>
-          <a href="/privacy" style={{ color: 'var(--sub)', fontWeight: 600 }}>개인정보처리방침</a>
+          {/* 누를 면은 .lp-footlink 한 곳에서 정한다(44px) — 인라인으로 적으면 좁은 화면 규칙이 이기지 못한다. */}
+          <a href="/terms" className="lp-footlink">이용약관</a>
+          <a href="/privacy" className="lp-footlink">개인정보처리방침</a>
           <span style={{ display: 'block', marginTop: 10 }}>© GOWON Chat (데모) — 약관·방침은 초안이며 법률 검토 전입니다.</span>
         </div>
       </footer>

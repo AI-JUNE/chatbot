@@ -1540,3 +1540,91 @@ test('감사 로그 CSV 가 수식 주입을 실제로 막는다', opts, async (
   assert.match(csv, /'=cmd/, '원문은 보존되어야 한다');
   audit.resetAudit();
 });
+
+/* ══════════ 디자인 스프린트 — 13차 재감사 (DS 16-3) ══════════ */
+
+/**
+ * 개인정보처리방침 4조는 「상담원 연결을 위한 연락처는 상담 완료 후 지체 없이 파기합니다」라고
+ * 약속한다. 종전에는 그 약속을 지킬 경로가 코드에 없었다 — 완료·취소로 바꾼 뒤에도 연락처가 남아
+ * 목록·상세·백업·CSV 로 계속 나갔다. 문서 검사로는 「지워지는가」를 알 수 없으므로 실제로 돌려 본다.
+ */
+test('상담이 끝나면 연락처가 실제로 지워진다 (DS 16-3)', opts, async () => {
+  const esc = await importLib('escalation');
+
+  for (const done of ['resolved', 'canceled']) {
+    esc.resetTickets();
+    const { ticket } = esc.createTicket({
+      sessionId: `rt-purge-${done}`,
+      contact: '010-1234-5678',
+      message: '환불 문의',
+      summary: '요약',
+    });
+    assert.equal(esc.getTicket(ticket.id).contact, '010-1234-5678', '접수 시점에는 연락처가 있어야 한다');
+
+    // 상담 중에는 지우지 않는다 — 운영자가 그 연락처로 전화를 건다.
+    esc.updateTicket(ticket.id, { status: 'in_progress' });
+    assert.equal(esc.getTicket(ticket.id).contact, '010-1234-5678', '상담 중에 연락처를 지우면 연락할 수 없다');
+    assert.equal(esc.getTicket(ticket.id).contactPurgedAt, undefined);
+
+    const r = esc.updateTicket(ticket.id, { status: done });
+    assert.equal(r.ok, true);
+    const after = esc.getTicket(ticket.id);
+    assert.equal(after.contact, undefined, `${done} 로 바꿨는데 연락처가 남아 있다`);
+    assert.ok(after.contactPurgedAt, '파기 사실이 남지 않으면 「처음부터 없던 접수」와 구분되지 않는다');
+    // 이관 근거는 파기 대상이 아니다.
+    assert.equal(after.message, '환불 문의', '대화 근거까지 지우면 이관 기록이 무의미해진다');
+    assert.equal(after.summary, '요약');
+
+    // 다시 열어도 되살아나지 않는다(파기는 되돌릴 수 없다).
+    esc.updateTicket(ticket.id, { status: 'open' });
+    assert.equal(esc.getTicket(ticket.id).contact, undefined, '다시 열자 연락처가 되살아났다');
+
+    // 목록·백업 어디에도 원문이 없어야 한다.
+    const json = JSON.stringify({ list: esc.listTickets(), snapshot: esc.exportTickets() });
+    assert.equal(/010-1234-5678/.test(json), false, '목록·백업에 파기한 연락처가 남아 있다');
+  }
+  esc.resetTickets();
+});
+
+test('파기 뒤 고객이 다시 남긴 연락처는 「파기됨」이 아니다 (DS 16-3)', opts, async () => {
+  const esc = await importLib('escalation');
+  esc.resetTickets();
+  const { ticket } = esc.createTicket({ sessionId: 'rt-purge-again', contact: '010-1111-2222' });
+  esc.updateTicket(ticket.id, { status: 'resolved' });
+  assert.ok(esc.getTicket(ticket.id).contactPurgedAt);
+
+  // 다시 열린 접수에 고객이 새 연락처를 남기면 그 티켓은 다시 「연락처 남김」이다.
+  esc.updateTicket(ticket.id, { status: 'open' });
+  esc.createTicket({ sessionId: 'rt-purge-again', contact: 'hong@example.com' });
+  const t = esc.getTicket(ticket.id);
+  assert.equal(t.contact, 'hong@example.com', '같은 세션의 열린 접수를 재사용해야 한다');
+  assert.equal(t.contactPurgedAt, undefined, '새로 받은 연락처에 파기 표시가 남아 있다');
+  esc.resetTickets();
+});
+
+test('파기 이전에 뜬 백업을 되돌려도 연락처는 되살아나지 않는다 (DS 16-3)', opts, async () => {
+  const esc = await importLib('escalation');
+  esc.resetTickets();
+  // 파기 표시와 연락처가 **함께** 들어 있는 스냅샷(구버전 백업을 손으로 이어 붙인 경우).
+  const r = esc.importTickets({
+    version: 1,
+    tickets: [{
+      id: 'ESC-0001',
+      sessionId: 'rt-purge-import',
+      status: 'resolved',
+      reason: 'user_request',
+      message: '문의',
+      contact: '010-9999-8888',
+      contactPurgedAt: '2026-09-21T00:00:00.000Z',
+      createdAt: '2026-09-21T00:00:00.000Z',
+      updatedAt: '2026-09-21T00:00:00.000Z',
+    }],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.count, 1);
+  const t = esc.getTicket('ESC-0001');
+  assert.ok(!t.contact, '파기 표시가 있는데 연락처가 복원됐다');
+  assert.equal(t.contactPurgedAt, '2026-09-21T00:00:00.000Z', '파기 시각은 유지해야 한다');
+  assert.equal(/010-9999-8888/.test(JSON.stringify(esc.exportTickets())), false, '복원 직후 백업에 원문이 남았다');
+  esc.resetTickets();
+});

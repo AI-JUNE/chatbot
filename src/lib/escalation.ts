@@ -26,6 +26,15 @@ export interface EscalationTicket {
   reasonCode: HandoffReason;
   message: string; // 요청 시점 마지막 사용자 메시지(요약용)
   contact?: string; // 고객이 남긴 연락처(선택) — 개인정보 영구 저장은 [승인 필요]
+  /**
+   * 연락처를 파기한 시각(ISO). 개인정보처리방침 4조가 「상담원 연결을 위한 연락처는 상담 완료 후
+   * 지체 없이 파기합니다」라고 약속하는데, 종전에는 그 약속을 지킬 경로가 코드에 없었다 —
+   * 완료·취소로 바뀐 뒤에도 연락처가 티켓에 남아 목록·상세·백업·CSV 로 계속 나갔고,
+   * 운영자가 지울 수 있는 유일한 수단은 티켓을 통째로 비우는 것(이관 근거까지 함께 사라진다)뿐이었다.
+   * 이제 완료·취소 시 `contact` 를 지우고 **지웠다는 사실과 시각만** 남긴다 — 「처음부터 연락처가
+   * 없던 접수」와 「받았다가 파기한 접수」는 다른 사실이라 화면에서 구분해야 한다.
+   */
+  contactPurgedAt?: string;
   status: EscalationStatus;
   note?: string; // 상담원 메모
   /** 규칙 기반 이관 요약(마스킹 완료 평문). lib/handoff.buildHandoffSummary 산출물. */
@@ -82,8 +91,11 @@ export function importTickets(input: unknown): { ok: true; count: number } | { o
     if (typeof c.id !== 'string' || !c.id.trim()) continue;
     if (typeof c.sessionId !== 'string' || !c.sessionId.trim()) continue;
     if (!ESCALATION_STATUSES.includes(c.status)) continue;
+    // 파기된 연락처는 복원하지 않는다 — 파기 이전에 뜬 백업을 되돌리면 되살아나던 자리다.
+    const purgedAt = typeof c.contactPurgedAt === 'string' && c.contactPurgedAt ? c.contactPurgedAt : undefined;
     restored.push({
       ...c,
+      ...(purgedAt ? { contact: undefined, contactPurgedAt: purgedAt } : {}),
       reason: typeof c.reason === 'string' && c.reason ? c.reason : 'user_request',
       reasonCode: isHandoffReason(c.reasonCode) ? c.reasonCode : toReasonCode(c.reason),
       message: String(c.message ?? '').slice(0, 300),
@@ -117,7 +129,11 @@ export function createTicket(input: {
   const existing = tickets.find((t) => t.sessionId === sessionId && (t.status === 'open' || t.status === 'in_progress'));
   if (existing) {
     existing.updatedAt = now();
-    if (input.contact) existing.contact = String(input.contact).trim().slice(0, 100);
+    if (input.contact) {
+      existing.contact = String(input.contact).trim().slice(0, 100);
+      // 다시 받은 연락처는 「파기됨」이 아니다(다시 열린 접수에 새로 남긴 경우).
+      delete existing.contactPurgedAt;
+    }
     // 요약은 항상 최신 대화 기준으로 갱신한다(상담원이 오래된 요약을 보면 이관이 무의미해진다).
     if (input.summary) existing.summary = String(input.summary).slice(0, 4000);
     persist();
@@ -161,6 +177,13 @@ export function updateTicket(id: string, patch: { status?: EscalationStatus; not
     t.status = patch.status;
   }
   if (patch.note !== undefined) t.note = String(patch.note).trim().slice(0, 500) || undefined;
+  // 상담이 끝났으면(완료·취소) 연락처를 그 자리에서 파기한다 — 방침 4조가 약속한 「지체 없이」다.
+  // 되돌릴 수 없다: 다시 열어도 연락처는 돌아오지 않는다(고객이 새로 남기면 그때 다시 채워진다).
+  // 이관 근거(사유·요약·대화)는 그대로 둔다 — 파기 대상은 개인정보인 연락처뿐이다.
+  if ((t.status === 'resolved' || t.status === 'canceled') && t.contact) {
+    delete t.contact;
+    t.contactPurgedAt = now();
+  }
   t.updatedAt = now();
   persist();
   return { ok: true, ticket: { ...t } };

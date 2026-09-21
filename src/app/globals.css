@@ -368,3 +368,11 @@ main:focus{outline:none}
   .lg-toc-list a{white-space:nowrap;font-size:12.5px;padding:7px 10px;background:var(--bg);min-height:34px;display:inline-flex;align-items:center}
   .lg-card{padding:24px 18px 30px}
 }
+
+/* 푸터 법무 링크(약관·방침) — 두 화면의 푸터가 같은 규격을 본다.
+ * 이 두 링크가 약관·방침으로 가는 **유일한 길**인데(DS 15-3), 글자만 있는 12.5px 링크라
+ * 누를 수 있는 높이가 15px 였다 — 같은 화면의 다른 모든 링크가 34~42px 를 지키는데
+ * 여기만 규격 밖이었다(WCAG 2.5.8 최소 24px·2.5.5 권장 44px). 글자 크기·색·굵기는 그대로 두고
+ * **누를 면만** 키운다. 화면마다 인라인으로 적지 않는다 — 미디어 쿼리가 인라인을 이기지 못한다(DS 13-2). */
+.lp-footlink{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 6px;margin:0 2px;
+  color:var(--sub);font-weight:600}
