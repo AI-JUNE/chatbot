@@ -4,6 +4,7 @@
 // [승인 필요] 외부 SIEM 전송.
 // 토큰 값 등 시크릿은 절대 기록하지 않는다(인증 사용 여부만 boolean으로 기록).
 import { loadJson, scheduleSave } from '@/lib/storage';
+import { csvRow } from '@/lib/csv';
 
 export type AuditAction =
   | 'kb.upsert'
@@ -54,15 +55,10 @@ export function listAudit(limit = 100): AuditEvent[] {
   return events.slice(-limit).reverse().map((e) => ({ ...e }));
 }
 
-function csvCell(v: string | boolean): string {
-  const s = String(v);
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
 /** 전체 보존분 CSV(시간순) — 엑셀 호환 UTF-8 BOM은 라우트에서 붙인다. */
 export function auditToCsv(): string {
   const header = 'id,at,action,target,detail,authed';
-  const rows = events.map((e) => [e.id, e.at, e.action, e.target, e.detail, e.authed].map(csvCell).join(','));
+  const rows = events.map((e) => csvRow([e.id, e.at, e.action, e.target, e.detail, e.authed]));
   return [header, ...rows].join('\r\n');
 }
 

@@ -32,6 +32,13 @@
   - 근거: `/api/health` `dependencies.tenants`(적재 건수·건너뛴 수·CTA 주소와 환경변수 적용 여부. FAQ 0건이나 건너뛴 항목이 있으면 `status: 'degraded'`), `/api/admin/tenants`(GET만·`requireAdmin`·읽기 전용), 관리 콘솔 "테넌트 지식" 탭(빈 상태·오류·로딩 `aria-live`·라벨 연결된 선택 상자)
   - 비밀값을 싣지 않는다(응답에 토큰류 키가 없음을 테스트가 고정). 편집 경로는 열지 않았다 — 원본이 파일이라 콘솔 편집은 저장소 도입 후
   - 테스트 9건(적재 건수·환경변수 CTA 반영과 불온한 값 차단·상세 조회·알 수 없는 테넌트 null·비밀값 미노출·라우트 읽기 전용·health 배선·콘솔 화면 상태)
+- [x] **응답 보안 헤더** — 프레임 차단·MIME 스니핑 차단·Referrer·권한 정책·HSTS
+  - 근거: `next.config.js` `headers()`. `frame-ancestors 'none'` 을 전역에 걸고 임베드가 존재 이유인 `/widget` 만 정규식으로 뺐다(새 화면의 기본은 「막힘」). 콘솔·관리 API 에는 `X-Frame-Options: DENY` 를 덧댄다. 전 경로에 nosniff·`Referrer-Policy: strict-origin-when-cross-origin`·`Permissions-Policy`(카메라·마이크·위치·결제 차단)·HSTS 1년
+  - 종전에는 헤더가 0건이었다 — 남의 페이지가 로그인된 `/admin` 을 프레임으로 띄울 수 있었고(라이브에서 실제로 렌더됨), 백업 JSON·로그 CSV 가 HTML 로 해석될 수 있었다
+  - CSP 는 frame-ancestors 만 — `script-src` 는 Next 인라인 스크립트의 nonce 미들웨어가 필요한 별도 작업이다
+  - 테스트 2건(Next 자신의 경로 매칭기로 12개 경로를 돌려 위젯 CSP 0개·나머지 정확히 1개·콘솔 XFO 확인 + 텍스트 계약)
+- [x] **크롤러 경계** — robots.txt·sitemap.xml
+  - 근거: `app/robots.ts`(`/admin`·`/api/`·`/widget` disallow — 메타 `index:false` 는 크롤러가 받아 본 뒤에야 읽히므로 요청 자체를 끊는다), `app/sitemap.ts`(공개 3장만). 배포 주소·법무 시행일은 `src/lib/site.ts` 단일 출처. 테스트 3건
 - [ ] **약관·개인정보 처리방침 확정본 반영** (현재 초안, 문안은 사람이 확정) — **[승인 필요]** 자동 확정 불가
 - [x] **테스트** 핵심 로직 커버리지 확보, CI에서 실행
   - 근거: `.github/workflows/ci.yml`(npm ci → typecheck → test → build → route export 규칙 검사), 테스트 94건(정적 계약 53 + 런타임 동작 41). 런타임 테스트는 `tests/_compile.mjs`가 TS를 실제 컴파일해 실행

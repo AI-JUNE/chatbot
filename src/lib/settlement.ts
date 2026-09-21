@@ -16,6 +16,7 @@ import {
   type Account,
   type AccountQuery,
 } from '@/lib/partners';
+import { csvCell, csvRow } from '@/lib/csv';
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
@@ -233,22 +234,16 @@ export function buildSettlement(input: SettlementInput): SettlementResult {
   };
 }
 
-function csvCell(v: string | number | null): string {
-  if (v === null) return '';
-  const s = String(v);
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
 /**
  * 정산 CSV. 미확정 값은 **빈 칸**으로 두고 사유 열을 함께 낸다 — 0으로 채우면
  * 받는 쪽에서 "0원 청구"로 읽힌다. 엑셀 호환 BOM은 라우트에서 붙인다.
  */
 export function settlementToCsv(report: SettlementReport): string {
   const header = ['기준월', '파트너ID', '파트너명', '고객사ID', '고객사명', '계약일', '월이용료(원)', '수수료율(bp)', '수수료(원)', '비고'];
-  const lines = [header.map(csvCell).join(',')];
+  const lines = [csvRow(header)];
   for (const r of report.rows) {
     lines.push(
-      [
+      csvRow([
         report.month,
         r.partnerId,
         r.partnerName,
@@ -259,13 +254,11 @@ export function settlementToCsv(report: SettlementReport): string {
         r.feeRateBp,
         r.feeAmountKrw,
         SETTLEMENT_ISSUE_LABELS[r.issue],
-      ]
-        .map(csvCell)
-        .join(','),
+      ]),
     );
   }
   lines.push('');
-  lines.push(['합계', '', '', '', `대상 ${report.totals.accounts}건 / 산출 ${report.totals.billable}건`, '', report.totals.baseAmountKrw, '', report.totals.feeAmountKrw, report.totals.partial ? '일부 미산출 — 아래 주석 참고' : ''].map(csvCell).join(','));
+  lines.push(csvRow(['합계', '', '', '', `대상 ${report.totals.accounts}건 / 산출 ${report.totals.billable}건`, '', report.totals.baseAmountKrw, '', report.totals.feeAmountKrw, report.totals.partial ? '일부 미산출 — 아래 주석 참고' : '']));
   lines.push('');
   for (const n of report.notes) lines.push(csvCell(`# ${n}`));
   return lines.join('\r\n');

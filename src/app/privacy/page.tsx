@@ -2,6 +2,7 @@
 // 현재 구현 기준 사실만 기술: 대화 로그는 인메모리/로컬 스텁, 실개인정보 영구 저장 OFF.
 import type { Metadata } from 'next';
 import LegalLayout from './LegalLayout';
+import { LEGAL_UPDATED } from '@/lib/site';
 
 export const metadata: Metadata = {
   title: '개인정보처리방침 — GOWON Chat',
@@ -12,7 +13,7 @@ export default function PrivacyPage() {
   return (
     <LegalLayout
       title="개인정보처리방침"
-      updated="2026-08-12"
+      updated={LEGAL_UPDATED}
       meta="서비스: GOWON Chat(상담 챗봇) · 운영: 주식회사 고원(GOWON)"
       draft
     >

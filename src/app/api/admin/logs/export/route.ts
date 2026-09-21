@@ -4,14 +4,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { listAllTurns } from '@/lib/convlog';
 import { requireAdmin } from '@/lib/http';
+import { csvRow } from '@/lib/csv';
 
 export const dynamic = 'force-dynamic';
-
-function csvCell(v: string | boolean): string {
-  const s = String(v);
-  if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
-  return s;
-}
 
 export async function GET(req: NextRequest) {
   const denied = requireAdmin(req, { allowQueryToken: true });
@@ -19,10 +14,10 @@ export async function GET(req: NextRequest) {
 
   const header = ['id', 'at', 'channel', 'sessionId', 'intent', 'source', 'escalate', 'message', 'reply'];
   const rows = listAllTurns().map((l) =>
-    [l.id, l.at, l.channel, l.sessionId, l.intent, l.source, l.escalate, l.message, l.reply].map(csvCell).join(',')
+    csvRow([l.id, l.at, l.channel, l.sessionId, l.intent, l.source, l.escalate, l.message, l.reply])
   );
   // UTF-8 BOM: 엑셀에서 한글 깨짐 방지
-  const csv = '\uFEFF' + [header.join(','), ...rows].join('\r\n') + '\r\n';
+  const csv = '\uFEFF' + [csvRow(header), ...rows].join('\r\n') + '\r\n';
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
 
   return new NextResponse(csv, {

@@ -1535,3 +1535,140 @@ test('랜딩 섹션 메뉴가 좁은 화면에서 사라지지 않는다 (DS 13-
   // 메뉴 칩은 전부 링크라 Tab 으로 닿는다 — 스크롤 영역에 별도 tabindex 를 두지 않는다(DS 9-1 단서).
   assert.match(page, /<nav aria-label="주요 섹션" className="lp-nav">/, '메뉴 랜드마크 이름이 사라졌다');
 });
+
+/* ────────────────────────────────────────────────────────────────
+ * DS 15-1 — 응답 보안 헤더 (next.config.js)
+ * 종전에는 한 줄도 없었다: 남의 페이지가 로그인된 `/admin` 을 프레임으로 띄울 수 있었고,
+ * 내려받은 백업·로그 파일이 HTML 로 해석될 수 있었다.
+ * ──────────────────────────────────────────────────────────────── */
+test('보안 헤더: 모든 응답에 nosniff·Referrer-Policy·HSTS·Permissions-Policy 가 붙는다', () => {
+  const s = read('next.config.js');
+  assert.match(s, /async headers\(\)/, 'headers() 가 있어야 한다');
+  assert.match(s, /'X-Content-Type-Options',\s*value:\s*'nosniff'/);
+  assert.match(s, /'Referrer-Policy',\s*value:\s*'strict-origin-when-cross-origin'/);
+  assert.match(s, /'Strict-Transport-Security',\s*value:\s*'max-age=\d{7,}/);
+  assert.match(s, /'Permissions-Policy'/);
+  // 전역 규칙의 대상은 모든 경로여야 한다(화면을 하나씩 세면 새 화면이 빠진다).
+  assert.match(s, /source:\s*'\/:path\*',\s*headers:\s*BASE/);
+});
+
+test('보안 헤더: 프레임은 기본 금지이고 위젯만 예외다', () => {
+  const s = read('next.config.js');
+  assert.match(s, /frame-ancestors 'none'/, '기본은 프레임 금지여야 한다');
+  // 「막을 곳을 센다」가 아니라 「열 곳만 뺀다」 — 새 화면이 늘어도 기본이 막힘이다.
+  assert.match(s, /source:\s*'\/\(\(\?!widget/, '전역 규칙에서 /widget 을 정규식으로 빼야 한다');
+  // 같은 헤더를 두 번 내보내면 브라우저가 둘 다 적용해 위젯이 막힌다 → CSP 규칙은 하나뿐이어야 한다.
+  assert.equal(
+    (s.match(/'Content-Security-Policy'/g) || []).length,
+    1,
+    'CSP 규칙이 둘 이상이면 위젯 응답에 두 줄이 나가 임베드가 막힌다',
+  );
+  // X-Frame-Options 는 「아무나 허용」 값이 없으므로 전역에 걸면 안 된다(위젯이 죽는다).
+  assert.ok(!/source:\s*'\/:path\*',\s*headers:\s*\[\{\s*key:\s*'X-Frame-Options'/.test(s));
+  assert.match(s, /source:\s*'\/admin\/:path\*'[\s\S]{0,120}X-Frame-Options[\s\S]{0,40}DENY/);
+  assert.match(s, /source:\s*'\/api\/admin\/:path\*'[\s\S]{0,120}X-Frame-Options[\s\S]{0,40}DENY/);
+});
+
+/* ────────────────────────────────────────────────────────────────
+ * DS 15-3 — robots.txt / sitemap.xml (종전 둘 다 404)
+ * ──────────────────────────────────────────────────────────────── */
+test('robots.txt 가 콘솔·API·위젯 프레임을 크롤 대상에서 뺀다', () => {
+  assert.ok(has('src/app/robots.ts'), 'app/robots.ts 가 있어야 한다');
+  const s = read('src/app/robots.ts');
+  for (const p of ['/admin', '/api/', '/widget']) {
+    assert.ok(s.includes(`'${p}'`), `${p} 가 disallow 에 없다`);
+  }
+  assert.match(s, /sitemap:/, 'sitemap 주소를 알려야 한다');
+  // 주소는 지어내지 않고 단일 출처에서 온다.
+  assert.match(s, /from '@\/lib\/site'/);
+  assert.ok(!/https:\/\/[a-z0-9.-]+\.(vercel\.app|com)/.test(s), '배포 주소를 여기 적으면 안 된다(@/lib/site)');
+});
+
+test('sitemap 은 공개 화면 3장만 싣고 날짜를 지어내지 않는다', () => {
+  assert.ok(has('src/app/sitemap.ts'), 'app/sitemap.ts 가 있어야 한다');
+  const s = read('src/app/sitemap.ts');
+  for (const p of ['/`', '/terms`', '/privacy`']) assert.ok(s.includes(p), `${p} 가 없다`);
+  for (const p of ['/admin', '/widget', '/api']) {
+    assert.ok(!s.includes(p), `${p} 는 사이트맵에 넣지 않는다`);
+  }
+  // 배포마다 오늘 날짜를 찍으면 검색엔진이 「매일 바뀌는 문서」로 읽고 다시 오지 않는다.
+  assert.ok(!/new Date\(\)/.test(s), 'lastModified 에 배포 시각을 찍으면 안 된다');
+  assert.match(s, /LEGAL_UPDATED/, '화면이 보여 주는 시행일과 같은 값이어야 한다');
+});
+
+test('배포 주소·법무 시행일이 단일 출처에서 나온다', () => {
+  const site = read('src/lib/site.ts');
+  assert.match(site, /NEXT_PUBLIC_SITE_URL/);
+  // http(s) 가 아닌 값(javascript: 등)은 받지 않는다.
+  assert.match(site, /protocol !== 'https:'/);
+  assert.match(site, /export const LEGAL_UPDATED = '(\d{4}-\d{2}-\d{2})'/);
+  const date = site.match(/export const LEGAL_UPDATED = '(\d{4}-\d{2}-\d{2})'/)[1];
+  // 약관·방침 화면이 같은 상수를 봐야 한다 — 갈라지면 사이트맵이 화면과 다른 날짜를 알린다.
+  for (const p of ['src/app/terms/page.tsx', 'src/app/privacy/page.tsx']) {
+    const s = read(p);
+    assert.match(s, /updated=\{LEGAL_UPDATED\}/, `${p} 가 상수를 쓰지 않는다`);
+    assert.ok(!s.includes(`updated="${date}"`), `${p} 에 날짜가 하드코딩돼 있다`);
+  }
+  // 링크 미리보기의 기준 주소도 같은 곳에서 온다.
+  const layout = read('src/app/layout.tsx');
+  assert.match(layout, /from '@\/lib\/site'/);
+  assert.ok(!/const SITE_URL = process\.env/.test(layout), 'layout 이 기본값을 따로 들고 있으면 갈라진다');
+});
+
+/* CSV 수식 주입 — 단일 출처 고정(실행 검증은 runtime.test.mjs) */
+test('CSV 를 만드는 곳이 전부 공용 이스케이프를 쓴다', () => {
+  const WRITERS = ['src/lib/audit.ts', 'src/lib/settlement.ts', 'src/app/api/admin/logs/export/route.ts'];
+  for (const p of WRITERS) {
+    const s = read(p);
+    assert.match(s, /from '@\/lib\/csv'/, `${p} 가 공용 이스케이프를 쓰지 않는다`);
+    // 제 손으로 따옴표만 세우는 사본이 다시 생기면 수식 주입이 되살아난다.
+    assert.ok(!/function csvCell/.test(s), `${p} 에 csvCell 사본이 남아 있다`);
+  }
+  const csv = read('src/lib/csv.ts');
+  assert.match(csv, /\[=\+\\?-@/, '수식 시작 글자(= + - @ 탭 CR)를 모두 봐야 한다');
+  assert.match(csv, /PLAIN_NUMBER/, '순수한 수는 예외여야 한다(음수 금액)');
+});
+
+/**
+ * DS 15-1 — 헤더 규칙을 **Next 자신의 경로 매칭기로 실제로 돌려** 확인한다.
+ * 문자열 검사로는 `/((?!widget(?:/|$)).*)` 가 정말 `/widget` 만 빼는지 알 수 없고,
+ * 여기를 잘못 쓰면 ① 위젯 응답에 CSP 가 두 줄 나가 **고객사 임베드가 통째로 막히거나**
+ * ② 반대로 콘솔이 프레임 금지에서 빠져 원래 결함으로 되돌아간다. 둘 다 조용히 일어난다.
+ */
+test('헤더 규칙 매칭: 위젯만 프레임이 열리고 나머지는 전부 막힌다', async () => {
+  const { createRequire } = await import('node:module');
+  const require_ = createRequire(new URL('../package.json', import.meta.url));
+  let pathToRegexp;
+  try {
+    const m = require_('next/dist/compiled/path-to-regexp');
+    pathToRegexp = m.pathToRegexp || m.default?.pathToRegexp || m;
+  } catch {
+    return; // next 미설치 환경 — 위의 텍스트 계약 검사로 갈음한다.
+  }
+  const { fileURLToPath } = await import('node:url');
+  const rules = await require_(fileURLToPath(new URL('../next.config.js', import.meta.url))).headers();
+  const keysFor = (p) =>
+    rules.filter((r) => pathToRegexp(r.source).test(p)).flatMap((r) => r.headers.map((h) => h.key));
+
+  const BASE = ['X-Content-Type-Options', 'Referrer-Policy', 'Permissions-Policy', 'Strict-Transport-Security'];
+
+  // 위젯: 프레임으로 도는 것이 존재 이유 — CSP 가 한 줄도 나가면 안 된다.
+  for (const p of ['/widget', '/widget/']) {
+    const keys = keysFor(p);
+    for (const b of BASE) assert.ok(keys.includes(b), `${p} 에 ${b} 가 빠졌다`);
+    assert.equal(keys.filter((k) => k === 'Content-Security-Policy').length, 0, `${p} 에 CSP 가 붙으면 임베드가 막힌다`);
+    assert.ok(!keys.includes('X-Frame-Options'), `${p} 에 X-Frame-Options 가 붙으면 임베드가 막힌다`);
+  }
+
+  // 나머지: 프레임 금지가 **정확히 한 번**. 두 번이면 브라우저가 둘 다 적용한다.
+  for (const p of ['/', '/terms', '/privacy', '/admin', '/admin/x', '/api/chat', '/embed.js', '/robots.txt', '/sitemap.xml']) {
+    const keys = keysFor(p);
+    for (const b of BASE) assert.ok(keys.includes(b), `${p} 에 ${b} 가 빠졌다`);
+    assert.equal(keys.filter((k) => k === 'Content-Security-Policy').length, 1, `${p} 의 CSP 개수가 1이 아니다`);
+  }
+
+  // 콘솔·관리 API 는 구형 브라우저에도 못을 박는다.
+  for (const p of ['/admin', '/admin/x', '/api/admin/backup', '/api/admin/logs/export']) {
+    assert.ok(keysFor(p).includes('X-Frame-Options'), `${p} 에 X-Frame-Options 가 빠졌다`);
+  }
+});

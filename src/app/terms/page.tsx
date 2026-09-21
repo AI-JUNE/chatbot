@@ -3,6 +3,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import LegalLayout from '../privacy/LegalLayout';
+import { LEGAL_UPDATED } from '@/lib/site';
 
 export const metadata: Metadata = {
   title: '이용약관 — GOWON Chat',
@@ -13,7 +14,7 @@ export default function TermsPage() {
   return (
     <LegalLayout
       title="이용약관"
-      updated="2026-08-12"
+      updated={LEGAL_UPDATED}
       meta="서비스: GOWON Chat(상담 챗봇) · 운영: 주식회사 고원(GOWON)"
       draft
     >
