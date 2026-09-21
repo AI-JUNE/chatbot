@@ -315,3 +315,19 @@ test('호스트 화면의 「상담창 열기」가 실제로 상담창을 연�
     assert.match(m, /^<(a|button)\b/, `키보드로 닿지 않는 요소에 붙였다: ${m}`);
   }
 });
+
+test('위젯 입력칸이 키보드 초점 표시를 지우지 않는다 (DS 14-2)', opts, async () => {
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  // 고객이 직접 글을 치는 칸은 둘뿐이다(메시지·연락처). 둘 다 outline 을 지워 두면
+  // Tab 으로 옮겨 온 사람은 지금 어디에 있는지 알 수 없다(WCAG 2.4.7).
+  assert.equal(/outline: *'none'/.test(src), false, '위젯에서 초점 표시를 지우면 안 된다');
+
+  // 실제로 그린 화면에도 남아 있지 않아야 한다(인라인 스타일이므로 렌더 결과에 그대로 나온다).
+  const html = await render({ tenant: TENANT });
+  assert.ok(html.includes('aria-label="메시지 입력"'), '메시지 입력칸이 렌더돼야 한다');
+  assert.equal(/outline:none/.test(html), false, '렌더된 위젯에 초점 표시를 지운 칸이 있다');
+
+  // 지운 자리를 대신하는 것은 공용 규칙이다 — 화면마다 따로 그리지 않는다.
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  assert.match(css, /:focus-visible\{outline:2px solid var\(--brand\)/, '공용 초점 표시 규칙이 없다');
+});

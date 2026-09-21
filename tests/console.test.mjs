@@ -18,6 +18,7 @@ const CAN = existsSync(TSC) && existsSync(path.join(REPO, 'node_modules', 'react
 const opts = CAN ? {} : { skip: 'typescript/react-dom 미설치 — npm ci 후 실행' };
 
 let cached = null;
+let cachedJs = '';
 
 /** admin/page.tsx 를 컴파일해 import 한다(외부 의존은 react 뿐이다). */
 async function loadConsole() {
@@ -41,10 +42,45 @@ async function loadConsole() {
     }),
   );
   execFileSync(process.execPath, [TSC, '-p', 'tsconfig.json'], { cwd: dir, stdio: 'pipe' });
-  renameSync(path.join(dir, 'out', 'AdminPage.js'), path.join(dir, 'out', 'AdminPage.mjs'));
-  const mod = await import(pathToFileURL(path.join(dir, 'out', 'AdminPage.mjs')).href);
+  const js = path.join(dir, 'out', 'AdminPage.mjs');
+  renameSync(path.join(dir, 'out', 'AdminPage.js'), js);
+  cachedJs = readFileSync(js, 'utf8');
+  const mod = await import(pathToFileURL(js).href);
   cached = mod.default;
   return cached;
+}
+
+/**
+ * 모듈 안에만 있는(내보내지 않는) 토큰 보관 함수 3개를 컴파일된 JS 에서 떼어내
+ * **가짜 window** 위에서 실제로 실행한다 — 소스 검사만으로는 "정말 그렇게 저장하는가"를 못 본다.
+ */
+async function loadTokenStore(win) {
+  await loadConsole();
+  const key = (cachedJs.match(/const TOKEN_KEY = '([^']+)'/) || [])[1];
+  assert.ok(key, 'TOKEN_KEY 를 찾지 못했다');
+  const parts = ['tokenStore', 'readSavedToken', 'writeSavedToken'].map((n) => {
+    const i = cachedJs.indexOf(`function ${n}(`);
+    assert.ok(i >= 0, `${n} 선언을 찾지 못했다`);
+    const end = cachedJs.indexOf('\n}', i); // 최상위 함수라 닫는 중괄호는 1열에 있다
+    assert.ok(end > i, `${n} 의 끝을 찾지 못했다`);
+    return cachedJs.slice(i, end + 2);
+  });
+  const make = new Function(
+    'window',
+    `const TOKEN_KEY = ${JSON.stringify(key)};\n${parts.join('\n')}\nreturn { TOKEN_KEY, tokenStore, readSavedToken, writeSavedToken };`,
+  );
+  return make(win);
+}
+
+/** 브라우저 저장소 흉내. `throws` 면 접근 자체가 예외를 던진다(사생활 보호 모드 등). */
+function fakeStorage({ throws = false } = {}) {
+  const map = new Map();
+  return {
+    map,
+    getItem(k) { if (throws) throw new Error('blocked'); return map.has(k) ? map.get(k) : null; },
+    setItem(k, v) { if (throws) throw new Error('blocked'); map.set(k, String(v)); },
+    removeItem(k) { if (throws) throw new Error('blocked'); map.delete(k); },
+  };
 }
 
 async function render() {
@@ -646,4 +682,55 @@ test('콘솔 표 9곳에 접근 이름이 있다 — 이름은 스크롤 영역�
   // 이름은 화면에 글자로 나타나지 않는다(표 위 제목과 두 번 보이지 않게) — 기존 숨김 규격을 그대로 쓴다.
   const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
   assert.match(css, /\.ac-srhide\{[^}]*clip:rect\(0 0 0 0\)/, '스크린리더 전용 숨김 규격이 없다');
+});
+
+test('터치 기기에서 입력칸이 화면을 확대시키지 않는다 (DS 14-1)', () => {
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  // iOS Safari 는 16px 미만 입력칸에 초점이 가면 화면을 확대하고 되돌리지 않는다.
+  // 콘솔·위젯·랜딩의 입력칸은 모두 13~14px 이므로(디자인 규격) 터치 기기에서만 한 곳에서 덮는다.
+  const block = (css.match(/@media \(pointer:coarse\)\{[\s\S]*?\n\}/) || [])[0];
+  assert.ok(block, '터치 기기용 입력칸 규칙이 없다');
+  assert.match(block, /input,\s*select,\s*textarea\{font-size:16px!important\}/, '입력칸 3종을 모두 덮어야 한다');
+
+  // 인라인 글자 크기(style={{fontSize:13.5}})보다 세야 하므로 !important 가 필요하다.
+  assert.match(block, /!important/, '인라인 스타일을 이기지 못하면 규칙이 없는 것과 같다');
+
+  // 확대 자체를 막는 길(maximum-scale·user-scalable=no)은 쓰지 않는다 — WCAG 1.4.4 위반이다.
+  const layout = readFileSync(new URL('../src/app/layout.tsx', import.meta.url), 'utf8');
+  assert.equal(/maximumScale|userScalable|user-scalable/.test(layout), false, '손으로 확대할 권리를 빼앗으면 안 된다');
+});
+
+test('관리 토큰은 탭을 닫으면 지워진다 — 공용 PC 에 남지 않는다 (DS 14-3)', opts, async () => {
+  const ss = fakeStorage();
+  const ls = fakeStorage();
+  const win = { sessionStorage: ss, localStorage: ls };
+  const t = await loadTokenStore(win);
+
+  // 정상 경로: 저장은 탭 단위 저장소로만 간다.
+  t.writeSavedToken('secret-token');
+  assert.equal(ss.map.get(t.TOKEN_KEY), 'secret-token', '탭 저장소에 있어야 한다');
+  assert.equal(ls.map.has(t.TOKEN_KEY), false, '브라우저를 닫아도 남는 저장소에 두면 안 된다');
+  assert.equal(t.readSavedToken(), 'secret-token', '같은 탭에서는 새로고침해도 이어져야 한다');
+
+  // 로그아웃: 값을 비우면 저장소에서 지운다(빈 문자열로 남기지 않는다).
+  t.writeSavedToken('');
+  assert.equal(ss.map.has(t.TOKEN_KEY), false, '로그아웃하면 지워야 한다');
+
+  // 이전 판이 localStorage 에 남긴 토큰은 한 번 옮기고 원본을 지운다.
+  ls.map.set(t.TOKEN_KEY, 'legacy-token');
+  assert.equal(t.readSavedToken(), 'legacy-token', '이미 로그인해 둔 사람을 내쫓지 않는다');
+  assert.equal(ls.map.has(t.TOKEN_KEY), false, '옛 저장처에서 지워야 영구히 남지 않는다');
+  assert.equal(ss.map.get(t.TOKEN_KEY), 'legacy-token', '탭 저장소로 옮겨야 한다');
+
+  // 실패 경로: 저장소 접근이 막혀도 예외가 새지 않는다(그 탭에서 다시 로그인하면 된다).
+  const blocked = await loadTokenStore({ sessionStorage: fakeStorage({ throws: true }), localStorage: fakeStorage({ throws: true }) });
+  assert.equal(blocked.readSavedToken(), '', '읽지 못하면 로그인 전과 같이 다룬다');
+  assert.doesNotThrow(() => blocked.writeSavedToken('x'));
+  assert.doesNotThrow(() => blocked.writeSavedToken(''));
+
+  // 새 저장 경로가 생겨도 같은 결함이 다시 나지 않게 — 콘솔 전체에 영구 저장은 0건이다.
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  assert.equal(/localStorage\.setItem/.test(src), false, '관리 토큰을 영구 저장소에 쓰면 안 된다');
+  // 화면 안내가 실제 보관 기간과 어긋나면 안 된다(「이 브라우저에만 저장」은 사실이 아니었다).
+  assert.match(src, /이 탭에만 보관되고 브라우저를 닫으면 지워집니다/, '보관 기간을 밝혀야 한다');
 });
