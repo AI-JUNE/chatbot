@@ -926,7 +926,7 @@ export default function ChatWidget({
                               placeholder="010-0000-0000 또는 name@example.com"
                               style={{
                                 width: '100%', border: `1px solid ${handoff.error ? 'var(--danger)' : 'var(--line-2)'}`, borderRadius: 10,
-                                padding: '9px 11px', fontSize: 13, color: 'var(--ink)', background: 'var(--bg)', outline: 'none',
+                                padding: '9px 11px', fontSize: 13, color: 'var(--ink)', background: 'var(--bg)',
                               }}
                             />
                             <p id="gw-handoff-hint" style={{ fontSize: 10.5, lineHeight: 1.5, color: 'var(--mut)', marginTop: 5 }}>
@@ -1074,7 +1074,8 @@ export default function ChatWidget({
               aria-label="메시지 입력"
               aria-invalid={tooLong || undefined}
               aria-describedby={input.length > COUNT_FROM ? 'gw-count' : undefined}
-              style={{ flex: 1, minWidth: 0, border: `1px solid ${tooLong ? 'var(--danger)' : 'var(--line-2)'}`, borderRadius: 999, padding: '11px 15px', fontSize: 13.5, color: 'var(--ink)', background: 'var(--bg)', outline: 'none' }}
+              // 초점 표시(outline)를 지우지 않는다 — globals.css 의 :focus-visible 가 그린다(DS 14-2).
+              style={{ flex: 1, minWidth: 0, border: `1px solid ${tooLong ? 'var(--danger)' : 'var(--line-2)'}`, borderRadius: 999, padding: '11px 15px', fontSize: 13.5, color: 'var(--ink)', background: 'var(--bg)' }}
             />
             <button
               onClick={send}

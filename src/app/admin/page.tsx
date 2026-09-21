@@ -1247,6 +1247,54 @@ function GlobalSearch({ search, onFirstOpen }: { search: (q: string) => SearchHi
   );
 }
 
+/** 관리 토큰 보관함 — **탭 단위**(sessionStorage)다.
+ * `localStorage` 는 브라우저를 닫아도 남는다: 공용 PC·회의실 PC 에서 다음 사람이 /admin 을 열면
+ * 이미 로그인된 콘솔이 뜨고, 거기서 대화 기록·연락처·백업까지 내려받을 수 있다.
+ * 위젯 대화(DS 7-1)가 같은 이유로 sessionStorage 를 쓴다 — 자격 증명이 대화보다 오래 남을 이유는 없다.
+ * 저장소를 못 쓰는 환경(사생활 보호 모드 등)에서도 콘솔은 그대로 동작한다(그 탭에서만 다시 로그인). */
+const TOKEN_KEY = 'cb_admin_token';
+
+function tokenStore(): Storage | null {
+  try {
+    return window.sessionStorage || null;
+  } catch {
+    return null; // 저장소 접근 차단 — 로그인 화면으로 간다
+  }
+}
+
+/** 저장된 토큰을 읽는다. 이전 판이 localStorage 에 남긴 값은 한 번 옮기고 **지운다**. */
+function readSavedToken(): string {
+  const ss = tokenStore();
+  try {
+    const cur = ss?.getItem(TOKEN_KEY) || '';
+    if (cur) return cur;
+  } catch {
+    /* 읽기 실패는 로그인 전과 같게 다룬다 */
+  }
+  try {
+    const legacy = window.localStorage.getItem(TOKEN_KEY) || '';
+    window.localStorage.removeItem(TOKEN_KEY);
+    if (legacy) {
+      try { ss?.setItem(TOKEN_KEY, legacy); } catch { /* 옮기지 못해도 이번 탭에서는 쓴다 */ }
+    }
+    return legacy;
+  } catch {
+    return '';
+  }
+}
+
+/** 토큰을 저장하거나(값 있음) 지운다(빈 값 = 로그아웃). 옛 저장처도 함께 지운다. */
+function writeSavedToken(v: string) {
+  const ss = tokenStore();
+  try {
+    if (v) ss?.setItem(TOKEN_KEY, v);
+    else ss?.removeItem(TOKEN_KEY);
+  } catch {
+    /* 저장하지 못해도 이번 탭에서는 tokenRef 로 동작한다 */
+  }
+  try { window.localStorage.removeItem(TOKEN_KEY); } catch { /* noop */ }
+}
+
 const S = {
   page: { maxWidth: 960, margin: '0 auto', padding: '32px 20px 80px' } as const,
   h2: { fontSize: 16, fontWeight: 800, letterSpacing: '-.01em' } as const,
@@ -1403,27 +1451,20 @@ export default function AdminPage() {
   const [notice, setNotice] = useState('');
 
   // ---- 관리 토큰(ADMIN_TOKEN 설정 시 x-admin-token 필수) ----
+  // 보관처는 탭 단위 저장소다 — 위 `tokenStore()` 주석 참고(DS 14-3).
   const [adminToken, setAdminToken] = useState('');
   const tokenRef = useRef('');
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem('cb_admin_token') || '';
-      if (saved) {
-        setAdminToken(saved);
-        tokenRef.current = saved;
-      }
-    } catch {
-      /* localStorage 미지원 환경 무시 */
+    const saved = readSavedToken();
+    if (saved) {
+      setAdminToken(saved);
+      tokenRef.current = saved;
     }
   }, []);
   const applyToken = (v: string) => {
     setAdminToken(v);
     tokenRef.current = v;
-    try {
-      window.localStorage.setItem('cb_admin_token', v);
-    } catch {
-      /* ignore */
-    }
+    writeSavedToken(v);
   };
   const authHeaders = (json = false): Record<string, string> => ({
     ...(json ? { 'Content-Type': 'application/json' } : {}),
@@ -2527,7 +2568,7 @@ export default function AdminPage() {
             {authMsg ? (
               <p id="ac-login-err" role="alert" className="ac-err">{authMsg}</p>
             ) : (
-              <p id="ac-login-help" className="ac-rulehint">토큰은 이 브라우저에만 저장되며, 서버에는 확인할 때만 전송됩니다.</p>
+              <p id="ac-login-help" className="ac-rulehint">토큰은 이 탭에만 보관되고 브라우저를 닫으면 지워집니다. 서버에는 확인할 때만 전송됩니다.</p>
             )}
           </div>
           <button type="submit" {...busyBtn(authBusy, authBusy, { ...S.btn, width: '100%', padding: '11px 14px' })}>

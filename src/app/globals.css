@@ -29,6 +29,14 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font);-webkit-font-
 a{color:inherit;text-decoration:none}
 button{font-family:inherit;cursor:pointer;border:none;background:none}
 input,textarea{font-family:inherit}
+/* 터치 기기에서 입력칸 글자를 16px 밑으로 두지 않는다 — iOS Safari 는 16px 미만 입력칸에
+ * 초점이 가는 순간 화면을 확대하고, 초점을 잃어도 되돌리지 않는다. 임베드 위젯이라면
+ * 확대된 채로 남는 것은 고객사 페이지다. 화면마다 글자 크기가 인라인이라 여기서 한 번에 덮는다.
+ * 확대 자체를 막는 길(viewport 의 maximum-scale·user-scalable=no)은 쓰지 않는다 —
+ * 저시력 사용자가 손으로 키워 볼 권리를 함께 빼앗는다(WCAG 1.4.4). */
+@media (pointer:coarse){
+  input,select,textarea{font-size:16px!important}
+}
 
 /* 키보드 사용자에게 초점 위치를 항상 보이게 한다(마우스 클릭에는 표시하지 않는다). */
 :focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:6px}
