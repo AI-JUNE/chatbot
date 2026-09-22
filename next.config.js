@@ -34,6 +34,20 @@ const BASE = [
   { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' },
 ];
 
+/**
+ * ── `/embed.js` 만 캐시를 연다
+ * 이 파일은 **고객사 사이트의 모든 페이지**에 `<script src>` 로 박히는 유일한 파일이다.
+ * 기본 정책(`public, max-age=0, must-revalidate`, 라이브 실측)에서는 방문자가 상품 목록 →
+ * 상세 → 장바구니로 한 번 옮길 때마다 상담창이 뜨기 전에 **이 파일을 재검증하는 왕복**이 먼저
+ * 끼어든다. 304 로 돌아와 내려받는 양은 0 이어도, 느린 모바일 회선에서 사라지는 것은 왕복 시간이다.
+ *
+ * 10분(`max-age=600`) 동안은 묻지 않고 쓰고, 그 뒤 하루(`stale-while-revalidate=86400`)는
+ * **가진 것을 먼저 쓰고 뒤에서 새로 받는다** — 스니펫을 고쳐도 방문자가 기다리는 일이 없다.
+ * ⚠️ 맞바꾼 것: 스니펫 수정이 고객사 브라우저에 닿기까지 최대 10분이 걸린다. `/widget` 문서와
+ * API 응답은 **손대지 않는다** — 대화·집계는 언제나 최신이어야 한다.
+ */
+const EMBED_CACHE = [{ key: 'Cache-Control', value: 'public, max-age=600, stale-while-revalidate=86400' }];
+
 /** 프레임 금지 — `/widget` 을 제외한 모든 경로. */
 const NO_FRAME = [{ key: 'Content-Security-Policy', value: "frame-ancestors 'none'" }];
 
@@ -48,6 +62,8 @@ const nextConfig = {
       // 콘솔·관리 API 는 구형 브라우저에도 못을 박는다(위젯과 경로가 겹치지 않아 안전).
       { source: '/admin/:path*', headers: [{ key: 'X-Frame-Options', value: 'DENY' }] },
       { source: '/api/admin/:path*', headers: [{ key: 'X-Frame-Options', value: 'DENY' }] },
+      // 고객사 모든 페이지에 박히는 단 하나의 파일 — 여기만 캐시를 연다(HTML·API 는 그대로).
+      { source: '/embed.js', headers: EMBED_CACHE },
     ];
   },
 };

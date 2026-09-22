@@ -1,7 +1,11 @@
-/* GOWON Chat 임베드 스니펫 (v0.7)
+/* GOWON Chat 임베드 스니펫 (v0.8)
  * 사용법: <script src="https://<배포도메인>/embed.js" async></script>
  * 옵션(선택): data-position="left" | data-offset="24" | data-z="2147483000"
  *            data-tenant="eum"  ← 테넌트 프리셋(문구·색·FAQ 지식)을 바꿔 끼운다
+ *
+ * v0.8 변경점
+ * - 상담창 프레임이 밝은 화면 한 벌임을 선언한다(color-scheme:light). 종전의 `normal` 은
+ *   「정하지 않음」이라 호스트 페이지의 배색·브라우저 자동 다크 테마에 색이 끌려갔다.
  *
  * v0.7 변경점
  * - 위젯 메시지의 출처를 창 단위로 확인한다(ev.source === iframe.contentWindow). 종전에는
@@ -90,7 +94,9 @@
     'border:0',
     'background:transparent',
     'z-index:' + zIndex,
-    'color-scheme:normal',
+    // 상담창은 밝은 화면 한 벌이다(globals.css `:root{color-scheme:light}` 와 같은 선언).
+    // `normal` 은 「정하지 않음」이라 호스트 페이지의 배색·자동 다크 테마에 끌려간다.
+    'color-scheme:light',
     // 붙는 순간에는 투명 — 위젯이 그려지기 전의 빈 사각형이 깜빡이지 않게 한다.
     'opacity:0',
     calm ? 'transition:none' : 'transition:opacity .22s ease,width .18s ease,height .18s ease'

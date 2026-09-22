@@ -1760,3 +1760,112 @@ test('푸터 법무 링크가 손가락으로 누를 수 있는 규격을 지킨
     }
   }
 });
+
+
+/* ══════════ 디자인 스프린트 — 14차 재감사 (DS 17-1·17-2·17-3) ══════════ */
+
+/**
+ * DS 17-1 — 글꼴은 **동적 서브셋** 판만 쓴다.
+ *
+ * 통짜 판(`static/pretendard.css`)은 서브셋이 없어 굵기 하나가 통째로 750~780KB 다.
+ * 화면이 쓰는 굵기는 4종(400·600·700·800)이라 첫 방문에 **3.0MB**(라이브 실측 748+767+773+775KB).
+ * 같은 루트 레이아웃을 `/widget` 이 쓰므로 그 값은 **고객사 사이트 방문자**가 치른다.
+ *
+ * 이 테스트가 고정하는 것은 세 가지다 — ① 통짜 판으로 되돌아가지 않는다 ② preconnect 가
+ * 스타일시트와 **같은 출처**를 가리킨다(두 문자열이 갈라지면 미리 연 연결이 아무 데도 쓰이지 않는다)
+ * ③ 시트가 싣는 family 이름이 `--font` 의 **첫 이름**과 같다(종전에는 시트가 `Pretendard` 만
+ * 싣는데 토큰의 첫 이름은 `Pretendard Variable` 이라 첫 자리가 죽어 있었다).
+ */
+test('글꼴은 동적 서브셋 판을 쓰고 CDN 연결을 미리 연다 (DS 17-1)', () => {
+  const s = read('src/app/layout.tsx');
+  // 주석은 걷어내고 본다 — 아래 검사들은 「없어야 한다」라서 설명 문장에 걸리면 거짓 실패한다.
+  const code = s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  // ① 통짜 판 금지.
+  assert.equal(/static\/pretendard\.css/.test(code), false,
+    '서브셋 없는 통짜 글꼴로 되돌아갔다 — 굵기 4종이면 첫 방문에 3.0MB 다');
+  const css = s.match(/const FONT_CSS = `([^`]+)`/);
+  assert.ok(css, 'FONT_CSS 한 곳에서 글꼴 시트 주소를 정하지 않는다');
+  assert.match(css[1], /dynamic-subset\.css$/, '글꼴 시트가 동적 서브셋(unicode-range) 판이 아니다');
+
+  // ② preconnect 는 시트와 같은 출처여야 한다 — 문자열 두 벌이 갈라지지 않게 FONT_ORIGIN 을 재사용한다.
+  const origin = s.match(/const FONT_ORIGIN = '([^']+)'/);
+  assert.ok(origin && /^https:\/\//.test(origin[1]), 'FONT_ORIGIN 이 없다');
+  assert.ok(css[1].startsWith('${FONT_ORIGIN}'), '글꼴 시트 주소가 FONT_ORIGIN 을 쓰지 않는다 — 두 출처가 갈라진다');
+  const pre = s.match(/<link rel="preconnect"[^>]*>/);
+  assert.ok(pre, '글꼴 CDN 에 preconnect 가 없다 — 첫 글자 앞에서 DNS·TLS 왕복이 통째로 남는다');
+  assert.match(pre[0], /href=\{FONT_ORIGIN\}/, 'preconnect 가 FONT_ORIGIN 이 아닌 다른 주소를 가리킨다');
+  assert.match(pre[0], /crossOrigin="anonymous"/, '글꼴은 익명 CORS 요청이라 crossOrigin 없이는 연결이 재사용되지 않는다');
+
+  // ③ 시트가 싣는 family 와 토큰의 첫 이름이 같아야 한다.
+  const font = read('src/app/globals.css').match(/--font:([^;]+);/);
+  assert.ok(font, '--font 토큰이 없다');
+  assert.ok(font[1].trim().startsWith("'Pretendard Variable'"),
+    `--font 의 첫 이름이 'Pretendard Variable' 이 아니다: ${font[1].trim()}`);
+  assert.match(css[1], /\/variable\/pretendardvariable-/,
+    '시트가 가변 글꼴 판이 아니면 --font 의 첫 이름은 한 번도 로드되지 않는다(죽은 자리)');
+});
+
+/**
+ * DS 17-2 — `/embed.js` 만 캐시를 연다.
+ *
+ * 이 파일은 **고객사 사이트의 모든 페이지**에 박히는 유일한 파일인데, 기본 정책
+ * (`public, max-age=0, must-revalidate` — 라이브 실측)에서는 페이지를 옮길 때마다 상담창이
+ * 뜨기 전에 재검증 왕복이 먼저 끼어든다. 반대로 HTML·API 에 캐시를 열면 대화·집계가 낡는다 —
+ * 그래서 **열리는 곳이 이 한 곳뿐**임을 함께 고정한다.
+ */
+test('embed.js 만 캐시가 열리고 화면·API 는 그대로다 (DS 17-2)', async () => {
+  const s = read('next.config.js');
+  const rule = s.match(/const EMBED_CACHE = \[\{ key: 'Cache-Control', value: '([^']+)' \}\]/);
+  assert.ok(rule, 'embed.js 캐시 정책이 한 곳(EMBED_CACHE)에 없다');
+  const age = rule[1].match(/max-age=(\d+)/);
+  assert.ok(age && Number(age[1]) > 0, `max-age 가 0 이면 매 페이지마다 재검증 왕복이 남는다: ${rule[1]}`);
+  assert.ok(Number(age[1]) <= 3600, `스니펫 수정이 닿기까지 너무 오래 걸린다: ${rule[1]}`);
+  assert.match(rule[1], /stale-while-revalidate=\d+/, '새로 받는 동안 방문자가 기다리지 않게 SWR 을 둔다');
+  assert.equal(/must-revalidate/.test(rule[1]), false, 'must-revalidate 면 캐시를 연 뜻이 없다');
+
+  // 규칙을 **Next 자신의 경로 매칭기로 실제로 돌려** 확인한다(문자열 검사로는 범위를 알 수 없다).
+  const { createRequire } = await import('node:module');
+  const require_ = createRequire(new URL('../package.json', import.meta.url));
+  let pathToRegexp;
+  try {
+    const m = require_('next/dist/compiled/path-to-regexp');
+    pathToRegexp = m.pathToRegexp || m.default?.pathToRegexp || m;
+  } catch {
+    return; // next 미설치 환경 — 위의 텍스트 계약 검사로 갈음한다.
+  }
+  const { fileURLToPath } = await import('node:url');
+  const rules = await require_(fileURLToPath(new URL('../next.config.js', import.meta.url))).headers();
+  const cacheCount = (p) =>
+    rules.filter((r) => pathToRegexp(r.source).test(p))
+      .flatMap((r) => r.headers.map((h) => h.key))
+      .filter((k) => k === 'Cache-Control').length;
+
+  assert.equal(cacheCount('/embed.js'), 1, '/embed.js 에 캐시 정책이 붙지 않았다');
+  for (const p of ['/', '/widget', '/admin', '/api/chat', '/api/admin/backup', '/terms']) {
+    assert.equal(cacheCount(p), 0, `${p} 에 캐시가 열렸다 — 화면·API 는 언제나 최신이어야 한다`);
+  }
+});
+
+/**
+ * DS 17-3 — 밝은 화면 한 벌임을 선언한다.
+ *
+ * 선언이 없으면(`color-scheme: normal` — 라이브 실측) Android Chrome 의 자동 다크 테마가
+ * 「다크를 준비하지 않은 사이트」로 보고 색을 스스로 뒤집는다. 그 화면은 고객사 사이트 위의
+ * 상담창이기도 하다 — 우리가 손대지 않은 곳에서 브랜드가 어긋난다.
+ * meta 와 CSS 를 **둘 다** 둔다: 판정은 문서를 받는 순간에 나므로 CSS 보다 meta 가 먼저 읽힌다.
+ */
+test('밝은 화면 한 벌임을 선언한다 — 자동 다크에 색을 맡기지 않는다 (DS 17-3)', () => {
+  const root = read('src/app/globals.css').split(':root{')[1].split('\n}')[0];
+  assert.match(root, /color-scheme\s*:\s*light/, ':root 에 color-scheme 선언이 없다');
+
+  const layout = read('src/app/layout.tsx');
+  assert.match(layout, /<meta name="color-scheme" content="light" \/>/,
+    'meta 선언이 없다 — CSS 가 도착하기 전에 자동 다크 판정이 난다');
+
+  // 임베드 프레임도 같은 선언이어야 한다. `normal` 은 「정하지 않음」이라 호스트 배색에 끌려간다.
+  const embed = read('public/embed.js');
+  const style = embed.split('iframe.style.cssText = [')[1].split('].join')[0];
+  assert.match(style, /'color-scheme:light'/, '임베드 프레임이 밝은 화면임을 선언하지 않는다');
+  assert.equal(/color-scheme:normal/.test(style), false, '프레임이 아직 color-scheme:normal 이다');
+});
