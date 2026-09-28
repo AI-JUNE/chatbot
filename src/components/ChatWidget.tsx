@@ -789,6 +789,13 @@ export default function ChatWidget({
                         fontSize: 13.5,
                         lineHeight: 1.6,
                         whiteSpace: 'pre-wrap',
+                        // 고객이 긴 URL·주문번호처럼 끊을 수 없는 문자열을 치면(links, tracking id)
+                        // body 의 word-break:keep-all(한글 어절 보존)만으로는 줄바꿈이 안 돼
+                        // 말풍선이 대화창 밖으로 밀려난다 — 관리 콘솔의 응답 테스트 미리보기
+                        // (.ac-pv-user/.ac-pv-bot)는 이미 이 값을 가지고 있었는데 정작 실제
+                        // 위젯 말풍선에는 닿지 않았다(라이브 375px 실측: 긴 URL 한 줄에
+                        // scrollWidth 1211px vs clientWidth 255px — 대화 영역이 가로로 밀림).
+                        wordBreak: 'break-word',
                       }}
                     >
                       {m.text}
@@ -835,7 +842,7 @@ export default function ChatWidget({
                     {m.citation && (
                       <div style={{ fontSize: 11.5, lineHeight: 1.55, color: 'var(--sub)', background: 'var(--surface)', border: '1px solid var(--line)', borderLeft: '3px solid var(--brand)', borderRadius: 10, padding: '8px 10px' }}>
                         <div style={{ fontWeight: 700, color: 'var(--brand-600)', fontSize: 11 }}>근거 · {m.citation.source}</div>
-                        <div style={{ marginTop: 3 }}>“{m.citation.snippet}”</div>
+                        <div style={{ marginTop: 3, wordBreak: 'break-word' }}>“{m.citation.snippet}”</div>
                       </div>
                     )}
 

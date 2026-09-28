@@ -142,6 +142,27 @@ test('테넌트가 없어도 기본 위젯이 AI 고지와 함께 렌더된다',
   assert.equal(html.includes('이런 걸 물어보실 수 있어요'), false, '지식 없이 칩을 만들면 안 된다');
 });
 
+/* ── 말풍선이 긴 URL·주문번호로 대화창 밖으로 밀려나지 않는다 (DS 18-1) ── */
+
+test('말풍선이 끊을 수 없는 긴 문자열(URL 등)에 word-break:break-word 로 대비한다 (DS 18-1)', opts, async () => {
+  const html = await render({ tenant: TENANT });
+  // body 전역 규칙은 한글 어절 보존을 위해 word-break:keep-all 이다(globals.css) — 라틴 문자로만
+  // 이어진 긴 문자열(URL·주문번호)은 그 규칙 아래서는 어디서도 끊기지 않는다. 콘솔의 응답 테스트
+  // 미리보기(.ac-pv-user/.ac-pv-bot)는 이미 word-break:break-word 를 갖고 있었는데, 정작 실제
+  // 위젯 말풍선(인사말이 쓰는 것과 같은 스타일 블록)에는 닿지 않았었다 — 라이브 375px 실측:
+  // 168자 URL 한 줄을 치면 대화 영역이 scrollWidth 1290px/clientWidth 349px 로 가로로 밀렸다.
+  const bubbleStyleMatch = html.match(/<div style="([^"]*white-space:pre-wrap[^"]*)">안녕하세요/);
+  assert.ok(bubbleStyleMatch, '인사말 말풍선을 찾지 못했다');
+  assert.match(bubbleStyleMatch[1], /word-break:break-word/, '말풍선에 word-break:break-word 가 없다');
+});
+
+test('근거 인용문도 같은 이유로 word-break:break-word 를 갖는다 (DS 18-1)', opts, async () => {
+  const source = readFileSync(path.join(REPO, 'src', 'components', 'ChatWidget.tsx'), 'utf8');
+  const line = source.split('\n').find((l) => l.includes('m.citation.snippet'));
+  assert.ok(line, '근거 인용 div 를 찾지 못했다');
+  assert.match(line, /wordBreak: 'break-word'/, '근거 인용 div 에 wordBreak 대비가 없다');
+});
+
 /* ── 대화 이어가기 (DS 7-1) ── */
 
 test('저장한 대화를 같은 방문 안에서 그대로 되살린다 (DS 7-1)', opts, async () => {
