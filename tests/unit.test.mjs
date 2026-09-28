@@ -592,7 +592,7 @@ test('위젯이 타이핑 인디케이터·도착 애니메이션·시각을 렌
 test('위젯이 빠른 답장 칩과 답변 평가를 제공한다', () => {
   const s = read('src/components/ChatWidget.tsx');
   assert.match(s, /이런 걸 물어보실 수 있어요/, '빠른 답장 안내');
-  assert.match(s, /tenant\?\.starters/, '빠른 답장은 서버가 준 실제 FAQ에서 와야 한다');
+  assert.match(s, /tenant \? \(tenant\.starters \?\? \[\]\) : \(fallbackStarters \?\? \[\]\)/, '빠른 답장은 서버가 준 실제 FAQ에서 와야 한다(테넌트 유무로 출처만 갈라져야 한다)');
   assert.match(s, /도움이 됐나요\?/, '답변 평가 문구');
   assert.match(s, /'\/api\/feedback'/, '평가는 서버에 기록돼야 한다');
   assert.match(s, /평가를 보내지 못했어요/, '실패를 삼키지 않고 알려야 한다');
@@ -603,7 +603,12 @@ test('위젯이 빠른 답장 칩과 답변 평가를 제공한다', () => {
 test('빠른 답장은 실제 적재된 FAQ에서만 만들어진다', () => {
   const s = read('src/lib/tenantKB.ts');
   assert.match(s, /STARTER_COUNT/, '칩 개수 상수가 있어야 한다');
-  assert.match(s, /tenantKB\(preset\)\s*\n?\s*\.slice\(0, STARTER_COUNT\)/, '칩은 KB에서 잘라 써야 한다');
+  // 테넌트(tenantConfig)·기본 위젯(fallbackStarters) 모두 같은 topQuestions() 한 곳에서 자른다 —
+  // 두 출처가 각자 슬라이스를 하면 개수 규칙이 갈라질 수 있다(DS 19-1, DS 6-2 와 같은 단일 출처 원칙).
+  assert.match(s, /function topQuestions\(entries: KBEntry\[\]\): string\[\] \{/, '슬라이스가 한 함수로 모여 있어야 한다');
+  assert.match(s, /\.slice\(0, STARTER_COUNT\)/, '칩은 KB에서 잘라 써야 한다');
+  assert.match(s, /export function tenantConfig[\s\S]*?topQuestions\(tenantKB\(preset\)\)/, 'tenantConfig 가 topQuestions 를 거치지 않는다');
+  assert.match(s, /export function fallbackStarters\(\): string\[\] \{\s*\n\s*return topQuestions\(listKB\(\)\)/, 'fallbackStarters 가 topQuestions 를 거치지 않는다');
   assert.equal(/starters: \[\s*'/.test(s), false, '칩 문구를 코드에 지어 넣으면 안 된다');
 });
 
@@ -1868,4 +1873,33 @@ test('밝은 화면 한 벌임을 선언한다 — 자동 다크에 색을 맡�
   const style = embed.split('iframe.style.cssText = [')[1].split('].join')[0];
   assert.match(style, /'color-scheme:light'/, '임베드 프레임이 밝은 화면임을 선언하지 않는다');
   assert.equal(/color-scheme:normal/.test(style), false, '프레임이 아직 color-scheme:normal 이다');
+});
+/**
+ * DS 19-1 — 「빠른 답장」이 이음 프리셋에만 연결돼 있었다.
+ *
+ * `tenantConfig(id)` 는 등록된 프리셋(예: eum)일 때만 값을 돌려준다(`getTenantPreset` 이 그 외에는
+ * null). 그런데 랜딩(`page.tsx`)과 기본 임베드(`widget/page.tsx`)는 `tenant` 가 없으면 아무것도
+ * 넘기지 않았다 — 그래서 GOWON 자체(테넌트를 지정하지 않는 가장 흔한 경우)는 관리 콘솔에 지식을
+ * 아무리 채워도 위젯 첫 화면에 칩이 한 번도 뜨지 않았다. `tests/widget.test.mjs` 의 렌더 테스트가
+ * 전부 가짜 `tenant` 객체를 직접 넘겨 왔기 때문에 이 배선 누락이 18차 재감사까지 드러나지 않았다.
+ * `fallbackStarters()`(일반 지식베이스 상위 질문)를 두 화면 모두에 연결한다 — 단, 실제 테넌트가
+ * 붙었을 때는 절대 쓰지 않는다(자기 칩이 비었다고 일반 지식으로 채우면 다른 브랜드 문구가 샌다).
+ */
+test('기본 위젯(테넌트 없음)도 일반 지식베이스에서 빠른 답장을 받는다 (DS 19-1)', () => {
+  const lib = read('src/lib/tenantKB.ts');
+  assert.match(lib, /export function fallbackStarters\(\)/, 'fallbackStarters 가 없다');
+  assert.match(lib, /listKB\(\)/, 'fallbackStarters 는 관리 콘솔 지식베이스(listKB)에서 뽑아야 한다');
+
+  const landing = read('src/app/page.tsx');
+  assert.match(landing, /import \{ fallbackStarters \} from '@\/lib\/tenantKB'/, '랜딩이 fallbackStarters 를 불러오지 않는다');
+  assert.match(landing, /<ChatWidget\s+defaultOpen=\{false\}\s+fallbackStarters=\{fallbackStarters\(\)\}/, '랜딩 위젯에 fallbackStarters 가 연결되지 않았다');
+
+  const widgetPage = read('src/app/widget/page.tsx');
+  assert.match(widgetPage, /fallbackStarters(?:,\s*| )tenantConfig|tenantConfig(?:,\s*| )fallbackStarters/, '위젯 페이지가 fallbackStarters 를 불러오지 않는다');
+  assert.match(widgetPage, /tenant \? \{ tenant \} : \{ fallbackStarters: fallbackStarters\(\) \}/, 'tenant 가 없을 때만 fallbackStarters 를 써야 한다');
+
+  const widget = read('src/components/ChatWidget.tsx');
+  assert.match(widget, /fallbackStarters\?:\s*string\[\]/, 'ChatWidget 이 fallbackStarters 프롭을 받지 않는다');
+  // 테넌트가 있으면 그 테넌트의 starters 만 본다 — 있을 때도 fallbackStarters 로 새면 격리가 깨진다.
+  assert.match(widget, /const starters = \(tenant \? \(tenant\.starters \?\? \[\]\) : \(fallbackStarters \?\? \[\]\)\)/, 'tenant 유무에 따라 출처가 갈라지지 않는다(격리 깨짐 위험)');
 });

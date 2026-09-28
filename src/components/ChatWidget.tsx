@@ -340,7 +340,11 @@ export default function ChatWidget({
   // 처음에 대화창을 펼친 채로 둘지. 호스트 화면(랜딩)은 `false` 를 넘겨 런처만 보이게 한다 —
   // 모바일에서 열린 위젯은 전체화면이라, 자동으로 열면 호스트 화면을 첫 로드부터 덮어 버린다(DS 5-1).
   defaultOpen = !embedded,
-}: { embedded?: boolean; tenant?: WidgetTenant; defaultOpen?: boolean }) {
+  // `tenant` 가 없는 기본(GOWON) 위젯의 빠른 답장 후보(관리 콘솔 지식베이스 상위 질문).
+  // tenant 가 있을 때는 절대 쓰지 않는다 — 특정 테넌트가 붙었는데 그 테넌트의 칩이 비어 있다고
+  // 해서 일반 지식으로 채우면 다른 브랜드 문구가 섞여 나간다(이음 프리셋 격리, DS 19-1).
+  fallbackStarters,
+}: { embedded?: boolean; tenant?: WidgetTenant; defaultOpen?: boolean; fallbackStarters?: string[] }) {
   const greeting = tenant?.greeting || '안녕하세요! 저는 인공지능(AI) 상담 챗봇입니다. 무엇을 도와드릴까요?';
   const [open, setOpen] = useState(defaultOpen);
   const [input, setInput] = useState('');
@@ -659,7 +663,7 @@ export default function ChatWidget({
   }
 
   const fullscreen = open && mobile;
-  const starters = (tenant?.starters ?? []).slice(0, 4);
+  const starters = (tenant ? (tenant.starters ?? []) : (fallbackStarters ?? [])).slice(0, 4);
   const showStarters = starters.length > 0 && msgs.length === 1 && !busy;
   const title = tenant?.headerTitle || 'GOWON Chat';
   const avatarChar = tenant?.badge || 'G';

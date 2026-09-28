@@ -1,4 +1,5 @@
 import ChatWidget from '@/components/ChatWidget';
+import { fallbackStarters } from '@/lib/tenantKB';
 
 /**
  * 랜딩 — AICC Portal 과 같은 디자인 시스템(globals.css 토큰)만 쓴다.
@@ -391,7 +392,9 @@ export default function Home() {
       </footer>
 
       {/* 랜딩에서는 런처만 띄운다 — 위젯이 저절로 펼쳐지면 375px에서 제품 소개를 통째로 덮는다(DS 5-1). */}
-      <ChatWidget defaultOpen={false} />
+      {/* 빠른 답장은 지식베이스 상위 질문에서 뽑는다(DS 19-1) — 정적 페이지라 배포 시점 기준, 콘솔에서
+          지식을 고치면 다음 배포부터 반영된다(설치 탭 스니펫을 통해 들어오는 /widget 은 매 요청마다 새로 뽑는다). */}
+      <ChatWidget defaultOpen={false} fallbackStarters={fallbackStarters()} />
     </div>
   );
 }

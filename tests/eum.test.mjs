@@ -188,7 +188,7 @@ test('위젯이 테넌트 인사말·CTA 버튼·AI 고지를 렌더한다', () 
 /* ══════════ 테넌트 적재 상태·관리 콘솔 조회(읽기 전용) ══════════ */
 
 test('tenantStatus는 배포본이 실제로 적재한 FAQ 건수를 센다', opts, async () => {
-  const { tenantStatus } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize']);
+  const { tenantStatus } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize', 'storage', 'adminStore']);
   const list = tenantStatus({});
   const eum = list.find((t) => t.id === 'eum');
   assert.ok(eum, '이음 테넌트가 목록에 없다');
@@ -199,7 +199,7 @@ test('tenantStatus는 배포본이 실제로 적재한 FAQ 건수를 센다', op
 });
 
 test('CTA가 환경변수로 덮이면 상태에 그대로 드러난다', opts, async () => {
-  const { tenantStatus } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize']);
+  const { tenantStatus } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize', 'storage', 'adminStore']);
   const eum = tenantStatus({ EUM_APPLY_URL: 'https://eum.example.go.kr/apply' }).find((t) => t.id === 'eum');
   assert.equal(eum.ctaUrl, 'https://eum.example.go.kr/apply');
   assert.equal(eum.ctaFromEnv, true);
@@ -210,7 +210,7 @@ test('CTA가 환경변수로 덮이면 상태에 그대로 드러난다', opts, 
 });
 
 test('tenantDetail은 FAQ 원문과 근거 라벨을 함께 돌려준다', opts, async () => {
-  const { tenantDetail, tenantIds } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize']);
+  const { tenantDetail, tenantIds } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize', 'storage', 'adminStore']);
   assert.deepEqual(tenantIds(), ['eum']);
   const d = tenantDetail('eum', {});
   assert.equal(d.faq.length, doc.faq.length);
@@ -224,14 +224,14 @@ test('tenantDetail은 FAQ 원문과 근거 라벨을 함께 돌려준다', opts,
 });
 
 test('실패 경로: 알 수 없는 테넌트 상세는 null이며 throw하지 않는다', opts, async () => {
-  const { tenantDetail } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize']);
+  const { tenantDetail } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize', 'storage', 'adminStore']);
   for (const bad of ['../secret', 'EUM', 'no-such', '', null, 42]) {
     assert.equal(tenantDetail(bad, {}), null, `거부되지 않았다: ${String(bad)}`);
   }
 });
 
 test('테넌트 상세에 비밀값이 섞이지 않는다', opts, async () => {
-  const { tenantDetail } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize']);
+  const { tenantDetail } = await importLib('tenantKB', ['tenants', 'knowledge', 'normalize', 'storage', 'adminStore']);
   const json = JSON.stringify(tenantDetail('eum', { ADMIN_TOKEN: 'super-secret-token', EUM_APPLY_URL: 'https://eum.example.go.kr/apply' }));
   assert.equal(json.includes('super-secret-token'), false, '관리 토큰이 응답에 섞였다');
   assert.equal(/token|secret|password/i.test(json), false, '비밀값스러운 키가 응답에 있다');

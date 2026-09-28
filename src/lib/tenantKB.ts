@@ -3,6 +3,7 @@
 // JSON은 정적 import 한다 — 서버리스 배포에서 파일 경로 접근에 의존하지 않기 위해서다.
 import eumFaqDoc from '../../data/eum-faq.json';
 import type { KBEntry } from '@/lib/knowledge';
+import { listKB } from '@/lib/adminStore';
 import {
   TENANTS,
   faqToKB,
@@ -45,6 +46,13 @@ export function resolveTenant(id: unknown): { preset: TenantPreset; kb: KBEntry[
 /** 빠른 답장 칩에 쓸 대표 질문 수 — 위젯 폭(375px)에서 두 줄을 넘기지 않는 개수. */
 const STARTER_COUNT = 4;
 
+function topQuestions(entries: KBEntry[]): string[] {
+  return entries
+    .slice(0, STARTER_COUNT)
+    .map((e) => e.question)
+    .filter((q) => typeof q === 'string' && q.trim().length > 0);
+}
+
 /**
  * 위젯에 내려보낼 공개 설정(환경변수 반영).
  * 빠른 답장 칩은 **실제 적재된 FAQ 질문 문구**에서 앞 STARTER_COUNT 건을 그대로 쓴다.
@@ -53,11 +61,18 @@ const STARTER_COUNT = 4;
 export function tenantConfig(id: unknown): PublicTenant | null {
   const preset = getTenantPreset(id);
   if (!preset) return null;
-  const starters = tenantKB(preset)
-    .slice(0, STARTER_COUNT)
-    .map((e) => e.question)
-    .filter((q) => typeof q === 'string' && q.trim().length > 0);
+  const starters = topQuestions(tenantKB(preset));
   return { ...publicTenant(preset, process.env), ...(starters.length ? { starters } : {}) };
+}
+
+/**
+ * 테넌트가 없는 기본(GOWON) 위젯의 빠른 답장 — 관리 콘솔 지식베이스(`listKB()`)에서 뽑는다.
+ * tenantConfig 는 `id` 가 등록된 프리셋(예: eum)일 때만 값을 돌려주므로, 기본 위젯은 이 함수가
+ * 없으면 항상 칩 없이 뜬다(DS 19-1 — 「빠른 답장」이 이음 프리셋에만 연결돼 있던 문제).
+ * 등록된 테넌트 대화에는 절대 섞이지 않는다 — 호출부가 tenant 가 없을 때만 이 값을 쓴다(격리 유지).
+ */
+export function fallbackStarters(): string[] {
+  return topQuestions(listKB());
 }
 
 export function tenantLoadWarnings(): string[] {

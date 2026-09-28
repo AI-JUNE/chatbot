@@ -26,6 +26,8 @@
 > 진행(9/22): 16순위까지 닫힌 뒤 **아직 한 번도 재지 않은 축 — 첫 화면 속도**(QUALITY_BAR §2)를 라이브에서 실측해 3건 — 글꼴 3.0MB(DS 17-1), 고객사 모든 페이지에 박히는 `embed.js` 의 매번 재검증(DS 17-2), 밝은 화면임을 선언하지 않아 자동 다크에 색을 맡기고 있던 것(DS 17-3). 아래 「17순위」.
 > 진행(9/28): 17순위까지 닫힌 뒤 위젯(1순위) 자체를 6조건 중 「375px 에서 깨지지 않는다」로 다시 훑어 1건 — 고객이 긴 URL·주문번호를 치면 말풍선이 대화창 밖으로 밀려나던 것(DS 18-1, 콘솔 미리보기에만 있던 대비가 실제 위젯에는 없었다). 아래 「18순위」.
 > 진행(9/28, 2회차): 18순위까지 닫혀 DESIGN_SPRINT·EUM_INTEGRATION·COMMERCIAL_READINESS 세 문서 모두 소진(COMMERCIAL_READINESS 는 [승인 필요] 약관 확정본 1건만 남음) — 라이브 위젯·콘솔을 다시 열어 아직 개별 재감사를 거치지 않았던 축을 훑었다: 위젯 키보드 초점 가두기·Escape 처리·`aria-live="polite"` 실측, 로그인·연락처(한국 전화번호 형식)·안내 자료 등록 폼의 인라인 오류, 지식베이스 표 9행의 접근 이름, 삭제·초기화 확인 대화상자, CSV 수식 주입 방어, 정산 리포트 빈 상태. 전부 이미 규격대로였다 — 새 결함을 못 찾았다는 것도 근거 없이 「완료」라 적지 않고 그대로 남긴다(§13 금지 대상). `node --test`343건 전부 통과·`tsc --noEmit` 0건으로 회귀 없음만 재확인했다. 코드 변경 없음.
+> 진행(9/28, 3회차): 세 문서 소진 뒤 다시 라이브에서 실제 계약 검사를 돌렸다(`node --test` 343건·`tsc --noEmit` 0건, 컨테이너 디스크가 가득 차 `TMPDIR` 를 옮겨 재확인 — 결과 자체는 회귀 없음). 이번에는 코드가 아니라 **화면에 뜨는 문구가 실제로 어디서 오는가**를 라이브 위젯에서 직접 확인했다 — `/widget`(테넌트 없음)을 열어 대화를 시작했더니 1순위에서 완료로 적어 둔 「빠른 답장 칩」이 뜨지 않았다. `tenantConfig(undefined)` 는 `getTenantPreset` 이 등록된 프리셋(현재 eum 하나)이 아니면 항상 null 을 돌려주므로, `tenant` 프롭 자체가 랜딩·기본 임베드 어디에도 전달되지 않고 있었다 — 이음이 아닌 **GOWON 자체**(가장 흔히 쓰일 기본 구성)는 관리 콘솔에 지식을 아무리 채워도 칩이 한 번도 뜨지 않았다. 위젯 렌더 테스트가 전부 가짜 tenant 객체를 직접 주입해 왔기 때문에 18차 재감사까지 드러나지 않았다. 아래 DS 19-1.
+
 
 ## 디자인 시스템 (AICC Portal 에서 이식)
 - 색: primary #2563EB, ink #0F172A, sub #475569, line #E2E8F0, bg #F8FAFC, success #16A34A, warn #D97706, danger #DC2626
@@ -398,6 +400,15 @@
   - 테스트가 위젯을 실제로 컴파일해 인사말 말풍선의 렌더된 스타일 문자열에 `word-break:break-word` 가 있는지, 근거 인용 div 도 같은 대비를 갖는지 소스 레벨로 고정한다(레이아웃 엔진이 없는 `node:test` 환경이라 넘침 자체는 여기서 재현하지 않는다 — 그 실측은 위 「근거」의 라이브 확인이 대신한다)
   - 확인(9/28, 라이브 DOM 에 새 값을 얹어 실측 — DS 16-1 과 같은 방식): 옛 상태 `scrollWidth 1211 / clientWidth 255` → `wordBreak:'break-word'` 를 얹자 **`scrollWidth`가 `clientWidth`와 같은 255로 즉시 내려갔다**(넘침 0). 한글 문장은 이미 글자 단위로 끊기던 자리라 이 값을 더해도 줄바꿈 위치가 바뀌지 않는다(짧은 라틴 단어·공백이 있는 일반 문장에는 영향 없음 — `break-word` 는 정상적인 끊을 자리가 없을 때만 개입한다)
 
+
+
+## 19순위 — 백로그 소진 후 16차 재감사 (DS 19-x)
+- [x] 「빠른 답장 칩」이 이음 프리셋에만 연결돼 있었다 — 기본 GOWON 위젯은 지식을 채워도 칩이 뜨지 않는다 (DS 19-1)
+  - 근거(9/28, 라이브 실측 + 소스 확인): `/widget`(테넌트 지정 없음)을 열어 첫 메시지를 받아 보면 칩 영역 자체가 없다. `src/app/widget/page.tsx`·`src/app/page.tsx` 모두 `ChatWidget` 에 `tenant` 프롭을 **테넌트가 해석될 때만** 넘기고(`{...(tenant ? { tenant } : {})}`), `getTenantPreset(id)` 는 `TENANTS`(현재 `{ eum }`)에 없는 id — 즉 기본 GOWON 을 포함한 모든 비이음 경우 — 에 대해 언제나 `null` 이다. `ChatWidget` 의 `const starters = (tenant?.starters ?? []).slice(0, 4)` 는 그래서 기본 위젯에서 항상 빈 배열이었다. 1순위 항목은 "tenantConfig()가 실제 적재 KB에서 상위 4건 질문을 그대로 내려보냄"이라고 이음 기준으로만 검증돼 있었다 — `tests/widget.test.mjs` 의 두 「빠른 답장」 테스트가 전부 손으로 만든 가짜 `tenant` 객체를 직접 주입해 왔기 때문에, 실제 배선(페이지 → 위젯 프롭)이 한 번도 실행 경로로 검사되지 않았다
+  - 관리 콘솔이 「지식베이스」 탭에서 편집하는 일반 KB(`@/lib/adminStore` 의 `listKB()`)는 이음 FAQ(`tenantKB`)와 별개 저장소다. `tenantKB.ts` 에 `topQuestions(entries)` 를 뽑아 두 출처(`tenantConfig`→테넌트 프리셋 KB, 새 `fallbackStarters()`→`listKB()`)가 **같은 한 함수**에서 잘리게 했다(DS 6-2 의 "단일 출처" 와 같은 이유 — 개수 규칙이 갈라지지 않게). `ChatWidget` 에 `fallbackStarters?: string[]` 프롭을 추가하고 `const starters = (tenant ? (tenant.starters ?? []) : (fallbackStarters ?? [])).slice(0, 4)` 로 출처를 완전히 가른다 — **tenant 가 있으면 fallbackStarters 는 절대 보지 않는다.** 이음처럼 등록된 테넌트가 자기 칩이 비었다고 일반 GOWON 지식으로 채워지면 "테넌트 대화는 이음 FAQ만 보고 고원 문구는 유출하지 않는다"는 격리 원칙(EUM_INTEGRATION.md)이 깨진다
+  - `src/app/widget/page.tsx`(매 요청 동적)·`src/app/page.tsx`(정적 프리렌더 — 랜딩은 빌드 시점 지식 기준이고, 콘솔에서 지식을 고치면 다음 배포부터 반영된다. 실제 임베드 진입점인 `/widget` 은 요청마다 새로 뽑으므로 이 차이는 랜딩의 "상시 떠 있는 견본 위젯"에만 해당한다) 양쪽 모두에 `fallbackStarters()` 를 연결했다
+  - 테스트: (1) 소스 계약 — `page.tsx`·`widget/page.tsx` 가 `fallbackStarters` 를 불러와 연결하는지, `ChatWidget` 이 `tenant` 유무로 출처를 가르는지(`tests/unit.test.mjs`). (2) 렌더 — `fallbackStarters` 만 주면 기본 위젯에 칩이 뜨고, `tenant` 가 있으면 그 테넌트의 빈 `starters` 가 `fallbackStarters` 로 새지 않는지 실제 컴파일해 렌더(`tests/widget.test.mjs`). (3) 런타임 — `fallbackStarters()` 가 `listKB()` 상위 4건과 실제로 같은지, KB 를 바꾸면 다음 호출에 반영되는지(정적 스냅샷이 아님을 실행으로 확인), 이음 프리셋과 값이 섞이지 않는지(`tests/runtime.test.mjs`, ENGINE 과 같은 방식으로 tenantKB·adminStore 가 같은 컴파일 상태를 공유하게 캐시 키를 맞췄다)
+  - ⚠️ 범위: 이번 수정은 "칩이 뜨는가"만 고친다. 칩에 실제로 좋은 질문이 올라오는가(관리자가 KB 순서를 의도적으로 정하는 UI 등)는 별개 항목이며, 지금은 `listKB()` 등록 순서를 그대로 쓴다(이음과 같은 규칙)
 
 ## 완료 기준
 QUALITY_BAR 6조건 + **"AICC Portal 옆에 두었을 때 같은 회사 제품으로 보이는가"**. 각 항목은 375px·키보드·스크린리더 확인 후 `[x]`.

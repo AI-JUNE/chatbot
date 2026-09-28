@@ -1628,3 +1628,41 @@ test('파기 이전에 뜬 백업을 되돌려도 연락처는 되살아나지 �
   assert.equal(/010-9999-8888/.test(JSON.stringify(esc.exportTickets())), false, '복원 직후 백업에 원문이 남았다');
   esc.resetTickets();
 });
+/**
+ * DS 19-1 — 기본(GOWON) 위젯의 빠른 답장은 관리 콘솔 지식베이스에서 실제로 나와야 한다.
+ * eum 처럼 정적 FAQ 파일이 아니라 `listKB()`(런타임에 admin 이 늘리고 줄이는 값)를 본다 —
+ * 그래서 값이 고정 텍스트가 아니라 실제 KB 변경을 따라가는지까지 실행해서 확인한다.
+ *
+ * tenantKB 와 adminStore 가 **같은 kbEntries 상태**를 봐야 이 검증이 의미가 있다 — ENGINE 과 같은
+ * 이유로, 자기 자신을 뺀 같은 집합을 넘겨 컴파일 캐시 키를 일치시킨다(위 주석 참고).
+ */
+const TENANTKB_GROUP = ['tenantKB', 'adminStore', 'tenants', 'knowledge', 'normalize', 'storage'];
+const tkb = (name) => importLib(name, TENANTKB_GROUP.filter((n) => n !== name));
+
+test('fallbackStarters는 관리 콘솔 지식베이스 상위 질문을 그대로 돌려준다 (DS 19-1)', opts, async () => {
+  const { fallbackStarters, tenantConfig } = await tkb('tenantKB');
+  const { listKB, upsertKB, deleteKB } = await tkb('adminStore');
+
+  const before = listKB().map((e) => e.question).slice(0, 4).filter((q) => q && q.trim());
+  assert.ok(before.length > 0, '기본 지식베이스가 비어 있어 이 테스트 전제를 확인할 수 없다');
+  assert.deepEqual(fallbackStarters(), before, '일반 지식베이스 상위 질문과 달라야 할 이유가 없다');
+  assert.ok(fallbackStarters().length <= 4, '칩은 4개를 넘지 않아야 한다(375px 두 줄 제한)');
+
+  // eum 처럼 등록된 테넌트는 자기 프리셋만 본다 — fallbackStarters 와 같은 값이 섞이면 격리가 깨진다.
+  const eum = tenantConfig('eum');
+  assert.ok(eum && eum.starters && eum.starters.length > 0, '이음 프리셋 starters 가 비었다');
+  assert.notDeepEqual(eum.starters, fallbackStarters(), '이음 위젯에 일반 지식 칩이 섞이면 안 된다');
+
+  // 실제 admin 이 지식을 늘리면 다음 호출부터 반영돼야 한다(정적 스냅샷이 아니다) — 끝나면 원복한다.
+  const marker = { id: 'ds19-1-drill', category: '점검', question: '__DS19-1 드릴 질문__', keywords: ['ds19drill'], answer: '점검용 답변' };
+  const restore = listKB();
+  try {
+    // 맨 앞에 오도록 KB를 통째로 비우고 마커 하나만 넣는다(순서 의존 없이 반영 여부만 본다).
+    for (const e of restore) deleteKB(e.id);
+    upsertKB(marker);
+    assert.deepEqual(fallbackStarters(), [marker.question], '지식베이스를 바꿔도 칩이 그대로면 정적 스냅샷을 쓰고 있다는 뜻이다');
+  } finally {
+    deleteKB(marker.id);
+    for (const e of restore) upsertKB(e);
+  }
+});
