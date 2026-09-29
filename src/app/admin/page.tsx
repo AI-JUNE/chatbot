@@ -1945,6 +1945,10 @@ export default function AdminPage() {
   const [settleBusy, setSettleBusy] = useState(false);
   // 지금 화면이 보고 있는 조건. 주소를 읽을 때 「이미 같은 조건인가」를 판단하는 기준이다.
   const settleCond = useRef({ month: settleMonth, partnerId: settlePartner });
+  // 지금 화면이 **결과로 보고 싶어 하는** 조건(위 settleCond 는 주소와 맞추는 쪽이다).
+  // 계산이 도는 중에 기준월·파트너를 다시 골라도 여기만 바뀌고, 돌고 있는 조회가 끝나면
+  // 이 조건까지 따라간다(followLatest) — 종전에는 두 번째 호출이 조용히 버려졌다(DS 20-2).
+  const settleWant = useRef<SettleCond>({ month: settleMonth, partnerId: settlePartner });
 
   // DS 6-3 은 탭만 주소에 남겼다 — 그래서 「정산 화면 좀 봐주세요」로 보낸 `#settle` 링크는
   // 받는 사람에게 **언제나 이번 달**로 열렸고, 지난달을 보다 F5 를 누르면 조건이 사라졌다(DS 9-3).
@@ -1958,6 +1962,8 @@ export default function AdminPage() {
       const month = MONTH_RE.test(m) ? m : settleCond.current.month;
       if (month === settleCond.current.month && pid === settleCond.current.partnerId) return;
       settleCond.current = { month, partnerId: pid };
+      // 뒤로/앞으로도 「보고 싶어 하는 조건」의 변경이다 — 도는 계산이 이 조건까지 따라오게 한다.
+      settleWant.current = { month, partnerId: pid };
       setSettleMonth(month);
       setSettlePartner(pid);
       // 조건이 달라졌으니 이전 달의 표를 그대로 두지 않는다 — 비우면 탭 진입 로더가 새 조건으로 계산한다.
@@ -1983,10 +1989,6 @@ export default function AdminPage() {
       /* 주소를 바꾸지 못하는 환경에서도 정산 계산 자체는 막지 않는다 */
     }
   }, [tab, settleMonth, settlePartner]);
-
-  // 지금 화면이 **보고 싶어 하는** 조건. 계산이 도는 중에 기준월·파트너를 다시 골라도 여기만 바뀐다 —
-  // 돌고 있는 조회가 끝나면 이 조건까지 따라간다(followLatest). 종전에는 두 번째 호출이 버려졌다.
-  const settleWant = useRef<SettleCond>({ month: settleMonth, partnerId: settlePartner });
 
   const loadSettlement = useCallback(async (month: string, partnerId: string) => {
     settleWant.current = { month, partnerId };
