@@ -194,6 +194,22 @@ export function contactPurpose(v: string): 'tel' | 'email' {
   return /[@a-zA-Z]/.test(v) ? 'email' : 'tel';
 }
 
+/**
+ * 접수에 실을 「고객이 마지막으로 한 말」 — **화면에 남아 있는 대화**에서 찾는다.
+ *
+ * 종전에는 전송할 때마다 채우는 ref 하나로 들고 있었다. 그 값은 위젯이 다시 뜨면 비어 있다 —
+ * 임베드 위젯은 호스트가 페이지를 옮길 때마다 iframe 이 통째로 다시 로드되므로(그래서 DS 7-1 이
+ * 대화를 되살린다) **되살린 대화에서 「상담원 연결하기」를 누르면** 접수의 마지막 말이 빈 문자열로
+ * 갔고, 운영자 화면에는 「남긴 메시지 없음」이 떴다. 고객은 분명히 물어봤는데 접수에는 없다.
+ * 대화를 되살린 쪽과 접수에 싣는 쪽이 **같은 출처**(msgs)를 보게 해 둘이 다시 갈라지지 않게 한다.
+ */
+export function lastUserText(list: Msg[]): string {
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (list[i].role === 'user') return list[i].text;
+  }
+  return '';
+}
+
 /** 표시 시각 — 오전/오후 h:mm. 마운트 이후에만 호출한다. */
 function clock(ms: number): string {
   try {
@@ -361,7 +377,13 @@ export default function ChatWidget({
   const [sessionId, setSessionId] = useState(newSessionId);
   // 저장된 대화를 되살렸는지 — 되살렸다면 왜 지난 말풍선이 있는지 화면에 밝힌다.
   const [resumed, setResumed] = useState(false);
-  const lastUserRef = useRef('');
+  /**
+   * 대화 세대 — 「닫고 처음으로」로 대화를 지울 때 올라간다.
+   * 보낸 뒤 답을 기다리는 동안 대화를 지우면, 그 답은 **지워진 대화의 것**이다. 세대를 대조하지
+   * 않으면 새 대화에 끼어들어 사용자가 묻지 않은(방금 지운) 질문의 답이 인사말 아래 붙고,
+   * 기다림 표시(타이핑 점 3개)도 물어본 것 없이 돌아간다.
+   */
+  const genRef = useRef(0);
   const endRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -498,11 +520,14 @@ export default function ChatWidget({
   const closePanel = useCallback((reset: boolean) => {
     setOpen(false);
     if (reset) {
+      // 이 대화는 여기서 끝난다 — 보내 둔 요청의 답이 아래 새 대화에 끼어들지 못하게 세대를 올린다.
+      genRef.current += 1;
       setMsgs([{ key: nextKey(), role: 'bot', text: greeting, at: Date.now() }]);
       setRated({});
       setHandoff(null);
       setInput('');
-      lastUserRef.current = '';
+      // 기다리던 답은 버려지므로 기다림 표시도 함께 내린다(묻지 않았는데 점이 뛰면 안 된다).
+      setBusy(false);
       // 사용자가 명시적으로 지운 대화다 — 저장분도 지우고, 서버 문맥으로도 이어지지 않게 새 세션으로 간다.
       clearThread(threadId);
       setSessionId(newSessionId());
@@ -556,12 +581,13 @@ export default function ChatWidget({
       setInput('');
       setMsgs((m) => [...m, { key: nextKey(), role: 'user', text, at: Date.now() }]);
     }
-    lastUserRef.current = text;
     // 연결이 끊긴 상태: 요청을 보내 봐야 실패한다 — 원인을 밝히고 바로 다시 보낼 수단을 준다.
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       pushBot({ text: '인터넷 연결이 끊겨 메시지를 보내지 못했습니다. 연결이 돌아오면 다시 보내 주세요.', failed: text });
       return;
     }
+    // 이 요청이 속한 대화 세대. 답이 오는 사이에 「닫고 처음으로」를 누르면 달라진다.
+    const gen = genRef.current;
     setBusy(true);
     try {
       const r = await fetch('/api/chat', {
@@ -570,6 +596,8 @@ export default function ChatWidget({
         body: JSON.stringify({ message: text, sessionId, ...(tenant ? { tenant: tenant.id } : {}) }),
       });
       const data = await r.json();
+      // 지워진 대화의 답이다 — 화면에 싣지 않는다(아래 실패 안내도 같다).
+      if (gen !== genRef.current) return;
       if (!r.ok || data?.ok === false || typeof data?.reply !== 'string') {
         pushBot({ text: errorText(data, r), failed: text });
         return;
@@ -585,9 +613,12 @@ export default function ChatWidget({
         cta: isCTA(data.cta) ? data.cta : undefined,
       });
     } catch {
+      if (gen !== genRef.current) return;
       pushBot({ text: '연결이 원활하지 않아 메시지를 보내지 못했습니다. 잠시 후 다시 보내 주세요.', failed: text });
     } finally {
-      setBusy(false);
+      // 새 대화가 이미 시작됐다면 그 대화의 기다림 표시를 꺼서는 안 된다
+      // (지운 뒤 곧바로 물어본 질문의 점 3개가 사라지고, 중복 전송까지 열린다).
+      if (gen === genRef.current) setBusy(false);
     }
   }
 
@@ -628,6 +659,7 @@ export default function ChatWidget({
         return;
       }
     }
+    const gen = genRef.current;
     setHandoff({ ...handoff, contact, stage: 'sending', error: '' });
     try {
       const r = await fetch('/api/escalation', {
@@ -636,11 +668,14 @@ export default function ChatWidget({
         body: JSON.stringify({
           sessionId,
           reason: 'user_request',
-          message: lastUserRef.current,
+          // 되살린 대화에서도 비지 않는다 — 화면에 남아 있는 마지막 고객 말을 그대로 싣는다.
+          message: lastUserText(msgs),
           ...(trimmed ? { contact: trimmed } : {}),
         }),
       });
       const d = await r.json();
+      // 접수하는 사이에 대화를 지웠다면 그 접수 카드는 이미 사라진 말풍선에 붙어 있다.
+      if (gen !== genRef.current) return;
       if (r.ok && d?.ok && d?.ticket?.id) {
         setHandoff({
           key: handoff.key,
@@ -658,6 +693,7 @@ export default function ChatWidget({
       }
       setHandoff({ ...handoff, contact, stage: 'error', error: errorText(d, r) });
     } catch {
+      if (gen !== genRef.current) return;
       setHandoff({ ...handoff, contact, stage: 'error', error: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' });
     }
   }

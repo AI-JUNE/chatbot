@@ -275,6 +275,45 @@ test('저장소가 막혀 있어도 위젯이 죽지 않는다 (DS 7-1 실패 �
   });
 });
 
+/**
+ * DS 20-3 — 되살린 대화에서 상담원을 연결하면 접수에 마지막 말이 실리지 않았다.
+ *
+ * 임베드 위젯은 호스트가 페이지를 옮길 때마다 새로 뜬다(그래서 DS 7-1 이 대화를 되살린다).
+ * 접수에 싣는 마지막 고객 말을 전송할 때 채우는 ref 로 들고 있으면 그 순간 빈 값이라,
+ * 운영자 화면에는 「남긴 메시지 없음」이 떴다 — 고객은 분명히 물어봤다.
+ * 여기서는 **저장 → 복원 → 접수에 실을 값** 왕복을 실제로 돌려 본다.
+ */
+test('되살린 대화에서도 접수에 실을 마지막 고객 말이 남는다 (DS 20-3)', opts, async () => {
+  const m = await loadModule();
+  assert.equal(typeof m.lastUserText, 'function', 'lastUserText 를 내보내야 한다');
+  const st = fakeStorage();
+  await withStorage(st, () => {
+    const msgs = [
+      { key: 1, role: 'bot', text: '안녕하세요', at: 1000 },
+      { key: 2, role: 'user', text: '어제 주문한 물건이 아직 안 왔어요', at: 2000 },
+      { key: 3, role: 'bot', text: '배송 조회를 도와드릴게요.', at: 3000, escalate: true },
+    ];
+    m.saveThread('default', 'web_abc', msgs, 4000);
+    const back = m.loadThread('default', 5000);
+    assert.ok(back, '되살리지 못했다');
+    assert.equal(
+      m.lastUserText(back.msgs),
+      '어제 주문한 물건이 아직 안 왔어요',
+      '되살린 대화에서 접수에 실을 말이 비면 운영자에게 「남긴 메시지 없음」으로 간다',
+    );
+  });
+  // 봇 말만 있는 대화(인사말뿐)에는 실을 말이 없다 — 없는 것을 지어내지 않는다.
+  assert.equal(m.lastUserText([{ key: 1, role: 'bot', text: '안녕하세요', at: 1 }]), '');
+  assert.equal(m.lastUserText([]), '');
+  // 여러 번 주고받았으면 **마지막** 고객 말이다.
+  assert.equal(m.lastUserText([
+    { key: 1, role: 'user', text: '첫 질문', at: 1 },
+    { key: 2, role: 'bot', text: '답', at: 2 },
+    { key: 3, role: 'user', text: '두 번째 질문', at: 3 },
+    { key: 4, role: 'bot', text: '답', at: 4 },
+  ]), '두 번째 질문');
+});
+
 test('서버 렌더에는 이어가기 표시가 없다 (DS 7-1)', opts, async () => {
   const html = await render({ tenant: TENANT });
   assert.equal(html.includes('이전 대화를 이어서 보고 있습니다'), false, '저장소를 읽기 전에 이어간다고 단정한다');

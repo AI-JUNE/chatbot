@@ -1010,6 +1010,36 @@ function tabFromHash(hash: string): TabKey {
 /** 정산 기준월 — 주소에서 받은 값은 믿지 않는다(`?m=2026-13` 이면 지금 달로 되돌린다). */
 const MONTH_RE = /^\d{4}-(?:0[1-9]|1[0-2])$/;
 
+/** 정산 조회 조건(기준월·파트너) — 「지금 화면이 원하는 것」과 「응답이 답한 것」을 대조하는 단위. */
+interface SettleCond { month: string; partnerId: string }
+function sameSettleCond(a: SettleCond, b: SettleCond): boolean {
+  return a.month === b.month && a.partnerId === b.partnerId;
+}
+
+/**
+ * **마지막으로 고른 조건까지 따라가는 조회.**
+ *
+ * 조회가 도는 동안 조건이 바뀌면 이미 돌고 있던 응답은 화면에 싣지 않고(`stillWanted()` 가
+ * 거짓), 새 조건으로 한 번 더 조회한다. 종전에는 중복 실행 방지(`useRunOnce`)가 두 번째
+ * 호출을 **조용히 버렸다** — 기준월만 새 달로 바뀌고 표·합계·KPI 는 앞선 달 그대로 남아,
+ * 화면이 「7월」이라 말하면서 8월 수수료 합계를 보여줬다(운영자가 그대로 옮겨 적는 금액이다).
+ * 아무 표시도 없으니 실패한 줄도 몰랐다(QUALITY_BAR §1·§3).
+ *
+ * `step` 이 `false` 를 돌려주면(세션 만료 등) 더 따라가지 않고 멈춘다.
+ */
+async function followLatest<T>(
+  want: { current: T },
+  same: (a: T, b: T) => boolean,
+  step: (cond: T, stillWanted: () => boolean) => Promise<boolean>,
+): Promise<void> {
+  for (;;) {
+    const cond = want.current;
+    const go = await step(cond, () => same(want.current, cond));
+    if (!go) return;
+    if (same(want.current, cond)) return;
+  }
+}
+
 /** 사이드바 라벨의 단일 출처 — 헤더 제목(h1)·본문 이름(aria-label)·브라우저 제목이 같은 값을 본다. */
 const TAB_LABEL = Object.fromEntries(TAB_GROUPS.flatMap((g) => g.tabs)) as Record<TabKey, string>;
 
@@ -1954,34 +1984,58 @@ export default function AdminPage() {
     }
   }, [tab, settleMonth, settlePartner]);
 
+  // 지금 화면이 **보고 싶어 하는** 조건. 계산이 도는 중에 기준월·파트너를 다시 골라도 여기만 바뀐다 —
+  // 돌고 있는 조회가 끝나면 이 조건까지 따라간다(followLatest). 종전에는 두 번째 호출이 버려졌다.
+  const settleWant = useRef<SettleCond>({ month: settleMonth, partnerId: settlePartner });
+
   const loadSettlement = useCallback(async (month: string, partnerId: string) => {
+    settleWant.current = { month, partnerId };
+    // 이미 도는 계산이 있으면 그 계산이 위 조건을 이어받는다(중복 요청은 그대로 막는다).
     if (!claim('settlement')) return;
     setSettleBusy(true);
-    setSettleErr('');
     try {
-      const qs = new URLSearchParams({ month });
-      if (partnerId) qs.set('partnerId', partnerId);
-      const res = await fetch(`/api/admin/settlement?${qs.toString()}`, { headers: authHeaders(), cache: 'no-store' });
-      if (on401(res)) return;
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        setSettleReport(null);
-        setSettleErr(data?.message || data?.error || '정산 리포트를 불러오지 못했습니다.');
-        return;
-      }
-      setSettleReport(data.report as SettlementReportView);
-    } catch {
-      setSettleReport(null);
-      setSettleErr('네트워크 오류로 정산 리포트를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      await followLatest(settleWant, sameSettleCond, async (cond, stillWanted) => {
+        setSettleErr('');
+        try {
+          const qs = new URLSearchParams({ month: cond.month });
+          if (cond.partnerId) qs.set('partnerId', cond.partnerId);
+          const res = await fetch(`/api/admin/settlement?${qs.toString()}`, { headers: authHeaders(), cache: 'no-store' });
+          if (on401(res)) return false;
+          const data = await res.json();
+          // 그새 조건이 바뀌었다 — 이 결과는 지금 화면의 답이 아니므로 싣지 않는다.
+          if (!stillWanted()) return true;
+          if (!res.ok || !data.ok) {
+            setSettleReport(null);
+            setSettleErr(data?.message || data?.error || '정산 리포트를 불러오지 못했습니다.');
+            return true;
+          }
+          setSettleReport(data.report as SettlementReportView);
+        } catch {
+          if (!stillWanted()) return true;
+          setSettleReport(null);
+          setSettleErr('네트워크 오류로 정산 리포트를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+        }
+        return true;
+      });
     } finally {
       setSettleBusy(false);
       release('settlement');
     }
   }, [claim, release]);
 
+  /**
+   * 화면에 그릴 리포트 — **고른 조건이 답한 것**일 때만이다.
+   * 금액은 운영자가 화면에서 그대로 옮겨 적는 숫자라, 조건과 결과가 어긋나면 그리지 않는다.
+   * 위 `followLatest` 가 어긋나는 경로를 막지만, 그리기 직전에 한 번 더 대조한다(KPI·표·CSV 가
+   * 같은 값을 본다). 기준월 칸을 비운 동안에는 서버가 이번 달로 채워 돌려주므로 대조 대상이 아니다.
+   */
+  const settleView = settleReport && (!MONTH_RE.test(settleMonth) || settleReport.month === settleMonth)
+    ? settleReport
+    : null;
+
   const downloadSettlementCsv = () => {
     // 잠긴 버튼도 눌러 볼 수 있다(초점을 잃지 않으려고 `disabled` 를 쓰지 않는다) — 이유를 밝힌다.
-    if (!settleReport || settleReport.rows.length === 0) {
+    if (!settleView || settleView.rows.length === 0) {
       flash('내려받을 산출 근거가 없습니다. 기준월을 바꾸거나 「다시 계산」을 눌러 주세요.');
       return;
     }
@@ -2112,11 +2166,12 @@ export default function AdminPage() {
     // 정산 탭은 파트너 목록(필터 선택지)이 필요하므로 함께 채운다.
     if (tab === 'settle') {
       if (!partnerLoaded && !partnerBusy) loadPartners('');
-      if (!settleReport && !settleBusy && !settleErr) loadSettlement(settleMonth, settlePartner);
+      // 그릴 수 있는 리포트가 없으면(없거나·고른 조건과 어긋나면) 지금 조건으로 계산한다.
+      if (!settleView && !settleBusy && !settleErr) loadSettlement(settleMonth, settlePartner);
     }
     // 테넌트 지식도 탭을 열었을 때만 불러온다.
     if (tab === 'tenant' && !tenantView && !tenantBusy && !tenantErr) loadTenant(tenantId);
-  }, [tab, partnerLoaded, partnerBusy, loadPartners, partnerFilter, settleReport, settleBusy, settleErr, loadSettlement, settleMonth, settlePartner, tenantView, tenantBusy, tenantErr, loadTenant, tenantId]);
+  }, [tab, partnerLoaded, partnerBusy, loadPartners, partnerFilter, settleView, settleBusy, settleErr, loadSettlement, settleMonth, settlePartner, tenantView, tenantBusy, tenantErr, loadTenant, tenantId]);
 
   const flash = (msg: string) => {
     setNotice(msg);
@@ -3961,7 +4016,7 @@ export default function AdminPage() {
       })()}
 
       {tab === 'settle' && (() => {
-        const r = settleReport;
+        const r = settleView;
         const won = (v: number) => `${v.toLocaleString('ko-KR')}원`;
         const feeTotal = !r ? MEASURING : r.rows.length === 0 ? '대상 없음' : r.totals.billable === 0 ? '산출 불가' : won(r.totals.feeAmountKrw);
         const feeEmpty = !r || r.rows.length === 0 || r.totals.billable === 0;

@@ -1903,3 +1903,54 @@ test('기본 위젯(테넌트 없음)도 일반 지식베이스에서 빠른 답
   // 테넌트가 있으면 그 테넌트의 starters 만 본다 — 있을 때도 fallbackStarters 로 새면 격리가 깨진다.
   assert.match(widget, /const starters = \(tenant \? \(tenant\.starters \?\? \[\]\) : \(fallbackStarters \?\? \[\]\)\)/, 'tenant 유무에 따라 출처가 갈라지지 않는다(격리 깨짐 위험)');
 });
+
+/** 소스에서 함수 하나의 본문만 떼어낸다(들여쓴 `  }` 로 끝나는 컴포넌트 안 함수 기준). */
+function fnBody(src, decl) {
+  const i = src.indexOf(decl);
+  assert.ok(i >= 0, `${decl} 선언을 찾지 못했다`);
+  const end = src.indexOf('\n  }', i);
+  assert.ok(end > i, `${decl} 의 끝을 찾지 못했다`);
+  return src.slice(i, end);
+}
+
+/**
+ * DS 20-1 — 「닫고 처음으로」로 지운 대화의 답이 새 대화에 끼어든다.
+ *
+ * 답을 기다리는 동안 닫기를 누르면 `msgs`·`handoff` 는 초기화되지만 **보낸 요청은 그대로 돌아온다**.
+ * 종전에는 그 응답이 아무 대조 없이 `pushBot`/`setHandoff` 로 들어가, 사용자가 방금 지운 질문의
+ * 답이 새 대화의 인사말 아래 붙었다(§1 「중복 클릭·상태가 깨지지 않는다」). `busy` 도 그 요청이
+ * 끝날 때까지 참이라 **묻지도 않았는데 타이핑 점 3개**가 돌았다.
+ */
+test('지운 대화의 응답이 새 대화에 끼어들지 않는다 (DS 20-1)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  assert.match(s, /const genRef = useRef\(0\)/, '대화 세대를 세는 ref 가 없다');
+
+  const close = fnBody(s, 'const closePanel = useCallback(');
+  assert.match(close, /genRef\.current \+= 1/, '「닫고 처음으로」가 대화 세대를 올리지 않는다');
+  assert.match(close, /setBusy\(false\)/, '지운 대화의 기다림 표시를 내리지 않는다(묻지 않았는데 점이 뛴다)');
+
+  const send = fnBody(s, 'async function sendText(');
+  assert.match(send, /const gen = genRef\.current/, 'sendText 가 요청 시점의 세대를 잡지 않는다');
+  // 응답 경로·네트워크 예외 경로·기다림 표시 해제 세 곳 모두 대조해야 한다.
+  assert.ok((send.match(/gen !== genRef\.current/g) || []).length >= 2, '응답·예외 두 경로에서 세대를 대조해야 한다');
+  assert.match(send, /if \(gen === genRef\.current\) setBusy\(false\)/, '새 대화의 기다림 표시를 꺼 버리면 중복 전송까지 열린다');
+
+  const handoff = fnBody(s, 'async function submitHandoff(');
+  assert.match(handoff, /const gen = genRef\.current/, 'submitHandoff 가 세대를 잡지 않는다');
+  assert.ok((handoff.match(/gen !== genRef\.current/g) || []).length >= 2, '접수 응답·예외 두 경로에서 세대를 대조해야 한다');
+});
+
+/**
+ * DS 20-3 — 되살린 대화에서 접수하면 「남긴 메시지 없음」이 붙는다.
+ *
+ * 접수에 싣는 마지막 고객 말을 전송할 때 채우는 ref 하나로 들고 있었다. 임베드 위젯은 호스트가
+ * 페이지를 옮길 때마다 새로 뜨므로(DS 7-1 이 그래서 대화를 되살린다) 그 ref 는 비어 있고,
+ * 운영자 화면에는 고객이 분명히 물어봤는데 「남긴 메시지 없음」이 떴다.
+ */
+test('접수에 싣는 마지막 고객 말은 화면의 대화에서 온다 (DS 20-3)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  assert.match(s, /export function lastUserText\(list: Msg\[\]\): string/, '대화에서 마지막 고객 말을 찾는 함수가 없다');
+  assert.match(s, /message: lastUserText\(msgs\)/, '접수 요청이 화면의 대화에서 마지막 말을 싣지 않는다');
+  // 되살린 대화에서 비는 별도 ref 를 다시 들이지 않는다(대화와 접수가 같은 출처를 봐야 한다).
+  assert.equal(/lastUserRef/.test(s), false, '마지막 말을 별도 ref 로 들고 있으면 되살린 대화에서 빈 값이 된다');
+});

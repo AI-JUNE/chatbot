@@ -787,3 +787,85 @@ test('연락처 파기가 화면·확인·기록에 드러난다 (DS 16-3)', () 
   const privacy = readFileSync(new URL('../src/app/privacy/page.tsx', import.meta.url), 'utf8');
   assert.match(privacy, /연락처는 상담[\s\S]{0,20}완료 후 지체 없이 파기합니다/, '방침의 파기 약속 문장을 찾지 못했다');
 });
+
+/* ══════════ 디자인 스프린트 — 17차 재감사 (DS 20-2) ══════════ */
+
+/**
+ * 컴파일된 JS 에서 최상위 함수 몇 개를 떼어내 실제로 실행한다(DS 14-3 의 방식과 같다).
+ * 「마지막 조건까지 따라간다」는 소스 검사로는 확인할 수 없다 — 돌려 봐야 안다.
+ */
+async function loadFollowLatest() {
+  await loadConsole();
+  const parts = ['followLatest', 'sameSettleCond'].map((n) => {
+    // `async` 를 빼고 떼어내면 본문의 await 가 문법 오류가 된다 — 선언부를 함께 잡는다.
+    const m = new RegExp(`(?:async )?function ${n}\\(`).exec(cachedJs);
+    assert.ok(m, `${n} 선언을 찾지 못했다`);
+    const end = cachedJs.indexOf('\n}', m.index); // 최상위 함수라 닫는 중괄호는 1열에 있다
+    assert.ok(end > m.index, `${n} 의 끝을 찾지 못했다`);
+    return cachedJs.slice(m.index, end + 2);
+  });
+  return new Function(`${parts.join('\n')}\nreturn { followLatest, sameSettleCond };`)();
+}
+
+/**
+ * DS 20-2 — 계산 중에 기준월을 다시 고르면 두 번째 요청이 **조용히** 버려졌다.
+ *
+ * `useRunOnce` 의 claim 이 거짓이면 종전 `loadSettlement` 는 그대로 돌아갔다(로딩도, 오류도 없음).
+ * 그래서 조건만 새 달로 바뀌고 KPI·파트너별 합계·수수료 합계는 앞선 달 그대로 남았다 —
+ * 운영자가 화면에서 그대로 옮겨 적는 금액이다(QUALITY_BAR §1·§3).
+ */
+test('정산 조회가 마지막으로 고른 조건까지 따라간다 (DS 20-2)', opts, async () => {
+  const { followLatest, sameSettleCond } = await loadFollowLatest();
+
+  assert.equal(sameSettleCond({ month: '2026-08', partnerId: '' }, { month: '2026-08', partnerId: '' }), true);
+  assert.equal(sameSettleCond({ month: '2026-08', partnerId: '' }, { month: '2026-07', partnerId: '' }), false);
+  assert.equal(sameSettleCond({ month: '2026-08', partnerId: 'p1' }, { month: '2026-08', partnerId: '' }), false, '파트너 조건도 함께 봐야 한다');
+
+  // ① 조회가 도는 중에 기준월이 두 번 바뀐다 — 화면에 남는 것은 마지막 조건의 결과여야 한다.
+  const want = { current: { month: '2026-08', partnerId: '' } };
+  const queried = [];
+  let applied = null;
+  const nextCond = ['2026-07', '2026-06'];
+  await followLatest(want, sameSettleCond, async (cond, stillWanted) => {
+    queried.push(cond.month);
+    // 응답을 기다리는 사이에 사용자가 기준월을 또 바꿨다.
+    const n = nextCond.shift();
+    if (n) want.current = { month: n, partnerId: '' };
+    await Promise.resolve();
+    if (!stillWanted()) return true; // 지금 화면의 답이 아니다 — 싣지 않는다
+    applied = cond.month;
+    return true;
+  });
+  assert.deepEqual(queried, ['2026-08', '2026-07', '2026-06'], '바뀐 조건으로 다시 조회하지 않는다');
+  assert.equal(applied, '2026-06', '화면에 앞선 달의 금액이 남는다');
+
+  // ② 조건이 그대로면 한 번만 조회한다(같은 계산을 되풀이하지 않는다).
+  const once = { current: { month: '2026-08', partnerId: 'p1' } };
+  let calls = 0;
+  await followLatest(once, sameSettleCond, async () => { calls += 1; return true; });
+  assert.equal(calls, 1, '조건이 그대로인데 다시 조회한다');
+
+  // ③ 세션이 만료되면(step 이 false) 더 따라가지 않는다 — 잠금 화면 뒤에서 계속 물어보면 안 된다.
+  const expired = { current: { month: '2026-08', partnerId: '' } };
+  let tries = 0;
+  await followLatest(expired, sameSettleCond, async () => {
+    tries += 1;
+    expired.current = { month: '2026-07', partnerId: '' };
+    return false;
+  });
+  assert.equal(tries, 1, '세션이 끊겼는데 조회를 이어간다');
+});
+
+test('정산 화면은 고른 조건이 답한 리포트만 그린다 (DS 20-2)', () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // 조회는 「마지막으로 고른 조건」 한 곳(settleWant)만 보고 followLatest 를 거친다.
+  assert.match(src, /const settleWant = useRef<SettleCond>/, '원하는 조건을 담는 ref 가 없다');
+  const load = src.slice(src.indexOf('const loadSettlement ='), src.indexOf('const settleView'));
+  assert.match(load, /settleWant\.current = \{ month, partnerId \}/, '요청 조건을 남기지 않으면 따라갈 수 없다');
+  assert.match(load, /await followLatest\(settleWant, sameSettleCond/, '조건 변경을 따라가지 않는다');
+  assert.match(load, /if \(!stillWanted\(\)\) return true/, '지난 조건의 응답을 화면에 싣는다');
+  // 그리기 직전에 한 번 더 대조한다 — KPI·표·CSV 가 같은 값(settleView)을 본다.
+  assert.match(src, /const settleView = settleReport && \(!MONTH_RE\.test\(settleMonth\)/, '조건과 결과를 대조하지 않는다');
+  assert.match(src, /if \(!settleView \|\| settleView\.rows\.length === 0\)/, 'CSV 내려받기가 화면과 다른 리포트를 본다');
+  assert.match(src, /\{tab === 'settle' && \(\(\) => \{\s*\n\s*const r = settleView;/, '정산 화면이 대조를 거치지 않은 리포트를 그린다');
+});
