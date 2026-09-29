@@ -20,12 +20,26 @@ const opts = CAN ? {} : { skip: 'typescript/react-dom 미설치 — npm ci 후 �
 let cached = null;
 let cachedMod = null;
 
+/**
+ * 임시 폴더에 node_modules 를 잇는다.
+ * Windows 의 디렉터리 심볼릭 링크는 관리자·개발자 모드가 아니면 EPERM 이라 정션을 쓴다
+ * (정션은 권한이 필요 없다). 그래도 안 되면 심볼릭 링크로 되돌린다.
+ */
+function linkNodeModules(dir) {
+  const target = path.join(REPO, 'node_modules');
+  const link = path.join(dir, 'node_modules');
+  if (process.platform === 'win32') {
+    try { symlinkSync(target, link, 'junction'); return; } catch { /* 아래 심볼릭 링크로 */ }
+  }
+  symlinkSync(target, link, 'dir');
+}
+
 /** ChatWidget.tsx 를 컴파일해 import 한다. */
 async function loadWidget() {
   if (cached) return cached;
   const dir = mkdtempSync(path.join(tmpdir(), 'gowon-widget-'));
   cpSync(path.join(REPO, 'src', 'components', 'ChatWidget.tsx'), path.join(dir, 'ChatWidget.tsx'));
-  symlinkSync(path.join(REPO, 'node_modules'), path.join(dir, 'node_modules'), 'dir');
+  linkNodeModules(dir);
   writeFileSync(
     path.join(dir, 'tsconfig.json'),
     JSON.stringify({
