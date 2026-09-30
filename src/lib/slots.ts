@@ -14,6 +14,7 @@
 // [승인 필요] 관리 콘솔에서 폼을 편집·추가하는 기능, 수집 결과의 외부 업무시스템 전송.
 import { maskPii } from '@/lib/handoff';
 import { compact, keywordHit, prepare } from '@/lib/normalize';
+import { compareYmd, kstYmd, normalizeYmd, ymdToString } from '@/lib/kst';
 
 /** 슬롯 값의 종류. 종류마다 검증·정규화 규칙이 다르다. */
 export type SlotKind = 'text' | 'contact' | 'datetime' | 'choice';
@@ -200,14 +201,13 @@ function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-function fmtDate(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
 /**
  * 한국어 날짜·시간 표현을 파싱한다.
  * 지원: 오늘/내일/모레/글피 · YYYY-MM-DD · M/D · M월 D일 · HH시(분) · 오전·오후 · HH:MM
  * 날짜와 시간 중 하나도 못 찾으면 null.
+ *
+ * "오늘"·"내일"·연도 없는 "9/30" 은 **한국 시간 달력**으로 푼다(@/lib/kst) — 서버가 UTC 로 돌면
+ * 한국 자정~오전 9시에 말한 "오늘"이 어제가 되어 지난 날짜로 예약이 접수된다.
  */
 export function parseDateTime(input: string, now: Date = new Date()): { value: string } | null {
   const t = (input || '').trim();
@@ -226,16 +226,15 @@ export function parseDateTime(input: string, now: Date = new Date()): { value: s
     const d = Number(md[2]);
     if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
       // 연도 미기재 — 이미 지난 날짜면 내년으로 본다(예약은 미래가 기본).
-      const y = now.getFullYear();
-      const cand = new Date(y, m - 1, d);
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      date = fmtDate(cand.getTime() < today.getTime() ? new Date(y + 1, m - 1, d) : cand);
+      const today = kstYmd(now);
+      const cand = normalizeYmd(today.y, m, d);
+      date = ymdToString(compareYmd(cand, today) < 0 ? normalizeYmd(today.y + 1, m, d) : cand);
     }
   } else {
     for (const [re, offset] of RELATIVE_DAYS) {
       if (re.test(t)) {
-        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
-        date = fmtDate(d);
+        const today = kstYmd(now);
+        date = ymdToString(normalizeYmd(today.y, today.m, today.d + offset));
         break;
       }
     }

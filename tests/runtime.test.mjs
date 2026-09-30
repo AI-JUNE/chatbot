@@ -7,7 +7,10 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { importLib, tscPath } from './_compile.mjs';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { compileLibs, importLib, tscPath } from './_compile.mjs';
 
 const CAN_COMPILE = tscPath() !== null;
 const opts = CAN_COMPILE ? {} : { skip: 'typescript 미설치 — npm ci 후 실행' };
@@ -576,7 +579,7 @@ test('입력 상한 — 오래된 턴부터 버리고 마지막 질문은 반드
 // importLib의 캐시 키는 [이름, ...deps] 이므로, 자기 자신을 뺀 같은 집합을 넘겨 키를 일치시킨다.
 const ENGINE = [
   'chat', 'adminStore', 'knowledge', 'rules', 'normalize', 'session',
-  'escalation', 'handoff', 'llm', 'monitoring', 'storage', 'logger', 'convlog', 'slots',
+  'escalation', 'handoff', 'llm', 'monitoring', 'storage', 'logger', 'convlog', 'slots', 'kst',
 ];
 const eng = (name) => importLib(name, ENGINE.filter((n) => n !== name));
 
@@ -778,9 +781,104 @@ test('토큰 대입이 반복되면 잠근다(성공하면 즉시 해제)', opts
   aa.resetLockouts();
 });
 
+/* ══════════ 한국 시간 달력 (DS 21-x) ══════════ */
+
+// 기준 시각은 **오프셋을 명시한 절대 시각**으로만 쓴다. `new Date(y, m, d, h)` 는 테스트 기계의
+// 시간대로 조립된 뒤 같은 시간대로 읽히므로, 시간대 결함이 있어도 언제나 통과한다
+// (종전 FIXED_NOW 가 그래서 UTC 서버의 하루 어긋남을 한 번도 잡지 못했다).
+const KST_EARLY = new Date('2026-10-01T02:00:00+09:00'); // = 2026-09-30T17:00Z — UTC 달력으로는 9월 30일
+const KST_LATE = new Date('2026-09-30T23:00:00+09:00'); // = 2026-09-30T14:00Z — 두 달력이 같은 날
+
+test('한국 자정 직후의 「오늘」은 한국 날짜다 (DS 21-1)', opts, async () => {
+  const k = await eng('kst');
+  assert.equal(k.kstDate(KST_EARLY), '2026-10-01');
+  assert.equal(k.kstMonth(KST_EARLY), '2026-10');
+  assert.equal(k.kstStamp(KST_EARLY), '20261001');
+  // 고치기 전 값 — UTC 달력으로 읽으면 하루 전이다(이 간극이 결함의 크기다).
+  assert.equal(KST_EARLY.toISOString().slice(0, 10), '2026-09-30');
+  assert.equal(k.kstDate(KST_LATE), '2026-09-30');
+  assert.equal(k.kstStamp(KST_LATE), '20260930');
+});
+
+test('오프셋 계산이 시간대 데이터베이스(Intl)와 같은 날짜를 낸다 (DS 21-1)', opts, async () => {
+  const k = await eng('kst');
+  // 독립된 두 번째 구현(ICU 시간대 데이터)과 대조한다 — 서로 어긋나면 한쪽이 틀렸다.
+  // 2026-03-08 은 미국 일광절약시간 시작일이다(한국은 영향 없음을 함께 확인).
+  for (const iso of ['2026-01-01T00:30:00Z', '2026-03-08T17:30:00Z', '2026-06-15T15:00:00Z', '2026-09-30T17:00:00Z', '2026-12-31T23:59:00Z']) {
+    const d = new Date(iso);
+    assert.equal(k.kstDate(d), d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' }), iso);
+  }
+});
+
+/**
+ * ★ 이 테스트만 **다른 시간대의 프로세스에서** 돌린다.
+ *
+ * 이 기계는 Asia/Seoul 이라, 날짜를 로컬 게터로 읽는 옛 코드도 여기서는 정답을 낸다 —
+ * 즉 같은 프로세스 안에서는 어떤 입력을 주어도 결함을 재현할 수 없다(종전 테스트가 통과한 이유).
+ * 배포 환경(Vercel Node = UTC)과 UTC 보다 뒤진 시간대를 자식 프로세스로 만들어 실제로 돌린다.
+ */
+// 자식 프로세스가 쓰는 컴파일 결과. 정산(settlement)까지 포함해야 기준월 기본값을 같이 돌릴 수 있다.
+const TZ_LIBS = ['kst', 'slots', 'normalize', 'handoff', 'settlement', 'partners', 'storage', 'logger', 'monitoring'];
+
+function runInTz(tz) {
+  const dir = compileLibs(TZ_LIBS);
+  const url = (n) => JSON.stringify(pathToFileURL(path.join(dir, `${n}.mjs`)).href);
+  const code = [
+    `import assert from 'node:assert/strict';`,
+    `import { parseDateTime } from ${url('slots')};`,
+    `import { kstDate, kstMonth, kstStamp } from ${url('kst')};`,
+    `import { currentMonth } from ${url('settlement')};`,
+    `assert.equal(Intl.DateTimeFormat().resolvedOptions().timeZone, ${JSON.stringify(tz)}, '자식 프로세스에 시간대가 걸리지 않았다');`,
+    // 고객이 한국 시간 10월 1일 새벽 2시에 "오늘"이라고 말한다(= UTC 9월 30일 17시).
+    `const early = new Date('2026-10-01T02:00:00+09:00');`,
+    // 재현 전제: 이 시간대의 로컬 달력은 아직 9월 30일이다(고치기 전 코드가 읽던 값).
+    `assert.equal(early.getDate(), 30, '재현 전제가 깨졌다 — 이 시간대에서는 로컬 달력이 9월 30일이어야 한다');`,
+    `assert.equal(parseDateTime('오늘 오후 2시', early).value, '2026-10-01 14:00');`,
+    `assert.equal(parseDateTime('내일', early).value, '2026-10-02 (시간 미정)');`,
+    `assert.equal(parseDateTime('9월 30일 14시', early).value, '2027-09-30 14:00');`,
+    `assert.equal(kstDate(early), '2026-10-01');`,
+    `assert.equal(kstStamp(early), '20261001', '내려받는 파일 이름의 날짜');`,
+    `assert.equal(kstMonth(early), '2026-10');`,
+    `assert.equal(currentMonth(early), '2026-10', '정산 기준월 기본값');`,
+  ].join('\n');
+  execFileSync(process.execPath, ['--input-type=module', '-e', code], {
+    env: { ...process.env, TZ: tz },
+    stdio: 'pipe',
+    encoding: 'utf8',
+  });
+}
+
+test('서버 시간대가 UTC 여도 「오늘」은 한국 날짜다 (DS 21-1·21-2·21-3)', opts, () => {
+  runInTz('UTC'); // 배포 환경(Vercel Node 런타임)
+  runInTz('America/New_York'); // UTC 보다 더 뒤진 시간대 — 반대 방향으로도 어긋나지 않는지
+});
+
+test('달력 계산이 달·해를 넘긴다 (DS 21-1)', opts, async () => {
+  const k = await eng('kst');
+  assert.deepEqual(k.normalizeYmd(2026, 9, 31), { y: 2026, m: 10, d: 1 }, '없는 날짜는 다음 달로 넘긴다');
+  assert.deepEqual(k.normalizeYmd(2026, 12, 32), { y: 2027, m: 1, d: 1 }, '해를 넘긴다');
+  assert.deepEqual(k.normalizeYmd(2028, 2, 29), { y: 2028, m: 2, d: 29 }, '윤년 2월 29일은 그대로 둔다');
+  assert.ok(k.compareYmd({ y: 2026, m: 9, d: 30 }, { y: 2026, m: 10, d: 1 }) < 0);
+  assert.equal(k.compareYmd({ y: 2026, m: 9, d: 30 }, { y: 2026, m: 9, d: 30 }), 0);
+  assert.ok(k.compareYmd({ y: 2027, m: 1, d: 1 }, { y: 2026, m: 12, d: 31 }) > 0);
+});
+
 /* ══════════ 멀티턴 슬롯 수집 — 순수 엔진 ══════════ */
 
-const FIXED_NOW = new Date(2026, 8, 3, 10, 0, 0); // 2026-09-03(목) 10:00 — 상대 날짜 계산 기준 고정
+// 2026-09-03(목) 10:00 KST — 상대 날짜 계산 기준 고정(절대 시각으로 적어 기계 시간대와 무관하게).
+const FIXED_NOW = new Date('2026-09-03T10:00:00+09:00');
+
+test('한국 자정~오전 9시에 말한 「오늘」이 어제로 접수되지 않는다 (DS 21-1)', opts, async () => {
+  const { parseDateTime } = await eng('slots');
+  // 고객은 10월 1일 새벽 2시에 "오늘"이라고 말했다. 서버(UTC)는 9월 30일이다.
+  assert.equal(parseDateTime('오늘 오후 2시', KST_EARLY).value, '2026-10-01 14:00');
+  assert.equal(parseDateTime('내일 오후 2시', KST_EARLY).value, '2026-10-02 14:00');
+  assert.equal(parseDateTime('모레', KST_EARLY).value, '2026-10-03 (시간 미정)');
+  // 연도 미기재 — 한국에서는 이미 지난 날짜(어제)이므로 내년으로 본다.
+  assert.equal(parseDateTime('9월 30일 14시', KST_EARLY).value, '2027-09-30 14:00');
+  // 경계를 넘긴 뒤에는 종전과 같은 값이다(두 달력이 같은 날인 시간대).
+  assert.equal(parseDateTime('오늘 09:30', KST_LATE).value, '2026-09-30 09:30');
+});
 
 test('날짜·시간 표현을 파싱한다(상대·절대·오전오후)', opts, async () => {
   const { parseDateTime } = await eng('slots');
@@ -1244,6 +1342,15 @@ async function settlementLib() {
   return { P, S };
 }
 
+test('기준월 기본값은 한국 시간 기준 이번 달이다 (DS 21-2)', opts, async () => {
+  const { S } = await settlementLib();
+  // 10월 1일 새벽 2시(KST) = 9월 30일 17시(UTC). 종전에는 아직 9월로 계산했다 —
+  // 조건 툴바는 「10월」인데 합계는 9월치인 화면이 되는 자리다.
+  assert.equal(S.currentMonth(new Date('2026-10-01T02:00:00+09:00')), '2026-10');
+  assert.equal(S.currentMonth(new Date('2026-09-30T23:00:00+09:00')), '2026-09');
+  assert.equal(S.currentMonth(new Date('2027-01-01T08:59:00+09:00')), '2027-01', '해가 바뀌는 경계');
+});
+
 test('정산 리포트가 월 이용료 × 수수료율로 수수료를 산출한다', opts, async () => {
   const { P, S } = await settlementLib();
   const ptr = P.upsertPartner({ name: '제이투모로우원', feeRateBp: 1500 });
@@ -1440,6 +1547,9 @@ test('일자별·오늘 집계는 기록된 대화에서만 만들어진다', op
   assert.equal(s.daily.slice(0, 6).every((d) => d.turns === 0), true, '없는 날에 값을 만들면 안 된다');
   // 날짜 형식(YYYY-MM-DD)이 유지돼야 화면 축 라벨이 깨지지 않는다
   for (const d of s.daily) assert.match(d.date, /^\d{4}-\d{2}-\d{2}$/);
+  // 「오늘」의 뜻이 한 곳에서만 온다 — 축의 마지막 칸은 한국 시간 기준 오늘이다(DS 21-1).
+  // 대조는 독립 구현(ICU 시간대 데이터)으로 한다.
+  assert.equal(last.date, new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' }), '대시보드의 「오늘」이 한국 날짜가 아니다');
 
   resetLogs();
 });

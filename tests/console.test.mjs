@@ -869,3 +869,38 @@ test('정산 화면은 고른 조건이 답한 리포트만 그린다 (DS 20-2)'
   assert.match(src, /if \(!settleView \|\| settleView\.rows\.length === 0\)/, 'CSV 내려받기가 화면과 다른 리포트를 본다');
   assert.match(src, /\{tab === 'settle' && \(\(\) => \{\s*\n\s*const r = settleView;/, '정산 화면이 대조를 거치지 않은 리포트를 그린다');
 });
+
+/* ══════════ 디자인 스프린트 — 18차 재감사 (DS 21-2) ══════════ */
+
+/**
+ * DS 21-2 — 기준월 기본값이 UTC 달이었다.
+ *
+ * `new Date().toISOString().slice(0, 7)` 은 한국 자정~오전 9시에 아직 지난달이다.
+ * 정산은 월초 업무라 그 아홉 시간이 정확히 운영자가 이 탭을 여는 시간대다 —
+ * 매월 1일 아침, 고르지도 않은 달의 수수료 합계가 「이번 달」인 것처럼 떴다.
+ * 콘솔은 lib 을 불러오지 않으므로(클라이언트 번들) 계산식이 두 곳에 있다 — 여기서 맞춰 고정한다.
+ */
+test('콘솔의 기준월 기본값이 한국 시간 기준 이번 달이다 (DS 21-2)', opts, async () => {
+  await loadConsole();
+  const m = /function kstMonthNow\(/.exec(cachedJs);
+  assert.ok(m, 'kstMonthNow 선언을 찾지 못했다');
+  const end = cachedJs.indexOf('\n}', m.index);
+  assert.ok(end > m.index, 'kstMonthNow 의 끝을 찾지 못했다');
+  const { kstMonthNow } = new Function(`${cachedJs.slice(m.index, end + 2)}\nreturn { kstMonthNow };`)();
+
+  // 대조는 독립 구현(ICU 시간대 데이터)으로 한다 — 같은 식을 두 번 적어 맞다고 하지 않는다.
+  const oracle = (iso) => new Date(iso).toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' }).slice(0, 7);
+  for (const iso of ['2026-10-01T02:00:00+09:00', '2026-09-30T23:00:00+09:00', '2027-01-01T08:59:00+09:00', '2026-06-15T15:00:00Z']) {
+    assert.equal(kstMonthNow(new Date(iso)), oracle(iso), iso);
+  }
+  // 고치기 전 값과 실제로 달라지는 시각인지 확인한다(이 간극이 결함의 크기다).
+  assert.equal(new Date('2026-10-01T02:00:00+09:00').toISOString().slice(0, 7), '2026-09');
+  assert.equal(kstMonthNow(new Date('2026-10-01T02:00:00+09:00')), '2026-10');
+
+  // 서버 기본값(src/lib/kst.ts)과 같은 오프셋을 쓰는지 — 갈라지면 화면과 계산이 다른 달을 본다.
+  const lib = readFileSync(new URL('../src/lib/kst.ts', import.meta.url), 'utf8');
+  assert.match(lib, /9 \* 60 \* 60 \* 1000/, 'lib 의 KST 오프셋 선언이 바뀌었다');
+  const page = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /9 \* 60 \* 60 \* 1000/, '화면의 KST 오프셋 선언이 바뀌었다');
+  assert.match(page, /src\/lib\/kst\.ts/, '옮겨 적은 계산식의 원본을 밝히지 않았다');
+});

@@ -172,6 +172,18 @@ function timeLabel(iso: string): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+/**
+ * 한국 시간 기준 이번 달 'YYYY-MM' — 정산 기준월의 기본값.
+ * 원본은 `src/lib/kst.ts`(kstMonth)이며, 콘솔은 lib 을 불러오지 않으므로(클라이언트 번들 ·
+ * MAX_DOC_CHARS 와 같은 이유) 계산식을 여기에 옮겨 적고 **테스트가 두 결과를 맞춰 고정한다**.
+ * 어긋나면 화면은 「7월」을 보여주면서 서버는 다른 달을 기본값으로 계산한다.
+ * 브라우저 시간대(`toISOString` = UTC, 해외에서 접속한 PC)에 기대지 않는 이유이기도 하다.
+ */
+function kstMonthNow(at: Date = new Date()): string {
+  const d = new Date(at.getTime() + 9 * 60 * 60 * 1000); // KST = UTC+9, 일광절약시간 없음
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
 /** 빈 상태 일러스트 — 장식이므로 스크린리더에서는 숨긴다. 색은 토큰만 쓴다. */
 function EmptyArt({ kind }: { kind: 'kb' | 'chat' }) {
   return (
@@ -1938,7 +1950,7 @@ export default function AdminPage() {
   };
 
   // ---- 정산 리포트 ----
-  const [settleMonth, setSettleMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [settleMonth, setSettleMonth] = useState(() => kstMonthNow());
   const [settlePartner, setSettlePartner] = useState('');
   const [settleReport, setSettleReport] = useState<SettlementReportView | null>(null);
   const [settleErr, setSettleErr] = useState('');

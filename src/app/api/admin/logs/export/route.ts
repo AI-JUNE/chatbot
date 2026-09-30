@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { listAllTurns } from '@/lib/convlog';
 import { requireAdmin } from '@/lib/http';
 import { csvRow } from '@/lib/csv';
+import { kstStamp } from '@/lib/kst';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +19,8 @@ export async function GET(req: NextRequest) {
   );
   // UTF-8 BOM: 엑셀에서 한글 깨짐 방지
   const csv = '\uFEFF' + [csvRow(header), ...rows].join('\r\n') + '\r\n';
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  // 파일 이름의 날짜는 받는 사람(한국의 운영자)이 읽는 날짜다 — 서버 시간대가 아니라 KST.
+  const date = kstStamp();
 
   return new NextResponse(csv, {
     headers: {

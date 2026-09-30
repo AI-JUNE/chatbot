@@ -17,6 +17,7 @@ import {
   type AccountQuery,
 } from '@/lib/partners';
 import { csvCell, csvRow } from '@/lib/csv';
+import { kstMonth } from '@/lib/kst';
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
@@ -31,9 +32,13 @@ export function monthEnd(month: string): string {
   return `${month}-${String(last).padStart(2, '0')}`;
 }
 
-/** 현재 달(UTC 기준 'YYYY-MM'). 화면 기본값으로만 쓴다. */
+/**
+ * 현재 달('YYYY-MM'). 기준월을 지정하지 않은 조회의 기본값이다.
+ * **한국 시간** 기준으로 센다 — UTC 로 세면 한국 자정~오전 9시(정산은 월초 업무다)에
+ * 매월 1일이 아직 지난달로 잡혀, 운영자가 고르지도 않은 달의 수수료 합계가 뜬다.
+ */
 export function currentMonth(at: Date = new Date()): string {
-  return at.toISOString().slice(0, 7);
+  return kstMonth(at);
 }
 
 export type SettlementIssue = 'none' | 'no_fee_rate' | 'no_base_amount' | 'no_fee_rate_and_base';

@@ -4,6 +4,7 @@
 // [승인 필요] 외부 DB 저장·분석 파이프라인 전송.
 import type { ReplySource } from '@/lib/chat';
 import { loadJson, scheduleSave } from '@/lib/storage';
+import { kstDate } from '@/lib/kst';
 
 export interface ChatTurnLog {
   id: string;
@@ -134,16 +135,15 @@ export interface DailyBucket {
   escalated: number;
 }
 
-/** 한국 시간 기준 날짜 문자열. 서버 시간대(UTC)와 무관하게 같은 날로 묶기 위한 것. */
+/**
+ * 한국 시간 기준 날짜 문자열. 서버 시간대(UTC)와 무관하게 같은 날로 묶기 위한 것.
+ * 계산은 `@/lib/kst` 하나에 맡긴다 — 「며칠인가」의 답이 화면마다 갈라지지 않게.
+ * (종전에는 Intl 이 없는 환경으로 떨어지면 UTC 날짜를 돌려줘, 조용히 하루가 어긋났다.)
+ */
 function dayKey(iso: string | number | Date): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  try {
-    // sv-SE 로캘은 YYYY-MM-DD 형식을 준다.
-    return d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
-  } catch {
-    return d.toISOString().slice(0, 10);
-  }
+  return kstDate(d);
 }
 
 /** 최근 7일 축(오늘 포함, 과거→오늘 순). */

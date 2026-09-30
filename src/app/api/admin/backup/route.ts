@@ -8,13 +8,16 @@ import { exportSnapshot, importSnapshot } from '@/lib/adminStore';
 import { exportPartners, importPartners } from '@/lib/partners';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, requireAdmin, isAdminAuthed, MAX_IMPORT_BYTES } from '@/lib/http';
+import { kstStamp } from '@/lib/kst';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   const denied = requireAdmin(req, { allowQueryToken: true });
   if (denied) return denied;
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  // 파일 이름의 날짜는 받는 사람(한국의 운영자)이 읽는 날짜다 — 서버 시간대가 아니라 KST.
+  // 운영자는 이 파일들을 이름순으로 정리한다(백업은 날짜가 곧 식별자다).
+  const date = kstStamp();
   return new NextResponse(JSON.stringify({ ...exportSnapshot(), partners: exportPartners() }, null, 2), {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',

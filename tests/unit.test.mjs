@@ -1954,3 +1954,67 @@ test('접수에 싣는 마지막 고객 말은 화면의 대화에서 온다 (DS
   // 되살린 대화에서 비는 별도 ref 를 다시 들이지 않는다(대화와 접수가 같은 출처를 봐야 한다).
   assert.equal(/lastUserRef/.test(s), false, '마지막 말을 별도 ref 로 들고 있으면 되살린 대화에서 빈 값이 된다');
 });
+
+/**
+ * DS 21-1·21-2·21-3 — 「며칠인가」를 서버 시간대에 맡기고 있었다.
+ *
+ * 사용자는 한국에 있고 서버는 없다(Vercel Node 런타임 = UTC). 달력 날짜를 로컬/UTC 게터로 읽으면
+ * 한국 자정~오전 9시 동안 하루가 어긋난다. 그 계산을 `src/lib/kst.ts` 한 곳으로 모으고,
+ * **밖에서 다시 새지 않도록** 패턴 자체를 0건으로 고정한다(DS 6-2 의 단일 출처와 같은 방식).
+ */
+const KST_SOURCES = [
+  'src/lib/kst.ts',
+  'src/lib/slots.ts',
+  'src/lib/settlement.ts',
+  'src/lib/convlog.ts',
+  'src/app/admin/page.tsx',
+  ...ROUTES,
+].filter(has);
+
+test('달력 날짜 계산은 src/lib/kst.ts 밖에 없다 (DS 21-1·21-2·21-3)', () => {
+  for (const p of KST_SOURCES) {
+    if (p === 'src/lib/kst.ts') continue;
+    const s = read(p);
+    // 로컬 달력 게터 — 서버가 UTC 면 한국 날짜와 하루 어긋난다.
+    assert.equal(/\.get(FullYear|Month|Date)\(\)/.test(s), false, `${p}: 로컬 달력 게터로 날짜를 읽는다`);
+    // toISOString().slice(0,10|7) — UTC 날짜·달을 사람이 읽는 날짜처럼 쓰는 자리.
+    assert.equal(/toISOString\(\)\.slice\(\s*0\s*,\s*(10|7)\s*\)/.test(s), false, `${p}: UTC 날짜를 사람이 읽는 날짜로 쓴다`);
+  }
+  // 시간대는 한 곳에서만 선언한다.
+  const kst = read('src/lib/kst.ts');
+  assert.match(kst, /9 \* 60 \* 60 \* 1000/, 'KST 오프셋 선언이 없다');
+  assert.match(kst, /export function kstDate\(/);
+  assert.match(kst, /export function kstMonth\(/);
+  assert.match(kst, /export function kstStamp\(/);
+});
+
+test('예약 폼의 「오늘·내일」은 한국 달력으로 푼다 (DS 21-1)', () => {
+  const s = read('src/lib/slots.ts');
+  assert.match(s, /from '@\/lib\/kst'/, 'slots 가 한국 달력 모듈을 쓰지 않는다');
+  assert.match(s, /kstYmd\(now\)/, '상대 날짜 기준일을 한국 시간으로 잡지 않는다');
+  // 종전의 로컬 Date 조립 헬퍼는 남겨 두면 다시 쓰이게 된다.
+  assert.equal(/function fmtDate\(/.test(s), false, '로컬 시간대에 의존하는 날짜 조립 함수가 남아 있다');
+});
+
+test('정산 기준월 기본값은 한국 시간 기준 이번 달이다 (DS 21-2)', () => {
+  const lib = read('src/lib/settlement.ts');
+  assert.match(lib, /return kstMonth\(at\)/, '서버 기본값이 한국 달력을 쓰지 않는다');
+  const page = read('src/app/admin/page.tsx');
+  assert.match(page, /function kstMonthNow\(/, '화면에 한국 달력 기본값 함수가 없다');
+  assert.match(page, /useState\(\(\) => kstMonthNow\(\)\)/, '기준월 기본값이 한국 달력을 쓰지 않는다');
+});
+
+test('내려받기 파일 이름의 날짜는 한국 날짜다 (DS 21-3)', () => {
+  for (const p of ['src/app/api/admin/backup/route.ts', 'src/app/api/admin/audit/route.ts', 'src/app/api/admin/logs/export/route.ts']) {
+    const s = read(p);
+    assert.match(s, /kstStamp\(\)/, `${p}: 파일 이름 날짜가 한국 날짜가 아니다`);
+    assert.match(s, /filename="[^"]*\$\{date\}/, `${p}: 파일 이름에 날짜가 붙지 않는다`);
+  }
+});
+
+test('대화 집계의 날짜 묶음도 같은 한 곳에서 온다 (DS 21-1)', () => {
+  const s = read('src/lib/convlog.ts');
+  assert.match(s, /import \{ kstDate \} from '@\/lib\/kst'/, 'convlog 가 한국 달력 모듈을 쓰지 않는다');
+  // Intl 이 없는 환경에서 UTC 로 떨어지던 폴백을 되살리지 않는다(조용히 하루가 어긋나는 자리).
+  assert.equal(/Asia\/Seoul/.test(s), false, '시간대 문자열이 두 곳에 있으면 갈라진다');
+});

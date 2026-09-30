@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { listAudit, auditToCsv } from '@/lib/audit';
 import { ok, intQuery, requireAdmin } from '@/lib/http';
+import { kstStamp } from '@/lib/kst';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +12,8 @@ export async function GET(req: NextRequest) {
   if (denied) return denied;
 
   if (req.nextUrl.searchParams.get('format') === 'csv') {
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    // 파일 이름의 날짜는 받는 사람(한국의 운영자)이 읽는 날짜다 — 서버 시간대가 아니라 KST.
+    const date = kstStamp();
     return new NextResponse('\uFEFF' + auditToCsv(), {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
