@@ -22,7 +22,7 @@ GPTs 대체. 이음 참여자 화면 우하단에 붙는 **FAQ·신청 안내 �
 ```
 
 - `data-tenant` 형식은 `^[a-z0-9][a-z0-9_-]{0,31}$`. 어긋나거나 모르는 값이면 무시하고 기본(고원) 위젯이 뜬다.
-- 신청 버튼 주소는 환경변수 `EUM_APPLY_URL`로 바꾼다(미설정 시 `https://eum-app.vercel.app`).
+- 신청 버튼 주소는 환경변수 `EUM_APPLY_URL`로 바꾼다(미설정 시 `https://eum.gowon.co.kr`).
   http(s) 절대 URL만 통과하고, 그 외 값은 기본값으로 되돌린다.
 
 ## 구현 구조

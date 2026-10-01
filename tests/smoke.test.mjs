@@ -18,7 +18,7 @@ const HEALTH_OK = {
   status: 'ok',
   dependencies: {
     storage: { driver: 'memory', namespaces: [{ ns: 'audit', health: 'ok' }] },
-    tenants: [{ id: 'eum', name: '이음', entries: 10, skipped: 0, ctaUrl: 'https://eum-app.vercel.app', ctaFromEnv: false }],
+    tenants: [{ id: 'eum', name: '이음', entries: 10, skipped: 0, ctaUrl: 'https://eum.gowon.co.kr', ctaFromEnv: false }],
   },
   build: { env: 'production', commit: 'abc1234' },
 };
@@ -27,7 +27,7 @@ const CHAT_FAQ_OK = {
   reply: '이음 참여 신청은 안내 페이지에서 하실 수 있어요.',
   source: 'kb',
   citation: { source: '이음 FAQ 1. 신청 방법', quote: '신청은 안내 페이지에서 받습니다.' },
-  cta: { label: '이음 참여 신청하기', url: 'https://eum-app.vercel.app', hint: '신청은 이 버튼으로 하실 수 있어요.' },
+  cta: { label: '이음 참여 신청하기', url: 'https://eum.gowon.co.kr', hint: '신청은 이 버튼으로 하실 수 있어요.' },
 };
 
 const CHAT_UNKNOWN_OK = {

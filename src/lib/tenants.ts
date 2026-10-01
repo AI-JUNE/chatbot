@@ -57,7 +57,9 @@ export interface TenantPreset {
   ruleReplies?: Record<string, string>;
 }
 
-export const EUM_APPLY_URL_DEFAULT = 'https://eum-app.vercel.app';
+// 이음 현재 운영 주소. 옛 eum-app.vercel.app 은 보조 대상으로 내려갔으므로
+// 환경변수 EUM_APPLY_URL 이 없을 때의 기본값도 현재 주소를 가리켜야 한다.
+export const EUM_APPLY_URL_DEFAULT = 'https://eum.gowon.co.kr';
 
 export const EUM_TENANT: TenantPreset = {
   id: 'eum',
