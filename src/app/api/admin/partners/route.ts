@@ -90,10 +90,15 @@ export async function POST(req: NextRequest) {
     const r = upsertAccount({ ...(parsed.data as AccountInput), authed });
     if (!r.ok) return fail('invalid_input', r.error);
     const last = r.account.attribution[r.account.attribution.length - 1];
+    // 감사 로그의 「대상·내용」은 운영자가 그대로 읽는 칸이다 — 파트너 식별자(`PTR-0001`)와
+    // 유입 경로 코드(`referral`)가 아니라 이름으로 남긴다(DS 2-12 가 화면에 세운 원칙과 같은 자리).
+    const ownerName = r.account.partnerId
+      ? listPartners().find((p) => p.id === r.account.partnerId)?.name ?? '알 수 없는 파트너'
+      : '직접 계약';
     logAudit({
       action: 'account.upsert',
       target: r.account.id,
-      detail: `${r.created ? '등록' : '수정'}: 귀속 ${r.account.partnerId ?? '직접'} / 경로 ${r.account.source}${last ? ` / ${last.note.slice(0, 40)}` : ''}`,
+      detail: `${r.created ? '등록' : '수정'}: ${r.account.name.slice(0, 40)} / 귀속 ${ownerName} / 경로 ${LEAD_SOURCE_LABELS[r.account.source]}${last ? ` / ${last.note.slice(0, 40)}` : ''}`,
       authed,
     });
     return ok({ account: r.account, created: r.created });

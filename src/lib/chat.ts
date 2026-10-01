@@ -10,7 +10,8 @@ import { resolveTenant } from '@/lib/tenantKB';
 import { resolveCTA, type TenantPreset } from '@/lib/tenants';
 import { RULES, type Rule } from '@/lib/rules';
 import { prepare } from '@/lib/normalize';
-import { listKB, getRuleOverride, matchCustomRule } from '@/lib/adminStore';
+import { listKB, getRuleOverride, listCustomRules, matchCustomRule } from '@/lib/adminStore';
+import { intentLabelMap } from '@/lib/intents';
 import { appendTurn, getSession, setSlot, updateSession } from '@/lib/session';
 import { createTicket, queuePosition } from '@/lib/escalation';
 import { buildHandoffSummary, type HandoffReason } from '@/lib/handoff';
@@ -191,6 +192,8 @@ function summaryFor(
     turns: ctx.turns ?? [],
     slots: ctx.slots ?? {},
     pendingSlots: pending,
+    // 운영자가 만든 규칙으로 답한 대화면 그 규칙 이름을 요약의 「직전 주제」에 쓴다(코드 `cr_…` 대신).
+    intentLabels: intentLabelMap(listCustomRules()),
     ...(opts.slotLabels ? { slotLabels: opts.slotLabels } : {}),
     ...(opts.ticketId ? { ticketId: opts.ticketId } : {}),
   }).text;

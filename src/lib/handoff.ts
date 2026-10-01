@@ -6,6 +6,7 @@
 //
 // 규칙 기반 순수 함수다. LLM을 호출하지 않으므로 결정적이고 이관 지연이 모델에 좌우되지 않는다.
 // [승인 필요] LLM 추상 요약, 요약 영구 저장·상담사 시스템(CTI/슬랙) 실전송.
+import { intentLabel } from '@/lib/intents';
 
 /** 이관 사유 — AICC-Core `Handoff['reason']` 어휘와 동일하게 유지한다(교차 저장소 리포트 정합). */
 export type HandoffReason = 'low_confidence' | 'customer_request' | 'policy' | 'error' | 'max_retry';
@@ -27,6 +28,19 @@ export function isHandoffReason(v: unknown): v is HandoffReason {
 // ---- 개인정보 마스킹(AICC-Core policyGuard §10.3 규칙 이식) ----
 // 규칙 순서 = 우선순위. 좁은 패턴(주민·카드·휴대폰)을 먼저, 가장 넓은 계좌 패턴을 마지막에 둔다.
 // 순서를 바꾸면 휴대폰이 계좌로 분류되어 마스킹 종류 통계가 틀어진다.
+
+/**
+ * 마스킹 종류의 화면 표시명. `name` 은 저장·집계용 코드이고(교차 저장소 리포트가 이 어휘를 본다),
+ * 운영자 화면에 뜨는 것은 이쪽이다 — 요약 평문이 관리 콘솔 서랍에 그대로 그려지므로
+ * 「개인정보 마스킹: email, phone」처럼 영문 코드가 보이면 안 된다.
+ */
+const MASK_KIND_LABELS: Record<string, string> = {
+  rrn: '주민등록번호',
+  card: '카드번호',
+  phone: '휴대폰 번호',
+  email: '이메일 주소',
+  account: '계좌번호',
+};
 
 const MASK_RULES: { name: string; re: RegExp; mask: (m: string) => string }[] = [
   { name: 'rrn', re: /\b(\d{6})[-\s]?([1-4]\d{6})\b/g, mask: (m) => `${m.slice(0, 6)}-*******` },
@@ -87,6 +101,20 @@ export type Speaker = 'customer' | 'bot' | 'agent';
 
 const SPEAKER_LABELS: Record<Speaker, string> = { customer: '고객', bot: 'AI', agent: '상담원' };
 
+/** 채널 표시명 — 관리 콘솔 표의 「채널」 열과 같은 말을 쓴다. */
+const CHANNEL_LABELS: Record<string, string> = { web: '홈페이지 상담창', kakao: '카카오톡' };
+
+/** 마스킹 종류 코드 → 표시명. 모르는 코드는 그대로 두지 않고 「개인정보」로 뭉갠다. */
+function maskKindLabel(kind: string): string {
+  return MASK_KIND_LABELS[kind] ?? '개인정보';
+}
+
+/** 식별자는 앞자리만 — 관리 콘솔 서랍 제목(`shortTicket`·`shortSession`)과 같은 길이다. */
+function shortId(id: string, len: number): string {
+  const v = String(id ?? '');
+  return v.length > len ? `${v.slice(0, len)}…` : v;
+}
+
 export interface SummaryLine {
   at: string;
   speaker: Speaker;
@@ -111,6 +139,8 @@ export interface HandoffSummary {
   reasonLabelKo: string;
   turnCount: number;
   lastIntent?: string;
+  /** 직전 주제의 표시명(`@/lib/intents`). 평문 요약은 코드가 아니라 이 값을 보여준다. */
+  lastIntentLabelKo?: string;
   collectedSlots: SummarySlot[];
   pendingSlots: string[];
   /** 미수집 슬롯의 한국어 라벨(pendingSlots와 같은 순서). */
@@ -134,6 +164,8 @@ export interface SummaryInput {
   pendingSlots?: string[];
   /** 슬롯 키 → 한국어 라벨 재정의(폼 정의가 주는 라벨을 그대로 쓰기 위함). */
   slotLabels?: Record<string, string>;
+  /** 인텐트 → 이름 재정의. 운영자가 만든 규칙(`cr_*`)의 이름은 런타임에만 알 수 있다. */
+  intentLabels?: Record<string, string>;
   /** 표시할 최근 턴 수 — 화면 설정값이며 성능 지표가 아니다. */
   recentTurns?: number;
   now?: () => string;
@@ -196,19 +228,27 @@ export function buildHandoffSummary(input: SummaryInput): HandoffSummary {
     piiKinds: [...kinds].sort(),
     text: '',
     ...(input.ticketId ? { ticketId: input.ticketId } : {}),
-    ...(lastIntent ? { lastIntent } : {}),
+    ...(lastIntent ? { lastIntent, lastIntentLabelKo: intentLabel(lastIntent, input.intentLabels) } : {}),
   };
   summary.text = renderSummaryText(summary);
   return summary;
 }
 
-/** 상담원 화면용 평문. 입력이 이미 마스킹된 요약이므로 재마스킹하지 않는다. */
+/**
+ * 상담원 화면용 평문. 입력이 이미 마스킹된 요약이므로 재마스킹하지 않는다.
+ *
+ * 이 문자열은 관리 콘솔 「상담원 요청」 서랍의 「이관 요약」 칸에 **그대로** 그려진다(`.ac-summary`).
+ * 그래서 여기에는 코드가 아니라 사람이 읽는 말만 남긴다 — 사유 코드·인텐트 코드·마스킹 종류
+ * 영문명·채널 코드는 구조체 필드(`reason`·`lastIntent`·`piiKinds`·`channel`)에 그대로 남아 있고
+ * 기계가 보는 쪽은 그것을 쓴다. 식별자도 서랍 제목과 같은 길이로 줄인다(앞 8자·앞 6자).
+ */
 export function renderSummaryText(s: HandoffSummary): string {
   const L: string[] = [];
-  L.push(`[상담원 이관 요약] ${s.ticketId ?? s.sessionId} · 채널 ${s.channel}`);
-  L.push(`이관 사유: ${s.reasonLabelKo} (${s.reason})`);
-  L.push(`진행: ${s.turnCount}턴`);
-  if (s.lastIntent) L.push(`직전 의도: ${s.lastIntent}`);
+  const who = s.ticketId ? `접수번호 ${shortId(s.ticketId, 8)}` : `대화 ${shortId(s.sessionId, 6)}`;
+  L.push(`[상담원 이관 요약] ${who} · ${CHANNEL_LABELS[s.channel] ?? '상담창'}`);
+  L.push(`이관 사유: ${s.reasonLabelKo}`);
+  L.push(`주고받은 메시지: ${s.turnCount}개`);
+  if (s.lastIntentLabelKo) L.push(`직전 주제: ${s.lastIntentLabelKo}`);
 
   L.push('수집 정보');
   if (s.collectedSlots.length === 0) L.push('  - 없음');
@@ -223,6 +263,6 @@ export function renderSummaryText(s: HandoffSummary): string {
   if (s.recentTurns.length === 0) L.push('  - 없음');
   else for (const t of s.recentTurns) L.push(`  [${SPEAKER_LABELS[t.speaker]}] ${t.text}`);
 
-  L.push(`개인정보 마스킹: ${s.piiMasked ? s.piiKinds.join(', ') : '해당 없음'}`);
+  L.push(`개인정보 마스킹: ${s.piiMasked ? s.piiKinds.map(maskKindLabel).join(', ') : '해당 없음'}`);
   return L.join('\n');
 }

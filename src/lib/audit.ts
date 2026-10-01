@@ -21,6 +21,36 @@ export type AuditAction =
   | 'account.upsert'
   | 'settlement.export';
 
+/**
+ * 작업 표시명 — 감사 로그 표·필터·CSV 가 **그대로** 보여주는 이름의 단일 출처.
+ *
+ * `Record<AuditAction, string>` 이므로 작업 종류를 하나 더 만들면 **타입 검사에서 막힌다** —
+ * 종전에는 화면이 따로 적어 둔 사전 9개로 이름을 붙이고 없으면 코드를 그렸고, 「사업」 그룹에서
+ * 새로 생긴 4종(`partner.upsert`·`partner.delete`·`account.upsert`·`settlement.export`)이
+ * 사전에 추가되지 않아 파트너·고객사 편집과 정산 내려받기가 영문 코드로 남았다.
+ * 말씨는 화면의 실제 메뉴·버튼 이름에 맞춘다(지식베이스=안내 자료, 기본 규칙/내가 만든 규칙).
+ */
+export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
+  'kb.upsert': '안내 자료 등록·수정',
+  'kb.delete': '안내 자료 삭제',
+  'kb.reset': '안내 자료 초기화',
+  'kb.import': '문서 업로드 등록',
+  'rule.override': '기본 규칙 변경',
+  'rule.custom.upsert': '내가 만든 규칙 등록·수정',
+  'rule.custom.delete': '내가 만든 규칙 삭제',
+  'escalation.update': '상담원 요청 처리',
+  'backup.restore': '백업 복원',
+  'partner.upsert': '파트너 등록·수정',
+  'partner.delete': '파트너 삭제',
+  'account.upsert': '고객사 등록·수정',
+  'settlement.export': '정산 리포트 내려받기',
+};
+
+/** 모르는 코드까지 화면에 코드로 내보내지 않는다(복원된 옛 스냅샷 대비). */
+export function auditActionLabel(action: string): string {
+  return AUDIT_ACTION_LABELS[action as AuditAction] ?? '관리 작업';
+}
+
 export interface AuditEvent {
   id: string;
   at: string; // ISO
@@ -55,10 +85,16 @@ export function listAudit(limit = 100): AuditEvent[] {
   return events.slice(-limit).reverse().map((e) => ({ ...e }));
 }
 
-/** 전체 보존분 CSV(시간순) — 엑셀 호환 UTF-8 BOM은 라우트에서 붙인다. */
+/**
+ * 전체 보존분 CSV(시간순) — 엑셀 호환 UTF-8 BOM은 라우트에서 붙인다.
+ * 열 이름은 받는 사람(한국의 운영자)이 읽는 말로 적고, 작업은 이름과 코드를 함께 싣는다
+ * — 사람은 이름을 읽고, 다른 시스템에 옮겨 담을 때는 코드를 쓴다.
+ */
 export function auditToCsv(): string {
-  const header = 'id,at,action,target,detail,authed';
-  const rows = events.map((e) => csvRow([e.id, e.at, e.action, e.target, e.detail, e.authed]));
+  const header = csvRow(['번호', '시각', '작업', '작업코드', '대상', '내용', '인증']);
+  const rows = events.map((e) =>
+    csvRow([e.id, e.at, auditActionLabel(e.action), e.action, e.target, e.detail, e.authed ? '로그인됨' : '인증 없이 수행']),
+  );
   return [header, ...rows].join('\r\n');
 }
 

@@ -3,6 +3,8 @@
 import { NextRequest } from 'next/server';
 import { createTicket, getTicket, queuePosition, toReasonCode, STATUS_LABELS } from '@/lib/escalation';
 import { buildHandoffSummary } from '@/lib/handoff';
+import { intentLabelMap } from '@/lib/intents';
+import { listCustomRules } from '@/lib/adminStore';
 import { getSession, updateSession } from '@/lib/session';
 import { rateGuard } from '@/lib/ratelimit';
 import { ok, fail, readJson, optStr, reqQuery, withRequestId } from '@/lib/http';
@@ -58,6 +60,8 @@ export async function POST(req: NextRequest) {
     turns: ctx.turns ?? [],
     slots,
     pendingSlots: slots.contact ? [] : ['contact'],
+    // 「직전 주제」에 운영자가 만든 규칙 이름을 쓴다 — 요약은 운영자가 그대로 읽는 평문이다.
+    intentLabels: intentLabelMap(listCustomRules()),
   }).text;
 
   const { ticket, created } = createTicket({

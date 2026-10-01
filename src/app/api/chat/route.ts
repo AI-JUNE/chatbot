@@ -2,6 +2,8 @@
 import { NextRequest } from 'next/server';
 import { replyToAsync } from '@/lib/chat';
 import { logTurn } from '@/lib/convlog';
+import { intentLabel, intentLabelMap } from '@/lib/intents';
+import { listCustomRules } from '@/lib/adminStore';
 import { rateGuard } from '@/lib/ratelimit';
 import { ok, readJson, optStr, withRequestId } from '@/lib/http';
 import { captureError } from '@/lib/monitoring';
@@ -73,6 +75,7 @@ export async function POST(req: NextRequest) {
         sessionId,
         reply: '일시적인 오류가 발생했어요. 잠시 후 다시 시도해 주시거나 "상담원"이라고 입력해 주세요.',
         intent: 'error',
+        intentLabel: intentLabel('error'),
         escalate: true,
         source: 'fallback' as const,
         requestId: rl.requestId,
@@ -108,5 +111,10 @@ export async function POST(req: NextRequest) {
     // LLM 경로가 실패해 결정적 폴백으로 되돌아갔으면 사유를 남긴다(오류를 삼키지 않는다).
     ...(result.llmFailure ? { code: `llm_${result.llmFailure}` } : {}),
   });
-  return withRequestId(ok({ sessionId, ...result }), rl.requestId);
+  // `intentLabel` 은 **운영자 화면용 표시명**이다(관리 콘솔 「응답 테스트 → 왜 이렇게 답했나」).
+  // 위젯은 이 값을 쓰지 않는다 — 고객 화면에 주제를 드러내지 않는다(기존 계약 그대로, 필드만 추가).
+  return withRequestId(
+    ok({ sessionId, ...result, intentLabel: intentLabel(result.intent, intentLabelMap(listCustomRules())) }),
+    rl.requestId,
+  );
 }

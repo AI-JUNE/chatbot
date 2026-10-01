@@ -103,7 +103,8 @@ interface OpsStats {
     sessions: number;
     bySource: Record<string, number>;
     byChannel: Record<string, number>;
-    topIntents: { intent: string; count: number }[];
+    /** `label` 은 서버가 붙인 주제 표시명이다(`@/lib/intents`) — 화면은 코드를 그리지 않는다. */
+    topIntents: { intent: string; count: number; label?: string }[];
     autoHandled: number;
     autoRate: number;
     escalatedTurns: number;
@@ -348,7 +349,7 @@ function ConversationDrawer({
                 <span className="ac-bubble-who">챗봇</span>
                 <p>{t.reply}</p>
                 <div className="ac-bubble-tags">
-                  <span className="ac-pill">{INTENT_LABELS[t.intent] || t.intent}</span>
+                  <span className="ac-pill">{t.intentLabel || UNNAMED_TOPIC}</span>
                   <span className="ac-pill">{SOURCE_VIEW_LABELS[t.source] || t.source}</span>
                   {t.escalate && <span className="ac-pill" style={TONE.warn}>상담원 제안</span>}
                   <span style={{ fontSize: 11, color: 'var(--mut)', marginLeft: 'auto' }}>{timeLabel(t.at)}</span>
@@ -748,6 +749,8 @@ interface TurnView {
   message: string;
   reply: string;
   intent: string;
+  /** 주제 표시명(서버가 `@/lib/intents` 로 붙인다). 화면은 코드가 아니라 이 값을 쓴다. */
+  intentLabel?: string;
   source: string;
   escalate: boolean;
   at: string;
@@ -770,18 +773,16 @@ const CHANNEL_LABELS: Record<string, string> = {
   call: '전화',
 };
 
-/** 대화 주제(인텐트) 표시명. 사전에 없으면 원래 값을 그대로 쓴다. */
-const INTENT_LABELS: Record<string, string> = {
-  greeting: '인사',
-  hours: '운영 시간',
-  price: '요금 문의',
-  location: '위치 안내',
-  refund: '환불·취소',
-  handoff: '상담원 연결',
-  unknown: '분류 전',
-  faq: '자료 안내',
-  error: '연결 오류',
-};
+/**
+ * 대화 주제 표시명은 **서버가 붙여 보낸다**(`src/lib/intents.ts` → `intentLabel` 필드).
+ *
+ * 종전에는 이 파일이 사전 9개를 따로 들고 있다가 없으면 인텐트 코드를 그대로 그렸다. 사전에는
+ * 엔진이 내지 않는 키(`price`·`handoff`·`unknown`·`faq`)가 있었고, 가장 흔한 경로 — 등록 자료로
+ * 답한 대화(`kb:환불`)·분류 전(`fallback`)·운영자가 만든 규칙(`cr_…`)·접수 폼 진행
+ * (`form:reservation:datetime`) — 에는 이름이 없어 운영자 화면에 영문 코드가 그대로 떴다.
+ * 이름을 붙이는 쪽은 어휘를 아는 서버 한 곳이고, 화면은 받은 이름만 그린다.
+ */
+const UNNAMED_TOPIC = '기타';
 
 const TICKET_STATUS_LABELS: Record<TicketView['status'], string> = {
   open: '접수',
@@ -2567,7 +2568,8 @@ export default function AdminPage() {
     {
       q: string;
       reply: string;
-      intent: string;
+      /** 주제 표시명 — 서버가 붙여 준다(`@/lib/intents`). 코드(`kb:환불`)를 화면에 쓰지 않는다. */
+      intentLabel: string;
       source: string;
       confidence?: number;
       citation?: { source: string; snippet: string };
@@ -2594,7 +2596,7 @@ export default function AdminPage() {
       });
       data = (await res.json()) as Record<string, unknown>;
     } catch {
-      data = { reply: '연결이 원활하지 않습니다. 잠시 후 다시 시도해 주세요.', intent: 'error', source: 'error' };
+      data = { reply: '연결이 원활하지 않습니다. 잠시 후 다시 시도해 주세요.', intentLabel: '연결 오류', source: 'error' };
     } finally {
       setTestBusy(false);
     }
@@ -2607,7 +2609,7 @@ export default function AdminPage() {
         {
           q,
           reply: typeof data.reply === 'string' ? data.reply : '답변을 받지 못했습니다. 다시 시도해 주세요.',
-          intent: typeof data.intent === 'string' ? data.intent : '-',
+          intentLabel: typeof data.intentLabel === 'string' && data.intentLabel ? data.intentLabel : UNNAMED_TOPIC,
           source: typeof data.source === 'string' ? data.source : '-',
           confidence: typeof data.confidence === 'number' ? data.confidence : undefined,
           citation: cite,
@@ -2975,8 +2977,8 @@ export default function AdminPage() {
                   const max = stats.conversation.topIntents[0].count || 1;
                   return (
                     <div key={t.intent} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                      <span style={{ width: 150, fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {INTENT_LABELS[t.intent] || t.intent}
+                      <span style={{ width: 150, fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.label || UNNAMED_TOPIC}>
+                        {t.label || UNNAMED_TOPIC}
                       </span>
                       <div style={{ flex: 1, background: 'var(--brand-50)', borderRadius: 999, height: 10, minWidth: 60 }}>
                         <div style={{ width: `${Math.max(6, Math.round((t.count / max) * 100))}%`, background: 'var(--brand)', borderRadius: 999, height: 10 }} />
@@ -3030,7 +3032,7 @@ export default function AdminPage() {
                     </span>
                     <span className="ac-row-side">
                       <span style={{ fontSize: 11.5, color: 'var(--mut)', whiteSpace: 'nowrap' }}>{timeLabel(t.at)}</span>
-                      <span className="ac-pill">{INTENT_LABELS[t.intent] || t.intent}</span>
+                      <span className="ac-pill">{t.intentLabel || UNNAMED_TOPIC}</span>
                       <span className="ac-pill">{SOURCE_VIEW_LABELS[t.source] || t.source}</span>
                       {t.escalate && <span className="ac-pill" style={TONE.warn}>상담원 제안</span>}
                     </span>
@@ -4509,7 +4511,7 @@ export default function AdminPage() {
                   <div key={i} className="ac-why" data-latest={i === 0 ? 'true' : undefined}>
                     <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--ink)', marginBottom: 6 }}>“{t.q}”</div>
                     <dl className="ac-dl">
-                      <dt>주제</dt><dd>{INTENT_LABELS[t.intent] || t.intent}</dd>
+                      <dt>주제</dt><dd>{t.intentLabel || UNNAMED_TOPIC}</dd>
                       <dt>근거</dt><dd>{SOURCE_VIEW_LABELS[t.source] || t.source}{t.citation ? ` · ${t.citation.source}` : ''}</dd>
                       {t.citation && (<><dt>인용</dt><dd style={{ color: 'var(--sub)' }}>“{t.citation.snippet}”</dd></>)}
                       {t.confidence !== undefined && (<><dt>확신도</dt><dd>{Math.round(t.confidence * 100)}% <span style={{ color: 'var(--mut)' }}>(엔진 판정값)</span></dd></>)}
