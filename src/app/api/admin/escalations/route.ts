@@ -17,10 +17,18 @@ export async function GET(req: NextRequest) {
   // 주제(인텐트)는 엔진 식별자다 — 화면이 사전을 따로 들고 있으면 어휘가 늘 때마다 어긋나
   // 운영자에게 `kb:환불`·`cr_m1x2`·`form:reservation:datetime` 같은 코드가 그대로 보인다.
   // 이름은 어휘를 아는 서버에서 붙여 보낸다(`@/lib/intents`).
-  const labels = withLogs ? intentLabelMap(listCustomRules()) : {};
+  const labels = intentLabelMap(listCustomRules());
+  const conversation = convStats();
   return ok({
     tickets: listTickets(),
-    stats: { escalation: escalationStats(), conversation: convStats() },
+    stats: {
+      escalation: escalationStats(),
+      // 대시보드 「주제별 분포」 막대도 같은 이름을 쓴다(집계값 `intent` 는 그대로 둔다 — 기계가 보는 쪽이다).
+      conversation: {
+        ...conversation,
+        topIntents: conversation.topIntents.map((t) => ({ ...t, label: intentLabel(t.intent, labels) })),
+      },
+    },
     ...(withLogs
       ? { recentTurns: listTurns(30).map((t) => ({ ...t, intentLabel: intentLabel(t.intent, labels) })) }
       : {}),

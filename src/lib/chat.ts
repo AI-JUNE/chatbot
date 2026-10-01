@@ -187,7 +187,8 @@ function summaryFor(
   const pending = opts.pendingSlots ?? (ctx.slots?.contact ? [] : ['contact']);
   return buildHandoffSummary({
     sessionId,
-    channel: 'web',
+    // 어디로 회신해야 하는지는 세션이 알고 있다 — 엔진은 채널을 모른 채 같은 함수로 돈다.
+    channel: ctx.channel ?? 'web',
     reason,
     turns: ctx.turns ?? [],
     slots: ctx.slots ?? {},

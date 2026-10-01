@@ -2018,3 +2018,123 @@ test('대화 집계의 날짜 묶음도 같은 한 곳에서 온다 (DS 21-1)', 
   // Intl 이 없는 환경에서 UTC 로 떨어지던 폴백을 되살리지 않는다(조용히 하루가 어긋나는 자리).
   assert.equal(/Asia\/Seoul/.test(s), false, '시간대 문자열이 두 곳에 있으면 갈라진다');
 });
+
+/* ══════════ 19차 재감사 — 운영자 화면에 코드가 그대로 뜨던 자리 (DS 22-x) ══════════ */
+
+/** `const NAME ... = { k: 'v', 'k.k': 'v' };` 블록을 `{k: v}` 로 읽는다(두 사전 대조용). */
+function dictOf(src, name) {
+  const start = src.indexOf(`const ${name}`);
+  assert.ok(start >= 0, `${name} 선언을 찾지 못했다`);
+  const open = src.indexOf('{', start);
+  const end = src.indexOf('\n};', open);
+  assert.ok(open > 0 && end > open, `${name} 블록의 끝을 찾지 못했다`);
+  const out = {};
+  for (const m of src.slice(open + 1, end).matchAll(/^\s*'?([\w.:-]+)'?\s*:\s*'([^']*)'/gm)) out[m[1]] = m[2];
+  assert.ok(Object.keys(out).length > 0, `${name} 에서 읽어낸 항목이 없다`);
+  return out;
+}
+
+test('이관 요약 평문에는 코드가 아니라 사람 말만 남는다 (DS 22-1)', () => {
+  const s = read('src/lib/handoff.ts');
+  const body = s.slice(s.indexOf('export function renderSummaryText'));
+  // 이 평문은 관리 콘솔 서랍의 「이관 요약」 칸에 그대로 그려진다 — 코드를 보간하면 그대로 화면에 뜬다.
+  assert.equal(/\(\$\{s\.reason\}\)/.test(body), false, '사유 코드를 괄호로 덧붙이면 안 된다');
+  assert.equal(/\$\{s\.lastIntent\}/.test(body), false, '인텐트 코드를 그대로 쓰면 안 된다');
+  assert.equal(/s\.piiKinds\.join/.test(body), false, '마스킹 종류 영문 코드를 그대로 쓰면 안 된다');
+  assert.equal(/채널 \$\{s\.channel\}/.test(body), false, '채널 코드를 그대로 쓰면 안 된다');
+  assert.equal(/s\.ticketId \?\? s\.sessionId/.test(body), false, '식별자 원문을 그대로 쓰면 안 된다');
+  assert.match(body, /shortId\(s\.ticketId, 8\)/, '접수번호는 서랍 제목과 같은 앞 8자');
+  assert.match(body, /shortId\(s\.sessionId, 6\)/, '대화 식별자는 앞 6자');
+  assert.match(body, /s\.lastIntentLabelKo/, '직전 주제는 표시명으로');
+  assert.match(body, /piiKinds\.map\(maskKindLabel\)/, '마스킹 종류는 표시명으로');
+  assert.match(body, /CHANNEL_LABELS\[s\.channel\]/, '채널은 표시명으로');
+  // 코드 자체는 구조체에 그대로 남는다(기계가 보는 쪽) — 사람이 읽는 평문과 섞지 않는다.
+  assert.match(s, /lastIntentLabelKo\?: string/, '표시명 필드 선언이 있어야 한다');
+  assert.match(s, /reasonLabelKo: HANDOFF_REASON_LABELS\[input\.reason\]/, '사유 코드 필드가 사라지면 안 된다');
+});
+
+test('대화 주제 이름은 어휘를 아는 서버에서 온다 (DS 22-2)', () => {
+  const page = read('src/app/admin/page.tsx');
+  // 화면이 사전을 따로 들고 코드로 폴백하던 자리를 없앤다.
+  assert.equal(/INTENT_LABELS/.test(page), false, '화면에 인텐트 사전이 남아 있으면 다시 어긋난다');
+  assert.equal(/\|\| t\.intent\}/.test(page), false, '인텐트 코드를 폴백으로 그리면 안 된다');
+  assert.match(page, /const UNNAMED_TOPIC = '기타'/, '이름 없는 주제의 표시명이 필요하다');
+  assert.match(page, /intentLabel\?: string/, '턴에 주제 표시명 필드가 있어야 한다');
+  assert.match(page, /topIntents: \{ intent: string; count: number; label\?: string \}/, '주제별 분포에도 표시명이 필요하다');
+  // 서버 3곳(최근 대화·주제별 분포·응답 테스트)이 모두 같은 함수로 이름을 붙인다.
+  const esc = read('src/app/api/admin/escalations/route.ts');
+  assert.match(esc, /intentLabel: intentLabel\(t\.intent, labels\)/, '최근 대화에 이름이 붙지 않는다');
+  assert.match(esc, /topIntents: conversation\.topIntents\.map/, '주제별 분포에 이름이 붙지 않는다');
+  assert.match(read('src/app/api/chat/route.ts'), /intentLabel: intentLabel\(result\.intent/, '응답 테스트가 쓸 이름이 없다');
+  // 내장 룰 이름은 룰 정의에서 그대로 온다 — 룰을 늘려도 사전을 고칠 일이 없다.
+  const lib = read('src/lib/intents.ts');
+  assert.match(lib, /for \(const r of RULES\) out\[r\.intent\] = r\.label/, '룰 라벨을 재사용하지 않으면 또 갈라진다');
+  assert.match(lib, /UNKNOWN_INTENT_LABEL = '기타'/, '모르는 코드도 코드로 내보내지 않는다');
+});
+
+test('접수 폼 제목이 폼 정의와 어긋나지 않는다 (DS 22-2)', () => {
+  const titles = dictOf(read('src/lib/intents.ts'), 'FORM_TITLES');
+  const slots = read('src/lib/slots.ts');
+  const forms = {};
+  for (const m of slots.matchAll(/id: '([\w-]+)',\n\s*title: '([^']+)'/g)) forms[m[1]] = m[2];
+  assert.ok(Object.keys(forms).length > 0, 'slots.ts 에서 폼 정의를 읽지 못했다');
+  assert.deepEqual(titles, forms, '폼 제목이 두 곳에서 갈라졌다(화면에 다른 이름이 뜬다)');
+});
+
+test('채널·응답 근거 사전이 화면과 서버에서 같다 (DS 22-2)', () => {
+  const lib = read('src/lib/intents.ts');
+  const page = read('src/app/admin/page.tsx');
+  assert.deepEqual(dictOf(page, 'CHANNEL_LABELS'), dictOf(lib, 'CHANNEL_LABELS'), '채널 표시명이 갈라졌다');
+  assert.deepEqual(dictOf(page, 'SOURCE_VIEW_LABELS'), dictOf(lib, 'SOURCE_LABELS'), '응답 근거 표시명이 갈라졌다');
+});
+
+test('감사 로그 작업 이름이 작업 종류 전수를 덮는다 (DS 22-3)', () => {
+  const s = read('src/lib/audit.ts');
+  const union = s.slice(s.indexOf('export type AuditAction'), s.indexOf('export const AUDIT_ACTION_LABELS'));
+  const codes = [...union.matchAll(/'([\w.]+)'/g)].map((m) => m[1]);
+  assert.ok(codes.length >= 13, `작업 종류를 읽지 못했다(${codes.length}건)`);
+  const labels = dictOf(s, 'AUDIT_ACTION_LABELS');
+  assert.deepEqual(Object.keys(labels).sort(), [...codes].sort(), '이름 없는 작업 종류가 있으면 화면에 코드가 뜬다');
+  for (const [code, label] of Object.entries(labels)) {
+    assert.equal(/[A-Za-z]/.test(label), false, `${code}: 표시명에 영문이 섞였다(${label})`);
+  }
+  assert.match(s, /Record<AuditAction, string>/, '타입으로 전수를 강제해야 다음 작업에서 또 빠지지 않는다');
+  // 화면은 서버가 준 이름만 그린다.
+  const page = read('src/app/admin/page.tsx');
+  assert.equal(/AUDIT_ACTION_LABELS/.test(page), false, '화면에 작업 사전이 남아 있으면 다시 어긋난다');
+  assert.equal(/\|\| e\.action\}/.test(page), false, '작업 코드를 폴백으로 그리면 안 된다');
+  assert.match(read('src/app/api/admin/audit/route.ts'), /actionLabel: auditActionLabel\(e\.action\)/, '작업 이름을 보내지 않는다');
+});
+
+test('감사 로그의 「내용」에 상태·경로 코드가 남지 않는다 (DS 22-3)', () => {
+  const esc = read('src/app/api/admin/escalations/route.ts');
+  assert.match(esc, /상태→\$\{STATUS_LABELS\[status\]\}/, '상태 코드가 그대로 기록된다');
+  const par = read('src/app/api/admin/partners/route.ts');
+  assert.equal(/경로 \$\{r\.account\.source\}/.test(par), false, '유입 경로 코드가 그대로 기록된다');
+  assert.equal(/귀속 \$\{r\.account\.partnerId/.test(par), false, '파트너 식별자가 이름 대신 기록된다');
+  assert.match(par, /LEAD_SOURCE_LABELS\[r\.account\.source\]/, '유입 경로를 이름으로 기록해야 한다');
+  assert.match(par, /\?\.name \?\? '알 수 없는 파트너'/, '귀속은 파트너 이름으로 기록해야 한다');
+});
+
+test('이관 요약이 회신 창구(채널)를 지어내지 않는다 (DS 22-4)', () => {
+  const chat = read('src/lib/chat.ts');
+  assert.equal(/channel: 'web',/.test(chat), false, '요약 채널이 고정값이면 카카오 접수도 홈페이지라고 말한다');
+  assert.match(chat, /channel: ctx\.channel \?\? 'web'/, '채널은 세션에서 읽어야 한다');
+  assert.match(read('src/lib/session.ts'), /channel\?: 'web' \| 'kakao'/, '세션에 채널 필드가 없다');
+  const kakao = read('src/app/api/kakao/webhook/route.ts');
+  assert.match(kakao, /updateSession\(sessionId, \{ channel: 'kakao' \}\)/, '카카오 웹훅이 채널을 남기지 않는다');
+  assert.match(read('src/app/api/escalation/route.ts'), /channel: ctx\.channel \?\? 'web'/, '접수 API 도 세션 채널을 따라야 한다');
+});
+
+test('내려받는 CSV 의 열 이름이 받는 사람의 말이다 (DS 22-3)', () => {
+  const audit = read('src/lib/audit.ts');
+  assert.equal(/'id,at,action/.test(audit), false, '변경 이력 CSV 열 이름이 영문이다');
+  assert.match(audit, /csvRow\(\['번호', '시각', '작업', '작업코드', '대상', '내용', '인증'\]\)/, '변경 이력 CSV 헤더');
+  assert.match(audit, /auditActionLabel\(e\.action\), e\.action/, '작업은 이름과 코드를 함께 싣는다');
+  const logs = read('src/app/api/admin/logs/export/route.ts');
+  assert.equal(/'intent', 'source'/.test(logs), false, '대화 기록 CSV 열 이름이 영문이다');
+  assert.match(logs, /'주제', '근거'/, '대화 기록 CSV 헤더가 한국어가 아니다');
+  assert.match(logs, /intentLabel\(l\.intent, labels\)/, '주제를 이름으로 싣지 않는다');
+  assert.match(logs, /SOURCE_LABELS\[l\.source\]/, '근거를 이름으로 싣지 않는다');
+  assert.match(logs, /'주제코드'/, '다른 시스템으로 옮길 코드 열은 남겨 둔다');
+});

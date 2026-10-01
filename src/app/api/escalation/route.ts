@@ -55,7 +55,8 @@ export async function POST(req: NextRequest) {
   const slots = { ...(ctx.slots ?? {}), ...(contact.value ? { contact: contact.value } : {}) };
   const summary = buildHandoffSummary({
     sessionId: sessionId.value,
-    channel: 'web',
+    // 이 API 는 웹 위젯 전용이지만 채널은 세션이 말하는 대로 적는다(요약이 회신 창구를 지어내지 않게).
+    channel: ctx.channel ?? 'web',
     reason: reasonCode,
     turns: ctx.turns ?? [],
     slots,

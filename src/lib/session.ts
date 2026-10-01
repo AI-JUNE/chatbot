@@ -32,6 +32,12 @@ export interface SessionContext {
   slots?: Record<string, string>;
   /** 진행 중인 멀티턴 슬롯 수집 상태(예약 접수·장애 신고 등). 완료·취소 시 비운다. */
   form?: FormState;
+  /**
+   * 이 대화가 들어온 채널. 이관 요약이 상담원에게 **어디로 회신해야 하는지**를 알리는 값이다
+   * — 종전에는 요약 생성이 언제나 'web' 로 적어, 카카오톡에서 온 접수도 홈페이지 상담창이라 말했다.
+   * 비어 있으면 웹 위젯으로 본다(기본 진입점).
+   */
+  channel?: 'web' | 'kakao';
   updatedAt: number;
 }
 

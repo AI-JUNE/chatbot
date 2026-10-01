@@ -1,4 +1,4 @@
-// 대화 「주제」(인텐트) 표시명 — 운영자 화면·이관 요약이 함께 쓰는 단일 출처.
+// 대화 표시명(주제·채널·응답 근거) — 운영자 화면·이관 요약·내려받기 파일이 함께 쓰는 단일 출처.
 //
 // 왜 필요한가: 인텐트 코드(`pricing` · `kb:환불` · `cr_m1x2y3` · `form:reservation:datetime`)는
 // 엔진 안에서만 뜻이 통하는 식별자다. 종전에는 관리 콘솔이 **따로 적어 둔 사전 9개**로 이름을
@@ -70,6 +70,27 @@ export function intentLabel(intent: string, extra?: Record<string, string>): str
   if (code.startsWith('form:')) return formLabel(code.slice(5));
   return UNKNOWN_INTENT_LABEL;
 }
+
+/**
+ * 채널·응답 근거 표시명 — 관리 콘솔 표가 쓰는 말과 같아야 한다(테스트가 콘솔 쪽 사전과 대조한다).
+ * 콘솔은 클라이언트 번들이라 lib 을 불러오지 않으므로 같은 값을 옮겨 적고, 어긋나면 테스트가 잡는다
+ * (`MAX_DOC_CHARS`·`kstMonthNow` 와 같은 방식).
+ */
+export const CHANNEL_LABELS: Record<string, string> = {
+  web: '홈페이지',
+  kakao: '카카오톡',
+  call: '전화',
+};
+
+export const SOURCE_LABELS: Record<string, string> = {
+  rule: '시나리오 규칙',
+  kb: '등록 자료',
+  llm: 'AI 생성',
+  context: '이어지는 대화',
+  fallback: '기본 안내',
+  empty: '내용 없음',
+  error: '연결 오류',
+};
 
 /** 규칙 목록을 `{인텐트: 이름}` 으로 — 운영자가 만든 규칙의 이름을 주제에 붙이는 데 쓴다. */
 export function intentLabelMap(rules: readonly { intent: string; label: string }[]): Record<string, string> {

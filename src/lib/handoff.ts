@@ -6,7 +6,7 @@
 //
 // 규칙 기반 순수 함수다. LLM을 호출하지 않으므로 결정적이고 이관 지연이 모델에 좌우되지 않는다.
 // [승인 필요] LLM 추상 요약, 요약 영구 저장·상담사 시스템(CTI/슬랙) 실전송.
-import { intentLabel } from '@/lib/intents';
+import { CHANNEL_LABELS, intentLabel } from '@/lib/intents';
 
 /** 이관 사유 — AICC-Core `Handoff['reason']` 어휘와 동일하게 유지한다(교차 저장소 리포트 정합). */
 export type HandoffReason = 'low_confidence' | 'customer_request' | 'policy' | 'error' | 'max_retry';
@@ -100,9 +100,6 @@ export function maskPii(input: string): MaskResult {
 export type Speaker = 'customer' | 'bot' | 'agent';
 
 const SPEAKER_LABELS: Record<Speaker, string> = { customer: '고객', bot: 'AI', agent: '상담원' };
-
-/** 채널 표시명 — 관리 콘솔 표의 「채널」 열과 같은 말을 쓴다. */
-const CHANNEL_LABELS: Record<string, string> = { web: '홈페이지 상담창', kakao: '카카오톡' };
 
 /** 마스킹 종류 코드 → 표시명. 모르는 코드는 그대로 두지 않고 「개인정보」로 뭉갠다. */
 function maskKindLabel(kind: string): string {
@@ -245,7 +242,7 @@ export function buildHandoffSummary(input: SummaryInput): HandoffSummary {
 export function renderSummaryText(s: HandoffSummary): string {
   const L: string[] = [];
   const who = s.ticketId ? `접수번호 ${shortId(s.ticketId, 8)}` : `대화 ${shortId(s.sessionId, 6)}`;
-  L.push(`[상담원 이관 요약] ${who} · ${CHANNEL_LABELS[s.channel] ?? '상담창'}`);
+  L.push(`[상담원 이관 요약] ${who} · ${CHANNEL_LABELS[s.channel] ?? '상담창'} 접수`);
   L.push(`이관 사유: ${s.reasonLabelKo}`);
   L.push(`주고받은 메시지: ${s.turnCount}개`);
   if (s.lastIntentLabelKo) L.push(`직전 주제: ${s.lastIntentLabelKo}`);

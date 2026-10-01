@@ -1776,3 +1776,178 @@ test('fallbackStarters는 관리 콘솔 지식베이스 상위 질문을 그대�
     for (const e of restore) upsertKB(e);
   }
 });
+
+/* ══════════ 19차 재감사 — 코드가 아니라 이름이 나오는지 실행해서 본다 (DS 22-x) ══════════ */
+
+/**
+ * DS 22-2 — 엔진이 내는 **모든** 인텐트에 이름이 붙는가.
+ * 소스 검사로는 "사전에 키가 있다"까지만 보이고, 정작 운영자가 보는 값은 함수가 돌려주는 문자열이다.
+ * 그래서 `src/lib/chat.ts` 에서 실제 인텐트 리터럴을 긁어 **그 전부**를 함수에 통과시킨다 —
+ * 종전 사전은 이 가운데 다섯 개만 알고 있었고 나머지는 코드가 그대로 화면에 떴다.
+ */
+test('엔진이 내는 인텐트 전부에 사람이 읽는 이름이 붙는다 (DS 22-2)', opts, async () => {
+  const { intentLabel, intentLabelMap, UNKNOWN_INTENT_LABEL } = await importLib('intents', ['rules']);
+  const { RULES } = await importLib('rules', ['intents']);
+
+  // 1) 내장 룰 19종 — 룰 정의의 이름이 그대로 나온다(콘솔 「시나리오 규칙」 탭과 같은 말).
+  assert.ok(RULES.length >= 19, `내장 룰을 읽지 못했다(${RULES.length}건)`);
+  for (const r of RULES) {
+    assert.equal(intentLabel(r.intent), r.label, `${r.intent}: 룰 이름과 다른 말이 나온다`);
+  }
+
+  // 2) chat.ts 가 직접 쓰는 리터럴 인텐트 — 하나라도 「기타」로 떨어지면 화면에서 뜻을 잃는다.
+  const chatSrc = readFileSync(new URL('../src/lib/chat.ts', import.meta.url), 'utf8');
+  const literals = [...chatSrc.matchAll(/intent: '([\w:.]+)'/g)].map((m) => m[1]);
+  assert.ok(literals.length >= 6, `리터럴 인텐트를 읽지 못했다(${literals.length}건)`);
+  for (const code of new Set(literals)) {
+    const label = intentLabel(code);
+    assert.notEqual(label, UNKNOWN_INTENT_LABEL, `${code}: 이름이 없어 「기타」로 떨어진다`);
+    // 「AI」는 제품 전체가 쓰는 말이라 둔다(「AI가 응대합니다」). 그 밖의 영문 낱말은 코드다.
+    assert.equal(/[A-Za-z]{2,}/.test(label.replace(/AI/g, '')), false, `${code}: 이름에 영문 코드가 섞였다(${label})`);
+  }
+
+  // 3) 가장 흔한 경로 — 등록 자료로 답한 대화. 카테고리가 그대로 보여야 운영자가 구분할 수 있다.
+  assert.equal(intentLabel('kb:환불·반품'), '자료 안내 · 환불·반품');
+  assert.equal(intentLabel('kb:'), '자료 안내', '카테고리가 비면 콜론만 남기지 않는다');
+
+  // 4) 접수 폼 — 어느 접수가 어디까지 갔는지로 읽힌다.
+  assert.equal(intentLabel('form:reservation:start'), '예약 접수 시작');
+  assert.equal(intentLabel('form:reservation:datetime'), '예약 접수 진행 중');
+  assert.equal(intentLabel('form:reservation:datetime:retry'), '예약 접수 진행 중');
+  assert.equal(intentLabel('form:trouble:complete'), '장애 신고 접수 완료');
+  assert.equal(intentLabel('form:trouble:cancelled'), '장애 신고 접수 중단');
+  assert.equal(intentLabel('form:reservation:max_retry'), '예약 접수 · 상담원 연결');
+
+  // 5) 운영자가 만든 규칙 — 자기가 붙인 이름이 나와야 한다(코드는 `cr_<시각>` 이라 읽을 수 없다).
+  const custom = intentLabelMap([{ intent: 'cr_m1x2y3', label: '쿠폰 재발급 안내' }, { intent: '', label: '버려짐' }]);
+  assert.equal(intentLabel('cr_m1x2y3', custom), '쿠폰 재발급 안내');
+  assert.equal(intentLabel('cr_m1x2y3'), UNKNOWN_INTENT_LABEL, '이름을 모르면 코드를 내보내지 않고 「기타」다');
+  assert.equal(Object.keys(custom).length, 1, '이름 없는 규칙은 사전에 넣지 않는다');
+
+  // 6) 어떤 입력에도 코드를 되돌려주지 않는다.
+  for (const code of ['', '  ', 'unknown_thing', 'cr_zzz', 'form:nope:x']) {
+    assert.equal(intentLabel(code).includes(code.trim()) && code.trim() !== '', false, `${code}: 코드가 화면 문자열에 섞였다`);
+  }
+});
+
+/**
+ * DS 22-1 — 이관 요약 평문은 상담원이 그대로 읽는 문장이다.
+ * 소스에 `${s.reason}` 이 없다는 것만으로는 부족하다 — 실제로 만들어 **영문 코드가 한 자도 없는지** 본다.
+ */
+test('이관 요약 평문에 내부 코드가 남지 않는다 (DS 22-1)', opts, async () => {
+  const { buildHandoffSummary } = await importLib('handoff', ['intents', 'rules']);
+
+  const sessionId = 'web_m9z8y7x6_abcdef';
+  const s = buildHandoffSummary({
+    sessionId,
+    channel: 'web',
+    reason: 'customer_request',
+    turns: [
+      { at: '2026-10-01T01:00:00.000Z', speaker: 'customer', text: '예약하고 싶어요. 010-1234-5678 로 연락 주세요', intent: 'reservation' },
+      { at: '2026-10-01T01:00:02.000Z', speaker: 'bot', text: '예약을 도와드릴게요.' },
+    ],
+    slots: { contact: 'hong@example.com', name: '홍길동' },
+    pendingSlots: ['datetime'],
+  });
+
+  // 사람이 읽는 말
+  assert.match(s.text, /이관 사유: 고객이 상담원 연결을 요청/);
+  assert.match(s.text, /직전 주제: 예약 접수/);
+  assert.match(s.text, /주고받은 메시지: 2개/);
+  assert.match(s.text, /개인정보 마스킹: .*휴대폰 번호/);
+  assert.match(s.text, /이메일 주소/);
+  assert.match(s.text, /홈페이지 접수/);
+
+  // 코드·식별자 원문
+  for (const code of ['customer_request', 'reservation', 'phone', 'email', 'web ', sessionId]) {
+    assert.equal(s.text.includes(code), false, `요약 평문에 코드가 남았다: ${code}`);
+  }
+  assert.match(s.text, /대화 web_m9…/, '대화 식별자는 앞 6자만 보여준다');
+
+  // 기계가 보는 구조체에는 코드가 그대로 남아 있다(두 쪽을 섞지 않는다).
+  assert.equal(s.reason, 'customer_request');
+  assert.equal(s.lastIntent, 'reservation');
+  assert.equal(s.lastIntentLabelKo, '예약 접수');
+  assert.deepEqual(s.piiKinds, ['email', 'phone']);
+  assert.equal(s.sessionId, sessionId, '세션 식별자 자체는 구조체에 그대로 있어야 한다');
+
+  // 접수번호가 생긴 뒤에는 그것으로 머리글을 쓴다(서랍 제목과 같은 앞 8자).
+  const withTicket = buildHandoffSummary({
+    sessionId,
+    ticketId: 'tkt_abcdefghijkl',
+    channel: 'kakao',
+    reason: 'max_retry',
+    turns: [],
+    slots: {},
+  });
+  assert.match(withTicket.text, /접수번호 tkt_abcd… · 카카오톡 접수/);
+  assert.match(withTicket.text, /이관 사유: 재시도 한도 초과/);
+  assert.equal(withTicket.text.includes('max_retry'), false, '사유 코드가 남았다');
+  // 운영자가 만든 규칙으로 답하던 대화면 그 규칙 이름이 「직전 주제」가 된다.
+  const byCustomRule = buildHandoffSummary({
+    sessionId,
+    channel: 'web',
+    reason: 'policy',
+    turns: [{ at: '2026-10-01T01:00:00.000Z', speaker: 'customer', text: '쿠폰 다시 주세요', intent: 'cr_m1x2y3' }],
+    slots: {},
+    intentLabels: { cr_m1x2y3: '쿠폰 재발급 안내' },
+  });
+  assert.match(byCustomRule.text, /직전 주제: 쿠폰 재발급 안내/);
+  assert.equal(byCustomRule.text.includes('cr_m1x2y3'), false, '규칙 코드가 남았다');
+});
+
+/**
+ * DS 22-4 — 이관 요약이 「어디로 회신해야 하는가」를 지어내지 않는다.
+ * 요약 생성은 채널을 언제나 'web' 로 적어 왔다 — 카카오톡에서 온 접수도 홈페이지라고 말했다.
+ * 채널을 아는 곳은 세션이므로, 세션에 남은 값을 그대로 따라가는지 실행해서 본다.
+ */
+test('이관 요약의 채널은 세션이 말하는 대로 적는다 (DS 22-4)', opts, async () => {
+  const SESSION_GROUP = ['chat', 'session', 'handoff', 'intents', 'rules', 'escalation', 'adminStore', 'knowledge', 'normalize', 'storage', 'slots', 'tenantKB', 'tenants', 'llm'];
+  const pick = (name) => importLib(name, SESSION_GROUP.filter((n) => n !== name));
+  const { replyTo } = await pick('chat');
+  const { updateSession, resetSessions } = await pick('session');
+  const esc = await pick('escalation');
+
+  for (const [channel, expected] of [[null, '홈페이지'], ['kakao', '카카오톡']]) {
+    resetSessions();
+    esc.resetTickets();
+    const sid = `rt-ch-${channel ?? 'web'}`;
+    if (channel) updateSession(sid, { channel });
+    const r = replyTo('상담원 연결해 주세요', sid);
+    assert.equal(r.escalate, true, '상담원 전환이 일어나야 이 검증이 의미가 있다');
+    const ticket = esc.listTickets()[0];
+    assert.ok(ticket?.summary, '티켓에 이관 요약이 붙지 않았다');
+    assert.ok(ticket.summary.includes(expected), `${channel ?? 'web'}: 요약이 ${expected} 라고 말하지 않는다\n${ticket.summary.split('\n')[0]}`);
+    if (channel === 'kakao') assert.equal(ticket.summary.includes('홈페이지'), false, '카카오 접수를 홈페이지라고 말한다');
+  }
+  resetSessions();
+  esc.resetTickets();
+});
+
+/** DS 22-3 — 감사 로그 CSV·목록이 작업을 이름으로 말한다(엑셀로 여는 파일이다). */
+test('감사 로그가 작업을 이름으로 말한다 (DS 22-3)', opts, async () => {
+  const audit = await importLib('audit');
+  audit.resetAudit();
+  try {
+    audit.logAudit({ action: 'partner.upsert', target: 'PTR-0001', detail: '등록: 가온파트너스', authed: true });
+    audit.logAudit({ action: 'settlement.export', target: '2026-09', detail: 'CSV 내려받기', authed: false });
+
+    // 목록(화면이 그대로 그리는 값)
+    for (const e of audit.listAudit(10)) {
+      assert.equal(/[A-Za-z]/.test(audit.auditActionLabel(e.action)), false, `${e.action}: 표시명에 영문이 섞였다`);
+    }
+    assert.equal(audit.auditActionLabel('partner.upsert'), '파트너 등록·수정');
+    assert.equal(audit.auditActionLabel('settlement.export'), '정산 리포트 내려받기');
+    // 옛 스냅샷에서 복원된 모르는 코드도 코드로 내보내지 않는다.
+    assert.equal(audit.auditActionLabel('someone.new'), '관리 작업');
+
+    const csv = audit.auditToCsv();
+    const [header, first] = csv.split('\r\n');
+    assert.equal(header, '번호,시각,작업,작업코드,대상,내용,인증', '열 이름이 받는 사람의 말이 아니다');
+    assert.ok(first.includes('파트너 등록·수정'), `작업 이름이 빠졌다: ${first}`);
+    assert.ok(first.includes('partner.upsert'), '옮겨 담을 코드 열이 빠졌다');
+    assert.ok(first.includes('로그인됨'), '인증 여부가 true/false 로 남았다');
+  } finally {
+    audit.resetAudit();
+  }
+});

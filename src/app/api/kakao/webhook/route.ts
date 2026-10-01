@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { replyToAsync } from '@/lib/chat';
 import { logTurn } from '@/lib/convlog';
+import { updateSession } from '@/lib/session';
 import {
   KAKAO_LIVE,
   authenticateKakao,
@@ -77,6 +78,8 @@ export async function POST(req: NextRequest) {
 
   const sessionId = `kakao:${parsed.userId}`;
   const sessionHash = hashId(sessionId);
+  // 이 대화가 어디서 왔는지 세션에 남긴다 — 상담원 이관 요약이 회신 창구를 그대로 받아 쓴다.
+  updateSession(sessionId, { channel: 'kakao' });
 
   // 재시도(중복 전달) — 같은 이벤트면 엔진을 다시 돌리지 않고 이전 응답을 그대로 돌려준다.
   const key = kakaoEventKey(req.headers, parsed.userId, parsed.utterance);

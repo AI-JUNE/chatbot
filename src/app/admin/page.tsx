@@ -756,7 +756,9 @@ interface TurnView {
   at: string;
 }
 
-/** 응답 근거 표시 — 화면에서는 내부 코드 대신 사람이 읽는 말로 보여준다. */
+/** 응답 근거 표시 — 화면에서는 내부 코드 대신 사람이 읽는 말로 보여준다.
+ *  원본은 `src/lib/intents.ts`(SOURCE_LABELS·CHANNEL_LABELS)이며 내려받기 파일도 그 값을 쓴다.
+ *  콘솔은 lib 을 불러오지 않으므로(클라이언트 번들) 여기에 옮겨 적고 테스트가 두 사전을 맞춰 고정한다. */
 const SOURCE_VIEW_LABELS: Record<string, string> = {
   rule: '시나리오 규칙',
   kb: '등록 자료',
@@ -795,22 +797,19 @@ interface AuditView {
   id: string;
   at: string;
   action: string;
+  /** 작업 표시명(서버가 `@/lib/audit` 로 붙인다). */
+  actionLabel?: string;
   target: string;
   detail: string;
   authed: boolean;
 }
 
-const AUDIT_ACTION_LABELS: Record<string, string> = {
-  'kb.upsert': 'KB 등록/수정',
-  'kb.delete': 'KB 삭제',
-  'kb.reset': 'KB 초기화',
-  'kb.import': '문서 업로드 등록',
-  'rule.override': '내장 룰 변경',
-  'rule.custom.upsert': '규칙 등록/수정',
-  'rule.custom.delete': '규칙 삭제',
-  'escalation.update': '티켓 변경',
-  'backup.restore': '백업 복원',
-};
+/**
+ * 작업 이름도 **서버가 붙여 보낸다**(`src/lib/audit.ts` 의 작업 표시명 → `actionLabel` 필드).
+ * 종전에는 이 파일의 사전 9개로 이름을 붙이고 없으면 코드를 그려, 「사업」 그룹에서 새로 생긴
+ * 4종(파트너·고객사 편집, 정산 내려받기)이 `partner.upsert` 처럼 영문 코드로 표·필터에 남았다.
+ */
+const UNNAMED_AUDIT_ACTION = '관리 작업';
 
 interface StorageNsView {
   ns: string;
@@ -4329,7 +4328,10 @@ export default function AdminPage() {
       )}
 
       {tab === 'audit' && (() => {
-        const actions = Array.from(new Set(auditEvents.map((e) => e.action)));
+        // 필터 선택지도 이름으로 보여준다 — 이름은 이벤트가 들고 온 것을 쓴다(사전을 또 두지 않는다).
+        const actionNames = new Map<string, string>();
+        for (const e of auditEvents) if (!actionNames.has(e.action)) actionNames.set(e.action, e.actionLabel || UNNAMED_AUDIT_ACTION);
+        const actions = Array.from(actionNames.keys());
         const shown = auditEvents.filter((e) => auditFilter === 'all' || e.action === auditFilter);
         return (
           <>
@@ -4343,7 +4345,7 @@ export default function AdminPage() {
                 <select id="audit-filter" className="ac-select" value={auditFilter} onChange={(e) => setAuditFilter(e.target.value)} style={{ marginLeft: 'auto' }}>
                   <option value="all">모든 작업</option>
                   {actions.map((a) => (
-                    <option key={a} value={a}>{AUDIT_ACTION_LABELS[a] || a}</option>
+                    <option key={a} value={a}>{actionNames.get(a) || UNNAMED_AUDIT_ACTION}</option>
                   ))}
                 </select>
                 <span style={S.tag}>{shown.length}/{auditEvents.length}건</span>
@@ -4386,7 +4388,7 @@ export default function AdminPage() {
                       {shown.map((e) => (
                         <tr key={e.id}>
                           <td style={{ whiteSpace: 'nowrap', color: 'var(--sub)' }}>{timeLabel(e.at)}</td>
-                          <td style={{ whiteSpace: 'nowrap' }}><span className="ac-pill">{AUDIT_ACTION_LABELS[e.action] || e.action}</span></td>
+                          <td style={{ whiteSpace: 'nowrap' }}><span className="ac-pill">{e.actionLabel || UNNAMED_AUDIT_ACTION}</span></td>
                           <td style={{ minWidth: 160 }}>
                             {e.target && <span style={{ fontWeight: 700 }}>{e.target}</span>}
                             {e.detail && <span className="ac-clamp" style={{ color: 'var(--sub)', display: 'block' }}>{e.detail}</span>}

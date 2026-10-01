@@ -320,7 +320,8 @@ test('응답 테스트가 좌 입력·근거 / 우 상담창 미리보기로 분
   assert.match(t, /htmlFor="ac-test-msg"/, '입력 라벨');
   assert.match(t, /busyBtn\(testBusy, testBusy/, '응답 대기 표시');
   assert.match(t, /gw-dot/, '타이핑 인디케이터(위젯과 같은 것)');
-  assert.match(t, /INTENT_LABELS\[t\.intent\]/, '주제는 사람 말로');
+  // 주제는 서버가 붙여 준 이름을 그린다 — 화면이 사전을 따로 들고 코드를 폴백하지 않는다(DS 22-2).
+  assert.match(t, /\{t\.intentLabel \|\| UNNAMED_TOPIC\}/, '주제는 서버가 준 이름으로');
   assert.match(t, /SOURCE_VIEW_LABELS\[t\.source\]/, '근거는 사람 말로');
   assert.equal(/intent: \{|source: \{/.test(t), false, '내부 코드 라벨을 그대로 보여주면 안 된다');
   assert.match(t, /실제 고객 정보는 넣지 마세요/, '개인정보 주의 안내');
