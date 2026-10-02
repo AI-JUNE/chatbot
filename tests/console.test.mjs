@@ -905,3 +905,62 @@ test('콘솔의 기준월 기본값이 한국 시간 기준 이번 달이다 (DS
   assert.match(page, /9 \* 60 \* 60 \* 1000/, '화면의 KST 오프셋 선언이 바뀌었다');
   assert.match(page, /src\/lib\/kst\.ts/, '옮겨 적은 계산식의 원본을 밝히지 않았다');
 });
+
+/* ══════════ 디자인 스프린트 — 20차 재감사 (DS 23-2) ══════════ */
+
+/** 컴파일된 콘솔에서 `afetch` 와 그 기본 기한을 떼어내 실제로 돌린다(DS 20-2 의 방식). */
+async function loadAfetch() {
+  await loadConsole();
+  const konst = /const REQUEST_TIMEOUT_MS = \d+;/.exec(cachedJs);
+  assert.ok(konst, 'REQUEST_TIMEOUT_MS 선언을 찾지 못했다');
+  const m = /function afetch\(/.exec(cachedJs);
+  assert.ok(m, 'afetch 선언을 찾지 못했다');
+  const end = cachedJs.indexOf('\n}', m.index); // 최상위 함수라 닫는 중괄호는 1열에 있다
+  assert.ok(end > m.index, 'afetch 의 끝을 찾지 못했다');
+  return new Function(`${konst[0]}\n${cachedJs.slice(m.index, end + 2)}\nreturn afetch;`)();
+}
+
+/**
+ * DS 23-2 — 끝나지 않는 요청 하나가 그 탭을 영구히 묶었다.
+ *
+ * 불러오기는 `phase: 'loading'` 에 머물러 스켈레톤만 반짝이고(「다시 시도」는 `error` 일 때만 뜬다),
+ * 중복 실행 잠금(`claim`)은 `release` 를 만나지 못해 같은 기능을 다시 누를 수조차 없었다.
+ * 「정말 끊기는가」는 소스 검사로 볼 수 없다 — 돌려 봐야 안다.
+ */
+test('콘솔 요청도 기한이 지나면 끊긴다 (DS 23-2)', opts, async () => {
+  const afetch = await loadAfetch();
+  const prev = globalThis.fetch;
+  try {
+    // ① 끝나지 않는 요청 — 진짜 fetch 처럼 **신호가 끊길 때만** 거절한다.
+    const seen = [];
+    globalThis.fetch = (url, init) => {
+      seen.push({ url, init });
+      return new Promise((_resolve, reject) => {
+        if (!init?.signal) return; // 기한이 없으면 영원히 끝나지 않는다(종전 동작)
+        init.signal.addEventListener('abort', () => reject(init.signal.reason));
+      });
+    };
+    const t0 = Date.now();
+    const err = await afetch('/api/admin/kb', { headers: { 'x-admin-token': 't' } }, 40).then(() => null, (e) => e);
+    assert.ok(err, '끝나지 않는 요청인데 성공으로 돌아왔다');
+    assert.equal(err.name, 'AbortError', `기한이 지나도 요청을 끊지 않는다(${err.name})`);
+    assert.ok(Date.now() - t0 < 3000, '기한을 훨씬 넘겨서 끊는다');
+    // 기존 요청 형태(인증 헤더)는 그대로 가야 한다 — 기한만 더한 것이다.
+    assert.equal(seen[0].url, '/api/admin/kb');
+    assert.equal(seen[0].init.headers['x-admin-token'], 't', '인증 헤더가 사라졌다');
+    assert.ok(seen[0].init.signal, '요청에 끊을 수 있는 신호를 붙이지 않았다');
+
+    // ② 기한 안에 온 응답은 그대로 통과한다(타이머가 받은 답을 끊지 않는다).
+    const res = { ok: true, status: 200 };
+    globalThis.fetch = async () => res;
+    assert.equal(await afetch('/api/health', {}, 1000), res, '응답을 그대로 돌려주지 않는다');
+
+    // ③ 기한을 적지 않은 호출도 기본 기한을 쓴다 — 요청마다 손으로 적게 하면 어느 하나는 빠진다.
+    const noMs = [];
+    globalThis.fetch = async (url, init) => { noMs.push(init); return res; };
+    await afetch('/api/admin/rules');
+    assert.ok(noMs[0].signal, '기한을 생략한 요청에는 신호가 붙지 않는다');
+  } finally {
+    globalThis.fetch = prev;
+  }
+});

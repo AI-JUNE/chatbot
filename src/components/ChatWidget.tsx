@@ -107,6 +107,54 @@ function errorText(d: ApiErrorLike, res?: Response): string {
   return ERROR_TEXT[code] || d?.message || d?.error || '오류가 발생했어요. 잠시 후 다시 시도해 주세요.';
 }
 
+/**
+ * ── 답이 끝내 오지 않을 때 ──
+ * 브라우저 `fetch` 에는 **시간 제한이 없다.** 지하철·엘리베이터처럼 요청을 보낸 직후 신호가 끊기거나
+ * 중간 장비가 연결만 붙잡고 있으면 그 약속(Promise)은 몇 분이 지나도 지켜지지도, 깨지지도 않는다.
+ * 그 사이 위젯은 `busy` 가 참인 채로
+ *  - 타이핑 점 3개를 계속 돌리고(스크린리더에는 「답변을 작성하고 있습니다」가 계속 읽힌다),
+ *  - `sendText` 앞단의 `if (!text || busy) return` 때문에 **다시 보내기도, 새 질문도 조용히 무시**한다.
+ * 즉 DS 5-5 가 만든 실패 안내·재전송 경로가 **한 번도 실행되지 않는다** — 멈춘 것인데 돌고 있는 것처럼
+ * 보이고, 사용자는 끝나지 않는 기다림에서 나올 방법이 없다(QUALITY_BAR §1·§3).
+ *
+ * 그래서 요청마다 기한을 둔다. 기한이 지나면 우리가 끊고(`AbortController`) 평소의 실패 경로로 보낸다.
+ */
+/** 대화 응답 기한. 서버의 LLM 상한(`CHAT_LLM_TIMEOUT_MS` 8초 × 재시도 1회 = 약 16초)보다 길게 둔다 — 짧으면 올 답을 끊는다. */
+export const CHAT_TIMEOUT_MS = 25_000;
+/** 접수·평가처럼 서버가 즉시 처리하는 요청의 기한. */
+export const POST_TIMEOUT_MS = 15_000;
+
+/**
+ * 기한 안에 끝내는 JSON POST.
+ *
+ * 본문(`r.json()`)까지 **같은 기한** 안에서 읽는다 — 헤더만 오고 본문이 멈추는 응답이 있으므로
+ * 응답이 왔다고 타이머를 먼저 지우면 기다림이 다시 무한이 된다.
+ * 본문이 JSON 이 아니면(중간 장비가 돌려주는 HTML 오류 페이지 등) `data` 는 null 이고,
+ * 부르는 쪽의 실패 안내로 이어진다 — 파싱 실패로 안내까지 잃지 않게 한다.
+ */
+// `data` 는 서버 응답을 그대로 받는 자리다 — 종전 `await r.json()` 과 같은 타입(검사는 부르는 쪽이 한다).
+export async function postJson(url: string, body: unknown, ms: number): Promise<{ r: Response; data: any }> {
+  const ctl = typeof AbortController === 'undefined' ? null : new AbortController();
+  const timer = ctl ? setTimeout(() => ctl.abort(), ms) : undefined;
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      ...(ctl ? { signal: ctl.signal } : {}),
+    });
+    const data = await r.json().catch(() => null);
+    return { r, data };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/** 기한이 지나 **우리가** 끊은 요청인가 — 사용자에게는 「연결이 느리다」와 다른 말을 해야 한다. */
+function isTimeout(e: unknown): boolean {
+  return (e as { name?: string } | null)?.name === 'AbortError';
+}
+
 // embedded=true: embed.js가 iframe으로 띄우는 모드. 처음엔 버블만 보이고,
 // 열림/닫힘 상태를 부모 페이지에 postMessage로 알려 iframe 크기를 맞춘다.
 export const EMBED_SIZE = { open: { w: 400, h: 660 }, closed: { w: 104, h: 104 } };
@@ -590,12 +638,12 @@ export default function ChatWidget({
     const gen = genRef.current;
     setBusy(true);
     try {
-      const r = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, sessionId, ...(tenant ? { tenant: tenant.id } : {}) }),
-      });
-      const data = await r.json();
+      // 기한 안에 끝낸다 — 답이 끝내 오지 않으면 끊고 아래 실패 안내로 보낸다(기다림이 무한이 되지 않게).
+      const { r, data } = await postJson(
+        '/api/chat',
+        { message: text, sessionId, ...(tenant ? { tenant: tenant.id } : {}) },
+        CHAT_TIMEOUT_MS,
+      );
       // 지워진 대화의 답이다 — 화면에 싣지 않는다(아래 실패 안내도 같다).
       if (gen !== genRef.current) return;
       if (!r.ok || data?.ok === false || typeof data?.reply !== 'string') {
@@ -612,9 +660,15 @@ export default function ChatWidget({
         form: isForm(data.form) ? data.form : undefined,
         cta: isCTA(data.cta) ? data.cta : undefined,
       });
-    } catch {
+    } catch (e) {
       if (gen !== genRef.current) return;
-      pushBot({ text: '연결이 원활하지 않아 메시지를 보내지 못했습니다. 잠시 후 다시 보내 주세요.', failed: text });
+      pushBot({
+        text: isTimeout(e)
+          // 기다린 사람에게는 「무엇을 기다렸는지」를 말해야 한다 — 연결이 느린 것과 답이 안 온 것은 다르다.
+          ? '답변이 오지 않아 기다리기를 멈췄습니다. 다시 보내 보시겠어요?'
+          : '연결이 원활하지 않아 메시지를 보내지 못했습니다. 잠시 후 다시 보내 주세요.',
+        failed: text,
+      });
     } finally {
       // 새 대화가 이미 시작됐다면 그 대화의 기다림 표시를 꺼서는 안 된다
       // (지운 뒤 곧바로 물어본 질문의 점 3개가 사라지고, 중복 전송까지 열린다).
@@ -629,11 +683,11 @@ export default function ChatWidget({
   async function rate(m: Msg, verdict: 'up' | 'down') {
     setRated((s) => ({ ...s, [m.key]: verdict }));
     try {
-      const r = await fetch('/api/feedback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, verdict, citation: m.citation?.source || '' }),
-      });
+      const { r } = await postJson(
+        '/api/feedback',
+        { sessionId, verdict, citation: m.citation?.source || '' },
+        POST_TIMEOUT_MS,
+      );
       if (!r.ok) setRated((s) => ({ ...s, [m.key]: 'error' }));
     } catch {
       setRated((s) => ({ ...s, [m.key]: 'error' }));
@@ -662,18 +716,17 @@ export default function ChatWidget({
     const gen = genRef.current;
     setHandoff({ ...handoff, contact, stage: 'sending', error: '' });
     try {
-      const r = await fetch('/api/escalation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const { r, data: d } = await postJson(
+        '/api/escalation',
+        {
           sessionId,
           reason: 'user_request',
           // 되살린 대화에서도 비지 않는다 — 화면에 남아 있는 마지막 고객 말을 그대로 싣는다.
           message: lastUserText(msgs),
           ...(trimmed ? { contact: trimmed } : {}),
-        }),
-      });
-      const d = await r.json();
+        },
+        POST_TIMEOUT_MS,
+      );
       // 접수하는 사이에 대화를 지웠다면 그 접수 카드는 이미 사라진 말풍선에 붙어 있다.
       if (gen !== genRef.current) return;
       if (r.ok && d?.ok && d?.ticket?.id) {
@@ -692,9 +745,17 @@ export default function ChatWidget({
         return;
       }
       setHandoff({ ...handoff, contact, stage: 'error', error: errorText(d, r) });
-    } catch {
+    } catch (e) {
       if (gen !== genRef.current) return;
-      setHandoff({ ...handoff, contact, stage: 'error', error: '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.' });
+      setHandoff({
+        ...handoff,
+        contact,
+        stage: 'error',
+        // 접수는 「되었는지 몰라서 또 누르는」 자리다 — 기한이 지나 끊었다는 사실을 밝히고 다시 시도하게 한다.
+        error: isTimeout(e)
+          ? '접수 결과가 오지 않아 기다리기를 멈췄습니다. 다시 시도해 주세요.'
+          : '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.',
+      });
     }
   }
 

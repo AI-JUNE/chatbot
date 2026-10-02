@@ -2138,3 +2138,80 @@ test('내려받는 CSV 의 열 이름이 받는 사람의 말이다 (DS 22-3)', 
   assert.match(logs, /SOURCE_LABELS\[l\.source\]/, '근거를 이름으로 싣지 않는다');
   assert.match(logs, /'주제코드'/, '다른 시스템으로 옮길 코드 열은 남겨 둔다');
 });
+
+/* ══════════ 디자인 스프린트 — 20차 재감사 (DS 23-1·23-2) ══════════ */
+
+/**
+ * DS 23-1 — 브라우저 `fetch` 에는 시간 제한이 없다.
+ *
+ * 요청을 보낸 뒤 신호가 끊기면(지하철·엘리베이터, 연결만 붙잡고 있는 중간 장비) 그 약속은 몇 분이
+ * 지나도 지켜지지도 깨지지도 않는다. 그 사이 위젯은 `busy` 가 참이라 타이핑 점 3개를 계속 돌리고,
+ * `sendText` 앞단의 `if (!text || busy) return` 때문에 **다시 보내기도 새 질문도 조용히 무시**한다 —
+ * DS 5-5 가 만든 실패 안내·재전송 경로가 한 번도 실행되지 않는다(QUALITY_BAR §1·§3).
+ */
+test('위젯의 모든 요청에 기한이 있다 (DS 23-1)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  // 기한은 한 곳에서 만든다 — 요청마다 손으로 적으면 어느 하나는 빠진다.
+  assert.match(s, /export async function postJson\(url: string, body: unknown, ms: number\)/, '기한을 가진 공용 요청 함수가 없다');
+  assert.match(s, /new AbortController\(\)/, '기한이 지나도 요청을 끊지 못한다');
+  assert.match(s, /setTimeout\(\(\) => ctl\.abort\(\), ms\)/, '기한 타이머가 없다');
+
+  // 본문 읽기까지 같은 기한 안에 있어야 한다 — 헤더만 오고 본문이 멈추는 응답이 있다.
+  const helper = s.slice(s.indexOf('export async function postJson'), s.indexOf('function isTimeout'));
+  assert.match(helper, /const data = await r\.json\(\)\.catch\(\(\) => null\)/, '본문을 기한 안에서 읽지 않거나, 파싱 실패로 안내까지 잃는다');
+  assert.equal(/clearTimeout/.test(helper.slice(0, helper.indexOf('const data'))), false, '응답이 오자마자 타이머를 지우면 본문 대기가 다시 무한이 된다');
+
+  // 위젯이 직접 fetch 를 부르는 자리는 postJson 안의 한 곳뿐이다(= 기한 없는 요청 0건).
+  assert.equal((s.match(/[^a-zA-Z]fetch\(/g) || []).length, 1, '기한을 거치지 않는 요청이 남아 있다');
+  for (const url of ['/api/chat', '/api/feedback', '/api/escalation']) {
+    assert.match(s, new RegExp(`postJson\\(\\s*'${url}'`), `${url} 요청이 기한을 거치지 않는다`);
+  }
+  // 대화 요청은 서버의 LLM 예산(8초 × 재시도 1회)보다 길어야 한다 — 짧으면 올 답을 끊는다.
+  assert.match(s, /export const CHAT_TIMEOUT_MS = 25_000/, '대화 응답 기한이 없다');
+  assert.match(s, /export const POST_TIMEOUT_MS = 15_000/, '접수·평가 요청 기한이 없다');
+
+  // 기한이 지나 우리가 끊은 것과 「연결이 느린 것」을 구분해 말한다.
+  assert.match(s, /function isTimeout\(e: unknown\)/, '끊긴 요청을 구분하지 않는다');
+  assert.match(s, /'AbortError'/, 'AbortError 를 구분하지 않으면 기다린 사람에게 엉뚱한 안내가 간다');
+  const send = fnBody(s, 'async function sendText(');
+  assert.match(send, /isTimeout\(e\)/, '대화 요청이 끊긴 사실을 구분하지 않는다');
+  assert.match(send, /답변이 오지 않아 기다리기를 멈췄습니다/, '기다림을 멈춘 사실을 밝히지 않는다');
+  assert.match(send, /failed: text,/, '끊긴 뒤 「다시 보내기」가 붙지 않으면 나오는 길이 없다');
+  const handoff = fnBody(s, 'async function submitHandoff(');
+  assert.match(handoff, /isTimeout\(e\)/, '접수도 기한이 지난 사실을 밝혀야 한다');
+  assert.match(handoff, /접수 결과가 오지 않아 기다리기를 멈췄습니다/, '접수가 끊긴 사실을 밝히지 않는다');
+});
+
+/**
+ * DS 23-2 — 콘솔도 같은 자리에 있었다.
+ *
+ * 불러오기가 끝나지 않으면 `phase` 가 `loading` 에 머물러 스켈레톤이 영구히 반짝이고(DS 4-2 의
+ * 「다시 시도」는 `error` 일 때만 뜬다), 중복 실행 잠금(`claim`)이 `release` 를 만나지 못해
+ * 그 탭에서는 같은 기능을 다시 누를 수조차 없다 — 새로고침 말고는 나오는 길이 없다.
+ */
+test('콘솔의 모든 요청이 기한을 거친다 (DS 23-2)', () => {
+  const s = read('src/app/admin/page.tsx');
+  assert.match(s, /function afetch\(input: string, init: RequestInit = \{\}, ms: number = REQUEST_TIMEOUT_MS\)/, '기한을 가진 공용 요청 함수가 없다');
+  assert.match(s, /setTimeout\(\(\) => ctl\.abort\(\), ms\)/, '기한 타이머가 없다');
+  // 응답이 왔다고 타이머를 지우지 않는다 — 본문(`json()`·`blob()`)을 읽는 동안에도 기한이 살아 있어야 한다.
+  const helper = s.slice(s.indexOf('function afetch('), s.indexOf('function scrollBehavior'));
+  assert.match(helper, /\.catch\(\(e\) => \{/, '실패한 요청의 타이머를 정리하지 않는다');
+  assert.equal(/\.finally\(/.test(helper), false, '응답과 함께 타이머를 지우면 본문 대기가 다시 무한이 된다');
+
+  // 화면이 직접 fetch 를 부르는 자리는 afetch 안의 두 곳(미지원 폴백·본체)뿐이다.
+  assert.equal((s.match(/[^a-zA-Z]fetch\(/g) || []).length, 2, '기한을 거치지 않는 요청이 남아 있다');
+  assert.ok((s.match(/await afetch\(/g) || []).length >= 25, '콘솔 요청 대부분이 기한을 거치지 않는다');
+
+  // 「응답 테스트」만 기한이 길다 — 같은 `/api/chat` 을 부르는 위젯과 **같은 값**이어야 한다.
+  assert.match(s, /const CHAT_TEST_TIMEOUT_MS = 25_000/, '응답 테스트 기한이 없다');
+  assert.match(s, /const REQUEST_TIMEOUT_MS = 15_000/, '기본 요청 기한이 없다');
+  assert.match(s, /CHAT_TEST_TIMEOUT_MS,\n\s*\);/, '응답 테스트가 긴 기한을 쓰지 않는다');
+  const widget = read('src/components/ChatWidget.tsx');
+  const pick = (src, name) => {
+    const m = new RegExp(`${name} = ([\\d_]+)`).exec(src);
+    assert.ok(m, `${name} 를 찾지 못했다`);
+    return Number(m[1].replace(/_/g, ''));
+  };
+  assert.equal(pick(s, 'CHAT_TEST_TIMEOUT_MS'), pick(widget, 'CHAT_TIMEOUT_MS'), '같은 /api/chat 인데 화면마다 기한이 다르다');
+  assert.equal(pick(s, 'REQUEST_TIMEOUT_MS'), pick(widget, 'POST_TIMEOUT_MS'), '짧은 요청의 기한이 화면마다 다르다');
+});

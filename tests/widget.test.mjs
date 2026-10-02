@@ -418,3 +418,72 @@ test('위젯 입력칸이 키보드 초점 표시를 지우지 않는다 (DS 14-
   const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
   assert.match(css, /:focus-visible\{outline:2px solid var\(--brand\)/, '공용 초점 표시 규칙이 없다');
 });
+
+/* ══════════ 디자인 스프린트 — 20차 재감사 (DS 23-1) ══════════ */
+
+/**
+ * 끝나지 않는 요청 흉내. 진짜 `fetch` 와 같게 **신호가 끊길 때만** 거절한다 —
+ * 지하철에서 신호가 끊긴 요청이 브라우저에서 그렇게 남는다(응답도, 오류도 없다).
+ */
+function hangingFetch(seen) {
+  return (url, init) => {
+    seen.push({ url, init });
+    return new Promise((_resolve, reject) => {
+      if (!init?.signal) return; // 기한이 없으면 영원히 끝나지 않는다(종전 동작)
+      init.signal.addEventListener('abort', () => reject(init.signal.reason));
+    });
+  };
+}
+
+/** `globalThis.fetch` 를 잠시 바꿔 치고 되돌린다. */
+async function withFetch(impl, fn) {
+  const prev = globalThis.fetch;
+  globalThis.fetch = impl;
+  try { return await fn(); } finally { globalThis.fetch = prev; }
+}
+
+/**
+ * DS 23-1 — 답이 끝내 오지 않으면 위젯은 영원히 기다렸다.
+ *
+ * 브라우저 `fetch` 에는 시간 제한이 없다. 그 사이 `busy` 는 참이라 타이핑 점 3개가 계속 돌고
+ * `sendText` 앞단의 `if (!text || busy) return` 이 **다시 보내기까지 조용히 무시**했다.
+ * 소스 검사로는 "정말 끊기는가"를 볼 수 없으므로 여기서는 컴파일한 함수를 실제로 돌린다.
+ */
+test('기한이 지나면 요청을 끊는다 (DS 23-1)', opts, async () => {
+  const mod = await loadModule();
+  const seen = [];
+
+  const t0 = Date.now();
+  const err = await withFetch(hangingFetch(seen), () =>
+    mod.postJson('/api/chat', { message: '안녕하세요' }, 40).then(
+      () => null,
+      (e) => e,
+    ),
+  );
+  assert.ok(err, '끝나지 않는 요청인데 성공으로 돌아왔다');
+  assert.equal(err.name, 'AbortError', `기한이 지나도 요청을 끊지 않는다(${err.name})`);
+  assert.ok(Date.now() - t0 < 3000, '기한을 훨씬 넘겨서 끊는다');
+  assert.ok(seen[0].init.signal, '요청에 끊을 수 있는 신호를 붙이지 않았다');
+  assert.equal(seen[0].init.method, 'POST', '기존 요청 형태가 바뀌었다');
+  assert.equal(JSON.parse(seen[0].init.body).message, '안녕하세요', '본문이 그대로 가지 않는다');
+});
+
+test('기한 안에 온 답은 그대로 쓰고 끊지 않는다 (DS 23-1)', opts, async () => {
+  const mod = await loadModule();
+
+  // ① 정상 응답 — 타이머가 받은 답을 끊어 버리면 안 된다.
+  const okRes = await withFetch(
+    async () => ({ ok: true, status: 200, json: async () => ({ ok: true, reply: '안내해 드릴게요' }) }),
+    () => mod.postJson('/api/chat', {}, 1000),
+  );
+  assert.equal(okRes.r.ok, true);
+  assert.equal(okRes.data.reply, '안내해 드릴게요', '응답 본문을 그대로 돌려주지 않는다');
+
+  // ② 본문이 JSON 이 아닐 때(중간 장비의 HTML 오류 페이지) — 파싱 실패로 안내까지 잃지 않는다.
+  const badRes = await withFetch(
+    async () => ({ ok: false, status: 502, json: async () => { throw new SyntaxError('not json'); } }),
+    () => mod.postJson('/api/chat', {}, 1000),
+  );
+  assert.equal(badRes.data, null, '본문을 읽지 못하면 예외가 새어 나간다');
+  assert.equal(badRes.r.status, 502, '응답 자체는 부르는 쪽에 전해져야 한다(상태별 안내)');
+});

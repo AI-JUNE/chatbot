@@ -1386,6 +1386,37 @@ function useRunOnce() {
 }
 
 /**
+ * ── 답이 끝내 오지 않을 때 ──
+ * 브라우저 `fetch` 에는 **시간 제한이 없다.** 요청을 보낸 뒤 신호가 끊기거나 중간 장비가 연결만
+ * 붙잡고 있으면, 그 약속(Promise)은 몇 분이 지나도 지켜지지도 깨지지도 않는다. 콘솔에서는 그 사이
+ *  - 불러오기(DS 4-2)의 `phase` 가 `loading` 에 머물러 **스켈레톤이 영구히 반짝이고**, `error` 로
+ *    가지 않으므로 「다시 시도」 버튼이 끝내 뜨지 않는다,
+ *  - 저장·삭제는 `...Busy` 가 참인 채로 남아 `aria-busy` 가 계속 「저장하는 중」이라 읽히고,
+ *  - 중복 실행 잠금(`claim`)이 `release` 를 못 만나 **그 탭에서는 같은 기능을 다시 누를 수조차 없다**
+ *    (파트너·정산·저장소·테넌트·인증) — 새로고침 말고는 나오는 길이 없다.
+ * 즉 DS 4-2·5-10 이 만든 실패 안내 경로가 **한 번도 실행되지 않는다**(QUALITY_BAR §1·§3).
+ *
+ * 그래서 콘솔의 모든 요청은 기한을 가진 이 한 곳을 거친다 — 기한이 지나면 끊고 평소의 실패 경로로 보낸다.
+ * 위젯도 같은 대비를 가진다(`ChatWidget.tsx` 의 `postJson`). 상수는 테스트가 두 값을 맞춰 고정한다.
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+/** 「응답 테스트」는 서버가 LLM 을 부를 수 있다(상한 8초 × 재시도 1회 = 약 16초) — 그보다 길게 둔다. */
+const CHAT_TEST_TIMEOUT_MS = 25_000;
+
+function afetch(input: string, init: RequestInit = {}, ms: number = REQUEST_TIMEOUT_MS): Promise<Response> {
+  if (typeof AbortController === 'undefined') return fetch(input, init);
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  // 본문(`res.json()`·`res.blob()`)을 읽는 동안에도 기한이 살아 있어야 한다 — 헤더만 오고 본문이
+  // 멈추는 응답이 있다. 그래서 응답이 왔다고 타이머를 지우지 않는다: 이미 다 읽은 요청에 대한
+  // `abort()` 는 아무 일도 하지 않고, 아직 읽지 않은 본문은 그때 끊기는 것이 맞다.
+  return fetch(input, { ...init, signal: ctl.signal }).catch((e) => {
+    clearTimeout(timer);
+    throw e;
+  });
+}
+
+/**
  * 모션 최소화 설정을 존중하는 스크롤 동작(DS 8-3).
  * CSS 의 `@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}` 는
  * **JS 가 `behavior:'smooth'` 를 직접 넘기면 무시된다** — 설정은 켜 두었는데 화면만 미끄러진다.
@@ -1575,7 +1606,7 @@ export default function AdminPage() {
   const loadKB = useCallback(async () => {
     markPhase('kb', 'loading');
     try {
-      const res = await fetch('/api/admin/kb', { headers: authHeaders() });
+      const res = await afetch('/api/admin/kb', { headers: authHeaders() });
       if (on401(res)) return;
       const data = await res.json();
       if (data.ok) setEntries(data.entries);
@@ -1613,7 +1644,7 @@ export default function AdminPage() {
     }
     setImpBusy(commit ? 'commit' : 'preview');
     try {
-      const res = await fetch('/api/admin/kb/import', {
+      const res = await afetch('/api/admin/kb/import', {
         method: 'POST',
         headers: authHeaders(true),
         body: JSON.stringify({
@@ -1660,7 +1691,7 @@ export default function AdminPage() {
   const loadRules = useCallback(async () => {
     markPhase('rules', 'loading');
     try {
-      const res = await fetch('/api/admin/rules', { headers: authHeaders() });
+      const res = await afetch('/api/admin/rules', { headers: authHeaders() });
       if (on401(res)) return;
       const data = await res.json();
       if (data.ok) {
@@ -1738,7 +1769,7 @@ export default function AdminPage() {
   const loadEsc = useCallback(async () => {
     markPhase('esc', 'loading');
     try {
-      const res = await fetch('/api/admin/escalations?logs=true', { headers: authHeaders() });
+      const res = await afetch('/api/admin/escalations?logs=true', { headers: authHeaders() });
       if (on401(res)) return;
       const data = await res.json();
       if (data.ok) {
@@ -1805,7 +1836,7 @@ export default function AdminPage() {
     setPartnerErr('');
     try {
       const qs = filter ? `?partnerId=${encodeURIComponent(filter)}` : '';
-      const res = await fetch(`/api/admin/partners${qs}`, { headers: authHeaders(), cache: 'no-store' });
+      const res = await afetch(`/api/admin/partners${qs}`, { headers: authHeaders(), cache: 'no-store' });
       if (on401(res)) return;
       const data = await res.json();
       if (!res.ok || !data.ok) {
@@ -1859,7 +1890,7 @@ export default function AdminPage() {
     setPartnerErr('');
     setPartnerSaving(true);
     try {
-      const res = await fetch('/api/admin/partners', {
+      const res = await afetch('/api/admin/partners', {
         method: 'POST',
         headers: authHeaders(true),
         body: JSON.stringify({
@@ -1900,7 +1931,7 @@ export default function AdminPage() {
     setPartnerErr('');
     setPartnerSaving(true);
     try {
-      const res = await fetch('/api/admin/partners', {
+      const res = await afetch('/api/admin/partners', {
         method: 'POST',
         headers: authHeaders(true),
         body: JSON.stringify({ kind: 'account', ...aForm }),
@@ -1931,7 +1962,7 @@ export default function AdminPage() {
     });
     if (!ok) return;
     try {
-      const res = await fetch(`/api/admin/partners?partnerId=${encodeURIComponent(p.id)}`, {
+      const res = await afetch(`/api/admin/partners?partnerId=${encodeURIComponent(p.id)}`, {
         method: 'DELETE',
         headers: authHeaders(),
       });
@@ -2013,7 +2044,7 @@ export default function AdminPage() {
         try {
           const qs = new URLSearchParams({ month: cond.month });
           if (cond.partnerId) qs.set('partnerId', cond.partnerId);
-          const res = await fetch(`/api/admin/settlement?${qs.toString()}`, { headers: authHeaders(), cache: 'no-store' });
+          const res = await afetch(`/api/admin/settlement?${qs.toString()}`, { headers: authHeaders(), cache: 'no-store' });
           if (on401(res)) return false;
           const data = await res.json();
           // 그새 조건이 바뀌었다 — 이 결과는 지금 화면의 답이 아니므로 싣지 않는다.
@@ -2064,7 +2095,7 @@ export default function AdminPage() {
   const loadAudit = useCallback(async () => {
     markPhase('audit', 'loading');
     try {
-      const res = await fetch('/api/admin/audit?limit=100', { headers: authHeaders() });
+      const res = await afetch('/api/admin/audit?limit=100', { headers: authHeaders() });
       if (on401(res)) return;
       const data = await res.json();
       if (data.ok) setAuditEvents(data.events || []);
@@ -2083,7 +2114,7 @@ export default function AdminPage() {
     setStorageBusy(true);
     setStorageErr('');
     try {
-      const res = await fetch('/api/health', { cache: 'no-store' });
+      const res = await afetch('/api/health', { cache: 'no-store' });
       const data = await res.json();
       const st = data?.dependencies?.storage;
       if (!res.ok || !st) {
@@ -2113,12 +2144,12 @@ export default function AdminPage() {
     setTenantBusy(true);
     setTenantErr('');
     try {
-      const list = await fetch('/api/admin/tenants', { headers: authHeaders(), cache: 'no-store' });
+      const list = await afetch('/api/admin/tenants', { headers: authHeaders(), cache: 'no-store' });
       if (on401(list)) return;
       const listData = await list.json();
       if (listData.ok) setTenantIdList(listData.ids || []);
 
-      const res = await fetch(`/api/admin/tenants?id=${encodeURIComponent(id)}`, { headers: authHeaders(), cache: 'no-store' });
+      const res = await afetch(`/api/admin/tenants?id=${encodeURIComponent(id)}`, { headers: authHeaders(), cache: 'no-store' });
       if (on401(res)) return;
       const data = await res.json();
       if (!data.ok || !data.tenant) {
@@ -2141,7 +2172,7 @@ export default function AdminPage() {
     if (!claim('auth')) return;
     setAuthBusy(true);
     try {
-      const res = await fetch('/api/admin/auth', { headers: authHeaders() });
+      const res = await afetch('/api/admin/auth', { headers: authHeaders() });
       const data = await res.json();
       if (data.ok) {
         setAuthInfo({ authRequired: data.authRequired, tokenConfigured: data.tokenConfigured, allowed: data.allowed, authed: data.authed });
@@ -2232,7 +2263,7 @@ export default function AdminPage() {
     // (종전에는 「저장하지 못했습니다: 관리자 토큰이 필요합니다」 라는 내부 문구만 토스트로 떴다).
     let data: { ok?: boolean; error?: string } | null;
     try {
-      const res = await fetch('/api/admin/kb', {
+      const res = await afetch('/api/admin/kb', {
         method: 'POST',
         headers: authHeaders(true),
         body: JSON.stringify(body),
@@ -2275,7 +2306,7 @@ export default function AdminPage() {
     });
     if (!ok) return;
     try {
-      const res = await fetch(`/api/admin/kb?id=${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() });
+      const res = await afetch(`/api/admin/kb?id=${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() });
       if (on401(res)) return;
       const data = await res.json();
       if (data.ok) {
@@ -2297,7 +2328,7 @@ export default function AdminPage() {
     });
     if (!ok) return;
     try {
-      const res = await fetch('/api/admin/kb', {
+      const res = await afetch('/api/admin/kb', {
         method: 'POST',
         headers: authHeaders(true),
         body: JSON.stringify({ reset: true }),
@@ -2317,7 +2348,7 @@ export default function AdminPage() {
 
   const patchRule = async (intent: string, patch: { enabled?: boolean; reply?: string | null }) => {
     try {
-      const res = await fetch('/api/admin/rules', {
+      const res = await afetch('/api/admin/rules', {
         method: 'PATCH',
         headers: authHeaders(true),
         body: JSON.stringify({ intent, ...patch }),
@@ -2351,7 +2382,7 @@ export default function AdminPage() {
     };
     setCrBusy(true);
     try {
-      const res = await fetch('/api/admin/rules', {
+      const res = await afetch('/api/admin/rules', {
         method: 'POST',
         headers: authHeaders(true),
         body: JSON.stringify(body),
@@ -2378,7 +2409,7 @@ export default function AdminPage() {
   // 오프라인·서버 오류에서 예외가 그대로 사라져, 스위치는 되돌아가는데 **왜 안 됐는지 아무 말이 없었다**(§3).
   const toggleCustomRule = async (r: CustomRuleView) => {
     try {
-      const res = await fetch('/api/admin/rules', {
+      const res = await afetch('/api/admin/rules', {
         method: 'POST',
         headers: authHeaders(true),
         body: JSON.stringify({ intent: r.intent, enabled: !r.enabled }),
@@ -2406,7 +2437,7 @@ export default function AdminPage() {
     });
     if (!ok) return;
     try {
-      const res = await fetch(`/api/admin/rules?intent=${encodeURIComponent(intent)}`, { method: 'DELETE', headers: authHeaders() });
+      const res = await afetch(`/api/admin/rules?intent=${encodeURIComponent(intent)}`, { method: 'DELETE', headers: authHeaders() });
       if (on401(res)) return;
       const data = await res.json();
       if (data.ok) {
@@ -2441,7 +2472,7 @@ export default function AdminPage() {
     if (dlBusy) return;
     setDlBusy(what);
     try {
-      const res = await fetch(url, { headers: authHeaders(), cache: 'no-store' });
+      const res = await afetch(url, { headers: authHeaders(), cache: 'no-store' });
       if (on401(res)) return;
       if (!res.ok) {
         // 오류 본문은 JSON 이 아닐 수도 있다(프록시 HTML 등) — 파싱 실패로 안내까지 잃지 않게 감싼다.
@@ -2502,7 +2533,7 @@ export default function AdminPage() {
     if (!ok) return;
     setRestoreBusy(true);
     try {
-      const res = await fetch('/api/admin/backup', {
+      const res = await afetch('/api/admin/backup', {
         method: 'POST',
         headers: authHeaders(true),
         body: JSON.stringify(parsed),
@@ -2538,7 +2569,7 @@ export default function AdminPage() {
     if (!claim('ticket')) return;
     setTicketBusy(true);
     try {
-      const res = await fetch('/api/admin/escalations', {
+      const res = await afetch('/api/admin/escalations', {
         method: 'PATCH',
         headers: authHeaders(true),
         body: JSON.stringify({ id, status }),
@@ -2588,11 +2619,16 @@ export default function AdminPage() {
     setTestBusy(true);
     let data: Record<string, unknown> = {};
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: q }),
-      });
+      // 이 요청만 기한이 길다 — 서버가 LLM 을 부르면 16초까지 쓸 수 있다(그보다 짧게 끊으면 올 답을 끊는다).
+      const res = await afetch(
+        '/api/chat',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: q }),
+        },
+        CHAT_TEST_TIMEOUT_MS,
+      );
       data = (await res.json()) as Record<string, unknown>;
     } catch {
       data = { reply: '연결이 원활하지 않습니다. 잠시 후 다시 시도해 주세요.', intentLabel: '연결 오류', source: 'error' };
