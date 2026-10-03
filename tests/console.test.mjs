@@ -281,7 +281,8 @@ test('대시보드 최근 대화가 서랍을 여는 행 목록으로 렌더된�
   assert.match(src, /function shortSession/, '대화 식별자 축약');
   // 375px: 서랍 전체폭·행 세로 배치
   const mobile = css.slice(css.indexOf('@media (max-width:900px){'));
-  assert.match(mobile, /\.ac-drawer\{width:100vw\}/);
+  // 전체폭이지만 「큰 글씨」 배율로 화면보다 넓어지지는 않는다(DS 25-1 — --vz 로 먼저 나눈다)
+  assert.match(mobile, /\.ac-drawer\{width:calc\(100vw \/ var\(--vz\)\)\}/);
   assert.match(mobile, /\.ac-row\{flex-direction:column/);
   assert.match(css, /\.ac-drawer\{animation:none!important\}|,\.ac-drawer\{animation:none!important\}/, '모션 최소화 존중');
 });
@@ -423,7 +424,7 @@ test('상담원 요청이 요약 KPI·상태 필터·표·상세 서랍으로 �
   // 375px: 사유·시각 열은 접히고 서랍은 전체폭
   const mobile = css.slice(css.indexOf('@media (max-width:900px){\n  .ac-shell'));
   assert.match(mobile, /\.ac-col-wide\{display:none\}/);
-  assert.match(mobile, /\.ac-drawer\{width:100vw\}/);
+  assert.match(mobile, /\.ac-drawer\{width:calc\(100vw \/ var\(--vz\)\)\}/);
 });
 
 test('감사 로그·저장소 상태가 표·카드 그리드로 렌더되고 환경변수명이 화면에 없다 (DS 2-10)', opts, () => {
@@ -743,9 +744,13 @@ test('관리 토큰은 탭을 닫으면 지워진다 — 공용 PC 에 남지 �
   assert.doesNotThrow(() => blocked.writeSavedToken('x'));
   assert.doesNotThrow(() => blocked.writeSavedToken(''));
 
-  // 새 저장 경로가 생겨도 같은 결함이 다시 나지 않게 — 콘솔 전체에 영구 저장은 0건이다.
+  // 새 저장 경로가 생겨도 같은 결함이 다시 나지 않게 — 콘솔이 브라우저에 **영구히** 쓰는 것은
+  // 비밀값이 아닌 보기 설정 하나(「큰 글씨」, DS 25-1)뿐이고, 그 값은 '1' 이다.
+  // (보기 설정까지 탭 단위로 두면 매일 아침 다시 켜야 한다 — 눈에 달린 설정은 사람을 따라간다.)
   const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
-  assert.equal(/localStorage\.setItem/.test(src), false, '관리 토큰을 영구 저장소에 쓰면 안 된다');
+  const perm = src.match(/window\.localStorage\.setItem\([^)]*\)/g) || [];
+  assert.deepEqual(perm, ['window.localStorage.setItem(VIEW_SCALE_KEY, \'1\')'], '영구 저장소에 쓰는 자리는 보기 설정 하나여야 한다');
+  assert.equal(/localStorage\.setItem\([^)]*[Tt]oken/.test(src), false, '관리 토큰을 영구 저장소에 쓰면 안 된다');
   // 화면 안내가 실제 보관 기간과 어긋나면 안 된다(「이 브라우저에만 저장」은 사실이 아니었다).
   assert.match(src, /이 탭에만 보관되고 브라우저를 닫으면 지워집니다/, '보관 기간을 밝혀야 한다');
 });
@@ -1028,4 +1033,125 @@ test('대시보드가 자동 확인 사실과 기준 시각을 밝힌다 (DS 24-
   assert.ok(html.includes('새로고침'), '손으로 다시 부르는 길이 사라졌다');
   // 대기 건수를 아직 모르므로 배지를 그리지 않는다 — 0을 지어내지 않는다.
   assert.equal(/ac-navcount/.test(html), false, '받은 값이 없는데 대기 배지를 그린다');
+});
+
+/* ══════════ 디자인 스프린트 — 22차 재감사 (DS 25-x) ══════════ */
+
+/**
+ * DS 25-1 — 「큰 글씨」. 기준 원본(AICC Portal `admin.html` 의 `body.big{zoom:1.13}`)을 이식한다.
+ * 이 콘솔의 글자 크기는 전부 px(인라인 포함)라 브라우저의 「기본 글꼴 크기」 설정이 닿지 않는다.
+ * 켜고 끄는 문(화면), 다음 방문까지 남는 것(저장), 그리고 배율 때문에 레이아웃이 화면 밖으로
+ * 밀리지 않는 것(--vz) 세 가지를 모두 본다 — 셋 중 하나만 빠지면 켠 뒤가 깨진다.
+ */
+test('콘솔에서 글자를 키울 수 있다 — 기준 원본의 「큰 글씨」 이식 (DS 25-1)', opts, async () => {
+  const html = await render();
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+
+  // 1) 화면: 헤더에 눌림 상태가 있는 토글. 「가」 모양은 장식이라 숨기고 이름은 글자로 남는다.
+  assert.match(html, /class="ac-viewbtn" aria-pressed="false"/, '보기 설정 토글이 헤더에 없다');
+  assert.match(html, /aria-hidden="true"[^>]*>가</, '「가」 모양은 장식이어야 한다');
+  assert.ok(html.includes('큰 글씨'), '버튼에 읽을 수 있는 이름이 없다');
+  // 서버는 저장된 설정을 모른다 — 첫 렌더에 켜진 상태를 그리면 하이드레이션이 어긋난다.
+  assert.equal(/data-view-scale/.test(html), false, '서버 렌더에 보기 설정 표시가 들어갔다');
+
+  // 2) 저장: 비밀값이 아니므로 브라우저 단위로 남긴다(토큰은 그대로 탭 단위 — DS 14-3).
+  assert.match(src, /const VIEW_SCALE_KEY = '[^']+'/, '설정 키가 없다');
+  assert.match(src, /function readBigText\(\)[\s\S]{0,300}return false;/, '저장소가 막혀도 꺼짐으로 시작해야 한다');
+  assert.match(src, /body\.dataset\.viewScale = 'big'/, '켜짐을 화면 전체에 알리는 표시가 없다');
+  assert.match(src, /delete body\.dataset\.viewScale/, '콘솔을 떠나면 표시를 거둬야 한다(랜딩은 대상이 아니다)');
+
+  // 3) CSS: 배율은 CSS 한 곳에만 있고, 로그인 화면도 같이 커진다(토글 전에 보는 화면이다).
+  assert.match(css, /body\[data-view-scale="big"\]\{--vz:1\.13\}/, '배율 토큰이 없다');
+  assert.match(css, /body\[data-view-scale="big"\] \.ac-login\{zoom:1\.13\}/, '로그인 화면도 같이 커져야 한다');
+  assert.match(css, /body\[data-view-scale="big"\] \.ac-shell,/, '셸이 커져야 한다');
+  // 두 값이 갈라지면 뷰포트 단위 보정이 어긋난다 — 같은 수인지 고정한다.
+  const vz = (css.match(/body\[data-view-scale="big"\]\{--vz:([\d.]+)\}/) || [])[1];
+  const zoom = (css.match(/body\[data-view-scale="big"\] \.ac-login\{zoom:([\d.]+)\}/) || [])[1];
+  assert.equal(vz, zoom, `--vz(${vz}) 와 zoom(${zoom}) 이 갈라졌다`);
+
+  // 4) zoom 은 vh·vw 까지 곱한다 — 보정하지 않으면 사이드바 아래가 화면 밖으로 밀린다.
+  //    셸 안에서 뷰포트 단위를 쓰는 자리는 **전부** --vz 로 나눠야 한다(clamp 안의 글자 크기는 제외 —
+  //    배율로 커질 요소가 아니라 화면 폭에 따라 커지는 랜딩 제목이다).
+  const decls = css.replace(/\/\*[\s\S]*?\*\//g, ''); // 주석은 규칙이 아니다
+  const unguarded = (decls.match(/[\d.]+v[hw]\b(?!\s*\/\s*var\(--vz\))/g) || [])
+    .filter((m) => !decls.includes(`clamp(24px,${m}`));
+  assert.deepEqual(unguarded, [], `--vz 로 나누지 않은 뷰포트 단위가 남았다: ${unguarded.join(', ')}`);
+  for (const rule of [
+    /\.ac-shell\{[^}]*min-height:calc\(100vh \/ var\(--vz\)\)/,
+    /\.ac-side\{[^}]*height:calc\(100vh \/ var\(--vz\)\)/,
+    /\.ac-login\{min-height:calc\(100vh \/ var\(--vz\)\)/,
+    /\.ac-drawer\{[^}]*width:min\(520px,calc\(100vw \/ var\(--vz\)\)\)/,
+  ]) assert.match(css, rule, `보정 누락: ${rule}`);
+  // 기본값은 1 — 꺼져 있을 때 지금까지의 레이아웃과 한 픽셀도 달라지지 않는다.
+  assert.match(css, /--vz:1;/, '기본 배율이 1이 아니면 평소 화면이 바뀐다');
+
+  // 5) 375px: 헤더가 접힐 때 토글이 사라지지 않는다(인쇄에서만 감춘다 — DS 25-3).
+  const pr = css.slice(css.indexOf('@media print{'));
+  assert.ok(pr.includes('.ac-viewbtn'), '인쇄에서는 보기 설정을 감춘다');
+  const mobile = css.slice(css.indexOf('@media (max-width:900px){\n  .ac-shell'), css.indexOf('@media (forced-colors: active){'));
+  assert.equal(/\.ac-viewbtn\{display:none\}/.test(mobile), false, '좁은 화면에서 토글을 지우면 안 된다');
+});
+
+/**
+ * DS 25-2 — OS 고대비(강제 색) 모드.
+ * 이 모드는 글자색·배경색·테두리색을 사용자가 고른 색으로 덮고 그림자를 지운다. 그런데 이 화면이
+ * 「선택됨·켜짐」을 말하는 신호는 거의 전부 배경색 하나였다 — 치환되면 신호가 0이 된다.
+ */
+test('OS 고대비에서도 「지금 선택된 것」이 보인다 (DS 25-2)', opts, () => {
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  const fc = css.slice(css.indexOf('@media (forced-colors: active){'), css.indexOf('@media print{'));
+  assert.ok(fc.length > 0, '강제 색 모드 규칙이 없다');
+
+  // 배경색 하나로만 말하던 자리 6곳이 모두 다시 보여야 한다.
+  for (const [sel, why] of [
+    ['.ac-navbtn[aria-current="page"]', '지금 보고 있는 탭'],
+    ['.ac-segbtn[aria-pressed="true"]', '눌린 세그먼트(그림자도 지워진다)'],
+    ['.ac-switch[aria-checked="true"]', '규칙 켜기/끄기'],
+    ['.ac-chip[data-hit="true"]', '미리보기 적중 칩'],
+    ['tr[data-editing="true"]', '편집 중인 행'],
+    ['.ac-gsearch-opt[aria-selected="true"]', '↑↓ 로 고른 검색 결과'],
+  ]) assert.ok(fc.includes(sel), `강제 색 모드에서 신호가 사라지는 자리: ${sel} (${why})`);
+
+  // 색을 되살리지 않고 **시스템 색**으로 말한다 — 사용자가 고른 색을 우리가 되돌리면 안 된다.
+  assert.match(fc, /background:Highlight/, '시스템 「선택」 색을 쓰지 않는다');
+  assert.match(fc, /color:HighlightText/, '선택 색 위의 글자색 짝이 없다');
+  assert.equal(/#[0-9a-fA-F]{3}|var\(--brand|var\(--success|var\(--line/.test(fc), false, '강제 색 모드에서 우리 색을 다시 밀어 넣고 있다');
+  // 꺼짐/켜짐이 같은 색이 되는 스위치는 채움으로 구분한다.
+  assert.match(fc, /\.ac-switch\{forced-color-adjust:none;background:Canvas;border:1px solid ButtonText\}/, '꺼진 스위치의 바탕·테두리');
+  assert.match(fc, /\.ac-switch\[aria-checked="true"\] \.ac-switch-knob\{background:HighlightText\}/, '켜진 스위치의 손잡이');
+
+  // 평소 화면은 건드리지 않는다 — 이 규칙은 미디어 쿼리 안에만 있다.
+  assert.equal(/forced-color-adjust/.test(css.replace(fc, '')), false, '강제 색 전용 속성이 평소 경로로 새어 나왔다');
+});
+
+/**
+ * DS 25-3 — 인쇄.
+ * 정산 리포트·감사 로그를 Ctrl+P 하면 메뉴 10개·검색칸이 종이에 찍히고, 정작 표는 가로 스크롤
+ * 상자(.ac-scrollx, DS 9-1)에 갇혀 **보이던 폭까지만** 인쇄된다 — 뒤쪽 열이 종이에서 사라진다.
+ */
+test('인쇄하면 화면 장치가 빠지고 표가 잘리지 않는다 (DS 25-3)', opts, () => {
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  const pr = css.slice(css.indexOf('@media print{'));
+  assert.ok(pr.length > 0, '인쇄 규칙이 없다');
+
+  // 이것이 이 항목의 핵심이다 — 상자를 펴지 않으면 열이 사라진 표가 찍힌다.
+  assert.match(pr, /\.ac-scrollx\{overflow:visible\}/, '가로 스크롤 상자를 펴지 않으면 표가 잘린다');
+  // 여러 장이면 머리 행을 장마다 반복한다 — 둘째 장에 열 이름이 없으면 읽을 수 없다.
+  assert.match(pr, /\.ac-table thead\{display:table-header-group\}/, '머리 행 반복');
+  assert.match(pr, /\.ac-table tr\{break-inside:avoid\}/, '한 행이 두 장에 걸쳐 쪼개지면 안 된다');
+
+  // 종이에서 쓸 수 없는 것은 덜어낸다(메뉴·검색·토스트·서랍·확인 대화상자·스켈레톤).
+  for (const sel of ['.ac-side', '.ac-gsearch', '.ac-toast', '.ac-offline', '.skip-link', '.ac-drawer-root', '.ac-modal-root', '.ac-skelrows']) {
+    assert.ok(pr.includes(sel), `인쇄에서 덜어내지 않은 화면 장치: ${sel}`);
+  }
+  // 본문은 한 단으로 펴고 사이드바 자리를 비운다.
+  assert.match(pr, /\.ac-shell\{display:block;min-height:0\}/, '셸을 한 단으로 펴야 한다');
+  assert.match(pr, /\.ac-split,\.ac-split-test\{grid-template-columns:minmax\(0,1fr\)\}/, '분할 화면도 한 단으로');
+  assert.match(pr, /@page\{margin:14mm\}/, '종이 여백');
+  // 브랜드색으로 채운 버튼은 글자가 흰색이다 — 배경을 생략하면 빈 칸으로 찍힌다.
+  assert.match(pr, /\.ac-body button\{print-color-adjust:exact/, '채운 버튼의 배경을 지켜야 한다');
+
+  // 평소 화면은 건드리지 않는다.
+  assert.equal(/@page|print-color-adjust/.test(css.replace(pr, '')), false, '인쇄 전용 속성이 평소 경로로 새어 나왔다');
 });

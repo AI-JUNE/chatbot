@@ -22,6 +22,12 @@
   --success-50:#F0FDF4; --warn-50:#FFFBEB; --danger-50:#FEF2F2;
   /* 같은 계열의 테두리 — 틴트 배경 위에 얹는 경고·오류 배너가 쓴다(배경보다 한 단 진하다). */
   --success-200:#BBF7D0; --warn-200:#FDE68A; --danger-200:#FECACA;
+  /* 화면 배율 — 「큰 글씨」(DS 25-1)가 켜지면 1 이 아니다.
+   * `zoom` 은 하위 요소의 길이를 모두 곱하는데 **뷰포트 단위(vh·vw)까지 함께 곱한다** —
+   * 100vh 가 113vh 가 되면 사이드바 아래쪽이 화면 밖으로 밀리고 서랍이 화면보다 넓어진다.
+   * 그래서 뷰포트 단위를 쓰는 자리는 이 값으로 **먼저 나눠 둔다**(1 일 때는 아무 일도 없다).
+   * 배율을 바꿀 때 두 값이 갈라지면 안 되므로 테스트가 짝을 고정한다. */
+  --vz:1;
   --r:16px; --r-sm:10px; --r-lg:18px;
   --shadow-card:0 1px 2px rgba(15,23,42,.04), 0 12px 30px -18px rgba(15,23,42,.18);
   --shadow-pop:0 10px 15px -3px rgba(15,23,42,.08), 0 30px 60px -30px rgba(15,23,42,.45);
@@ -79,8 +85,8 @@ main:focus{outline:none}
 /* ── 관리 콘솔 셸 (AICC Portal admin 셸 규격) ──
    넓은 화면: 좌측 사이드바 + 스티키 헤더 + 본문.
    좁은 화면(≤900px): 사이드바가 상단 가로 스크롤 메뉴로 접힌다(그룹 제목은 감춘다). */
-.ac-shell{display:grid;grid-template-columns:236px minmax(0,1fr);min-height:100vh;background:var(--bg)}
-.ac-side{background:var(--surface);border-right:1px solid var(--line);padding:16px 12px;position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
+.ac-shell{display:grid;grid-template-columns:236px minmax(0,1fr);min-height:calc(100vh / var(--vz));background:var(--bg)}
+.ac-side{background:var(--surface);border-right:1px solid var(--line);padding:16px 12px;position:sticky;top:0;height:calc(100vh / var(--vz));overflow-y:auto;display:flex;flex-direction:column}
 .ac-brand{display:flex;align-items:center;gap:9px;padding:4px 8px 14px}
 .ac-logo{width:32px;height:32px;border-radius:9px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0}
 .ac-nav{display:flex;flex-direction:column}
@@ -97,6 +103,11 @@ main:focus{outline:none}
 .ac-badge[data-tone="on"]{color:var(--success);border-color:var(--success-200);background:var(--success-50)}
 .ac-badge[data-tone="warn"]{color:var(--warn);border-color:var(--warn-200);background:var(--warn-50)}
 .ac-token{border:1px solid var(--line-2);border-radius:10px;padding:7px 11px;font-size:13px;width:180px;background:var(--bg);color:var(--ink)}
+/* 보기 설정 토글(「큰 글씨」, DS 25-1) — 눌린 상태를 색만으로 말하지 않는다(테두리까지 바뀐다). */
+.ac-viewbtn{display:inline-flex;align-items:center;gap:5px;min-height:32px;padding:0 10px;border:1px solid var(--line-2);border-radius:10px;font-size:12.5px;font-weight:700;color:var(--sub);background:var(--surface);white-space:nowrap}
+.ac-viewbtn:hover{background:var(--bg);color:var(--ink)}
+.ac-viewbtn[aria-pressed="true"]{background:var(--brand-50);border-color:var(--brand);color:var(--brand-600)}
+.ac-viewbtn:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
 /* 헤더 전역 검색(combobox + listbox) */
 .ac-gsearch{position:relative;flex:0 1 320px;min-width:200px}
 .ac-gsearch-input{width:100%;border:1px solid var(--line-2);border-radius:10px;padding:8px 62px 8px 34px;font-size:13px;background:var(--bg);color:var(--ink);font-family:inherit}
@@ -104,7 +115,7 @@ main:focus{outline:none}
 .ac-gsearch-input:focus{outline:2px solid var(--brand);outline-offset:1px;background:var(--surface)}
 .ac-gsearch-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--mut);pointer-events:none}
 .ac-gsearch-kbd{position:absolute;right:9px;top:50%;transform:translateY(-50%);font-size:10.5px;font-weight:700;color:var(--mut);border:1px solid var(--line);border-radius:6px;padding:2px 6px;background:var(--surface);pointer-events:none;font-family:inherit;white-space:nowrap}
-.ac-gsearch-pop{position:absolute;top:calc(100% + 6px);left:0;width:min(460px,calc(100vw - 32px));z-index:40;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow-pop);padding:6px;max-height:min(70vh,460px);overflow:auto}
+.ac-gsearch-pop{position:absolute;top:calc(100% + 6px);left:0;width:min(460px,calc(100vw / var(--vz) - 32px));z-index:40;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow-pop);padding:6px;max-height:min(calc(70vh / var(--vz)),460px);overflow:auto}
 .ac-gsearch-group{font-size:10.5px;font-weight:800;letter-spacing:.08em;color:var(--mut);padding:8px 10px 4px}
 .ac-gsearch-opt{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:10px;cursor:pointer;min-width:0}
 .ac-gsearch-opt[aria-selected="true"],.ac-gsearch-opt:hover{background:var(--brand-50)}
@@ -113,7 +124,7 @@ main:focus{outline:none}
 .ac-gsearch-empty{padding:14px 10px;font-size:13px;color:var(--mut);text-align:center;line-height:1.5}
 /* 스크린리더에만 읽히는 라벨(화면에서는 보이지 않는다). */
 .ac-srhide{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
-.ac-toast{position:fixed;right:20px;bottom:20px;z-index:60;background:var(--ink);color:#fff;font-size:13px;font-weight:600;border-radius:12px;padding:11px 16px;box-shadow:var(--shadow-pop);max-width:min(360px,calc(100vw - 32px))}
+.ac-toast{position:fixed;right:20px;bottom:20px;z-index:60;background:var(--ink);color:#fff;font-size:13px;font-weight:600;border-radius:12px;padding:11px 16px;box-shadow:var(--shadow-pop);max-width:min(360px,calc(100vw / var(--vz) - 32px))}
 
 /* KPI 카드 · 표 (콘솔 공통) */
 .ac-kpi{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(186px,1fr))}
@@ -180,7 +191,7 @@ main:focus{outline:none}
 .ac-row-side{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;flex-shrink:0;max-width:46%}
 .ac-drawer-root{position:fixed;inset:0;z-index:40}
 .ac-drawer-bg{position:absolute;inset:0;background:rgba(15,23,42,.38)}
-.ac-drawer{position:absolute;top:0;right:0;bottom:0;width:min(520px,100vw);background:var(--surface);box-shadow:var(--shadow-pop);display:flex;flex-direction:column;animation:ac-slide .2s ease-out both}
+.ac-drawer{position:absolute;top:0;right:0;bottom:0;width:min(520px,calc(100vw / var(--vz)));background:var(--surface);box-shadow:var(--shadow-pop);display:flex;flex-direction:column;animation:ac-slide .2s ease-out both}
 @keyframes ac-slide{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
 .ac-drawer-head{display:flex;align-items:flex-start;gap:10px;padding:16px 18px 12px;border-bottom:1px solid var(--line)}
 .ac-drawer-meta{display:flex;gap:6px;flex-wrap:wrap;padding:10px 18px;border-bottom:1px solid var(--line);background:var(--bg)}
@@ -277,12 +288,23 @@ main:focus{outline:none}
 .ac-statvalue a{color:var(--brand-600)}
 
 /* 로그인 화면 */
-.ac-login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px;background:var(--bg)}
+.ac-login{min-height:calc(100vh / var(--vz));display:flex;align-items:center;justify-content:center;padding:24px 16px;background:var(--bg)}
 .ac-login-card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:28px 26px 22px;box-shadow:var(--shadow-card)}
 .ac-login-input{position:relative}
 .ac-login-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:12px;font-weight:700;color:var(--brand-600);padding:5px 8px;border-radius:8px;min-height:30px}
 .ac-login-eye:hover{background:var(--brand-50)}
 .ac-login-foot{font-size:11.5px;color:var(--mut);margin-top:16px;padding-top:12px;border-top:1px solid var(--line);line-height:1.5}
+
+/* ── 「큰 글씨」 보기 설정 (DS 25-1) ──
+ * 기준 원본(AICC Portal 콘솔 `admin.html`)의 `body.big{zoom:1.13}` 를 그대로 이식한다.
+ * 이 콘솔의 글자 크기는 전부 px(인라인 포함)여서 브라우저의 「기본 글꼴 크기」 설정이 닿지 않는다 —
+ * 운영자가 글자를 키울 수단이 **전체 화면 확대밖에** 없었다(그러면 가로 스크롤이 생긴다).
+ * 글자만 키우면 간격·아이콘·표가 그대로라 규격이 깨지므로, 기준 원본과 같이 **셸 전체를 배율로** 키운다 —
+ * 켠 뒤에도 「AICC Portal 옆에 두었을 때 같은 회사 제품으로 보이는가」가 유지된다.
+ * 배율은 --vz 와 **같은 값**이어야 한다(위 토큰 주석 참고 — 뷰포트 단위를 그 값으로 나눠 두었다). */
+body[data-view-scale="big"]{--vz:1.13}
+body[data-view-scale="big"] .ac-shell,
+body[data-view-scale="big"] .ac-login{zoom:1.13}
 
 @media (max-width:900px){
   .ac-shell{grid-template-columns:minmax(0,1fr)}
@@ -296,7 +318,7 @@ main:focus{outline:none}
   .ac-gsearch{order:3;flex-basis:100%;min-width:0}
   .ac-gsearch-kbd{display:none}
   .ac-gsearch-input{padding-right:12px;min-height:40px}
-  .ac-gsearch-pop{width:100%;max-height:min(60vh,380px)}
+  .ac-gsearch-pop{width:100%;max-height:min(calc(60vh / var(--vz)),380px)}
   .ac-body{padding:16px 16px 64px}
   .ac-token{width:150px}
   .ac-toast{right:12px;left:12px;bottom:12px;max-width:none}
@@ -307,7 +329,7 @@ main:focus{outline:none}
   .ac-col-wide{display:none}
   .ac-row{flex-direction:column;gap:6px}
   .ac-row-side{justify-content:flex-start;max-width:none}
-  .ac-drawer{width:100vw}
+  .ac-drawer{width:calc(100vw / var(--vz))}
   .ac-preview-body{height:300px}
   .ac-ruleflow{grid-template-columns:minmax(0,1fr)}
   .ac-rulearrow{transform:rotate(90deg);line-height:1}
@@ -384,3 +406,66 @@ main:focus{outline:none}
  * **누를 면만** 키운다. 화면마다 인라인으로 적지 않는다 — 미디어 쿼리가 인라인을 이기지 못한다(DS 13-2). */
 .lp-footlink{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 6px;margin:0 2px;
   color:var(--sub);font-weight:600}
+
+/* ── OS 고대비(Windows 고대비 등 강제 색 모드)에서도 「지금 선택된 것」이 보이게 (DS 25-2) ──
+ * 이 모드에서 브라우저는 글자색·배경색·테두리색을 사용자가 고른 색으로 **덮고 그림자를 지운다.**
+ * 그런데 이 화면에서 「선택됨·켜짐」을 말하는 신호는 거의 전부 **배경색 하나**였다 —
+ * 현재 보고 있는 탭, 눌린 세그먼트(그림자까지 함께 사라진다), 규칙 켜기/끄기 스위치,
+ * 미리보기의 적중 칩, 편집 중인 행·카드, ↑↓ 로 고른 검색 결과. 그 색이 전부 같은 색으로 치환되면
+ * 신호가 0 이 된다(스크린리더는 aria-current·aria-pressed·aria-checked 로 알지만, 눈으로 보는 사람은 모른다).
+ * 색을 되살리려 하지 않는다 — 그 색은 사용자가 바꾼 것이다. 시스템이 「선택」에 쓰라고 내주는
+ * Highlight 짝과 테두리·윤곽선이라는 **모양**으로 다시 말한다. */
+@media (forced-colors: active){
+  /* 지금 보고 있는 탭 — 아이콘은 stroke="currentColor" 라 글자색을 따라온다 */
+  .ac-navbtn[aria-current="page"]{forced-color-adjust:none;background:Highlight;color:HighlightText}
+  /* 눌린 세그먼트·보기 설정 — 이 모드에서는 box-shadow 가 지워져 평평한 버튼이 된다 */
+  .ac-segbtn[aria-pressed="true"],.ac-viewbtn[aria-pressed="true"]{forced-color-adjust:none;background:Highlight;color:HighlightText;border-color:Highlight}
+  /* 규칙 켜기/끄기 — 켜짐(--success)과 꺼짐(--line-2)이 같은 색이 된다 */
+  .ac-switch{forced-color-adjust:none;background:Canvas;border:1px solid ButtonText}
+  .ac-switch .ac-switch-knob{background:ButtonText;box-shadow:none}
+  .ac-switch[aria-checked="true"]{background:Highlight;border-color:Highlight}
+  .ac-switch[aria-checked="true"] .ac-switch-knob{background:HighlightText}
+  /* 미리보기에서 적중한 표현 칩 — 이 강조가 곧 「이 표현으로 걸렸다」는 답이다 */
+  .ac-chip[data-hit="true"]{forced-color-adjust:none;background:Highlight;color:HighlightText;border-color:Highlight}
+  /* 편집 중인 행·카드 — 배경 틴트 대신 윤곽선으로 */
+  .ac-table tr[data-editing="true"],.ac-rulecard[data-editing="true"],.ac-why[data-latest="true"]{outline:2px solid Highlight;outline-offset:-2px}
+  /* ↑↓ 로 고른 검색 결과 — 강조가 사라지면 무엇을 고르고 있는지 알 수 없다 */
+  .ac-gsearch-opt[aria-selected="true"]{forced-color-adjust:none;background:Highlight;color:HighlightText}
+  .ac-gsearch-opt[aria-selected="true"] .ac-gsearch-title,.ac-gsearch-opt[aria-selected="true"] .ac-gsearch-detail{color:HighlightText}
+  /* 대기 건수 배지 — 배경이 사라지면 메뉴 이름 뒤에 붙은 맨 숫자가 된다 */
+  .ac-navcount{border:1px solid ButtonText}
+  /* 카드 경계는 1px 테두리뿐이라 이 모드에서 서로 붙어 한 덩어리로 읽힌다 */
+  .ac-kpicard,.ac-nscard,.ac-stat,.ac-preview,.lg-card,.ac-login-card{border-width:2px}
+  /* 불러오는 중 자리 표시 — 배경색이 지워져 빈 칸이 된다(막대가 없으면 멈춘 화면으로 보인다) */
+  .ac-skel{border:1px solid GrayText}
+}
+
+/* ── 인쇄 (DS 25-3) ──
+ * 운영자가 정산 리포트·감사 로그를 그대로 Ctrl+P 하면 종이에 메뉴 10개·검색칸·로그인 버튼이 찍히고,
+ * 정작 표는 가로 스크롤 상자(.ac-scrollx) 안에 갇혀 **화면에 보이던 폭까지만** 인쇄된다 —
+ * 수수료율·기준금액처럼 뒤쪽에 있는 열이 종이에서 아예 사라진다(DS 9-1 이 화면을 위해 세운 상자다).
+ * 화면에서만 쓰는 것을 덜어내고 본문을 한 단으로 펴서, 표가 전부 찍히게 한다. */
+@media print{
+  @page{margin:14mm}
+  html,body{background:#fff}
+  .ac-shell{display:block;min-height:0}
+  /* 종이에서 누를 수 없는 것들 */
+  .ac-side,.ac-gsearch,.ac-toast,.ac-offline,.skip-link,.ac-drawer-root,.ac-modal-root,
+  .ac-skelrows,.ac-skelchart,.ac-sticky,.ac-top .ac-linkbtn,.ac-top .ac-badge,.ac-viewbtn{display:none}
+  .ac-top{position:static;padding:0 0 10px}
+  .ac-body{padding:0;max-width:none}
+  .ac-split,.ac-split-test{grid-template-columns:minmax(0,1fr)}
+  /* 상자 안에 갇혀 잘리던 표를 펴고, 한 장에 더 들어가게 줄인다 */
+  .ac-scrollx{overflow:visible}
+  .ac-table{font-size:10.5px}
+  .ac-table th,.ac-table td{padding:5px 6px}
+  /* 여러 장으로 넘어가면 머리 행을 장마다 반복한다 — 둘째 장부터 열 이름이 없으면 읽을 수 없다 */
+  .ac-table thead{display:table-header-group}
+  .ac-table tr{break-inside:avoid}
+  .ac-kpicard,.ac-nscard,.ac-stat{box-shadow:none;break-inside:avoid}
+  /* 브랜드색으로 채운 버튼은 글자가 흰색이다 — 브라우저가 배경을 생략하면 흰 바탕에 흰 글자가
+     되어 「다시 계산」·「CSV 내려받기」 자리가 빈 칸으로 찍힌다. 이 자리만 배경을 지킨다.
+     (버튼을 숨기지는 않는다 — 최근 대화 행·켜기/끄기 스위치도 button 이라, 종이에서 읽을
+     내용 자체가 함께 사라진다.) */
+  .ac-body button{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+}

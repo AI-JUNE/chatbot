@@ -1364,6 +1364,29 @@ function writeSavedToken(v: string) {
   try { window.localStorage.removeItem(TOKEN_KEY); } catch { /* noop */ }
 }
 
+/** 「큰 글씨」 보기 설정(DS 25-1) — 토큰과 달리 **브라우저 단위**(localStorage)다.
+ * 토큰은 자격 증명이라 탭을 닫으면 지워야 하지만(위 주석), 글자 크기는 **그 사람의 눈**에 달린 것이라
+ * 매일 아침 다시 켜게 만들 이유가 없다. 비밀값이 아니므로 다음 사람이 봐도 새는 것이 없다.
+ * 값은 '1'/없음 둘뿐이고, 읽을 때 다른 값은 꺼짐으로 다룬다. */
+const VIEW_SCALE_KEY = 'cb_admin_big';
+
+function readBigText(): boolean {
+  try {
+    return window.localStorage.getItem(VIEW_SCALE_KEY) === '1';
+  } catch {
+    return false; // 저장소 접근 차단 — 기본(보통 크기)으로 시작한다
+  }
+}
+
+function writeBigText(on: boolean) {
+  try {
+    if (on) window.localStorage.setItem(VIEW_SCALE_KEY, '1');
+    else window.localStorage.removeItem(VIEW_SCALE_KEY);
+  } catch {
+    /* 저장하지 못해도 이번 방문에서는 그대로 쓴다 */
+  }
+}
+
 const S = {
   page: { maxWidth: 960, margin: '0 auto', padding: '32px 20px 80px' } as const,
   h2: { fontSize: 16, fontWeight: 800, letterSpacing: '-.01em' } as const,
@@ -1637,6 +1660,27 @@ export default function AdminPage() {
   type DataKey = 'kb' | 'rules' | 'esc' | 'audit';
   const [phase, setPhase] = useState<Record<DataKey, LoadPhase>>({ kb: 'loading', rules: 'loading', esc: 'loading', audit: 'loading' });
   const markPhase = (k: DataKey, v: LoadPhase) => setPhase((p) => (p[k] === v ? p : { ...p, [k]: v }));
+
+  // ---- 「큰 글씨」 보기 설정 (DS 25-1) ----
+  // 배율은 CSS 한 곳(globals.css 의 body[data-view-scale="big"])에만 있다 — 여기서는 켜짐/꺼짐만 말한다.
+  // 서버 렌더에는 넣지 않는다(저장된 설정을 서버는 모른다 — 넣으면 하이드레이션이 어긋난다).
+  const [bigText, setBigText] = useState(false);
+  useEffect(() => { setBigText(readBigText()); }, []);
+  useEffect(() => {
+    const body = typeof document === 'undefined' ? null : document.body;
+    if (!body) return;
+    if (bigText) body.dataset.viewScale = 'big';
+    else delete body.dataset.viewScale;
+    // 콘솔을 떠나면(랜딩·약관으로 이동) 표시를 거둔다 — 랜딩은 이 설정의 대상이 아니다.
+    return () => { delete body.dataset.viewScale; };
+  }, [bigText]);
+  const toggleBigText = () => {
+    const next = !bigText;
+    setBigText(next);
+    writeBigText(next);
+    // 저장·삭제와 같은 자리에서 알린다 — 눌린 버튼만으로는 무엇이 바뀐 줄 모르는 사람이 있다.
+    flash(next ? '큰 글씨를 켰습니다. 다음에 열 때도 그대로입니다.' : '큰 글씨를 껐습니다.');
+  };
 
   // ---- 네트워크 연결 상태 (DS 4-3) — 끊기면 헤더 아래 배너로 알리고, 복구되면 조용히 사라진다 ----
   const [offline, setOffline] = useState(false);
@@ -2996,6 +3040,18 @@ export default function AdminPage() {
             onFirstOpen={() => { if (!partnerLoaded && !partnerBusy) loadPartners(''); }}
           />
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {/* 「큰 글씨」(DS 25-1) — 콘솔의 글자는 전부 px 라 브라우저의 기본 글꼴 크기 설정이 닿지 않는다.
+                눌린 상태는 aria-pressed 로 읽히고, 「가」 모양은 장식이라 숨긴다. */}
+            <button
+              type="button"
+              className="ac-viewbtn"
+              aria-pressed={bigText}
+              onClick={toggleBigText}
+              title={bigText ? '보통 크기로 돌아갑니다.' : '화면 전체를 조금 크게 봅니다. 다음에 열 때도 그대로입니다.'}
+            >
+              <span aria-hidden="true" style={{ fontSize: 15, fontWeight: 800, lineHeight: 1 }}>가</span>
+              큰 글씨
+            </button>
             {authInfo && (
               <span
                 className="ac-badge"
