@@ -487,3 +487,38 @@ test('기한 안에 온 답은 그대로 쓰고 끊지 않는다 (DS 23-1)', opt
   assert.equal(badRes.data, null, '본문을 읽지 못하면 예외가 새어 나간다');
   assert.equal(badRes.r.status, 502, '응답 자체는 부르는 쪽에 전해져야 한다(상태별 안내)');
 });
+
+/* ══════════ 디자인 스프린트 — 21차 재감사 (DS 24-3) ══════════ */
+
+/**
+ * DS 24-3 — 상담창을 열어 둔 채 자리를 비운 사람.
+ *
+ * 서버는 30분 동안 말이 없던 대화의 문맥을 지운다. 페이지를 옮기면 복원 관문(`loadThread`)이
+ * 그 사실을 보고 새로 시작하지만, 창을 그대로 둔 사람은 그 관문을 지나지 않는다 — 화면에는
+ * 「예약 접수 · 성함을 알려주세요」 카드가 그대로 떠 있다. 「지금 보낸 것이 서버에 남은 문맥과
+ * 이어지는가」를 보는 판정이라 경계값(정확히 TTL·첫 발화)을 돌려서 확인한다.
+ */
+test('한동안 비워 둔 대화를 알아본다 (DS 24-3)', opts, async () => {
+  const mod = await loadModule();
+  const TTL = mod.THREAD_TTL_MS;
+  assert.equal(TTL, 30 * 60 * 1000, '서버 세션 TTL 과 다른 값이면 판정 자체가 어긋난다');
+
+  // 아직 한 번도 주고받지 않았으면 지울 문맥도 없다 — 첫 질문에 「초기화됐습니다」가 뜨면 안 된다.
+  assert.equal(mod.threadExpired(0, Date.now()), false, '첫 발화에 지난 대화가 있다고 말한다');
+  // 경계: 딱 TTL 까지는 서버 문맥이 살아 있다(`now - at > TTL` 일 때만 지운다).
+  assert.equal(mod.threadExpired(1_000_000, 1_000_000 + TTL), false, '아직 살아 있는 문맥을 지웠다고 말한다');
+  assert.equal(mod.threadExpired(1_000_000, 1_000_000 + TTL + 1), true, '사라진 문맥을 살아 있다고 본다');
+
+  // 마지막 주고받음은 **화면에 남아 있는 대화**에서 찾는다(되살린 대화든 방금 시작한 대화든 같다).
+  assert.equal(mod.lastTurnAt([]), 0);
+  assert.equal(mod.lastTurnAt([{ key: 1, role: 'bot', text: '안녕하세요', at: 0 }]), 0, '서버 렌더(시각 없음)를 과거로 보면 안 된다');
+  assert.equal(
+    mod.lastTurnAt([
+      { key: 1, role: 'bot', text: '안녕하세요', at: 100 },
+      { key: 2, role: 'user', text: '예약하고 싶어요', at: 200 },
+      { key: 3, role: 'bot', text: '성함을 알려주세요', at: 300 },
+    ]),
+    300,
+    '마지막이 아니라 다른 말풍선의 시각을 본다',
+  );
+});

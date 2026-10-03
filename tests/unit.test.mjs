@@ -2295,3 +2295,38 @@ test('콘솔에서 한 일이 그 콘솔에 바로 보인다 (DS 24-2)', () => {
   // 빈 상태가 가리키는 길과 실제 동작이 같은지 — 안내 문구가 거짓이 되지 않게 함께 고정한다.
   assert.ok(s.includes('「응답 테스트」에서 대화하면 여기에 쌓입니다'), '대시보드 빈 상태의 안내가 바뀌었다');
 });
+
+/**
+ * DS 24-3 — 고객 쪽에도 같은 자리가 있었다: 상담창을 **열어 둔 채** 자리를 비운 사람.
+ *
+ * 서버는 30분 뒤 대화 문맥을 지운다. 페이지를 옮기면 복원 관문(`loadThread`, DS 7-1)이 그 사실을
+ * 보고 새로 시작하지만, 창을 그대로 둔 사람은 그 관문을 지나지 않는다 — 화면에는 「예약 접수 ·
+ * 성함을 알려주세요」 카드가 그대로 떠 있는데 보낸 「홍길동」은 폼의 답이 아니라 새 질문이 된다.
+ */
+test('한동안 비워 둔 대화를 먼저 밝힌다 (DS 24-3)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  assert.match(s, /export function threadExpired\(lastAt: number, now: number\)/, '문맥이 사라졌는지 가리는 판정이 없다');
+  assert.match(s, /export function lastTurnAt\(msgs: Msg\[\]\)/, '마지막 주고받음 시각을 화면의 대화에서 찾지 않는다');
+
+  // 판정은 복원 관문과 **같은 값**을 쓴다 — 두 곳이 갈라지면 한쪽만 만료로 본다.
+  const ttl = /export const THREAD_TTL_MS = ([^;]+);/.exec(s);
+  assert.ok(ttl, 'THREAD_TTL_MS 를 찾지 못했다');
+  const session = read('src/lib/session.ts');
+  assert.match(session, /const TTL_MS = 30 \* 60 \* 1000;/, '서버 세션 TTL 이 바뀌었다 — 위젯 판정도 함께 맞춰야 한다');
+  assert.equal(ttl[1].trim(), '30 * 60 * 1000', '위젯이 서버 세션 TTL 과 다른 값으로 판정한다');
+
+  // 보내기 전에 밝힌다 — 답이 돌아온 뒤에 설명하면 이미 엉뚱한 안내를 읽은 뒤다.
+  const send = fnBody(s, 'async function sendText(');
+  const guard = send.indexOf('threadExpired(');
+  const call = send.indexOf("postJson(\n");
+  assert.ok(guard > 0, '전송 경로가 만료를 보지 않는다');
+  assert.ok(call > guard, '답을 받은 뒤에야 만료를 밝힌다');
+  // 누를 수 없게 된 카드(진행 중 폼·번호 제안)를 거둔다 — 남겨 두면 다시 눌러 같은 일이 되풀이된다.
+  assert.match(send, /form: undefined, suggestions: undefined/, '사라진 문맥의 카드를 화면에 남긴다');
+  // 안내는 사람 말로. 내부 용어(세션·TTL·문맥)를 손님에게 쓰지 않는다(DS 2-7).
+  const notice = /pushBot\(\{ text: '(한동안[^']+)' \}\)/.exec(send);
+  assert.ok(notice, '만료를 알리는 말풍선이 없다');
+  for (const bad of ['세션', 'TTL', '문맥', '서버']) {
+    assert.equal(notice[1].includes(bad), false, `손님에게 내부 용어를 쓴다: ${bad}`);
+  }
+});

@@ -1951,3 +1951,40 @@ test('감사 로그가 작업을 이름으로 말한다 (DS 22-3)', opts, async 
     audit.resetAudit();
   }
 });
+
+/* ══════════ 디자인 스프린트 — 21차 재감사 (DS 24-3) ══════════ */
+
+/**
+ * DS 24-3 — 문맥이 지워진 뒤에 적은 답은 **폼의 답이 아니라 새 질문**이 된다.
+ *
+ * 위젯이 「한동안 비워 둔 대화」를 알아보고 먼저 밝혀야 하는 이유가 여기 있다. 서버가 30분 뒤
+ * 세션 문맥을 지우면(`lib/session.ts`), 화면에 「예약 접수 1/3 · 예약자 성함」 카드가 그대로
+ * 떠 있어도 「홍길동」은 폼의 답으로 읽히지 않는다 — 손님은 이름을 잘못 적었다고 생각하고
+ * 같은 말을 되풀이한다. 「정말 그렇게 되는가」는 돌려 봐야 안다.
+ */
+test('세션 문맥이 사라지면 폼의 답이 새 질문이 된다 (DS 24-3)', opts, async () => {
+  const SESSION_GROUP = ['chat', 'session', 'handoff', 'intents', 'rules', 'escalation', 'adminStore', 'knowledge', 'normalize', 'storage', 'slots', 'tenantKB', 'tenants', 'llm'];
+  const pick = (name) => importLib(name, SESSION_GROUP.filter((n) => n !== name));
+  const { replyTo } = await pick('chat');
+  const { resetSessions } = await pick('session');
+
+  const sid = 'rt-stale-form';
+  resetSessions();
+  const start = replyTo('예약하고 싶어요', sid);
+  assert.ok(start.form, '예약 접수 폼이 시작되지 않았다 — 이 검증의 전제가 깨졌다');
+  assert.equal(start.form.step, 1);
+
+  // ① 문맥이 살아 있으면 다음 단계로 간다(정상 흐름).
+  const next = replyTo('홍길동', sid);
+  assert.ok(next.form, '이어서 답했는데 폼이 끊겼다');
+  assert.equal(next.form.step, 2, '성함을 받고도 다음 항목으로 가지 않는다');
+
+  // ② 자리를 비운 사이 서버가 문맥을 지운 상태(TTL 경과 뒤의 `sweep()` 과 같다).
+  resetSessions();
+  const stale = replyTo('홍길동', sid);
+  assert.equal(stale.form, undefined, '문맥이 없는데도 폼이 이어지는 척한다');
+  assert.equal(stale.intent, 'fallback', `폼의 답이 새 질문으로 떨어지지 않는다: ${stale.intent}`);
+  // 손님이 받는 말은 「무슨 말인지 모르겠다」 — 왜 그런지는 화면이 미리 밝혀 줘야 한다(위젯 DS 24-3).
+  assert.ok(stale.reply.includes('이해하지 못했'), `돌아오는 안내가 바뀌었다: ${stale.reply}`);
+  resetSessions();
+});

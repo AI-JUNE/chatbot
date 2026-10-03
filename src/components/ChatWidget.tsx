@@ -360,6 +360,27 @@ export function clearThread(tenantId: string): void {
   try { st.removeItem(threadKey(tenantId)); } catch { /* noop */ }
 }
 
+/** 화면에 남아 있는 대화의 마지막 주고받음 시각. 아직 시각이 붙지 않았으면(서버 렌더) 0. */
+export function lastTurnAt(msgs: Msg[]): number {
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    const at = msgs[i]?.at;
+    if (typeof at === 'number' && at > 0) return at;
+  }
+  return 0;
+}
+
+/**
+ * 서버가 이 대화의 문맥을 이미 지웠는가 (DS 24-3).
+ *
+ * 서버는 30분 동안 아무 말이 없던 대화의 문맥(진행 중인 접수 폼·직전 제안·이관 사유)을 지운다
+ * (`lib/session.ts` TTL_MS = `THREAD_TTL_MS`). 페이지를 옮기면 복원 관문(`loadThread`)이 그 사실을
+ * 보고 새로 시작하지만, **상담창을 열어 둔 채** 자리를 비운 사람은 그 관문을 지나지 않는다.
+ * 아직 한 번도 주고받지 않았으면(lastAt === 0) 지울 문맥도 없다.
+ */
+export function threadExpired(lastAt: number, now: number): boolean {
+  return lastAt > 0 && now - lastAt > THREAD_TTL_MS;
+}
+
 /**
  * 위젯 아이콘 — 16px 뷰박스 선 아이콘(stroke 1.4).
  * 랜딩(`app/page.tsx`)·관리 콘솔과 같은 규약을 쓴다. 이모지를 쓰지 않는다:
@@ -633,6 +654,15 @@ export default function ChatWidget({
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       pushBot({ text: '인터넷 연결이 끊겨 메시지를 보내지 못했습니다. 연결이 돌아오면 다시 보내 주세요.', failed: text });
       return;
+    }
+    // ── 한동안 비워 둔 대화 (DS 24-3) ──
+    // 화면은 자리를 비우기 전의 사진이다 — 「예약 접수 · 성함을 알려주세요」 카드가 그대로 떠
+    // 있는데 서버는 이미 그 폼을 잊었다. 그대로 보내면 「홍길동」이 폼의 답이 아니라 **새 질문**
+    // 으로 처리돼 엉뚱한 안내가 돌아오고, 고객은 자기가 뭘 잘못 적었는지 모른 채 같은 말을
+    // 되풀이한다. 답이 오기 전에 먼저 사실을 밝히고, 누를 수 없게 된 카드를 거둔다.
+    if (threadExpired(lastTurnAt(msgs), Date.now())) {
+      setMsgs((m) => m.map((x) => (x.form || x.suggestions ? { ...x, form: undefined, suggestions: undefined } : x)));
+      pushBot({ text: '한동안 대화가 없어 앞서 주고받은 내용은 보관하지 않았습니다. 방금 하신 말씀부터 다시 도와드릴게요.' });
     }
     // 이 요청이 속한 대화 세대. 답이 오는 사이에 「닫고 처음으로」를 누르면 달라진다.
     const gen = genRef.current;
