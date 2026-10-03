@@ -89,6 +89,8 @@ main:focus{outline:none}
 .ac-navbtn{display:flex;align-items:center;gap:9px;width:100%;padding:9px 10px;border-radius:10px;font-size:13.5px;font-weight:600;color:var(--sub);text-align:left;line-height:1.25;min-height:38px}
 .ac-navbtn:hover{background:var(--bg);color:var(--ink)}
 .ac-navbtn[aria-current="page"]{background:var(--brand-50);color:var(--brand-600);font-weight:800}
+/* 대기 중인 상담원 요청 수(DS 24-1) — 색만으로 말하지 않는다(숫자가 곧 뜻이고, 이름은 .ac-srhide 가 읽어 준다). */
+.ac-navcount{margin-left:auto;flex-shrink:0;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--warn);color:#fff;font-size:11px;font-weight:800;line-height:20px;text-align:center;font-variant-numeric:tabular-nums}
 .ac-top{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line);padding:14px 24px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .ac-body{padding:20px 24px 72px;max-width:1180px}
 .ac-badge{font-size:11.5px;font-weight:700;border-radius:999px;padding:4px 10px;border:1px solid var(--line);color:var(--sub);background:var(--bg);white-space:nowrap}

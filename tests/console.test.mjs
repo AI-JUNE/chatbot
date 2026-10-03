@@ -964,3 +964,68 @@ test('콘솔 요청도 기한이 지나면 끊긴다 (DS 23-2)', opts, async () 
     globalThis.fetch = prev;
   }
 });
+
+/* ══════════ 디자인 스프린트 — 21차 재감사 (DS 24-1·24-2) ══════════ */
+
+/** 컴파일된 콘솔에서 최상위 순수 함수를 떼어내 실제로 돌린다(DS 20-2·23-2 의 방식). */
+async function loadFns(names) {
+  await loadConsole();
+  const parts = names.map((n) => {
+    const i = cachedJs.indexOf(`function ${n}(`);
+    assert.ok(i >= 0, `${n} 선언을 찾지 못했다`);
+    const end = cachedJs.indexOf('\n}', i); // 최상위 함수라 닫는 중괄호는 1열에 있다
+    assert.ok(end > i, `${n} 의 끝을 찾지 못했다`);
+    return cachedJs.slice(i, end + 2);
+  });
+  return new Function(`${parts.join('\n')}\nreturn { ${names.join(', ')} };`)();
+}
+
+/**
+ * DS 24-1 — 자동 확인이 **쉬어야 할 때 쉬는가**.
+ *
+ * 숨은 탭에서도 30초마다 관리 API를 두드리면 아무도 보지 않는 화면을 위해 서버를 때리는 셈이고,
+ * 끊긴 동안 두드리면 실패만 쌓인다. 운영자가 접수 상태를 바꾸는 중이면 겹쳐 읽어 순서만 흔든다.
+ * 「정말 쉬는가」는 소스를 읽어서는 알 수 없다 — 돌려 봐야 안다.
+ */
+test('자동 확인은 숨은 탭·끊긴 연결·쓰는 중에는 쉰다 (DS 24-1)', opts, async () => {
+  const { shouldPoll } = await loadFns(['shouldPoll']);
+  assert.equal(shouldPoll('visible', true, false), true, '보이는 화면에서조차 돌지 않는다');
+  assert.equal(shouldPoll('hidden', true, false), false, '숨은 탭에서도 두드린다');
+  assert.equal(shouldPoll('visible', false, false), false, '연결이 끊겼는데도 두드린다');
+  assert.equal(shouldPoll('visible', true, true), false, '운영자가 쓰는 중인데 끼어든다');
+  // 브라우저가 알려 주지 않는 상태(prerender 등)는 「숨김」이 아니다 — 멈춰 세우지 않는다.
+  assert.equal(shouldPoll('prerender', true, false), true, '모르는 상태를 숨김으로 단정하면 영영 쉰다');
+});
+
+/**
+ * DS 24-1 — 새로 들어온 것만 알린다.
+ * 콘솔을 연 순간 이미 쌓여 있던 건수는 「방금 들어온 요청」이 아니다. 줄어든 경우(운영자가
+ * 처리했다)도 알릴 일이 아니다. 알림이 사실과 어긋나면 다음부터 아무도 읽지 않는다.
+ */
+test('대기 건수가 늘어난 때만 알린다 (DS 24-1)', opts, async () => {
+  const { newRequestNotice, waitingBadge } = await loadFns(['newRequestNotice', 'waitingBadge']);
+  assert.equal(newRequestNotice(null, 3), '', '콘솔을 열자마자 「새 요청 3건」이라 알린다');
+  assert.equal(newRequestNotice(0, 0), '', '아무 일도 없는데 알린다');
+  assert.equal(newRequestNotice(3, 1), '', '처리해서 줄었는데 「새 요청」이라 알린다');
+  const msg = newRequestNotice(1, 3);
+  assert.match(msg, /2건/, '늘어난 만큼(2건)을 세지 않는다');
+  assert.match(msg, /상담원 요청/, '어디서 확인하는지 알려주지 않는다');
+  assert.equal(/[A-Za-z]/.test(msg), false, `알림에 영문 코드가 섞였다: ${msg}`);
+  // 메뉴 배지는 세 자리를 넘으면 이름을 밀어낸다 — 숫자는 줄이되 뜻은 .ac-srhide 가 전한다.
+  assert.equal(waitingBadge(0), '0');
+  assert.equal(waitingBadge(99), '99');
+  assert.equal(waitingBadge(100), '99+');
+});
+
+/**
+ * DS 24-1 — 화면이 「언제 받은 값인지」와 「스스로 확인한다는 사실」을 밝힌다.
+ * 첫 렌더에는 받은 값이 없으므로 시각을 지어내지 않는다(§13).
+ */
+test('대시보드가 자동 확인 사실과 기준 시각을 밝힌다 (DS 24-1)', opts, async () => {
+  const html = await render();
+  assert.ok(html.includes('30초마다 자동 확인'), '화면이 스스로 다시 확인한다는 사실을 밝히지 않는다');
+  assert.ok(html.includes('확인 전'), '아직 받은 값이 없는데 기준 시각을 지어낸다');
+  assert.ok(html.includes('새로고침'), '손으로 다시 부르는 길이 사라졌다');
+  // 대기 건수를 아직 모르므로 배지를 그리지 않는다 — 0을 지어내지 않는다.
+  assert.equal(/ac-navcount/.test(html), false, '받은 값이 없는데 대기 배지를 그린다');
+});

@@ -689,6 +689,25 @@ function LoadState({ phase, busy, fail, onRetry, rows = 4 }: { phase: LoadPhase;
   return <SkeletonRows rows={rows} label={busy} />;
 }
 
+/**
+ * 「언제 것인가」 + 「새로고침」 (DS 24-1).
+ * 화면이 스스로 다시 확인하게 된 이상, 눈앞의 숫자가 **언제 받은 값인지** 밝히지 않으면
+ * 운영자는 그것이 방금 것인지 한 시간 전 것인지 구분할 수 없다. 자동 확인이 돈다는 사실도
+ * 함께 적는다 — 적지 않으면 「새로고침을 눌러야 하나」를 매번 다시 생각하게 된다.
+ * 30초마다 바뀌는 글이라 읽어 주는 영역(live region)으로 만들지 않는다(쉬지 않고 떠드는 화면이 된다).
+ */
+function SyncStatus({ at, onRefresh }: { at: number; onRefresh: () => void }) {
+  return (
+    <>
+      <span style={{ ...S.tag, whiteSpace: 'nowrap' }}>
+        {at > 0 ? `${new Date(at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 기준` : '확인 전'}
+        {` · ${Math.round(OPS_POLL_MS / 1000)}초마다 자동 확인`}
+      </span>
+      <button type="button" style={S.btnGhost} onClick={onRefresh}>새로고침</button>
+    </>
+  );
+}
+
 /** 최근 7일 대화량 막대 차트 — 실제 로그에서만 그린다. 기록이 없으면 차트를 만들지 않는다. */
 function TrendChart({ daily }: { daily: { date: string; turns: number; escalated: number }[] }) {
   const max = daily.reduce((m, d) => Math.max(m, d.turns), 0);
@@ -1417,6 +1436,45 @@ function afetch(input: string, init: RequestInit = {}, ms: number = REQUEST_TIME
 }
 
 /**
+ * ── 아무도 보고 있지 않은 사이에 들어온 일 (DS 24-1) ──
+ * 관리 콘솔의 화면은 **연 순간의 사진**이었다. 불러오기는 마운트 때 한 번뿐이고 되풀이가 없다.
+ * 그런데 이 화면에서 가장 중요한 데이터(상담원 연결 요청)는 운영자가 아니라 **고객이** 만든다 —
+ * 고객은 「상담원이 확인 후 순서대로 연락드릴게요」라는 약속과 접수 순번을 받고 기다리는데,
+ * 운영자 쪽 화면은 누군가 「새로고침」을 누르기 전까지 그 접수가 들어온 사실조차 모른다.
+ * 콘솔을 띄워 놓고 기다리는 것이 이 탭의 쓰임새라는 점에서, 그 기다림은 영원히 헛돈다.
+ *
+ * 그래서 **보이는 동안에만** 스스로 다시 확인한다. 숨은 탭·끊긴 연결에서는 쉬고, 다시 보이면
+ * 곧바로 한 번 확인한다(돌아온 운영자가 30초를 더 기다리지 않게). 운영자가 쓰는 중이면 건너뛴다.
+ */
+const OPS_POLL_MS = 30_000;
+
+/**
+ * 지금 배경 확인을 돌려도 되는가 (DS 24-1).
+ * - 숨은 탭: 아무도 보지 않는 화면을 위해 관리 API를 두드릴 이유가 없다(브라우저도 타이머를 늦춘다).
+ * - 끊긴 연결: 실패만 쌓인다. 돌아오면 `online` 이 깨운다.
+ * - 운영자가 쓰는 중: 그쪽이 끝나면 스스로 다시 읽는다. 겹쳐 읽어 봐야 순서만 흔든다.
+ * 순수 함수로 떼어 둔 이유: 「정말 숨은 탭에서 쉬는가」는 소스를 읽어서는 알 수 없다 — 돌려 봐야 안다.
+ */
+function shouldPoll(visibility: string, online: boolean, busy: boolean): boolean {
+  return visibility !== 'hidden' && online !== false && !busy;
+}
+
+/**
+ * 늘어난 대기 건수를 알리는 말 (DS 24-1). 알릴 것이 없으면 빈 문자열.
+ * 첫 확인(prev === null)은 「새로 들어온 것」이 아니다 — 콘솔을 열자마자 알림이 뜨면 안 된다.
+ * 줄어든 경우(운영자가 처리했다)도 알리지 않는다.
+ */
+function newRequestNotice(prev: number | null, next: number): string {
+  if (prev === null || next <= prev) return '';
+  return `새 상담원 연결 요청 ${next - prev}건 — 「상담원 요청」에서 확인해 주세요.`;
+}
+
+/** 사이드바 배지 글자 — 세 자리를 넘으면 메뉴 이름을 밀어내므로 줄인다(뜻은 .ac-srhide 가 전한다). */
+function waitingBadge(n: number): string {
+  return n > 99 ? '99+' : String(n);
+}
+
+/**
  * 모션 최소화 설정을 존중하는 스크롤 동작(DS 8-3).
  * CSS 의 `@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}` 는
  * **JS 가 `behavior:'smooth'` 를 직접 넘기면 무시된다** — 설정은 켜 두었는데 화면만 미끄러진다.
@@ -1766,20 +1824,41 @@ export default function AdminPage() {
   }, [ticketId, closeTicket]);
   // ---- 감사 로그 필터 ----
   const [auditFilter, setAuditFilter] = useState('all');
-  const loadEsc = useCallback(async () => {
-    markPhase('esc', 'loading');
+  /** 운영 데이터를 마지막으로 확인한 시각(ms). 0이면 아직 한 번도 받지 못했다. */
+  const [escSyncAt, setEscSyncAt] = useState(0);
+  /**
+   * 뒤늦게 도착한 옛 응답이 새 응답을 덮지 않게 한다 — 자동 확인이 돌기 시작하면 같은 목록을
+   * 부르는 요청이 겹칠 수 있고(배경 확인 ↔ 상태 변경 뒤 다시 읽기), 응답 순서는 보낸 순서와
+   * 다를 수 있다. 가장 늦게 **시작한** 요청의 결과만 화면에 올린다(DS 20-2 의 `followLatest`).
+   */
+  const escSeqRef = useRef(0);
+  /**
+   * 자동 확인은 운영자가 쓰는 중에는 건너뛴다. 값을 ref 로 두는 이유: 상태를 의존성에 넣으면
+   * 타이머가 매번 다시 걸려 간격이 어긋난다.
+   */
+  const escPauseRef = useRef(false);
+  escPauseRef.current = ticketBusy;
+
+  const loadEsc = useCallback(async (quiet = false) => {
+    // 배경 확인(quiet)은 화면을 「불러오는 중」으로 되돌리지 않는다 — 30초마다 스켈레톤이
+    // 끼어들면 읽던 표가 사라진다. 실패해도 마지막으로 받은 값을 그대로 둔다.
+    const seq = ++escSeqRef.current;
+    if (!quiet) markPhase('esc', 'loading');
     try {
       const res = await afetch('/api/admin/escalations?logs=true', { headers: authHeaders() });
+      if (seq !== escSeqRef.current) return;
       if (on401(res)) return;
       const data = await res.json();
+      if (seq !== escSeqRef.current) return;
       if (data.ok) {
         setTickets(data.tickets);
         setStats(data.stats);
         setRecentTurns(data.recentTurns || []);
+        setEscSyncAt(Date.now());
       }
-      markPhase('esc', data.ok ? 'done' : 'error');
+      if (data.ok || !quiet) markPhase('esc', data.ok ? 'done' : 'error');
     } catch {
-      markPhase('esc', 'error');
+      if (seq === escSeqRef.current && !quiet) markPhase('esc', 'error');
     }
   }, []);
 
@@ -2092,16 +2171,20 @@ export default function AdminPage() {
 
   // ---- Audit ----
   const [auditEvents, setAuditEvents] = useState<AuditView[]>([]);
-  const loadAudit = useCallback(async () => {
-    markPhase('audit', 'loading');
+  const auditSeqRef = useRef(0);
+  const loadAudit = useCallback(async (quiet = false) => {
+    const seq = ++auditSeqRef.current;
+    if (!quiet) markPhase('audit', 'loading');
     try {
       const res = await afetch('/api/admin/audit?limit=100', { headers: authHeaders() });
+      if (seq !== auditSeqRef.current) return;
       if (on401(res)) return;
       const data = await res.json();
+      if (seq !== auditSeqRef.current) return;
       if (data.ok) setAuditEvents(data.events || []);
-      markPhase('audit', data.ok ? 'done' : 'error');
+      if (data.ok || !quiet) markPhase('audit', data.ok ? 'done' : 'error');
     } catch {
-      markPhase('audit', 'error');
+      if (seq === auditSeqRef.current && !quiet) markPhase('audit', 'error');
     }
   }, []);
 
@@ -2222,6 +2305,49 @@ export default function AdminPage() {
     setNotice(msg);
     window.setTimeout(() => setNotice(''), 2500);
   };
+
+  // ── 보이는 동안에만 도는 자동 확인 (DS 24-1) ──
+  // 로그인 전에는 돌지 않는다(잠금 화면에서 관리 API를 두드리지 않는다).
+  useEffect(() => {
+    if (!authInfo?.allowed) return;
+    const tick = () => {
+      if (!shouldPoll(document.visibilityState, navigator.onLine !== false, escPauseRef.current)) return;
+      loadEsc(true);
+    };
+    const timer = window.setInterval(tick, OPS_POLL_MS);
+    // 자리를 비웠다 돌아온 운영자가 30초를 더 기다리지 않게, 화면이 다시 보이면 곧바로 한 번.
+    const wake = () => { if (document.visibilityState === 'visible') tick(); };
+    document.addEventListener('visibilitychange', wake);
+    window.addEventListener('online', wake);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', wake);
+      window.removeEventListener('online', wake);
+    };
+  }, [authInfo?.allowed, loadEsc]);
+
+  // ── 새 요청이 들어온 순간 (DS 24-1) ──
+  // 대기 건수는 운영자가 아니라 **고객이** 늘린다. 어느 탭에 있든 사이드바 배지로 남기고,
+  // 늘어난 순간에는 토스트(`role="status"`)로 한 번 알린다 — 스크린리더도 같은 글을 읽는다.
+  // 콘솔을 연 순간 이미 쌓여 있던 건수는 「새로 들어온 것」이 아니므로 알리지 않는다.
+  const openCount = stats?.escalation.open ?? 0;
+  const openSeenRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (escSyncAt === 0) return; // 아직 한 번도 받지 못했다
+    const msg = newRequestNotice(openSeenRef.current, openCount);
+    openSeenRef.current = openCount;
+    if (msg) flash(msg);
+    // flash 는 렌더마다 새로 만들어지는 함수라 의존성에 넣지 않는다(넣으면 매 렌더 다시 돈다).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openCount, escSyncAt]);
+
+  // ── 변경 이력은 탭을 열 때마다 다시 읽는다 (DS 24-2) ──
+  // 이 탭에 쌓이는 것은 **이 콘솔이 방금 한 일**이다. 마운트 때 한 번만 읽으면, 자료를 고치고
+  // 규칙을 바꾸고 접수 상태를 바꾼 뒤 열어도 그 기록이 하나도 보이지 않는다.
+  useEffect(() => {
+    if (tab !== 'audit' || !authInfo?.allowed) return;
+    loadAudit(true);
+  }, [tab, authInfo?.allowed, loadAudit]);
 
   // 내려받는 중인 항목 이름(빈 문자열이면 진행 중 아님) — 버튼에 진행 표시를 달고 중복 클릭을 막는다.
   const [dlBusy, setDlBusy] = useState('');
@@ -2618,6 +2744,8 @@ export default function AdminPage() {
     setTestInput('');
     setTestBusy(true);
     let data: Record<string, unknown> = {};
+    // 답이 실제로 서버에서 왔는가 — 아래 `catch` 가 만들어 넣는 안내 문구와 구분해야 한다.
+    let answered = false;
     try {
       // 이 요청만 기한이 길다 — 서버가 LLM 을 부르면 16초까지 쓸 수 있다(그보다 짧게 끊으면 올 답을 끊는다).
       const res = await afetch(
@@ -2630,6 +2758,7 @@ export default function AdminPage() {
         CHAT_TEST_TIMEOUT_MS,
       );
       data = (await res.json()) as Record<string, unknown>;
+      answered = true;
     } catch {
       data = { reply: '연결이 원활하지 않습니다. 잠시 후 다시 시도해 주세요.', intentLabel: '연결 오류', source: 'error' };
     } finally {
@@ -2652,6 +2781,11 @@ export default function AdminPage() {
         ...prev,
       ].slice(0, 20),
     );
+    // 「응답 테스트」로 주고받은 말도 그대로 대화 기록이 된다(DS 24-2) — 대시보드의 빈 상태가
+    // 「응답 테스트에서 대화하면 여기에 쌓입니다」라고 안내하고 버튼까지 두는데, 종전에는 그대로
+    // 따라 해도 돌아온 화면이 똑같이 비어 있었다. 시킨 대로 했으면 결과가 보여야 한다.
+    // 전환이 일어났다면 접수도 함께 생기므로 상담원 요청·KPI 도 같이 갱신된다.
+    if (answered) loadEsc(true);
   };
 
   // ---- 로그인 화면: 인증 게이트에 막혔거나 운영자가 직접 열었을 때 콘솔 대신 보여준다 ----
@@ -2834,6 +2968,14 @@ export default function AdminPage() {
                 >
                   <NavIcon tab={key} />
                   <span>{label}</span>
+                  {/* 대기 중인 상담원 요청은 다른 탭에서 일하는 동안에도 보여야 한다(DS 24-1).
+                      숫자 모양은 눈으로, 뜻은 스크린리더로 — 「99+」를 그대로 읽히지 않는다. */}
+                  {key === 'esc' && openCount > 0 && (
+                    <>
+                      <span className="ac-navcount" aria-hidden="true">{waitingBadge(openCount)}</span>
+                      <span className="ac-srhide">{`대기 ${openCount}건`}</span>
+                    </>
+                  )}
                 </button>
               ))}
             </div>
@@ -2894,7 +3036,7 @@ export default function AdminPage() {
         <>
           <section style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
             <h2 style={{ ...S.h2, marginRight: 'auto' }}>오늘의 응대 현황</h2>
-            <button type="button" style={S.btnGhost} onClick={loadEsc}>새로고침</button>
+            <SyncStatus at={escSyncAt} onRefresh={() => loadEsc()} />
             <button type="button" {...busyBtn(dlBusy === '대화 기록', dlBusy !== '')} onClick={downloadLogsCsv}>
               {dlBusy === '대화 기록' ? '내려받는 중…' : '대화 기록 내려받기'}
             </button>
@@ -2966,7 +3108,7 @@ export default function AdminPage() {
 
           {!stats && phase.esc === 'error' && (
             <section style={S.card}>
-              <LoadState phase="error" busy="" fail="현황을 불러오지 못했습니다" onRetry={loadEsc} />
+              <LoadState phase="error" busy="" fail="현황을 불러오지 못했습니다" onRetry={() => loadEsc()} />
             </section>
           )}
 
@@ -3043,7 +3185,7 @@ export default function AdminPage() {
               <span style={S.tag}>최대 30건</span>
             </div>
             {recentTurns.length === 0 && phase.esc !== 'done' ? (
-              <LoadState phase={phase.esc} busy="최근 대화를 불러오는 중입니다" fail="최근 대화를 불러오지 못했습니다" onRetry={loadEsc} rows={5} />
+              <LoadState phase={phase.esc} busy="최근 대화를 불러오는 중입니다" fail="최근 대화를 불러오지 못했습니다" onRetry={() => loadEsc()} rows={5} />
             ) : recentTurns.length === 0 ? (
               <div className="ac-empty">
                 <EmptyArt kind="chat" />
@@ -3661,11 +3803,11 @@ export default function AdminPage() {
                   style={{ marginLeft: 'auto' }}
                 />
                 <span style={S.tag} aria-live="polite">{filtered.length}/{tickets.length}건</span>
-                <button type="button" style={S.btnGhost} onClick={loadEsc}>새로고침</button>
+                <SyncStatus at={escSyncAt} onRefresh={() => loadEsc()} />
               </div>
 
               {tickets.length === 0 && phase.esc !== 'done' ? (
-                <LoadState phase={phase.esc} busy="상담원 요청을 불러오는 중입니다" fail="상담원 요청을 불러오지 못했습니다" onRetry={loadEsc} rows={4} />
+                <LoadState phase={phase.esc} busy="상담원 요청을 불러오는 중입니다" fail="상담원 요청을 불러오지 못했습니다" onRetry={() => loadEsc()} rows={4} />
               ) : tickets.length === 0 ? (
                 <div className="ac-empty">
                   <EmptyArt kind="chat" />
@@ -4385,7 +4527,7 @@ export default function AdminPage() {
                   ))}
                 </select>
                 <span style={S.tag}>{shown.length}/{auditEvents.length}건</span>
-                <button type="button" style={S.btnGhost} onClick={loadAudit}>새로고침</button>
+                <button type="button" style={S.btnGhost} onClick={() => loadAudit()}>새로고침</button>
                 <button
                   type="button"
                   {...busyBtn(dlBusy === '변경 이력', dlBusy !== '')}
@@ -4395,7 +4537,7 @@ export default function AdminPage() {
                 </button>
               </div>
               {auditEvents.length === 0 && phase.audit !== 'done' ? (
-                <LoadState phase={phase.audit} busy="변경 이력을 불러오는 중입니다" fail="변경 이력을 불러오지 못했습니다" onRetry={loadAudit} rows={4} />
+                <LoadState phase={phase.audit} busy="변경 이력을 불러오는 중입니다" fail="변경 이력을 불러오지 못했습니다" onRetry={() => loadAudit()} rows={4} />
               ) : auditEvents.length === 0 ? (
                 <div className="ac-empty">
                   <EmptyArt kind="kb" />

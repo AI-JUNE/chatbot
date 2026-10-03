@@ -2215,3 +2215,83 @@ test('콘솔의 모든 요청이 기한을 거친다 (DS 23-2)', () => {
   assert.equal(pick(s, 'CHAT_TEST_TIMEOUT_MS'), pick(widget, 'CHAT_TIMEOUT_MS'), '같은 /api/chat 인데 화면마다 기한이 다르다');
   assert.equal(pick(s, 'REQUEST_TIMEOUT_MS'), pick(widget, 'POST_TIMEOUT_MS'), '짧은 요청의 기한이 화면마다 다르다');
 });
+
+/* ══════════ 디자인 스프린트 — 21차 재감사 (DS 24-1·24-2) ══════════ */
+
+/**
+ * DS 24-1 — 관리 콘솔의 화면은 **연 순간의 사진**이었다.
+ *
+ * 불러오기는 마운트 때 한 번뿐인데, 이 화면에서 가장 중요한 데이터(상담원 연결 요청)는 운영자가
+ * 아니라 **고객이** 만든다. 고객은 「상담원이 확인 후 순서대로 연락드릴게요」라는 약속과 접수
+ * 순번을 받고 기다리는데, 운영자 쪽 화면은 누군가 「새로고침」을 누르기 전까지 그 접수가 들어온
+ * 사실조차 모른다 — 콘솔을 띄워 놓고 기다리는 것이 이 탭의 쓰임새인데 그 기다림이 헛돈다
+ * (QUALITY_BAR §1 「핵심 흐름이 처음부터 끝까지 끊기지 않는다」).
+ */
+test('콘솔이 새 상담원 요청을 스스로 확인하고 알린다 (DS 24-1)', () => {
+  const s = read('src/app/admin/page.tsx');
+
+  // 되풀이 확인이 실제로 걸린다(간격은 한 곳에서 정한다).
+  assert.match(s, /const OPS_POLL_MS = 30_000;/, '자동 확인 간격이 한 곳에 없다');
+  assert.match(s, /setInterval\(tick, OPS_POLL_MS\)/, '자동 확인 타이머가 없다 — 화면이 연 순간에 멈춘다');
+  // 보이는 동안에만 돈다 + 돌아오면 곧바로 한 번(30초를 더 기다리게 하지 않는다).
+  assert.match(s, /function shouldPoll\(visibility: string, online: boolean, busy: boolean\)/, '쉴 때를 가리는 판정이 없다');
+  assert.match(s, /addEventListener\('visibilitychange', wake\)/, '탭이 다시 보일 때 깨우지 않는다');
+  assert.match(s, /addEventListener\('online', wake\)/, '연결이 돌아올 때 깨우지 않는다');
+  // 떠날 때 치운다 — 타이머·리스너가 남으면 콘솔을 오래 쓸수록 요청이 겹쳐 늘어난다.
+  assert.match(s, /clearInterval\(timer\)/, '타이머를 치우지 않는다');
+  assert.equal((s.match(/removeEventListener\('visibilitychange', wake\)/g) || []).length, 1, 'visibilitychange 리스너가 남는다');
+  assert.equal((s.match(/removeEventListener\('online', wake\)/g) || []).length, 1, 'online 리스너가 남는다');
+
+  // 배경 확인은 화면을 「불러오는 중」으로 되돌리지 않는다 — 30초마다 스켈레톤이 끼어들면
+  // 읽던 표가 사라진다. 그래서 loadEsc·loadAudit 는 quiet 를 받는다.
+  assert.match(s, /const loadEsc = useCallback\(async \(quiet = false\) =>/, '배경 확인과 손으로 누른 새로고침을 구분하지 않는다');
+  assert.match(s, /const loadAudit = useCallback\(async \(quiet = false\) =>/, '변경 이력도 같은 구분이 필요하다');
+  assert.match(s, /if \(!quiet\) markPhase\('esc', 'loading'\);/, '배경 확인이 스켈레톤을 되돌린다');
+  assert.match(s, /if \(!quiet\) markPhase\('audit', 'loading'\);/, '배경 확인이 스켈레톤을 되돌린다');
+
+  // ⚠️ `onClick={loadEsc}` 처럼 **그대로** 넘기면 React 가 이벤트 객체를 첫 인자로 준다 —
+  // 그 순간 손으로 누른 새로고침이 조용히 배경 모드가 되어 「불러오는 중」 표시가 사라진다.
+  for (const name of ['loadEsc', 'loadAudit']) {
+    assert.equal(new RegExp(`(onClick|onRetry)=\\{${name}\\}`).test(s), false, `${name} 를 그대로 넘기면 이벤트 객체가 quiet 로 들어간다`);
+  }
+
+  // 뒤늦게 도착한 옛 응답이 새 응답을 덮지 않는다(배경 확인 ↔ 상태 변경이 겹친다).
+  assert.match(s, /const seq = \+\+escSeqRef\.current;/, '겹친 조회의 순서를 가리지 않는다');
+  assert.match(s, /if \(seq !== escSeqRef\.current\) return;/, '옛 응답이 새 응답을 덮는다');
+
+  // 어느 탭에 있든 대기 건수가 보인다 + 뜻은 스크린리더에도 전해진다(숫자만 읽히면 모른다).
+  assert.match(s, /className="ac-navcount"/, '사이드바에 대기 건수 배지가 없다');
+  assert.match(s, /대기 \$\{openCount\}건/, '배지의 뜻이 스크린리더에 전해지지 않는다');
+  assert.match(s, /function newRequestNotice\(prev: number \| null, next: number\)/, '늘어난 때만 알리는 판정이 없다');
+  const css = read('src/app/globals.css');
+  const rule = (/\.ac-navcount\{([^}]*)\}/.exec(css) || [])[1];
+  assert.ok(rule, '배지 모양이 없다');
+  // 색은 토큰으로만 말한다(DS 6-2). 흰 글자(#fff)는 토큰 위에 얹는 전경색이라 예외다
+  // — 「대기 중」 상태 pill 과 같은 --warn 을 써서 화면 안에서 같은 뜻이 같은 색이 되게 한다.
+  assert.match(rule, /background:var\(--warn\)/, '배지 색이 「대기 중」 상태와 어긋난다');
+  assert.deepEqual(rule.match(/#[0-9a-fA-F]{3,8}/g) || [], ['#fff'], '배지가 색 토큰을 우회한다(DS 6-2)');
+});
+
+/**
+ * DS 24-2 — 운영자가 **방금 한 일**도 콘솔에 남지 않았다.
+ *
+ * 「변경 이력」은 이 콘솔이 하는 모든 일이 쌓이는 곳인데 마운트 때 한 번만 읽었다 — 자료를 고치고
+ * 규칙을 바꾸고 접수 상태를 바꾼 뒤 열어도 그 기록이 하나도 없어 「안 남았나?」로 읽혔다.
+ * 「응답 테스트」도 마찬가지다: 대시보드의 빈 상태가 「응답 테스트에서 대화하면 여기에 쌓입니다」
+ * 라고 안내하고 버튼까지 두는데, 그대로 따라 해도 돌아온 화면이 똑같이 비어 있었다.
+ */
+test('콘솔에서 한 일이 그 콘솔에 바로 보인다 (DS 24-2)', () => {
+  const s = read('src/app/admin/page.tsx');
+
+  // 변경 이력 탭은 열 때마다 다시 읽는다(배경 모드라 스켈레톤이 끼어들지 않는다).
+  assert.match(s, /if \(tab !== 'audit' \|\| !authInfo\?\.allowed\) return;\n\s*loadAudit\(true\);/, '변경 이력이 탭을 열 때 갱신되지 않는다');
+
+  // 응답 테스트로 주고받은 말도 대화 기록이 된다 — 답이 **실제로 왔을 때만** 다시 읽는다
+  // (끊긴 요청에 우리가 만들어 넣은 안내 문구를 서버 응답으로 착각하면 안 된다).
+  const runTest = fnBody(s, 'const runTest = async () =>');
+  assert.match(runTest, /let answered = false;/, '답이 실제로 왔는지 구분하지 않는다');
+  assert.match(runTest, /answered = true;/, '응답을 받은 사실을 남기지 않는다');
+  assert.match(runTest, /if \(answered\) loadEsc\(true\);/, '시험 대화가 대시보드·최근 대화에 반영되지 않는다');
+  // 빈 상태가 가리키는 길과 실제 동작이 같은지 — 안내 문구가 거짓이 되지 않게 함께 고정한다.
+  assert.ok(s.includes('「응답 테스트」에서 대화하면 여기에 쌓입니다'), '대시보드 빈 상태의 안내가 바뀌었다');
+});
