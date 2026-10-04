@@ -206,6 +206,94 @@ function EmptyArt({ kind }: { kind: 'kb' | 'chat' }) {
   );
 }
 
+/**
+ * 뒤 화면 스크롤을 잠근다 — 되돌리는 함수를 돌려준다(DS 26-1).
+ *
+ * 서랍·대화상자는 화면을 덮지만 **뒤 화면의 스크롤까지 막지는 않는다.** 흐린 배경 위에서 휠을
+ * 굴리면 뒤의 표가 흘러가고, 서랍 본문의 끝에서 더 굴리면 그 스크롤이 뒤 화면으로 넘어간다.
+ * 닫고 나면 눌렀던 행은 화면 밖이고, 돌려준 초점은 보이지 않는 곳에 있다.
+ * 고객사 사이트에서는 이미 이렇게 하고 있었다(`public/embed.js` 의 `lockHost` — 전체화면 상담창이
+ * 열린 동안 호스트 페이지를 잠근다). 같은 방식을 우리 콘솔에도 쓴다.
+ *
+ * 잠글 때의 스크롤 위치와 **원래 인라인 스타일**을 기억해 두었다가 풀 때 그대로 되돌린다 —
+ * 덮개가 겹쳐 열려도(서랍 위의 확인 대화상자) 나중에 열린 것부터 풀리므로 값이 어긋나지 않는다.
+ * 스크롤바가 사라지면 본문이 그만큼 넓어져 표가 다시 배치되므로(화면이 덜컥 움직인다)
+ * 사라진 폭만큼 오른쪽을 메워 둔다.
+ */
+function lockPageScroll(win: Window, doc: Document): () => void {
+  const body = doc.body;
+  const y = win.scrollY || 0;
+  const prevOverflow = body.style.overflow;
+  const prevPad = body.style.paddingRight;
+  const raw = win.innerWidth - doc.documentElement.clientWidth;
+  const gap = Number.isFinite(raw) && raw > 0 ? Math.round(raw) : 0;
+  body.style.overflow = 'hidden';
+  if (gap > 0) body.style.paddingRight = `${gap}px`;
+  return () => {
+    body.style.overflow = prevOverflow;
+    body.style.paddingRight = prevPad;
+    win.scrollTo(0, y);
+  };
+}
+
+/** 덮개가 열려 있는 동안만 잠근다 — 잠금의 수명이 덮개의 수명과 정확히 같다(DS 26-1). */
+function useScrollLock() {
+  useEffect(() => {
+    try {
+      return lockPageScroll(window, document);
+    } catch {
+      return undefined; // 스크롤을 잠그지 못해도 덮개 자체는 열린다
+    }
+  }, []);
+}
+
+/** 세로로 넘치는가 — 넘치는 상자에만 초점을 준다(DS 26-2). */
+function overflowsY(el: { scrollHeight: number; clientHeight: number }) {
+  return el.scrollHeight - el.clientHeight > 1;
+}
+
+/**
+ * 세로로 넘치는 상자는 **키보드로도** 스크롤할 수 있어야 한다 — DS 26-2.
+ *
+ * DS 9-1 이 가로 넘침(`ScrollX`)에 세운 규칙과 같다: 스크롤 영역 안에 초점 받을 것이 없으면
+ * 휠·손가락 없이는 끝까지 읽을 수 없다. 서랍 본문은 말풍선·타임라인뿐이라 Tab 이 닿지 않고,
+ * 화살표 키는 초점이 있는 곳(머리의 닫기 버튼) 기준으로 **뒤 화면**을 굴린다 —
+ * 뒤 화면을 잠그면(DS 26-1) 그나마 있던 그 길까지 사라지므로 둘은 함께 고쳐야 한다.
+ *
+ * 넘치는지는 실제로 재서 정한다 — 넘치지 않는데 Tab 이 멈추면 그 자체가 방해다.
+ * 내용이 늘어나면(말풍선 추가) 다시 재야 하므로 `signal` 이 바뀔 때마다 측정한다.
+ */
+function useScrollableY<T extends HTMLElement>(signal: unknown): [RefObject<T>, boolean] {
+  const ref = useRef<T | null>(null);
+  const [scrollable, setScrollable] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setScrollable(overflowsY(el));
+    measure();
+    let ro: ResizeObserver | null = null;
+    try {
+      if (typeof ResizeObserver !== 'undefined') {
+        ro = new ResizeObserver(measure);
+        ro.observe(el);
+      }
+    } catch {
+      ro = null; // 관찰을 못 걸어도 창 크기 변화·내용 변화로는 따라간다
+    }
+    window.addEventListener('resize', measure);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [signal]);
+  return [ref as RefObject<T>, scrollable];
+}
+
+/** 넘치는 동안에만 붙는 초점 속성 — 넘치지 않는 상자는 Tab 순서에 끼지 않는다(DS 26-2). */
+function scrollFocusProps(scrollable: boolean) {
+  return scrollable ? { tabIndex: 0 } : {};
+}
+
 /** 확인 대화상자에 넘길 내용. `resolve` 는 버튼을 누르면 호출된다. */
 type ConfirmReq = {
   title: string;
@@ -226,6 +314,7 @@ function ConfirmDialog({ req }: { req: ConfirmReq }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
 
+  useScrollLock();
   useEffect(() => { cancelRef.current?.focus(); }, []);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -288,6 +377,9 @@ function ConversationDrawer({
   closeRef: RefObject<HTMLButtonElement>;
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
+  useScrollLock();
+  // 말풍선뿐인 본문이라 넘치는 동안에는 목록 자체가 초점을 받아야 한다(DS 26-2).
+  const [bodyRef, bodyScrolls] = useScrollableY<HTMLDivElement>(turns.length);
   const escalated = turns.some((t) => t.escalate);
   const channel = turns[0]?.channel ?? '';
   const first = turns[0]?.at;
@@ -338,7 +430,7 @@ function ConversationDrawer({
           {ticket && <span className="ac-pill">접수 {TICKET_STATUS_LABELS[ticket.status]}</span>}
         </div>
 
-        <div className="ac-drawer-body" role="log" aria-label="대화 내용">
+        <div ref={bodyRef} className="ac-drawer-body" role="log" aria-label="대화 내용" {...scrollFocusProps(bodyScrolls)}>
           {turns.map((t) => (
             <div key={t.id} className="ac-turn">
               <div className="ac-bubble ac-bubble-user">
@@ -386,6 +478,9 @@ function TicketDrawer({
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [showContact, setShowContact] = useState(false);
+  useScrollLock();
+  // 이관 요약이 길면 본문이 넘친다 — 「보기」 하나만으로는 그 아래까지 닿지 못한다(DS 26-2).
+  const [bodyRef, bodyScrolls] = useScrollableY<HTMLDivElement>(showContact);
   const t = ticket;
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Tab' || !panelRef.current) return;

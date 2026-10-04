@@ -73,6 +73,10 @@ main:focus{outline:none}
 .gw-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--mut);animation:gw-blink 1.2s infinite}
 .gw-dot:nth-child(2){animation-delay:.18s}
 .gw-dot:nth-child(3){animation-delay:.36s}
+/* 대화 목록(스크롤 영역) — 지난 말풍선에는 초점 받을 것이 없어 키보드만 쓰는 고객은 대화를
+ * 거슬러 올라갈 수 없었다(DS 26-2). 넘치는 동안에는 목록 자체가 초점을 받는다 —
+ * 초점 테두리는 목록 안쪽에 그린다(바깥에 그리면 상담창 테두리에 잘린다). */
+.gw-log:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
 
 /* 모션 최소화 설정을 존중한다(전정 장애 등). */
 @media (prefers-reduced-motion: reduce){
@@ -154,7 +158,18 @@ main:focus{outline:none}
 /* 좌 목록 / 우 편집·미리보기 분할 (지식베이스·응답 테스트) */
 .ac-split{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:start}
 .ac-split-test{grid-template-columns:minmax(0,1fr) 360px}
-.ac-sticky{position:sticky;top:84px}
+/* 우측 편집 폼·미리보기는 표를 내리는 동안 따라온다(스티키).
+ * 그런데 스티키 요소는 화면보다 길어지면 **아래쪽에 닿을 길이 없다** — 윗변이 top 에 붙은 채
+ * 멈춰 있고, 더 내려도 함께 내려오므로 밑에 있는 「저장」·「삭제」 버튼이 화면 밖에 영원히 남는다
+ * (규칙 빌더·고객사 폼은 입력이 6~8개라 노트북 높이를 넘긴다. 「큰 글씨」를 켜면 더 쉽게 넘는다).
+ * 화면에 들어갈 만큼만 차지하고, 넘치는 만큼은 **그 상자 안에서** 스크롤한다 —
+ * 뷰포트 단위는 배율로 먼저 나눈다(DS 25-1). top(84px) + 아래 여유(20px) = 104px.
+ * 상자 안에는 입력·버튼이 있어 Tab 만으로 끝까지 닿는다(브라우저가 초점 받은 칸을 끌어온다). */
+.ac-sticky{position:sticky;top:84px;max-height:calc(100vh / var(--vz) - 104px);overflow-y:auto;overscroll-behavior-y:contain}
+/* 미리보기 카드는 자기 안에 스크롤 영역(.ac-preview-body)을 이미 가지고 있다 — 카드째로 스크롤하면
+ * 브랜드 헤더가 밀려 올라가 「누구와 하는 대화인지」가 사라진다. 카드는 그대로 가두고(둥근 모서리
+ * 유지) 안의 대화 목록이 화면 높이에 맞춰 줄어들게 한다(아래 .ac-preview-body 의 clamp). */
+.ac-sticky.ac-preview{overflow:hidden}
 .ac-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line)}
 .ac-search{border:1px solid var(--line-2);border-radius:10px;padding:7px 11px;font-size:13px;width:220px;background:var(--bg);color:var(--ink)}
 .ac-select{border:1px solid var(--line-2);border-radius:10px;padding:7px 10px;font-size:13px;background:var(--surface);color:var(--ink);font-family:inherit}
@@ -195,13 +210,21 @@ main:focus{outline:none}
 @keyframes ac-slide{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
 .ac-drawer-head{display:flex;align-items:flex-start;gap:10px;padding:16px 18px 12px;border-bottom:1px solid var(--line)}
 .ac-drawer-meta{display:flex;gap:6px;flex-wrap:wrap;padding:10px 18px;border-bottom:1px solid var(--line);background:var(--bg)}
-.ac-drawer-body{flex:1;overflow-y:auto;padding:16px 18px;background:var(--bg)}
+/* 서랍 본문은 세로로 넘치는 상자다 — 끝에서 스크롤이 뒤 화면으로 넘어가지 않게 하고(열려 있는
+ * 동안 뒤 화면은 잠겨 있다 — DS 26-1), 초점을 받으면 키보드로도 스크롤할 수 있게 한다(DS 26-2:
+ * 대화 말풍선뿐인 본문에는 초점 받을 것이 하나도 없어 마우스 휠 없이는 끝까지 읽을 수 없었다). */
+.ac-drawer-body{flex:1;overflow-y:auto;overscroll-behavior-y:contain;padding:16px 18px;background:var(--bg)}
+.ac-drawer-body:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
 .ac-drawer-foot{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
 /* 확인 대화상자 — 되돌릴 수 없는 동작 앞에 세운다(QUALITY_BAR §3).
  * 브라우저 기본 confirm() 은 브랜드를 따르지 않고 주소가 그대로 노출돼 제품 화면으로 보이지 않는다. */
-.ac-modal-root{position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;padding:20px}
-.ac-modal-bg{position:absolute;inset:0;background:rgba(15,23,42,.38)}
-.ac-modal{position:relative;width:min(400px,100%);background:var(--surface);border-radius:var(--r-lg);box-shadow:var(--shadow-pop);padding:22px 22px 16px;animation:ac-pop .16s ease-out both}
+/* 열려 있는 동안 뒤 화면은 잠긴다(DS 26-1) — 그러면 이 대화상자가 화면보다 길어질 때(「큰 글씨」·
+ * 긴 대상 이름) 「취소」·「삭제」에 닿을 길이 사라진다. 덮개 자체가 스크롤되게 한다.
+ * 가운데 정렬은 align-items 대신 margin:auto 로 한다 — 내용이 화면보다 길 때 윗부분이 잘리지 않는다. */
+.ac-modal-root{position:fixed;inset:0;z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto}
+/* 덮개가 스크롤되면 absolute 배경은 함께 밀려 올라간다 — 화면에 고정한다(바깥 틀이 이미 fixed 다). */
+.ac-modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.38)}
+.ac-modal{position:relative;margin:auto;width:min(400px,100%);background:var(--surface);border-radius:var(--r-lg);box-shadow:var(--shadow-pop);padding:22px 22px 16px;animation:ac-pop .16s ease-out both}
 @keyframes ac-pop{from{transform:scale(.97);opacity:0}to{transform:none;opacity:1}}
 .ac-modal-icon{width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:var(--danger-50);color:var(--danger);margin-bottom:12px}
 .ac-modal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;flex-wrap:wrap}
@@ -226,7 +249,11 @@ main:focus{outline:none}
 .ac-preview-head{display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--brand);color:#fff}
 .ac-preview-avatar{width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.22);display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;flex-shrink:0}
 .ac-preview-ai{font-size:10.5px;font-weight:700;background:rgba(255,255,255,.18);border-radius:999px;padding:3px 8px;white-space:nowrap}
-.ac-preview-body{height:420px;overflow-y:auto;padding:14px;background:var(--bg);display:flex;flex-direction:column;gap:8px}
+/* 대화 목록 높이는 420px 가 기본이지만, 카드 전체(헤더 58 + 각주 44)가 스티키 높이를 넘으면
+ * 아래쪽이 잘린다 — 화면이 낮을 때는 화면에 맞춰 줄인다(DS 26-3). 초점을 받으면 키보드로도
+ * 스크롤할 수 있다(DS 26-2 — 말풍선뿐인 상자에는 초점 받을 것이 없다). */
+.ac-preview-body{height:clamp(160px,calc(100vh / var(--vz) - 230px),420px);overflow-y:auto;overscroll-behavior-y:contain;padding:14px;background:var(--bg);display:flex;flex-direction:column;gap:8px}
+.ac-preview-body:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
 .ac-pv-turn{display:contents}
 .ac-pv-user{align-self:flex-end;max-width:84%;background:var(--brand);color:#fff;border-radius:14px 14px 4px 14px;padding:8px 12px;font-size:13.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
 .ac-pv-bot{align-self:flex-start;max-width:84%;background:var(--surface);border:1px solid var(--line);border-radius:14px 14px 14px 4px;padding:8px 12px;font-size:13.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
@@ -324,7 +351,9 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
   .ac-toast{right:12px;left:12px;bottom:12px;max-width:none}
   .ac-split,.ac-split-test{grid-template-columns:minmax(0,1fr)}
   .ac-grid3{grid-template-columns:minmax(0,1fr)}
-  .ac-sticky{position:static}
+  /* 한 단으로 접히면 폼은 표 아래에 그대로 놓인다 — 스티키가 아니므로 높이를 가둘 이유가 없다
+     (가둔 채로 두면 폼 안에 또 하나의 스크롤이 생겨 손가락 스크롤이 어디서 멈출지 알 수 없다). */
+  .ac-sticky{position:static;max-height:none;overflow:visible}
   .ac-search{width:100%}
   .ac-col-wide{display:none}
   .ac-row{flex-direction:column;gap:6px}
