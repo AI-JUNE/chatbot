@@ -289,9 +289,15 @@ function useScrollableY<T extends HTMLElement>(signal: unknown): [RefObject<T>, 
   return [ref as RefObject<T>, scrollable];
 }
 
-/** 넘치는 동안에만 붙는 초점 속성 — 넘치지 않는 상자는 Tab 순서에 끼지 않는다(DS 26-2). */
-function scrollFocusProps(scrollable: boolean) {
-  return scrollable ? { tabIndex: 0 } : {};
+/**
+ * 넘치는 동안에만 붙는 초점 속성 — 넘치지 않는 상자는 Tab 순서에 끼지 않는다(DS 26-2).
+ * 이미 이름이 있는 상자(`role="log"` 의 대화 목록)에는 초점만 준다 — 역할을 덮으면
+ * 「새 말풍선을 읽어 주는 영역」이라는 뜻이 사라진다. 이름이 없는 상자에는 `ScrollX` 와 같은
+ * 방식으로 역할·이름을 함께 준다(초점이 갔을 때 무엇을 스크롤하는지 들려야 한다).
+ */
+function scrollFocusProps(scrollable: boolean, label?: string) {
+  if (!scrollable) return {};
+  return label ? { tabIndex: 0, role: 'region', 'aria-label': `${label} — 세로로 스크롤할 수 있습니다` } : { tabIndex: 0 };
 }
 
 /** 확인 대화상자에 넘길 내용. `resolve` 는 버튼을 누르면 호출된다. */
@@ -521,7 +527,7 @@ function TicketDrawer({
             : <span className="ac-pill" style={TONE.mute}>{t.contactPurgedAt ? '연락처 파기됨' : '연락처 없음'}</span>}
         </div>
 
-        <div className="ac-drawer-body">
+        <div ref={bodyRef} className="ac-drawer-body" {...scrollFocusProps(bodyScrolls, '요청 내용')}>
           <span className="ac-rulekey">고객이 마지막으로 한 말</span>
           {t.message ? (
             <div className="ac-bubble ac-bubble-user" style={{ marginBottom: 16 }}>
@@ -602,6 +608,9 @@ function AccountDrawer({
   closeRef: RefObject<HTMLButtonElement>;
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
+  useScrollLock();
+  // 귀속 이력이 쌓이면 타임라인이 길어진다 — 그 안에는 초점 받을 것이 없다(DS 26-2).
+  const [bodyRef, bodyScrolls] = useScrollableY<HTMLDivElement>(account.attribution.length);
   const a = account;
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Tab' || !panelRef.current) return;
@@ -640,7 +649,7 @@ function AccountDrawer({
           </span>
         </div>
 
-        <div className="ac-drawer-body">
+        <div ref={bodyRef} className="ac-drawer-body" {...scrollFocusProps(bodyScrolls, '계약 정보와 귀속 이력')}>
           <span className="ac-rulekey">계약 정보</span>
           <dl className="ac-dl" style={{ gridTemplateColumns: '84px minmax(0,1fr)', marginBottom: 18 }}>
             <dt>귀속</dt><dd>{partnerName(a.partnerId)}</dd>
@@ -2876,6 +2885,8 @@ export default function AdminPage() {
   useEffect(() => {
     testEndRef.current?.scrollIntoView({ block: 'end' });
   }, [testLog, testBusy]);
+  // 미리보기 대화도 말풍선뿐인 스크롤 상자다 — 넘치면 목록 자체가 초점을 받는다(DS 26-2).
+  const [previewRef, previewScrolls] = useScrollableY<HTMLDivElement>(testLog.length);
 
   const runTest = async () => {
     const q = testInput.trim();
@@ -4864,7 +4875,7 @@ export default function AdminPage() {
                 </span>
                 <span className="ac-preview-ai"><span aria-hidden="true">●</span> AI가 응대합니다</span>
               </div>
-              <div className="ac-preview-body" role="log" aria-live="polite" aria-label="미리보기 대화">
+              <div ref={previewRef} className="ac-preview-body" role="log" aria-live="polite" aria-label="미리보기 대화" {...scrollFocusProps(previewScrolls)}>
                 <div className="ac-pv-bot">안녕하세요! 무엇을 도와드릴까요?</div>
                 {testLog.slice().reverse().map((t, i) => (
                   <div key={i} className="ac-pv-turn">

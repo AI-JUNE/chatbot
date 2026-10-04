@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 
 interface Suggestion { id: string; question: string }
 // 근거 인용 — 서버가 KB 원문에서 그대로 뽑은 문장(생성 요약 아님).
@@ -189,6 +189,70 @@ function scrollBehavior(): ScrollBehavior {
       && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 'auto';
   } catch { /* matchMedia 미지원 — 기본값으로 둔다 */ }
   return 'smooth';
+}
+
+/**
+ * 뒤 화면 스크롤을 잠근다 — 되돌리는 함수를 돌려준다(DS 26-1).
+ *
+ * 전체화면(모바일)으로 열린 상담창은 화면을 덮지만 뒤 페이지의 스크롤까지 막지는 않는다 —
+ * 대화 목록 밖(헤더·입력줄)에 손을 대고 밀면 뒤 페이지가 움직여, 닫았을 때 읽던 자리가 아니다.
+ * 잠글 때의 위치와 **원래 인라인 스타일**을 기억해 두었다가 풀 때 그대로 되돌린다(호스트 페이지가
+ * 자기 스타일로 overflow 를 쓰고 있을 수 있다 — `public/embed.js` 의 `lockHost` 와 같은 규칙).
+ * 관리 콘솔의 서랍·대화상자도 **같은 사본**을 쓴다(테스트가 두 사본을 글자까지 맞춰 고정한다) —
+ * 같은 일을 두 화면이 다르게 하면 한쪽만 고쳐지는 날이 온다.
+ */
+function lockPageScroll(win: Window, doc: Document): () => void {
+  const body = doc.body;
+  const y = win.scrollY || 0;
+  const prevOverflow = body.style.overflow;
+  const prevPad = body.style.paddingRight;
+  const raw = win.innerWidth - doc.documentElement.clientWidth;
+  const gap = Number.isFinite(raw) && raw > 0 ? Math.round(raw) : 0;
+  body.style.overflow = 'hidden';
+  if (gap > 0) body.style.paddingRight = `${gap}px`;
+  return () => {
+    body.style.overflow = prevOverflow;
+    body.style.paddingRight = prevPad;
+    win.scrollTo(0, y);
+  };
+}
+
+/** 세로로 넘치는가 — 넘치는 상자에만 초점을 준다(DS 26-2). */
+function overflowsY(el: { scrollHeight: number; clientHeight: number }) {
+  return el.scrollHeight - el.clientHeight > 1;
+}
+
+/**
+ * 대화 목록은 세로로 넘치는 상자인데, 지난 말풍선에는 초점 받을 것이 하나도 없다 — DS 26-2.
+ * 키보드만 쓰는 고객은 초점이 입력칸에 있고, 화살표 키는 **목록이 아니라** 그 바깥을 굴린다 —
+ * 즉 대화를 거슬러 올라가 방금 받은 안내를 다시 읽을 수가 없다(WCAG 2.1.1).
+ * 넘치는 동안에만 목록 자체가 초점을 받게 한다 — 넘치지 않는데 Tab 이 멈추면 그 자체가 방해다.
+ * 말풍선이 늘어나면 다시 재야 하므로 `signal` 이 바뀔 때마다 측정한다.
+ */
+function useScrollableY<T extends HTMLElement>(signal: unknown): [RefObject<T>, boolean] {
+  const ref = useRef<T | null>(null);
+  const [scrollable, setScrollable] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setScrollable(overflowsY(el));
+    measure();
+    let ro: ResizeObserver | null = null;
+    try {
+      if (typeof ResizeObserver !== 'undefined') {
+        ro = new ResizeObserver(measure);
+        ro.observe(el);
+      }
+    } catch {
+      ro = null; // 관찰을 못 걸어도 창 크기 변화·내용 변화로는 따라간다
+    }
+    window.addEventListener('resize', measure);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [signal]);
+  return [ref as RefObject<T>, scrollable];
 }
 
 /**
@@ -514,6 +578,8 @@ export default function ChatWidget({
   // 새 말풍선으로 따라 내려간다. 모션 최소화 설정에서는 미끄러지지 않고 곧장 옮긴다(DS 8-3) —
   // 대화는 말할 때마다 움직이므로 제품에서 가장 잦은 모션이다.
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: scrollBehavior() }); }, [msgs, busy, open]);
+  // 대화 목록이 넘치면 목록 자체가 초점을 받아야 한다 — 키보드로 거슬러 올라갈 수 있게(DS 26-2).
+  const [logRef, logScrolls] = useScrollableY<HTMLDivElement>(`${msgs.length}:${open}`);
 
   // 연결 상태 — 끊긴 채로 보내면 요청은 무조건 실패한다. 보내기 전에 알린다.
   useEffect(() => {
@@ -575,15 +641,16 @@ export default function ChatWidget({
   }, [embedded, open, mobile]);
 
   // 전체화면(모바일)일 때 뒤 페이지가 따라 움직이지 않게 잠근다 — 대화 목록 끝에서 스크롤을 이어가면
-  // 뒤 화면이 밀려, 위젯을 닫았을 때 읽던 자리가 아니다. 닫으면 원래 값을 그대로 되돌린다.
+  // 뒤 화면이 밀려, 위젯을 닫았을 때 읽던 자리가 아니다. 닫으면 원래 값·위치를 그대로 되돌린다.
   // 임베드 모드는 호스트 문서가 따로 있어 `embed.js` 가 같은 일을 한다.
   useEffect(() => {
     if (embedded || typeof document === 'undefined') return;
     if (!(open && mobile)) return;
-    const body = document.body;
-    const prev = body.style.overflow;
-    body.style.overflow = 'hidden';
-    return () => { body.style.overflow = prev; };
+    try {
+      return lockPageScroll(window, document);
+    } catch {
+      return undefined; // 잠그지 못해도 상담창 자체는 열린다
+    }
   }, [embedded, open, mobile]);
 
   const closePanel = useCallback((reset: boolean) => {
@@ -849,10 +916,15 @@ export default function ChatWidget({
 
           {/* ── 대화 목록 ── */}
           <div
+            ref={logRef}
+            className="gw-log"
             role="log"
             aria-live="polite"
             aria-relevant="additions text"
             aria-label="대화 내용"
+            // 넘치는 동안에는 목록 자체가 초점을 받는다 — 말풍선에는 초점 받을 것이 없어
+            // 키보드만 쓰는 고객은 대화를 거슬러 올라갈 수 없었다(DS 26-2).
+            {...(logScrolls ? { tabIndex: 0 } : {})}
             // overscrollBehavior: 목록 끝에서 스크롤이 뒤 페이지로 넘어가지 않게 한다.
             style={{ flex: 1, overflowY: 'auto', overscrollBehavior: 'contain', padding: '16px 14px', background: 'var(--bg)', display: 'flex', flexDirection: 'column', gap: 12 }}
           >

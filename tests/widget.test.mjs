@@ -522,3 +522,47 @@ test('한동안 비워 둔 대화를 알아본다 (DS 24-3)', opts, async () => 
     '마지막이 아니라 다른 말풍선의 시각을 본다',
   );
 });
+
+/* ══════════ 디자인 스프린트 — 23차 재감사 (DS 26-1·26-2) ══════════ */
+
+/**
+ * DS 26-2 — 대화 목록을 **키보드로 거슬러 올라갈 수 있는가**.
+ *
+ * 지난 말풍선에는 초점 받을 것이 없다(평가 버튼은 근거가 붙은 **마지막** 답변에만 뜬다).
+ * 초점은 입력칸에 있고 화살표 키는 목록이 아니라 그 바깥을 굴린다 — 즉 방금 받은 안내를
+ * 다시 읽으려고 위로 올라갈 수단이 마우스·손가락뿐이었다(WCAG 2.1.1).
+ * 넘치는 동안에만 목록 자체가 초점을 받는다 — 넘치지 않는데 Tab 이 멈추면 그 자체가 방해다.
+ */
+test('대화 목록이 넘치면 키보드로 스크롤할 수 있다 (DS 26-2)', opts, async () => {
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  assert.match(src, /const \[logRef, logScrolls\] = useScrollableY<HTMLDivElement>/, '대화 목록이 넘치는지 재지 않는다');
+  assert.match(src, /\{\.\.\.\(logScrolls \? \{ tabIndex: 0 \} : \{\}\)\}/, '넘치는 목록이 초점을 받지 못한다');
+  // 초점 표시는 목록 안쪽에 그린다 — 바깥에 그리면 상담창 테두리에 잘린다.
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  assert.match(css, /\.gw-log:focus-visible\{outline:2px solid var\(--brand\);outline-offset:-2px\}/, '초점 표시가 없다');
+
+  // 첫 렌더에는 붙지 않는다(아직 재지 않았다) — 짧은 대화에 헛 Tab 이 생기지 않아야 한다.
+  const html = await render({ tenant: TENANT });
+  assert.match(html, /class="gw-log"/, '대화 목록에 초점 표시를 걸 자리가 없다');
+  assert.equal(/class="gw-log"[^>]*tabindex/.test(html), false, '재기 전에 초점을 붙였다');
+  // 목록의 뜻(role=log·읽어 주는 영역)은 그대로다 — 초점만 더한다.
+  assert.match(html, /class="gw-log" role="log" aria-live="polite"/, '대화 목록의 역할이 바뀌었다');
+});
+
+/**
+ * DS 26-1 — 전체화면 상담창 뒤에서 호스트 페이지가 움직이지 않는가.
+ * 잠금 자체는 관리 콘솔과 **같은 사본**(`lockPageScroll`)이 하고, 그 동작은 콘솔 테스트가
+ * 가짜 창 위에서 실제로 돌려 본다(`tests/console.test.mjs` DS 26-1).
+ * 두 사본이 갈라지지 않는지는 `tests/unit.test.mjs` 가 글자까지 대조한다.
+ */
+test('전체화면일 때만 뒤 페이지를 잠근다 (DS 26-1)', opts, () => {
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  const i = src.indexOf('function lockPageScroll(');
+  assert.ok(i >= 0, '잠금 함수가 없다');
+  // 조건: 임베드가 아니고(호스트 문서는 embed.js 가 맡는다) 전체화면으로 열려 있을 때만.
+  const eff = src.slice(src.indexOf('if (embedded || typeof document'), src.indexOf('const closePanel'));
+  assert.match(eff, /if \(!\(open && mobile\)\) return;/, '데스크톱에서 열어 두면 페이지를 읽을 수 없게 된다');
+  assert.match(eff, /return lockPageScroll\(window, document\);/, '잠금을 손으로 다시 적었다');
+  // 잠그지 못하는 환경에서도 상담창은 열려야 한다.
+  assert.match(eff, /catch \{\n *return undefined;/, '잠금 실패가 상담창을 막는다');
+});

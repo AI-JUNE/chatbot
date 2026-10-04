@@ -1155,3 +1155,166 @@ test('인쇄하면 화면 장치가 빠지고 표가 잘리지 않는다 (DS 25-
   // 평소 화면은 건드리지 않는다.
   assert.equal(/@page|print-color-adjust/.test(css.replace(pr, '')), false, '인쇄 전용 속성이 평소 경로로 새어 나왔다');
 });
+
+/* ══════════ 디자인 스프린트 — 23차 재감사 (DS 26-x) ══════════ */
+
+/** 가짜 창·문서 — 잠금이 **정말** 뒤 화면을 막고, 풀 때 원래대로 되돌리는지 돌려 본다. */
+function fakeWindow({ scrollY = 0, innerWidth = 1280, clientWidth = 1265, overflow = '', paddingRight = '' } = {}) {
+  const scrolls = [];
+  const body = { style: { overflow, paddingRight } };
+  const win = {
+    scrollY,
+    innerWidth,
+    scrollTo: (x, y) => scrolls.push([x, y]),
+  };
+  const doc = { body, documentElement: { clientWidth } };
+  return { win, doc, body, scrolls };
+}
+
+/**
+ * DS 26-1 — 서랍·대화상자가 열려 있는 동안 **뒤 화면이 함께 스크롤되지 않는가**.
+ *
+ * 고객사 사이트(`embed.js` 의 `lockHost`)와 전체화면 상담창에는 이 잠금이 있었는데 운영자 화면에는
+ * 없었다 — 흐린 배경 위에서 휠을 굴리면 뒤의 표가 흘러가고, 닫으면 눌렀던 행은 화면 밖이다.
+ * 「정말 잠그고, 정말 되돌리는가」는 소스를 읽어서는 알 수 없다 — 돌려 봐야 안다.
+ */
+test('덮개가 열린 동안 뒤 화면을 잠그고, 닫으면 그대로 되돌린다 (DS 26-1)', opts, async () => {
+  const { lockPageScroll } = await loadFns(['lockPageScroll']);
+
+  // 1) 잠그면 뒤 화면이 움직이지 않는다 + 사라진 스크롤바 폭(15px)만큼 메워 화면이 덜컥거리지 않는다.
+  const a = fakeWindow({ scrollY: 940 });
+  const unlock = lockPageScroll(a.win, a.doc);
+  assert.equal(a.body.style.overflow, 'hidden', '뒤 화면이 그대로 스크롤된다');
+  assert.equal(a.body.style.paddingRight, '15px', '스크롤바가 사라진 만큼 메우지 않아 표가 다시 배치된다');
+
+  // 2) 풀면 원래 인라인 스타일과 **읽던 자리**로 돌아간다.
+  unlock();
+  assert.equal(a.body.style.overflow, '', '원래 스타일을 되돌리지 않는다');
+  assert.equal(a.body.style.paddingRight, '', '메워 둔 폭이 남았다');
+  assert.deepEqual(a.scrolls, [[0, 940]], '읽던 자리로 되돌리지 않는다');
+
+  // 3) 호스트·화면이 이미 자기 스타일을 쓰고 있으면 그 값을 지킨다(지우면 안 된다).
+  const b = fakeWindow({ overflow: 'auto', paddingRight: '8px' });
+  lockPageScroll(b.win, b.doc)();
+  assert.equal(b.body.style.overflow, 'auto', '남의 overflow 를 지웠다');
+  assert.equal(b.body.style.paddingRight, '8px', '남의 여백을 지웠다');
+
+  // 4) 덮개가 겹쳐 열려도(서랍 위의 확인 대화상자) 나중에 열린 것부터 풀리므로 값이 어긋나지 않는다.
+  const c = fakeWindow({ scrollY: 120 });
+  const un1 = lockPageScroll(c.win, c.doc);
+  const un2 = lockPageScroll(c.win, c.doc);
+  assert.equal(c.body.style.paddingRight, '15px', '두 번 잠그면 여백이 두 배가 된다');
+  un2();
+  assert.equal(c.body.style.overflow, 'hidden', '안쪽 덮개를 닫자 아직 열린 서랍의 잠금이 풀렸다');
+  un1();
+  assert.equal(c.body.style.overflow, '', '마지막 덮개를 닫아도 잠금이 남았다');
+
+  // 5) 스크롤바가 자리를 차지하지 않는 환경(모바일·겹치는 스크롤바)에서는 메우지 않는다.
+  const d = fakeWindow({ innerWidth: 390, clientWidth: 390 });
+  lockPageScroll(d.win, d.doc);
+  assert.equal(d.body.style.paddingRight, '', '스크롤바가 없는데 오른쪽을 메웠다');
+  // 폭을 잴 수 없는 환경에서도 숫자가 새어 나오지 않는다.
+  const e = fakeWindow({ innerWidth: NaN, clientWidth: NaN });
+  lockPageScroll(e.win, e.doc);
+  assert.equal(e.body.style.paddingRight, '', '잴 수 없는 폭이 NaNpx 로 들어갔다');
+});
+
+/**
+ * DS 26-1 — 잠금이 **덮개 4곳 전부**에 붙어 있고, 덮개 자신은 스크롤될 수 있는가.
+ * 뒤 화면을 잠그면 화면보다 긴 확인 대화상자의 「취소」·「삭제」에 닿을 길이 사라진다.
+ */
+test('서랍 3곳·확인 대화상자가 모두 뒤 화면을 잠근다 (DS 26-1)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+
+  // 잠금의 수명은 덮개의 수명과 같아야 한다 — 열림 상태를 따로 세지 않고 덮개 안에서 건다.
+  for (const fn of ['ConfirmDialog', 'ConversationDrawer', 'TicketDrawer', 'AccountDrawer']) {
+    const i = src.indexOf(`function ${fn}(`);
+    assert.ok(i >= 0, `${fn} 을 찾지 못했다`);
+    // 닫는 중괄호는 1열 + 빈 줄 — `}) {`(인자 타입의 끝)에 걸리지 않게 줄바꿈까지 본다.
+    const body = src.slice(i, src.indexOf('\n}\n', i));
+    assert.match(body, /useScrollLock\(\);/, `${fn} 이 뒤 화면을 잠그지 않는다`);
+  }
+  assert.equal((src.match(/useScrollLock\(\);/g) || []).length, 4, '덮개 4곳만 잠가야 한다');
+  assert.match(src, /return lockPageScroll\(window, document\);/, '잠금 구현이 한 곳이 아니다');
+
+  // 서랍 본문 끝에서 스크롤이 뒤 화면으로 넘어가지 않는다.
+  assert.match(css, /\.ac-drawer-body\{[^}]*overscroll-behavior-y:contain/, '서랍 끝에서 스크롤이 뒤로 넘어간다');
+  // 확인 대화상자는 화면보다 길 때 덮개 자신이 스크롤된다 — 가운데 정렬로 윗부분을 잘라먹지 않는다.
+  assert.match(css, /\.ac-modal-root\{[^}]*overflow-y:auto\}/, '화면보다 긴 대화상자에 닿을 길이 없다');
+  assert.match(css, /\.ac-modal-root\{[^}]*align-items:flex-start/, '가운데 정렬은 넘칠 때 윗부분을 자른다');
+  assert.match(css, /\.ac-modal\{position:relative;margin:auto/, '여유가 있을 때는 가운데 있어야 한다');
+  // 덮개가 스크롤되면 absolute 배경은 함께 밀려 올라간다.
+  assert.match(css, /\.ac-modal-bg\{position:fixed;inset:0/, '배경이 함께 스크롤돼 흰 바닥이 드러난다');
+});
+
+/**
+ * DS 26-2 — 세로로 넘치는 상자를 **키보드로 스크롤할 수 있는가**.
+ *
+ * 서랍 본문·미리보기 대화는 말풍선뿐이라 Tab 이 닿지 않고, 화살표 키는 초점이 있는 곳 기준으로
+ * 뒤 화면을 굴린다 — 뒤 화면을 잠그면(DS 26-1) 그 길까지 사라진다. DS 9-1 이 가로 넘침에 세운
+ * 규칙과 같다: 넘치는 상자는 초점을 받고, 넘치지 않으면 Tab 순서에 끼지 않는다.
+ */
+test('세로로 넘치는 상자는 초점을 받아 키보드로 스크롤된다 (DS 26-2)', opts, async () => {
+  const { overflowsY, scrollFocusProps } = await loadFns(['overflowsY', 'scrollFocusProps']);
+
+  // 넘치는지는 재서 정한다 — 경계에서 흔들리지 않아야 한다(1px 반올림 오차는 넘침이 아니다).
+  assert.equal(overflowsY({ scrollHeight: 400, clientHeight: 400 }), false, '딱 맞는 상자에 Tab 이 멈춘다');
+  assert.equal(overflowsY({ scrollHeight: 401, clientHeight: 400 }), false, '1px 오차를 넘침으로 본다');
+  assert.equal(overflowsY({ scrollHeight: 402, clientHeight: 400 }), true, '넘치는데 초점을 주지 않는다');
+  assert.equal(overflowsY({ scrollHeight: 1200, clientHeight: 300 }), true);
+
+  // 이름이 이미 있는 상자(role="log")는 역할을 덮지 않는다 — 덮으면 「읽어 주는 영역」이 아니게 된다.
+  assert.deepEqual(scrollFocusProps(false), {}, '넘치지 않는 상자가 Tab 순서에 낀다');
+  assert.deepEqual(scrollFocusProps(true), { tabIndex: 0 }, '넘치는데 초점을 받지 못한다');
+  const labelled = scrollFocusProps(true, '요청 내용');
+  assert.equal(labelled.tabIndex, 0);
+  assert.equal(labelled.role, 'region', '이름 없는 상자는 무엇인지 알려야 한다');
+  assert.match(labelled['aria-label'], /요청 내용/, '초점이 갔을 때 무엇을 스크롤하는지 들리지 않는다');
+  assert.match(labelled['aria-label'], /세로로 스크롤할 수 있습니다/, '쓰는 법을 알려주지 않는다');
+
+  // 네 상자가 모두 같은 문을 지난다(서랍 3곳 + 미리보기 대화).
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  assert.equal((src.match(/useScrollableY<HTMLDivElement>\(/g) || []).length, 4, '넘치는 상자 하나가 빠졌다');
+  assert.equal((src.match(/scrollFocusProps\(/g) || []).length, 5, '초점 속성을 손으로 적은 자리가 있다');
+  for (const re of [
+    /className="ac-drawer-body" role="log" aria-label="대화 내용" \{\.\.\.scrollFocusProps\(bodyScrolls\)\}/,
+    /className="ac-drawer-body" \{\.\.\.scrollFocusProps\(bodyScrolls, '요청 내용'\)\}/,
+    /className="ac-drawer-body" \{\.\.\.scrollFocusProps\(bodyScrolls, '계약 정보와 귀속 이력'\)\}/,
+    /className="ac-preview-body"[^>]*\{\.\.\.scrollFocusProps\(previewScrolls\)\}/,
+  ]) assert.match(src, re, `초점이 닿지 않는 스크롤 상자가 남았다: ${re}`);
+
+  // 초점 표시는 상자 안쪽에 그린다 — 바깥에 그리면 서랍·카드 테두리에 잘린다.
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  assert.match(css, /\.ac-drawer-body:focus-visible\{outline:2px solid var\(--brand\);outline-offset:-2px\}/);
+  assert.match(css, /\.ac-preview-body:focus-visible\{outline:2px solid var\(--brand\);outline-offset:-2px\}/);
+
+  // 재기 전에는 붙이지 않는다 — 넘치지 않는 상자에 Tab 이 멈추면 그 자체가 방해다.
+  const hook = src.slice(src.indexOf('function useScrollableY<'));
+  assert.match(hook.slice(0, hook.indexOf('\n}')), /useState\(false\)/, '재기 전에 초점을 붙인다');
+  // 내용이 늘어나면(말풍선 추가) 다시 재야 한다 — 한 번만 재면 초점이 끝내 붙지 않는다.
+  assert.match(hook.slice(0, hook.indexOf('\n}')), /\}, \[signal\]\);/, '내용이 늘어도 다시 재지 않는다');
+});
+
+/**
+ * DS 26-3 — 스티키 편집 폼이 화면보다 길면 **아래쪽에 닿을 길이 없다**.
+ * 윗변이 top 에 붙은 채 함께 내려오므로 「저장」·「삭제」가 화면 밖에 영원히 남는다
+ * (규칙 빌더·고객사 폼은 입력이 6~8개다. 「큰 글씨」를 켜면 더 쉽게 넘는다).
+ */
+test('스티키 편집 폼은 화면에 들어갈 만큼만 차지한다 (DS 26-3)', opts, () => {
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+
+  // 높이를 가두고 넘치는 만큼은 상자 안에서 스크롤한다 — 뷰포트 단위는 배율로 먼저 나눈다(DS 25-1).
+  assert.match(css, /\.ac-sticky\{position:sticky;top:84px;max-height:calc\(100vh \/ var\(--vz\) - 104px\);overflow-y:auto;overscroll-behavior-y:contain\}/, '스티키 폼의 아래쪽에 닿을 길이 없다');
+  // 미리보기 카드는 자기 안에 스크롤 영역이 있다 — 카드째로 스크롤하면 브랜드 헤더가 밀려 올라간다.
+  assert.match(css, /\.ac-sticky\.ac-preview\{overflow:hidden\}/, '미리보기 카드가 헤더까지 스크롤된다');
+  assert.match(css, /\.ac-preview-body\{height:clamp\(160px,calc\(100vh \/ var\(--vz\) - 230px\),420px\)/, '낮은 화면에서 미리보기 아래가 잘린다');
+
+  // 한 단으로 접히면 스티키가 아니다 — 가둔 채로 두면 폼 안에 또 하나의 스크롤이 생긴다.
+  const mobile = css.slice(css.indexOf('@media (max-width:900px){\n  .ac-shell'), css.indexOf('@media (forced-colors: active){'));
+  assert.match(mobile, /\.ac-sticky\{position:static;max-height:none;overflow:visible\}/, '좁은 화면에서 폼 안에 스크롤이 생긴다');
+
+  // 인쇄에서는 편집 폼을 덜어낸다(DS 25-3) — 종이에서 누를 수 없다.
+  const pr = css.slice(css.indexOf('@media print{'));
+  assert.ok(pr.includes('.ac-sticky'), '인쇄에서 편집 폼을 덜어내지 않는다');
+});

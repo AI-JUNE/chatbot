@@ -1269,8 +1269,10 @@ test('위젯이 비모달일 때 키보드 초점을 가두지 않는다 (DS 7-2
 
 test('전체화면 위젯 뒤에서 페이지가 따라 움직이지 않는다 (DS 7-3)', () => {
   const s = read('src/components/ChatWidget.tsx');
-  assert.match(s, /body\.style\.overflow = 'hidden'/, '전체화면일 때 뒤 페이지가 스크롤된다');
-  assert.match(s, /return \(\) => \{ body\.style\.overflow = prev; \};/, '원래 스타일을 되돌리지 않는다');
+  // 잠그는 일 자체는 콘솔과 **같은 사본**(lockPageScroll)이 한다 — DS 26-1 에서 한 벌로 모았다.
+  assert.match(s, /return lockPageScroll\(window, document\);/, '전체화면일 때 뒤 페이지가 스크롤된다');
+  assert.match(s, /body\.style\.overflow = 'hidden'/, '잠금이 overflow 를 막지 않는다');
+  assert.match(s, /body\.style\.overflow = prevOverflow;/, '원래 스타일을 되돌리지 않는다');
   assert.match(s, /overscrollBehavior: 'contain'/, '목록 끝에서 스크롤이 뒤 페이지로 넘어간다');
   // 임베드 모드는 호스트 문서가 따로 있다 — 위젯이 아니라 embed.js 가 잠근다.
   assert.match(s, /if \(embedded \|\| typeof document === 'undefined'\) return;/, '임베드에서 자기 문서를 잠그면 소용이 없다');
@@ -2329,4 +2331,44 @@ test('한동안 비워 둔 대화를 먼저 밝힌다 (DS 24-3)', () => {
   for (const bad of ['세션', 'TTL', '문맥', '서버']) {
     assert.equal(notice[1].includes(bad), false, `손님에게 내부 용어를 쓴다: ${bad}`);
   }
+});
+
+
+/* ══════════ 26순위 — 백로그 소진 후 23차 재감사 (DS 26-x) ══════════ */
+
+/** 최상위 함수 하나를 소스에서 그대로 떼어낸다(닫는 중괄호가 1열에 있는 선언 기준). */
+function topFn(src, decl) {
+  const i = src.indexOf(decl);
+  assert.ok(i >= 0, `${decl} 선언을 찾지 못했다`);
+  const end = src.indexOf('\n}', i);
+  assert.ok(end > i, `${decl} 의 끝을 찾지 못했다`);
+  return src.slice(i, end + 2);
+}
+
+/**
+ * DS 26-1·26-2 — 같은 일을 하는 두 사본이 갈라지지 않는가.
+ *
+ * 위젯과 관리 콘솔은 서로를 불러오지 않는다(각각 다른 클라이언트 번들이고, 콘솔은 lib 을 쓰지
+ * 않는다 — `MAX_DOC_CHARS`·`kstMonthNow`·`REQUEST_TIMEOUT_MS` 와 같은 기존 규약이다).
+ * 그래서 「뒤 화면 잠금」과 「넘침 측정」은 두 파일에 사본으로 있다 — 글자까지 대조해 둔다.
+ * 종전에 위젯 쪽 잠금은 스크롤 위치를 되돌리지 않고 스크롤바 폭도 메우지 않았다(같은 일을
+ * 두 화면이 다르게 하고 있었다). 동작 자체는 콘솔 테스트가 가짜 창 위에서 실제로 돌려 본다.
+ */
+test('뒤 화면 잠금·넘침 측정이 위젯과 콘솔에서 같은 사본이다 (DS 26-1·26-2)', () => {
+  const widget = read('src/components/ChatWidget.tsx');
+  const console_ = read('src/app/admin/page.tsx');
+  for (const decl of ['function lockPageScroll(', 'function overflowsY(', 'function useScrollableY<']) {
+    assert.equal(topFn(widget, decl), topFn(console_, decl), `사본이 갈라졌다: ${decl}`);
+  }
+  // 뒤 화면의 스타일을 만지는 자리는 이 함수 안뿐이어야 한다 — 밖에서 만지면 잠금이 어긋난다.
+  for (const [name, s] of [['위젯', widget], ['콘솔', console_]]) {
+    const lock = topFn(s, 'function lockPageScroll(');
+    const outside = s.replace(lock, '');
+    assert.equal(/body\.style/.test(outside), false, `${name}이 잠금 밖에서 뒤 화면 스타일을 만진다`);
+    // 풀 때는 **열 때의 값**으로 되돌린다 — 지우면(빈 문자열) 호스트 페이지의 설정을 뺏는다.
+    assert.match(lock, /const prevOverflow = body\.style\.overflow;/, `${name}: 원래 값을 기억하지 않는다`);
+    assert.match(lock, /win\.scrollTo\(0, y\);/, `${name}: 읽던 자리로 되돌리지 않는다`);
+  }
+  // 고객사 사이트(호스트 문서)는 embed.js 가 같은 규칙으로 잠근다 — 이쪽은 계약이라 그대로 둔다.
+  assert.match(read('public/embed.js'), /function lockHost\(on\)/, '호스트 스크롤 잠금이 사라졌다');
 });
