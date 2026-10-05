@@ -422,6 +422,72 @@ export function clearThread(tenantId: string): void {
   const st = threadStore();
   if (!st) return;
   try { st.removeItem(threadKey(tenantId)); } catch { /* noop */ }
+  // 이 대화가 끝났으면 **적던 말도** 끝났다 — 남겨 두면 새 대화의 빈 칸에 지난 글이 떠 있다.
+  clearDraft(tenantId);
+}
+
+/**
+ * ── 보내지 않은 입력 (DS 27-1) ──
+ * DS 7-1 은 **보낸 말**을 되살리지만, 보내기 전에 입력칸에 적어 둔 말은 어디에도 없었다.
+ * 임베드 위젯은 호스트가 페이지를 옮길 때마다 iframe 이 통째로 다시 뜨므로(목록 → 상세 → 장바구니),
+ * 긴 문의·주문번호를 치던 중 링크를 한 번 누르면 **적던 말이 통째로 사라진다** — 되살릴 수단도,
+ * 사라졌다는 안내도 없다. 가장 공들여 쓴 한 문장이 가장 쉽게 사라지는 자리다.
+ *
+ * 대화 본문과 **다른 열쇠**에 둔다: 한 글자 칠 때마다 말풍선 40개를 다시 직렬화하지 않아야 한다.
+ * 보관처는 대화와 같은 `sessionStorage`(탭을 닫으면 사라진다 — 공용 PC 에 남지 않는다)이고,
+ * 이미 보낸 말 전체가 그곳에 있으므로 보내지 않은 한 문장이 새로 드러내는 것은 없다.
+ */
+const DRAFT_KEY = 'gowon-chat-draft';
+const DRAFT_VER = 1;
+/**
+ * 보관할 초안의 상한. 넘으면 **자르지 않고 보관을 건너뛴다** — 잘라서 되살리면 고객이 적은 글이
+ * 말없이 바뀐다(보낼 수 있는 길이의 두 배까지는 담으므로, 한계를 넘겨 치는 중에도 보관된다).
+ */
+const DRAFT_MAX_CHARS = MAX_INPUT_LEN * 2;
+
+interface SavedDraft { v: number; at: number; text: string }
+
+function draftKey(tenantId: string): string { return `${DRAFT_KEY}:${tenantId}`; }
+
+/** 보내지 않은 입력을 보관한다. 비었거나 너무 길면 지운다(빈 칸·잘린 글을 되살릴 이유가 없다). */
+export function saveDraft(tenantId: string, text: string, now: number = Date.now()): void {
+  const st = threadStore();
+  if (!st) return;
+  try {
+    if (!text.trim() || text.length > DRAFT_MAX_CHARS) { st.removeItem(draftKey(tenantId)); return; }
+    st.setItem(draftKey(tenantId), JSON.stringify({ v: DRAFT_VER, at: now, text } satisfies SavedDraft));
+  } catch {
+    /* 저장소 차단·용량 초과 — 되살리지 못할 뿐 대화는 계속된다 */
+  }
+}
+
+/**
+ * 보관된 입력을 읽는다. 없으면 빈 문자열.
+ * 대화 본문과 **같은 기한**을 쓴다 — 서버가 문맥을 잊은 뒤(DS 24-3)에 지난 질문이 칸에 떠 있으면
+ * 고객은 그것이 아직 유효한 줄 알고 그대로 보낸다.
+ */
+export function loadDraft(tenantId: string, now: number = Date.now()): string {
+  const st = threadStore();
+  if (!st) return '';
+  try {
+    const raw = st.getItem(draftKey(tenantId));
+    if (!raw) return '';
+    const d = JSON.parse(raw) as Partial<SavedDraft>;
+    if (d?.v !== DRAFT_VER || typeof d.text !== 'string' || typeof d.at !== 'number') return '';
+    if (now - d.at > THREAD_TTL_MS) { clearDraft(tenantId); return ''; }
+    if (!d.text.trim() || d.text.length > DRAFT_MAX_CHARS) return '';
+    return d.text;
+  } catch {
+    // 남의 데이터·깨진 JSON — 빈 칸으로 시작한다(사용자에게 알릴 실패가 아니다).
+    return '';
+  }
+}
+
+/** 보관된 입력을 지운다(보냈을 때·「닫고 처음으로」·만료). */
+export function clearDraft(tenantId: string): void {
+  const st = threadStore();
+  if (!st) return;
+  try { st.removeItem(draftKey(tenantId)); } catch { /* noop */ }
 }
 
 /** 화면에 남아 있는 대화의 마지막 주고받음 시각. 아직 시각이 붙지 않았으면(서버 렌더) 0. */
@@ -531,7 +597,12 @@ export default function ChatWidget({
   // 같은 방문에서 이어가던 대화가 있으면 여기서 되살린다(서버 렌더에는 저장소가 없다).
   useEffect(() => {
     setMounted(true);
+    // 대화를 먼저 본다 — 기한이 지난 대화는 이 안에서 지워지고(적던 말까지) 그 뒤에 읽으면 빈 칸이다.
+    // 순서를 바꾸면 이미 지운 초안이 화면에만 남는다.
     const saved = loadThread(threadId);
+    // 보내지 않은 입력도 되살린다 — 보낸 말만 되살리면 가장 공들여 쓴 한 문장이 사라진다(DS 27-1).
+    const savedDraft = loadDraft(threadId);
+    if (savedDraft) setInput(savedDraft);
     if (saved) {
       setSessionId(saved.id);
       // 화면 안 일련번호는 이 렌더에서 다시 매긴다(저장된 번호와 겹치지 않게).
