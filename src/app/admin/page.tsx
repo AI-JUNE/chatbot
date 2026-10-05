@@ -300,6 +300,32 @@ function scrollFocusProps(scrollable: boolean, label?: string) {
   return label ? { tabIndex: 0, role: 'region', 'aria-label': `${label} — 세로로 스크롤할 수 있습니다` } : { tabIndex: 0 };
 }
 
+/**
+ * 폼에 **아직 저장하지 않은 내용**이 남아 있는가 (DS 27-2).
+ *
+ * 기준선(마지막으로 **프로그램이** 채운 값 — 수정 시작·저장 완료·취소)과 값만 비교한다. 사용자가
+ * 치는 것은 기준선을 옮기지 않으므로, 둘이 다르면 그 차이가 곧 「적던 내용」이다.
+ * 앞뒤 공백만의 차이는 적은 것으로 보지 않는다 — 칸을 눌렀다 지운 것 때문에 확인이 뜨면
+ * 그 확인은 금세 읽지 않고 누르는 것이 되고, 정작 삭제 확인(DS 5-4)까지 함께 무뎌진다.
+ */
+function formDirty<T extends object>(cur: T, base: T): boolean {
+  // 같은 모양끼리만 견준다(`T` 하나) — 다른 폼의 기준선과 대조하면 늘 「적던 내용이 있다」가 된다.
+  const c = cur as Record<string, unknown>;
+  const z = base as Record<string, unknown>;
+  const keys = Object.keys(c).concat(Object.keys(z).filter((k) => !(k in c)));
+  for (const k of keys) {
+    const a = c[k];
+    const b = z[k];
+    // 체크박스처럼 값이 둘뿐인 칸은 공백을 다듬을 것이 없다 — 그대로 견준다.
+    if (typeof a === 'boolean' || typeof b === 'boolean') {
+      if (a !== b) return true;
+      continue;
+    }
+    if (String(a ?? '').trim() !== String(b ?? '').trim()) return true;
+  }
+  return false;
+}
+
 /** 확인 대화상자에 넘길 내용. `resolve` 는 버튼을 누르면 호출된다. */
 type ConfirmReq = {
   title: string;
@@ -1799,9 +1825,27 @@ export default function AdminPage() {
     };
   }, []);
 
+  /**
+   * ── 적던 내용의 기준선 (DS 27-2) ──
+   * 편집 폼 5곳의 「마지막으로 저장된 모습」이다. 프로그램이 폼을 채울 때(수정 시작·저장 완료·
+   * 취소·삭제 뒤 거두기)만 함께 옮긴다 — 아래 `load*Form` 한 문을 지나게 해 두었다.
+   * 기준선과 화면이 다르면 그 차이가 곧 「아직 저장하지 않은 내용」이다(`formDirty`).
+   * 상태가 아니라 ref 인 이유: 기준선이 바뀌는 순간은 언제나 폼 값도 함께 바뀌므로 다시 그릴 일이
+   * 따로 없고, 상태로 두면 같은 렌더에 두 번 그리게 된다.
+   */
+  const formBase = useRef({
+    kb: EMPTY_FORM as KBForm,
+    imp: EMPTY_IMPORT as ImportForm,
+    rule: EMPTY_CR_FORM as CustomRuleForm,
+    account: EMPTY_ACCOUNT_FORM as AccountForm,
+    partner: EMPTY_PARTNER_FORM as PartnerForm,
+  });
+
   // ---- KB ----
   const [entries, setEntries] = useState<KBEntryView[]>([]);
   const [form, setForm] = useState<KBForm>(EMPTY_FORM);
+  /** 안내 자료 폼을 프로그램이 채운다 — 기준선도 함께 옮긴다(사용자 입력은 `setForm` 그대로). */
+  const loadKbForm = useCallback((next: KBForm) => { formBase.current.kb = next; setForm(next); }, []);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [kbQuery, setKbQuery] = useState('');
   const [kbCat, setKbCat] = useState('');
@@ -1824,6 +1868,8 @@ export default function AdminPage() {
 
   // ---- 문서 업로드(청킹 → KB 후보) ----
   const [imp, setImp] = useState<ImportForm>(EMPTY_IMPORT);
+  /** 문서 붙여넣기 폼을 프로그램이 채운다(등록 완료 뒤 비우기) — 기준선도 함께 옮긴다. */
+  const loadImpForm = useCallback((next: ImportForm) => { formBase.current.imp = next; setImp(next); }, []);
   const [candidates, setCandidates] = useState<KBCandidateView[] | null>(null);
   // 어느 버튼이 도는지 구분해야 「미리보기 하는 중…」·「등록하는 중…」을 제자리에 쓸 수 있다.
   const [impBusy, setImpBusy] = useState<'' | 'preview' | 'commit'>('');
@@ -1869,7 +1915,7 @@ export default function AdminPage() {
       }
       if (commit) {
         setCandidates(null);
-        setImp(EMPTY_IMPORT);
+        loadImpForm(EMPTY_IMPORT);
         await loadKB();
         flash(`문서 등록 완료: 신규 ${data.created} · 갱신 ${data.updated}${data.errors?.length ? ` · 실패 ${data.errors.length}` : ''}`);
       } else {
@@ -1888,6 +1934,8 @@ export default function AdminPage() {
   const [rules, setRules] = useState<RuleView[]>([]);
   const [customRules, setCustomRules] = useState<CustomRuleView[]>([]);
   const [crForm, setCrForm] = useState<CustomRuleForm>(EMPTY_CR_FORM);
+  /** 규칙 빌더를 프로그램이 채운다 — 기준선도 함께 옮긴다(DS 27-2). */
+  const loadRuleForm = useCallback((next: CustomRuleForm) => { formBase.current.rule = next; setCrForm(next); }, []);
   const [crEditing, setCrEditing] = useState<string | null>(null);
   const [crErr, setCrErr] = useState<{ label?: string; keywords?: string; reply?: string }>({});
   const [crBusy, setCrBusy] = useState(false);
@@ -2020,6 +2068,9 @@ export default function AdminPage() {
   const [partnerLoaded, setPartnerLoaded] = useState(false);
   const [pForm, setPForm] = useState<PartnerForm>(EMPTY_PARTNER_FORM);
   const [aForm, setAForm] = useState<AccountForm>(EMPTY_ACCOUNT_FORM);
+  /** 파트너·고객사 폼을 프로그램이 채운다 — 기준선도 함께 옮긴다(DS 27-2). */
+  const loadPartnerForm = useCallback((next: PartnerForm) => { formBase.current.partner = next; setPForm(next); }, []);
+  const loadAccountForm = useCallback((next: AccountForm) => { formBase.current.account = next; setAForm(next); }, []);
   // 우측 폼은 고객사/파트너 중 하나만 보여준다(한 화면에 긴 폼 두 개를 쌓지 않는다).
   const [partnerFormKind, setPartnerFormKind] = useState<'account' | 'partner'>('account');
   const [pErr, setPErr] = useState<{ name?: string; feeRatePct?: string }>({});
@@ -2088,13 +2139,16 @@ export default function AdminPage() {
     setPartnerFormKind(kind);
     window.setTimeout(() => partnerFormRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }), 0);
   };
-  const editPartner = (p: PartnerView) => {
-    setPForm({ id: p.id, name: p.name, managerName: p.managerName ?? '', feeRatePct: p.feeRateBp === null ? '' : bpToPct(p.feeRateBp), status: p.status, memo: p.memo ?? '' });
+  // 적던 내용을 말없이 갈아 끼우지 않는다(DS 27-2) — `confirmDiscard` 는 아래에 있다(이벤트에서만 불린다).
+  const editPartner = async (p: PartnerView) => {
+    if (!(await confirmDiscard(formDirty(pForm, formBase.current.partner), '파트너 등록 폼'))) return;
+    loadPartnerForm({ id: p.id, name: p.name, managerName: p.managerName ?? '', feeRatePct: p.feeRateBp === null ? '' : bpToPct(p.feeRateBp), status: p.status, memo: p.memo ?? '' });
     setPErr({});
     focusPartnerForm('partner');
   };
-  const editAccount = (a: AccountView) => {
-    setAForm({
+  const editAccount = async (a: AccountView) => {
+    if (!(await confirmDiscard(formDirty(aForm, formBase.current.account), '고객사 등록 폼'))) return;
+    loadAccountForm({
       id: a.id, name: a.name, partnerId: a.partnerId ?? '', source: a.source,
       status: a.status, contractedAt: a.contractedAt ?? '', ownerName: a.ownerName ?? '',
       monthlyFeeKrw: typeof a.monthlyFeeKrw === 'number' ? String(a.monthlyFeeKrw) : '', attributionNote: '',
@@ -2131,7 +2185,7 @@ export default function AdminPage() {
         setPartnerErr(data.message || data.error || '저장하지 못했습니다.');
         return;
       }
-      setPForm(EMPTY_PARTNER_FORM);
+      loadPartnerForm(EMPTY_PARTNER_FORM);
       await loadPartners(partnerFilter);
       flash(data.created ? '파트너를 등록했습니다.' : '파트너를 수정했습니다.');
     } catch {
@@ -2169,7 +2223,7 @@ export default function AdminPage() {
         setPartnerErr(data.message || data.error || '저장하지 못했습니다.');
         return;
       }
-      setAForm(EMPTY_ACCOUNT_FORM);
+      loadAccountForm(EMPTY_ACCOUNT_FORM);
       await loadPartners(partnerFilter);
       flash(data.created ? '고객사를 등록했습니다.' : '고객사를 수정했습니다.');
     } catch {
@@ -2199,7 +2253,7 @@ export default function AdminPage() {
         setPartnerErr(data.message || data.error || '삭제하지 못했습니다.');
         return;
       }
-      if (pForm.id === p.id) setPForm(EMPTY_PARTNER_FORM);
+      if (pForm.id === p.id) loadPartnerForm(EMPTY_PARTNER_FORM);
       await loadPartners(partnerFilter);
       flash('파트너를 삭제했습니다.');
     } catch {
@@ -2510,6 +2564,49 @@ export default function AdminPage() {
   }), []);
 
   /**
+   * 적던 내용을 **덮어쓰기 전에** 묻는다 (DS 27-2).
+   *
+   * 지금까지 확인을 거치는 것은 삭제·초기화뿐이었다. 그런데 20분 걸려 쓴 답변이 사라지는 더 흔한
+   * 길은 표에서 **다른 행의 「수정」을 한 번 누르는 것**이었다 — 폼이 그 행의 값으로 통째로 갈리고,
+   * 적던 글은 되돌릴 수단도 알림도 없이 사라진다. 적은 것이 없으면 묻지 않는다: 뜻 없는 확인이
+   * 잦아지면 정작 삭제 확인(DS 5-4)까지 읽지 않고 누르게 된다.
+   * 위에서 선언한 `askConfirm` 을 쓰므로 여기 두지만, 호출하는 `edit*` 는 위쪽에 있다(이벤트에서만 불린다).
+   */
+  const confirmDiscard = useCallback(async (dirty: boolean, what: string) => {
+    if (!dirty) return true;
+    return askConfirm({
+      title: '적던 내용을 버릴까요?',
+      target: what,
+      body: '이 폼에 저장하지 않은 내용이 있습니다. 계속하면 적던 내용은 사라집니다 — 먼저 저장하려면 「취소」를 누르세요.',
+      confirmLabel: '버리고 계속',
+    });
+  }, [askConfirm]);
+
+  /**
+   * 적던 내용을 들고 **이 문서를 떠나려 할 때** 브라우저가 되묻게 한다 (DS 27-2).
+   *
+   * 콘솔 안에서 탭을 옮기는 것은 같은 문서라 폼이 그대로 있으므로 묻지 않는다(DS 6-3 이 탭을 주소에
+   * 남긴 뒤에도 탭 전환은 `pushState` 다). 걸리는 것은 새로고침·창 닫기·주소 이동·콘솔 밖으로 나가는
+   * 뒤로가기 — 모두 적던 내용이 **되돌릴 수 없이** 사라지는 길이다(QUALITY_BAR §2).
+   * 적은 것이 없으면 아예 걸지 않는다 — 걸어 두면 아무것도 쓰지 않은 사람에게도 경고가 뜬다.
+   */
+  const anyFormDirty = formDirty(form, formBase.current.kb)
+    || formDirty(imp, formBase.current.imp)
+    || formDirty(crForm, formBase.current.rule)
+    || formDirty(aForm, formBase.current.account)
+    || formDirty(pForm, formBase.current.partner);
+  useEffect(() => {
+    if (!anyFormDirty) return;
+    const onLeave = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // 문구는 브라우저가 자기 것으로 바꿔 보여준다 — 값이 비어 있으면 묻지 않는 브라우저가 있어 채운다.
+      e.returnValue = '저장하지 않은 내용이 있습니다.';
+    };
+    window.addEventListener('beforeunload', onLeave);
+    return () => window.removeEventListener('beforeunload', onLeave);
+  }, [anyFormDirty]);
+
+  /**
    * 실패한 동작을 조용히 넘기지 않는다(QUALITY_BAR §3).
    * 네트워크 예외·JSON 파싱 실패까지 잡아 사용자가 읽을 수 있는 문구로 알린다.
    */
@@ -2553,17 +2650,19 @@ export default function AdminPage() {
       failed('저장하지 못했습니다', data.error);
       return;
     }
-    setForm(EMPTY_FORM);
+    loadKbForm(EMPTY_FORM);
     setEditingId(null);
     setKbErr({});
     await loadKB();
     flash(editingId ? '수정되었습니다.' : '추가되었습니다.');
   };
 
-  const editKB = (e: KBEntryView) => {
+  const editKB = async (e: KBEntryView) => {
+    // 적던 내용을 말없이 갈아 끼우지 않는다 — 표에서 「수정」을 잘못 누르는 것이 가장 흔한 길이다.
+    if (!(await confirmDiscard(formDirty(form, formBase.current.kb), '안내 자료 편집 폼'))) return;
     setEditingId(e.id);
     setKbErr({});
-    setForm({ id: e.id, category: e.category, question: e.question, keywords: e.keywords.join(', '), answer: e.answer });
+    loadKbForm({ id: e.id, category: e.category, question: e.question, keywords: e.keywords.join(', '), answer: e.answer });
     goTab('kb');
     // 좁은 화면에서는 편집 폼이 표 아래에 있으므로 보이는 곳으로 옮긴다.
     window.setTimeout(() => kbFormRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }), 0);
@@ -2584,6 +2683,11 @@ export default function AdminPage() {
       if (on401(res)) return;
       const data = await res.json();
       if (data.ok) {
+        // 편집 폼이 방금 지운 자료를 가리키고 있으면 거둔다 (DS 27-3).
+        // 남겨 두면 「수정 저장」이 **지운 자료를 다시 만들고**(서버는 없는 식별자를 새로 만든다)
+        // 화면은 「수정되었습니다」라고 말한다 — 변경 이력에는 「생성」으로 남아 둘이 어긋난다.
+        // 규칙 쪽(`removeCustomRule`)은 처음부터 거두고 있었다. 같은 일을 두 탭이 다르게 하고 있었다.
+        if (editingId === id) { setEditingId(null); loadKbForm(EMPTY_FORM); setKbErr({}); }
         await loadKB();
         flash('삭제되었습니다.');
       } else {
@@ -2613,6 +2717,9 @@ export default function AdminPage() {
         failed('초기화하지 못했습니다', data.message || data.error);
         return;
       }
+      // 초기화는 모든 자료를 지운다 — 수정 중이던 자료도 사라졌으므로 폼을 거둔다 (DS 27-3).
+      // **새 자료를 적던 중**이면 건드리지 않는다: 그 글은 지워진 것과 아무 상관이 없다.
+      if (editingId) { setEditingId(null); loadKbForm(EMPTY_FORM); setKbErr({}); }
       await loadKB();
       flash('기본 지식베이스로 초기화했습니다.');
     } catch {
@@ -2667,7 +2774,7 @@ export default function AdminPage() {
         flash(`저장하지 못했습니다: ${data.message || data.error}`);
         return;
       }
-      setCrForm(EMPTY_CR_FORM);
+      loadRuleForm(EMPTY_CR_FORM);
       setCrEditing(null);
       await loadRules();
       flash(crEditing ? '규칙을 수정했습니다.' : '규칙을 추가했습니다.');
@@ -2717,7 +2824,7 @@ export default function AdminPage() {
       if (data.ok) {
         if (crEditing === intent) {
           setCrEditing(null);
-          setCrForm(EMPTY_CR_FORM);
+          loadRuleForm(EMPTY_CR_FORM);
         }
         await loadRules();
         flash('규칙을 삭제했습니다.');
@@ -3625,7 +3732,7 @@ export default function AdminPage() {
                       style={S.btnGhost}
                       onClick={() => {
                         setEditingId(null);
-                        setForm(EMPTY_FORM);
+                        loadKbForm(EMPTY_FORM);
                         setKbErr({});
                       }}
                     >
@@ -3651,9 +3758,11 @@ export default function AdminPage() {
         const shownBuiltin = rules.filter((r) => hit([r.label, r.pattern, r.effectiveReply].join(' ')));
         const formKeywords = splitKeywords(crForm.keywords);
         const probeHits = probeKeywords(ruleProbe, formKeywords);
-        const onEdit = (r: CustomRuleView) => {
+        const onEdit = async (r: CustomRuleView) => {
+          // 빌더에 적던 규칙을 말없이 갈아 끼우지 않는다(DS 27-2).
+          if (!(await confirmDiscard(formDirty(crForm, formBase.current.rule), '시나리오 룰 빌더'))) return;
           setCrEditing(r.intent);
-          setCrForm({ label: r.label, keywords: r.keywords.join(', '), reply: r.reply, escalate: r.escalate });
+          loadRuleForm({ label: r.label, keywords: r.keywords.join(', '), reply: r.reply, escalate: r.escalate });
           setCrErr({});
           ruleFormRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
         };
@@ -3895,7 +4004,7 @@ export default function AdminPage() {
                   {crBusy ? '저장 중…' : crEditing ? '수정 저장' : '규칙 추가'}
                 </button>
                 {crEditing && (
-                  <button type="button" style={S.btnGhost} onClick={() => { setCrEditing(null); setCrForm(EMPTY_CR_FORM); setCrErr({}); }}>
+                  <button type="button" style={S.btnGhost} onClick={() => { setCrEditing(null); loadRuleForm(EMPTY_CR_FORM); setCrErr({}); }}>
                     취소
                   </button>
                 )}
@@ -4182,7 +4291,11 @@ export default function AdminPage() {
                     <h2 id="partner-list-h" style={{ ...S.h2, marginRight: 4 }}>파트너</h2>
                     <span style={S.tag}>{partners.length}곳 · 고객사 수는 귀속 기준 건수만 셉니다</span>
                     {canWrite && partners.length > 0 && (
-                      <button type="button" style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={() => { setPForm(EMPTY_PARTNER_FORM); setPErr({}); focusPartnerForm('partner'); }}>파트너 추가</button>
+                      <button type="button" style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={async () => {
+                        // 「추가」도 폼을 통째로 비운다 — 수정 중이던 내용을 말없이 버리지 않는다(DS 27-2).
+                        if (!(await confirmDiscard(formDirty(pForm, formBase.current.partner), '파트너 등록 폼'))) return;
+                        loadPartnerForm(EMPTY_PARTNER_FORM); setPErr({}); focusPartnerForm('partner');
+                      }}>파트너 추가</button>
                     )}
                   </div>
                   {partners.length === 0 ? (
@@ -4317,7 +4430,7 @@ export default function AdminPage() {
                           <button type="submit" {...busyBtn(partnerSaving, partnerSaving, S.btn)}>
                             {partnerSaving ? '저장 중…' : aForm.id ? '수정 저장' : '고객사 등록'}
                           </button>
-                          {aForm.id && <button type="button" style={S.btnGhost} onClick={() => { setAForm(EMPTY_ACCOUNT_FORM); setAErr({}); }}>취소</button>}
+                          {aForm.id && <button type="button" style={S.btnGhost} onClick={() => { loadAccountForm(EMPTY_ACCOUNT_FORM); setAErr({}); }}>취소</button>}
                         </div>
                       </form>
                     ) : (
@@ -4358,7 +4471,7 @@ export default function AdminPage() {
                           <button type="submit" {...busyBtn(partnerSaving, partnerSaving, S.btn)}>
                             {partnerSaving ? '저장 중…' : pForm.id ? '수정 저장' : '파트너 등록'}
                           </button>
-                          {pForm.id && <button type="button" style={S.btnGhost} onClick={() => { setPForm(EMPTY_PARTNER_FORM); setPErr({}); }}>취소</button>}
+                          {pForm.id && <button type="button" style={S.btnGhost} onClick={() => { loadPartnerForm(EMPTY_PARTNER_FORM); setPErr({}); }}>취소</button>}
                         </div>
                       </form>
                     )}

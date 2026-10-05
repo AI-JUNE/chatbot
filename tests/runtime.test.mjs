@@ -1988,3 +1988,29 @@ test('세션 문맥이 사라지면 폼의 답이 새 질문이 된다 (DS 24-3)
   assert.ok(stale.reply.includes('이해하지 못했'), `돌아오는 안내가 바뀌었다: ${stale.reply}`);
   resetSessions();
 });
+
+/* ══════════ 디자인 스프린트 — 24차 재감사 (DS 27-3) ══════════ */
+
+/**
+ * DS 27-3 — 없는 식별자로 저장하면 서버는 **새로 만든다**.
+ *
+ * 그래서 자료를 지운 뒤 편집 폼을 거두지 않으면 「수정 저장」이 지운 자료를 되살리고, 화면은
+ * 「수정되었습니다」라고 말한다(폼은 여전히 수정 모드다) — 변경 이력에는 「생성」으로 남아
+ * 둘이 어긋난다. 콘솔 쪽 거두기가 **왜** 필요한지는 이 계약을 돌려 봐야 드러난다.
+ */
+test('없는 식별자로 저장하면 지운 자료가 되살아난다 (DS 27-3 근거)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false'; // 테스트가 로컬 파일을 건드리지 않게 한다
+  const store = await importLib('adminStore', ['knowledge', 'normalize']);
+
+  const entry = { id: 'ds27-ghost', category: '요금', question: '이용료가 얼마인가요?', keywords: ['요금'], answer: '월 9만원입니다.' };
+  assert.equal(store.upsertKB(entry).created, true, '전제: 새 자료가 만들어져야 한다');
+  assert.equal(store.deleteKB('ds27-ghost'), true, '전제: 삭제되어야 한다');
+
+  // 운영자가 지운 자료를 수정 중이던 폼이 그대로 남아 있었다면, 「수정 저장」은 이 요청을 보낸다.
+  const again = store.upsertKB({ ...entry, answer: '월 9만원입니다. (수정)' });
+  assert.equal(again.ok, true);
+  assert.equal(again.created, true, '서버는 없는 식별자를 수정하지 않는다 — 새로 만든다');
+  assert.ok(store.listKB().some((e) => e.id === 'ds27-ghost'), '지운 자료가 되살아나지 않았다면 이 검증의 전제가 깨졌다');
+
+  store.deleteKB('ds27-ghost');
+});

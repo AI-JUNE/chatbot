@@ -620,6 +620,13 @@ export default function ChatWidget({
     saveThread(threadId, sessionId, msgs);
   }, [mounted, threadId, sessionId, msgs]);
 
+  // 적던 말도 글자마다 보관한다(DS 27-1). 대화 본문과 열쇠가 달라 말풍선을 다시 쓰지 않는다.
+  // 복원 전(서버 렌더 직후)에는 쓰지 않는다 — 빈 칸으로 덮어써 되살릴 글을 지워 버리면 안 된다.
+  useEffect(() => {
+    if (!mounted) return;
+    saveDraft(threadId, input);
+  }, [mounted, threadId, input]);
+
   // 전체화면 전환 판단.
   // - 일반 페이지: 실제 뷰포트 폭으로 판단한다.
   // - 임베드(iframe): iframe 폭은 위젯 크기라 뷰포트가 아니다 → 호스트(embed.js)가 알려준 폭을 쓴다.

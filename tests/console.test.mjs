@@ -1318,3 +1318,100 @@ test('스티키 편집 폼은 화면에 들어갈 만큼만 차지한다 (DS 26-
   const pr = css.slice(css.indexOf('@media print{'));
   assert.ok(pr.includes('.ac-sticky'), '인쇄에서 편집 폼을 덜어내지 않는다');
 });
+
+/* ══════════ 디자인 스프린트 — 24차 재감사 (DS 27-x) ══════════ */
+
+/**
+ * DS 27-2 — 「아직 저장하지 않은 내용」을 **값으로** 가리는가.
+ *
+ * 이 판정 하나가 두 관문을 먹인다(덮어쓰기 확인·떠날 때 경고). 너무 둔하면 적은 글이 사라지고,
+ * 너무 예민하면 칸을 눌렀다 지운 것만으로도 확인이 떠서 정작 삭제 확인(DS 5-4)까지 무뎌진다.
+ * 「정말 그렇게 가리는가」는 소스를 읽어서는 알 수 없다 — 돌려 봐야 안다.
+ */
+test('적던 내용이 있는지 값으로 가린다 (DS 27-2)', opts, async () => {
+  const { formDirty } = await loadFns(['formDirty']);
+  const base = { id: '', category: '', question: '', keywords: '', answer: '' };
+
+  assert.equal(formDirty({ ...base }, base), false, '아무것도 적지 않았는데 확인이 뜬다');
+  assert.equal(formDirty({ ...base, answer: '평일 09~18시입니다.' }, base), true, '적은 글을 말없이 버린다');
+  // 눌렀다 지운 칸(공백만 남은 칸)은 적은 것이 아니다.
+  assert.equal(formDirty({ ...base, question: '   ' }, base), false, '공백만의 차이에 확인이 뜬다');
+  assert.equal(formDirty({ ...base, question: ' 요금 ' }, { ...base, question: '요금' }), false, '앞뒤 공백만 다른데 다르다고 본다');
+  // 수정 중이던 값을 한 글자 고친 것도 「적던 내용」이다.
+  assert.equal(formDirty({ ...base, id: 'kb_1', answer: '평일 09~18시' }, { ...base, id: 'kb_1', answer: '평일 09~18시.' }), true);
+
+  // 체크박스는 다듬을 공백이 없다 — 그대로 견준다(규칙 빌더의 「상담원 접수」).
+  assert.equal(formDirty({ label: '', escalate: false }, { label: '', escalate: true }), true, '체크를 바꾼 것을 놓친다');
+  assert.equal(formDirty({ label: '', escalate: false }, { label: '', escalate: false }), false);
+  // 한쪽에만 있는 칸도 본다(폼에 칸이 늘어난 뒤에도 판정이 새지 않게).
+  assert.equal(formDirty({ a: '', b: 'x' }, { a: '' }), true);
+  assert.equal(formDirty({ a: '' }, { a: '', b: 'x' }), true);
+});
+
+/**
+ * DS 27-2 — 적던 내용을 버리는 길 전부가 **묻는 문**을 지나는가.
+ *
+ * 지금까지 확인을 거치는 것은 삭제·초기화뿐이었다. 20분 걸려 쓴 답변이 사라지는 더 흔한 길은
+ * 표에서 **다른 행의 「수정」을 한 번 누르는 것**이고, 그 다음은 **새로고침**이었다.
+ */
+test('적던 내용을 덮어쓰거나 들고 떠날 때 먼저 묻는다 (DS 27-2)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+
+  // 1) 폼을 통째로 갈아 끼우는 자리 5곳이 전부 확인을 지난다(안내 자료·규칙·고객사·파트너·「파트너 추가」).
+  assert.equal((src.match(/confirmDiscard\(formDirty\(/g) || []).length, 5, '덮어쓰기 자리 하나가 확인을 지나지 않는다');
+  // 확인을 **기다려야** 하므로 전부 async 다 — 동기 함수면 물어보는 사이에 폼이 이미 갈린다.
+  for (const decl of ['const editKB = async', 'const editPartner = async', 'const editAccount = async', 'const onEdit = async']) {
+    assert.ok(src.includes(decl), `확인을 기다리지 않는다: ${decl}`);
+  }
+  // 적은 것이 없으면 묻지 않는다 — 뜻 없는 확인이 잦으면 삭제 확인까지 읽지 않고 누른다.
+  const fn = src.slice(src.indexOf('const confirmDiscard = useCallback'));
+  assert.match(fn.slice(0, fn.indexOf('}, [askConfirm]);')), /if \(!dirty\) return true;/, '적은 것이 없어도 묻는다');
+
+  // 2) 기준선을 옮기지 않고 폼을 채우는 자리가 없어야 한다 — 남으면 비운 폼이 「적던 내용」으로 보인다.
+  for (const bad of ['setForm(EMPTY_FORM)', 'setCrForm(EMPTY_CR_FORM)', 'setAForm(EMPTY_ACCOUNT_FORM)', 'setPForm(EMPTY_PARTNER_FORM)', 'setImp(EMPTY_IMPORT)']) {
+    assert.equal(src.includes(bad), false, `기준선을 옮기지 않고 폼을 비운다: ${bad}`);
+  }
+  // 기준선을 옮기는 문은 `load*Form` 다섯 개뿐이다(손으로 옮기는 자리가 생기면 곧 어긋난다).
+  assert.equal((src.match(/formBase\.current\.\w+ = /g) || []).length, 5, '기준선을 손으로 옮기는 자리가 있다');
+
+  // 3) 떠날 때 — 적은 것이 있을 때만 걸고, 폼 5곳 전부가 판정에 들어간다.
+  assert.match(src, /if \(!anyFormDirty\) return;/, '아무것도 쓰지 않은 사람에게도 경고가 뜬다');
+  assert.match(src, /addEventListener\('beforeunload', onLeave\)/, '새로고침·창 닫기에 적던 내용이 말없이 사라진다');
+  assert.match(src, /removeEventListener\('beforeunload', onLeave\)/, '경고가 치워지지 않고 남는다');
+  const decl = src.slice(src.indexOf('const anyFormDirty ='));
+  const judge = decl.slice(0, decl.indexOf(';'));
+  for (const f of [
+    'form, formBase.current.kb', 'imp, formBase.current.imp', 'crForm, formBase.current.rule',
+    'aForm, formBase.current.account', 'pForm, formBase.current.partner',
+  ]) {
+    assert.ok(judge.includes(f), `떠날 때 판정에서 빠진 폼: ${f}`);
+  }
+  // 콘솔 안의 탭 전환은 같은 문서다 — 폼이 그대로 있으므로 묻지 않는다(DS 6-3).
+  const goTab = src.slice(src.indexOf('const goTab = useCallback'));
+  assert.equal(/beforeunload|confirmDiscard/.test(goTab.slice(0, goTab.indexOf('}, [setTab]);'))), false, '탭을 옮길 때마다 경고가 뜬다');
+});
+
+/**
+ * DS 27-3 — 지운 자료를 가리키던 편집 폼을 거두는가.
+ *
+ * 거두지 않으면 「수정 저장」이 **지운 자료를 다시 만들고**(서버는 없는 식별자를 새로 만든다)
+ * 화면은 「수정되었습니다」라고 말한다 — 변경 이력에는 「생성」으로 남아 둘이 어긋난다.
+ */
+test('지운 자료를 가리키던 편집 폼을 거둔다 (DS 27-3)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const body = (name) => {
+    const i = src.indexOf(`const ${name} = async`);
+    assert.ok(i >= 0, `${name} 을 찾지 못했다`);
+    return src.slice(i, src.indexOf('\n  };', i));
+  };
+
+  assert.match(
+    body('removeKB'),
+    /if \(editingId === id\) \{ setEditingId\(null\); loadKbForm\(EMPTY_FORM\); setKbErr\(\{\}\); \}/,
+    '지운 자료를 가리킨 폼이 남아 「수정 저장」이 그 자료를 되살린다',
+  );
+  // 규칙 쪽은 처음부터 거두고 있었다 — 두 탭이 갈라지면 같은 일을 다르게 하는 콘솔이 된다.
+  assert.match(body('removeCustomRule'), /if \(crEditing === intent\) \{/, '규칙 쪽 거두기가 사라졌다');
+  // 초기화는 **수정 중일 때만** 거둔다 — 새로 적던 글은 지워진 것과 아무 상관이 없다.
+  assert.match(body('resetAll'), /if \(editingId\) \{ setEditingId\(null\); loadKbForm\(EMPTY_FORM\); setKbErr\(\{\}\); \}/, '초기화가 적던 새 자료까지 버린다');
+});

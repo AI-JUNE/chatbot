@@ -319,6 +319,119 @@ test('서버 렌더에는 이어가기 표시가 없다 (DS 7-1)', opts, async (
   assert.equal(html.includes('이전 대화를 이어서 보고 있습니다'), false, '저장소를 읽기 전에 이어간다고 단정한다');
 });
 
+/* ── 보내지 않은 입력 (DS 27-1) ── */
+
+/**
+ * DS 27-1 — DS 7-1 은 **보낸 말**만 되살렸다.
+ *
+ * 임베드 위젯은 호스트가 페이지를 옮길 때마다 iframe 이 통째로 다시 뜬다. 긴 문의·주문번호를
+ * 치던 중 링크를 한 번 누르면 적던 말이 사라지는데, 되살릴 수단도 사라졌다는 안내도 없었다.
+ * 「정말 되살아나는가」는 돌려 봐야 안다.
+ */
+test('보내지 않은 입력을 같은 방문 안에서 되살린다 (DS 27-1)', opts, async () => {
+  const m = await loadModule();
+  for (const fn of ['saveDraft', 'loadDraft', 'clearDraft']) {
+    assert.equal(typeof m[fn], 'function', `${fn} 을 내보내야 한다`);
+  }
+  const st = fakeStorage();
+  await withStorage(st, () => {
+    const typed = '주문번호 2026-10-04-00193 인데 환불이 가능한가요? 받은 상자가 찌그러져 있었습니다.';
+    m.saveDraft('eum', typed, 1000);
+    assert.equal(m.loadDraft('eum', 2000), typed, '페이지를 옮기면 적던 말이 사라진다');
+    // 테넌트마다 따로 둔다 — 다른 안내 챗봇의 입력칸에 남의 글이 뜨면 안 된다.
+    assert.equal(m.loadDraft('default', 2000), '', '다른 테넌트의 초안이 섞인다');
+
+    // 대화 본문과 **다른 열쇠**를 쓴다 — 한 글자 칠 때마다 말풍선 40개를 다시 직렬화하지 않는다.
+    const keys = [...st.calls.keys()];
+    assert.equal(keys.length, 1, `열쇠가 하나여야 한다: ${keys.join(',')}`);
+    assert.ok(keys[0].startsWith('gowon-chat-draft:'), `대화 본문과 같은 열쇠를 쓴다: ${keys[0]}`);
+  });
+});
+
+test('보냈거나 비우거나 대화를 지우면 적던 말이 남지 않는다 (DS 27-1)', opts, async () => {
+  const m = await loadModule();
+  const st = fakeStorage();
+  await withStorage(st, () => {
+    // 보내면 입력칸이 비고(위젯이 `setInput('')`), 그 값이 그대로 보관으로 내려온다 → 지워야 한다.
+    m.saveDraft('eum', '환불 문의', 1000);
+    m.saveDraft('eum', '', 1100);
+    assert.equal(m.loadDraft('eum', 1200), '', '보낸 뒤에도 지난 글이 칸에 떠 있다');
+    // 공백만 남은 칸을 되살릴 이유가 없다.
+    m.saveDraft('eum', '   \n ', 1300);
+    assert.equal(m.loadDraft('eum', 1400), '');
+    assert.equal(st.calls.size, 0, '빈 값을 저장소에 남긴다');
+
+    // 「닫고 처음으로」 — 대화를 지우면 적던 말도 끝이다(새 대화의 빈 칸에 지난 글이 떠 있으면 안 된다).
+    m.saveDraft('eum', '쓰다 만 글', 1500);
+    m.clearThread('eum');
+    assert.equal(m.loadDraft('eum', 1600), '', '대화를 지웠는데 적던 말이 남는다');
+  });
+});
+
+test('기한이 지난 초안은 되살리지 않고 지운다 (DS 27-1)', opts, async () => {
+  const m = await loadModule();
+  const st = fakeStorage();
+  await withStorage(st, () => {
+    // 대화 본문과 **같은 기한**이다 — 서버가 문맥을 잊은 뒤(DS 24-3) 지난 질문이 칸에 떠 있으면
+    // 고객은 그것이 아직 유효한 줄 알고 그대로 보낸다.
+    m.saveDraft('eum', '아까 물어보려던 것', 0);
+    assert.equal(m.loadDraft('eum', m.THREAD_TTL_MS - 1), '아까 물어보려던 것', '기한 안인데 버린다');
+    assert.equal(m.loadDraft('eum', m.THREAD_TTL_MS + 1), '', '기한이 지난 글을 되살린다');
+    assert.equal(st.calls.size, 0, '버린 글이 저장소에 남는다');
+  });
+});
+
+test('너무 긴 글은 잘라서 되살리지 않는다 (DS 27-1)', opts, async () => {
+  const m = await loadModule();
+  const st = fakeStorage();
+  await withStorage(st, () => {
+    // 보낼 수 있는 길이의 두 배까지는 담는다(한계를 넘겨 치는 중에도 보관된다 — 화면이 이유를 밝힌다).
+    const long = 'ㄱ'.repeat(m.MAX_INPUT_LEN + 100);
+    m.saveDraft('eum', long, 1000);
+    assert.equal(m.loadDraft('eum', 1100).length, long.length, '한계를 넘겨 친 글을 보관하지 않는다');
+    // 상한을 넘으면 **자르지 않고** 보관을 건너뛴다 — 잘라서 되살리면 고객이 적은 글이 말없이 바뀐다.
+    m.saveDraft('eum', 'ㄱ'.repeat(m.MAX_INPUT_LEN * 2 + 1), 1200);
+    assert.equal(m.loadDraft('eum', 1300), '', '잘린 글을 되살린다');
+    assert.equal(st.calls.size, 0, '넘친 글을 받아 저장소를 채운다');
+  });
+});
+
+test('저장소가 막혀 있어도 초안 때문에 위젯이 죽지 않는다 (DS 27-1 실패 경로)', opts, async () => {
+  const m = await loadModule();
+  // 서드파티 쿠키를 막은 브라우저의 iframe·사생활 보호 모드 — 접근 자체가 예외를 던진다.
+  await withStorage(fakeStorage({ throws: true }), () => {
+    assert.doesNotThrow(() => m.saveDraft('eum', '문의 내용', 1));
+    assert.doesNotThrow(() => m.clearDraft('eum'));
+    assert.equal(m.loadDraft('eum', 1), '');
+  });
+  // 깨진 값·남의 데이터 — 빈 칸으로 시작한다(사용자에게 알릴 실패가 아니다).
+  const st = fakeStorage();
+  await withStorage(st, () => {
+    st.setItem('gowon-chat-draft:eum', '{ 깨진');
+    assert.equal(m.loadDraft('eum', 1), '');
+    st.setItem('gowon-chat-draft:eum', JSON.stringify({ v: 99, at: 1, text: '다른 판' }));
+    assert.equal(m.loadDraft('eum', 1), '', '모르는 형식을 그대로 화면에 올린다');
+  });
+  // 저장소가 아예 없는 환경(서버 렌더).
+  await withStorage(null, () => {
+    assert.equal(m.loadDraft('eum', 1), '');
+    assert.doesNotThrow(() => m.saveDraft('eum', 'x', 1));
+  });
+});
+
+test('초안 복원은 대화 복원 뒤에 있고, 서버 렌더에는 없다 (DS 27-1)', opts, () => {
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  // 서버에는 저장소가 없다 — 초기값으로 읽으면 하이드레이션이 어긋난다(DS 7-1 과 같은 규칙).
+  assert.match(src, /const \[input, setInput\] = useState\(''\);/, '초기값에서 저장소를 읽는다');
+  // 기한이 지난 대화는 `loadThread` 안에서 초안까지 지운다 — 그보다 **먼저** 읽으면 지운 글이 화면에만 남는다.
+  const i = src.indexOf('const saved = loadThread(threadId);');
+  const j = src.indexOf('const savedDraft = loadDraft(threadId);');
+  assert.ok(i > 0 && j > i, '초안을 대화보다 먼저 읽으면 이미 지운 글이 칸에 남는다');
+  // 보관하는 자리는 한 곳뿐이다(입력이 바뀔 때).
+  assert.equal((src.match(/saveDraft\(/g) || []).length, 2, '초안을 손으로 저장하는 자리가 늘었다');
+  assert.match(src, /saveDraft\(threadId, input\);/, '입력이 바뀔 때 보관하지 않는다');
+});
+
 test('렌더된 위젯에 비활성 버튼이 없다 (DS 8-2)', opts, async () => {
   const html = await render({ tenant: TENANT, defaultOpen: true });
   const bad = (html.match(/<button[^>]*\sdisabled[^>]*>/g) || []);
