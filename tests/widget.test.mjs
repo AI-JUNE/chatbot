@@ -496,7 +496,11 @@ test('호스트 화면의 「상담창 열기」가 실제로 상담창을 연�
   assert.match(body, /closest\('\[data-gowon-open\]'\)/, '속성 하나가 출처다');
   assert.match(body, /document\.addEventListener\('click', onClick\)/, '듣는다');
   assert.match(body, /document\.removeEventListener\('click', onClick\)/, '리스너를 걷는다');
-  assert.match(body, /inputRef\.current\?\.focus\(\)/, '이미 열려 있으면 입력창으로 초점을 옮긴다');
+  // 펼치는 자리는 한 곳(openPanel)이다 — 런처와 갈라지면 「여기부터 읽지 않은 답변」 경계를
+  // 한쪽에서만 정하게 된다(DS 28-3).
+  assert.match(body, /openPanel\(\);/, '펼치는 문 하나를 지난다');
+  const door = src.slice(src.indexOf('const openPanel = useCallback'));
+  assert.match(door.slice(0, 500), /inputRef\.current\?\.focus\(\)/, '이미 열려 있으면 입력창으로 초점을 옮긴다');
   assert.equal(/preventDefault/.test(body), false, '기본 이동을 막으면 스크립트가 죽었을 때 갈 곳이 없다');
 
   // 랜딩: 히어로 CTA 는 링크를 유지한 채(스크립트 없이도 섹션으로 간다) 상담창을 연다.
@@ -678,4 +682,138 @@ test('전체화면일 때만 뒤 페이지를 잠근다 (DS 26-1)', opts, () => 
   assert.match(eff, /return lockPageScroll\(window, document\);/, '잠금을 손으로 다시 적었다');
   // 잠그지 못하는 환경에서도 상담창은 열려야 한다.
   assert.match(eff, /catch \{\n *return undefined;/, '잠금 실패가 상담창을 막는다');
+});
+
+/* ── 접어 둔 사이에 온 답 (DS 28-1·28-2·28-3) ── */
+
+/**
+ * DS 28-1 — 「최소화」는 대화를 끝내지 않는다(끝내는 것은 「닫고 처음으로」뿐이다).
+ *
+ * 답을 기다리다 상담창을 접은 고객에게 호스트 페이지에 남는 것은 런처 하나이고, 그 런처는
+ * 열림/닫힘만 말했다 — 답이 도착한 사실을 알 길이 없었다. 「접어 둔 사이의 것만 세는가」는
+ * 소스를 읽어서는 알 수 없다(돌려 봐야 안다).
+ */
+test('접어 둔 사이에 늘어난 말풍선만 읽지 않은 것으로 센다 (DS 28-1)', opts, async () => {
+  const m = await loadModule();
+  assert.equal(typeof m.unreadCount, 'function', 'unreadCount 를 내보내야 한다');
+
+  assert.equal(m.unreadCount(1, 1), 0, '인사말만 있는 런처에 숫자가 뜬다');
+  assert.equal(m.unreadCount(3, 3), 0, '보이는 동안 늘어난 말풍선을 안 읽은 것으로 센다');
+  assert.equal(m.unreadCount(3, 1), 2, '접어 둔 사이에 온 답을 세지 않는다');
+  // 「닫고 처음으로」로 대화가 인사말 하나로 줄어든 자리 — 음수가 숫자로 뜨면 안 된다.
+  assert.equal(m.unreadCount(1, 5), 0, '지운 대화에서 음수가 샌다');
+  assert.equal(m.unreadCount(-2, -3), 0, '이상한 값이 숫자로 뜬다');
+  // 접수 결과는 말풍선이 아니다(DS 28-2) — 말풍선이 없어도 알릴 것이 있다.
+  assert.equal(m.unreadCount(1, 1, 1), 1, '접수 결과만 바뀐 경우를 세지 않는다');
+  assert.equal(m.unreadCount(3, 1, 1), 3, '답 2개와 접수 결과를 함께 세지 않는다');
+
+  // 런처 위 숫자는 58px 원을 덮지 않아야 한다.
+  assert.equal(m.unreadBadge(99), '99');
+  assert.equal(m.unreadBadge(100), '99+', '세 자리가 런처를 덮는다');
+});
+
+test('런처가 읽지 않은 답을 이름과 소리로도 말한다 (DS 28-1)', opts, async () => {
+  const m = await loadModule();
+  // 숫자 뱃지는 보는 사람에게만 보인다 — 접근 이름이 같은 것을 말해야 한다(색·숫자만으로 알리지 않는다).
+  assert.equal(m.launcherLabel(false, '이음 안내 챗봇', 0), '이음 안내 챗봇 열기');
+  assert.equal(m.launcherLabel(false, '이음 안내 챗봇', 2), '이음 안내 챗봇 열기 — 읽지 않은 답변 2개');
+  assert.match(m.launcherLabel(false, 'GOWON Chat', 120), /99개 이상/, '세 자리는 「많다」가 더 정확하다');
+  // 열려 있으면 읽지 않은 것이 없다 — 이름이 「최소화」로 남아야 한다.
+  assert.equal(m.launcherLabel(true, 'GOWON Chat', 3), 'GOWON Chat 최소화');
+
+  // 접힌 상담창의 대화 목록(aria-live)은 DOM 에 없다 — 알리는 영역이 따로 있어야 한다.
+  assert.equal(m.unreadNotice('GOWON Chat', 0), '', '알릴 것이 없는데 말한다');
+  assert.match(m.unreadNotice('GOWON Chat', 1), /새 답변 1개/);
+  assert.match(m.unreadNotice('GOWON Chat', 1), /상담창을 열어/, '무엇을 하라는 말이 없다');
+});
+
+/**
+ * DS 28-2 — 접수(상담원 연결)의 결과는 말풍선이 아니라 **카드 안에서** 바뀐다.
+ * 접수를 누르고 상담창을 접은 고객은 접수번호가 발급됐는지, 실패해 다시 눌러야 하는지를
+ * 런처에서 알 수 없었다. 「그 사이에 바뀌었는가」이므로 접기 전에 보여 준 단계와 대조한다.
+ */
+test('접수 결과가 접어 둔 사이에 바뀐 것만 알린다 (DS 28-2)', opts, async () => {
+  const m = await loadModule();
+  assert.equal(m.handoffChanged('done', 'sending'), true, '접수번호가 나온 것을 알리지 않는다');
+  assert.equal(m.handoffChanged('error', 'sending'), true, '다시 눌러야 하는 것을 알리지 않는다');
+  // 접수 완료를 보고 나서 접은 사람에게 다시 알리지 않는다.
+  assert.equal(m.handoffChanged('done', 'done'), false, '이미 본 결과를 다시 알린다');
+  assert.equal(m.handoffChanged('error', 'error'), false, '이미 본 실패를 다시 알린다');
+  // 결과가 아닌 단계 변화는 알릴 것이 아니다(카드를 열거나 보내는 중).
+  assert.equal(m.handoffChanged('form', undefined), false, '카드를 연 것을 「새 답」이라 말한다');
+  assert.equal(m.handoffChanged('sending', 'form'), false, '보내는 중을 결과라 말한다');
+  assert.equal(m.handoffChanged(undefined, undefined), false, '접수가 없는데 알린다');
+
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  // 보여 준 단계를 옮기는 자리는 「열려 있는 동안」과 대화를 지울 때뿐이다.
+  const moves = src.match(/seenStageRef\.current = /g) || [];
+  assert.equal(moves.length, 2, `보여 준 단계를 옮기는 자리가 늘었다(${moves.length}곳) — 손으로 옮기면 곧 어긋난다`);
+});
+
+test('접어 둔 런처의 읽지 않은 표시가 첫 렌더에는 없다 (DS 28-1)', opts, async () => {
+  // 임베드 위젯은 런처만 보이는 상태로 시작한다 — 열어 본 적도 없는데 숫자가 뜨면 안 된다.
+  const html = await render({ embedded: true, tenant: TENANT });
+  assert.match(html, /aria-label="이음 안내 챗봇 열기"/, '런처 이름이 열기여야 한다');
+  assert.equal(/class="gw-unread"/.test(html), false, '첫 렌더부터 읽지 않은 숫자가 떠 있다');
+  assert.equal(/읽지 않은 답변/.test(html), false, '첫 렌더부터 읽지 않은 답을 말한다');
+  // 알리는 영역은 비어 있어도 항상 DOM 에 있어야 한다(없던 영역이 생기면 읽히지 않는다).
+  assert.match(html, /class="gw-srhide" role="status" aria-live="polite"/, '알릴 자리가 없다');
+
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  // 테넌트 색(이음 #BE5535)이 무엇이든 구분되게 카드 색 테두리를 두른다.
+  assert.match(css, /\.gw-unread\{[\s\S]*?border:2px solid var\(--surface\)/, '런처 색과 섞인다');
+  assert.match(css, /\.gw-unread\{[\s\S]*?font-variant-numeric:tabular-nums/, '숫자가 흔들린다');
+  // 같은 종류의 숫자(콘솔 대기 건수 배지)와 같은 토큰을 쓴다 — 화면마다 색이 다르면 같은 제품이 아니다.
+  assert.match(css, /\.gw-unread\{[\s\S]*?background:var\(--warn\);color:#fff/, '콘솔 배지와 색이 갈라진다');
+  assert.match(css, /\.ac-navcount\{[^}]*background:var\(--warn\);color:#fff/, '콘솔 배지 쪽이 바뀌었다');
+  // 고대비 모드에서 배경이 지워지면 아이콘 위에 겹친 맨 숫자가 된다(DS 25-2 와 같은 기준).
+  const forced = css.slice(css.indexOf('@media (forced-colors: active)'));
+  assert.match(forced, /\.gw-unread\{border:2px solid ButtonText\}/, '고대비에서 뱃지가 사라진다');
+});
+
+/**
+ * DS 28-3 — 다시 열면 **맨 아래로** 내려가 먼저 온 답을 건너뛴다.
+ * 긴 답변을 끝부터 보여 주면 고객은 답의 시작을 찾아 거슬러 올라가야 한다.
+ */
+test('다시 열면 읽지 않은 답의 시작으로 간다 (DS 28-3)', opts, async () => {
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+
+  // 경계는 **말풍선 열쇠**다 — 「다시 보내기」가 안내 말풍선을 지우면 자리 번호는 어긋난다.
+  assert.match(src, /const \[newFromKey, setNewFromKey\] = useState<number \| null>\(null\)/, '경계를 두지 않는다');
+  assert.match(src, /m\.key === newFromKey \?/, '구분선을 자리 번호로 그린다');
+  assert.match(src, /여기부터 읽지 않은 답변/, '어디부터 새 답인지 말하지 않는다');
+
+  // 경계는 펼치는 그 렌더에서 함께 정해야 한다 — 한 렌더 뒤에 정하면 대화 맨 위가 한 번 비친다.
+  const door = src.slice(src.indexOf('const openPanel = useCallback'), src.indexOf('// 새 말풍선으로 따라 내려간다'));
+  assert.match(door, /setNewFromKey\(first \? first\.key : null\)/, '펼치는 자리에서 경계를 정하지 않는다');
+  assert.match(door, /jumpRef\.current = !!first/, '갈 곳을 정하지 않는다');
+
+  // 구분선이 그려지기 전에는 아무 데도 가지 않는다(맨 아래로 갔다가 다시 올라오면 화면이 튄다).
+  const scroll = src.slice(src.indexOf('// 새 말풍선으로 따라 내려간다'), src.indexOf('// 연결 상태 —'));
+  assert.match(scroll, /if \(!newFromRef\.current\) return;/, '그려지기 전에 자리를 옮긴다');
+  assert.match(scroll, /newFromRef\.current\.scrollIntoView\(\{ behavior: 'auto', block: 'start' \}\)/, '안 읽은 자리를 화면 위에 두지 않는다');
+  assert.match(scroll, /\[msgs, busy, open, newFromKey\]/, '경계가 생겨도 다시 보지 않는다');
+
+  // 지난 경계는 지운다 — 다시 말을 건 사람에게도, 대화를 지운 사람에게도 남아 있으면 안 된다.
+  const sendFn = src.slice(src.indexOf('async function sendText('), src.indexOf('async function sendText(') + 700);
+  assert.match(sendFn, /setNewFromKey\(null\)/, '다시 말을 걸어도 지난 경계가 남는다');
+  const reset = src.slice(src.indexOf('const closePanel = useCallback'), src.indexOf('// ESC로 닫고'));
+  assert.match(reset, /readLenRef\.current = 1/, '지운 대화의 읽은 지점이 남는다');
+  assert.match(reset, /setNewFromKey\(null\)/, '사라진 말풍선을 가리키는 경계가 남는다');
+
+  // 읽은 지점을 옮기는 자리는 셋뿐이다: 되살린 대화·열려 있는 동안·대화를 지울 때.
+  const moves = src.match(/readLenRef\.current = /g) || [];
+  assert.equal(moves.length, 3, `읽은 지점을 옮기는 자리가 늘었다(${moves.length}곳)`);
+
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  assert.match(css, /\.gw-newline\{/, '구분선 규격이 없다');
+  assert.match(css, /\.gw-newline::before,\.gw-newline::after\{content:"";flex:1/, '구분선에 선이 없다');
+});
+
+test('열린 상담창에는 구분선도 읽지 않은 숫자도 없다 (DS 28-3)', opts, async () => {
+  // 펼친 채로 그려지는 화면(랜딩·`/widget`)에는 「읽지 않은 것」이라는 개념이 없다.
+  const html = await render({ tenant: TENANT });
+  assert.equal(html.includes('여기부터 읽지 않은 답변'), false, '열린 상담창에 구분선이 그려진다');
+  assert.equal(/class="gw-unread"/.test(html), false, '열린 상담창의 런처에 숫자가 뜬다');
+  assert.match(html, /aria-label="이음 안내 챗봇 최소화"/, '열린 런처의 이름이 최소화가 아니다');
 });

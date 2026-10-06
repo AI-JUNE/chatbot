@@ -78,15 +78,18 @@ main:focus{outline:none}
  * 초점 테두리는 목록 안쪽에 그린다(바깥에 그리면 상담창 테두리에 잘린다). */
 .gw-log:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
 /* 접어 둔 사이에 온 답의 개수(DS 28-1) — 런처 위 오른쪽.
- * 테넌트 색(--brand)이 무엇이든(이음 #BE5535) 구분되게 카드 색 테두리를 두른다.
+ * 색은 콘솔의 대기 건수 배지(.ac-navcount)와 **같은 토큰**이다 — 같은 종류의 숫자가 화면마다
+ * 다른 색이면 같은 제품으로 보이지 않는다(흰 글자 대비 5.0:1).
+ * 테넌트 색(--brand)이 무엇이든(이음 #BE5535) 구분되게 카드 색 테두리를 두르고,
  * 색만으로 말하지 않는다: 숫자가 곧 뜻이고, 이름은 런처의 접근 이름·.gw-srhide 가 전한다. */
 .gw-unread{position:absolute;top:-1px;right:-1px;min-width:21px;height:21px;padding:0 5px;
-  border-radius:999px;background:var(--danger);color:#fff;border:2px solid var(--surface);
+  border-radius:999px;background:var(--warn);color:#fff;border:2px solid var(--surface);
   font-size:11px;font-weight:800;line-height:17px;text-align:center;font-variant-numeric:tabular-nums}
-/* 다시 열었을 때 「어디부터 새 답인가」(DS 28-3) — 양쪽으로 선을 뻗은 한 줄. */
+/* 다시 열었을 때 「어디부터 새 답인가」(DS 28-3) — 양쪽으로 선을 뻗은 한 줄.
+ * 글자는 테넌트 색을 따라간다(--brand-600 은 위젯이 인라인으로 덮어쓰는 계열이다). */
 .gw-newline{display:flex;align-items:center;gap:8px;margin:0;font-size:10.5px;font-weight:800;
-  color:var(--danger);letter-spacing:-.01em;white-space:nowrap}
-.gw-newline::before,.gw-newline::after{content:"";flex:1;height:1px;background:var(--danger-200)}
+  color:var(--brand-600);letter-spacing:-.01em;white-space:nowrap}
+.gw-newline::before,.gw-newline::after{content:"";flex:1;height:1px;background:var(--line-2)}
 /* 화면에서는 감추고 스크린리더에만 남기는 글 — 콘솔의 .ac-srhide 와 같은 규격. */
 .gw-srhide{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
@@ -475,6 +478,10 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
   .ac-gsearch-opt[aria-selected="true"] .ac-gsearch-title,.ac-gsearch-opt[aria-selected="true"] .ac-gsearch-detail{color:HighlightText}
   /* 대기 건수 배지 — 배경이 사라지면 메뉴 이름 뒤에 붙은 맨 숫자가 된다 */
   .ac-navcount{border:1px solid ButtonText}
+  /* 런처의 읽지 않은 개수(DS 28-1) — 런처와 같은 색이 되면 아이콘 위에 겹친 숫자가 된다 */
+  .gw-unread{border:2px solid ButtonText}
+  /* 「여기부터 읽지 않은 답변」 구분선 — 선(--line-2)이 지워지면 글자만 남는다 */
+  .gw-newline::before,.gw-newline::after{background:ButtonText}
   /* 카드 경계는 1px 테두리뿐이라 이 모드에서 서로 붙어 한 덩어리로 읽힌다 */
   .ac-kpicard,.ac-nscard,.ac-stat,.ac-preview,.lg-card,.ac-login-card{border-width:2px}
   /* 불러오는 중 자리 표시 — 배경색이 지워져 빈 칸이 된다(막대가 없으면 멈춘 화면으로 보인다) */

@@ -1140,8 +1140,10 @@ export default function ChatWidget({
             {msgs.map((m) => {
               const mine = m.role === 'user';
               // 접어 둔 사이에 온 답의 시작 — 다시 열면 이 자리가 화면 위에 온다(DS 28-3).
+              // `role="separator"` 는 **내용에서 이름을 만들지 않는다**(ARIA) — 눈으로 보는 글과
+              // 같은 말을 이름으로 함께 적어야 스크린리더도 「여기부터」를 듣는다.
               const divider = m.key === newFromKey ? (
-                <p ref={newFromRef} className="gw-newline" role="separator">여기부터 읽지 않은 답변</p>
+                <p ref={newFromRef} className="gw-newline" role="separator" aria-label="여기부터 읽지 않은 답변">여기부터 읽지 않은 답변</p>
               ) : null;
               // 전송 실패 안내는 답변이 아니다 — 아바타 없이 경고 톤 카드로 그리고 곧바로 다시 보낼 수 있게 한다.
               if (m.failed !== undefined) {
