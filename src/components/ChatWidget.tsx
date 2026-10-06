@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 
 interface Suggestion { id: string; question: string }
 // 근거 인용 — 서버가 KB 원문에서 그대로 뽑은 문장(생성 요약 아님).
@@ -512,6 +512,68 @@ export function threadExpired(lastAt: number, now: number): boolean {
 }
 
 /**
+ * ── 접어 둔 사이에 온 답 (DS 28-1) ──
+ *
+ * 「최소화」는 대화를 끝내지 않는다(끝내는 것은 「닫고 처음으로」뿐이다) — 위젯은 그대로 살아 있고
+ * 보내 둔 요청의 답도 계속 들어온다. 그런데 고객사 페이지에 남는 것은 런처 하나이고, 그 런처는
+ * 지금까지 **열림/닫힘만** 말했다: 답을 기다리다 상담창을 접은 고객은 답이 도착한 사실을 알 길이
+ * 없다(대화 목록의 `aria-live` 도 접힌 동안에는 DOM 에 없다).
+ *
+ * 「읽었다」의 기준은 **보였는가**다 — 상담창이 열려 있는 동안 늘어난 말풍선은 그 자리에서 읽은
+ * 것으로 보고, 접혀 있는 동안 늘어난 것만 센다. 세는 일을 함수로 떼어 둔 이유: 「정말 접어 둔
+ * 사이의 것만 세는가」는 소스를 읽어서는 알 수 없다 — 돌려 봐야 안다.
+ *
+ * @param total 지금 대화에 있는 말풍선 수
+ * @param read  마지막으로 보여 준 지점(그 앞은 다 보였다)
+ * @param extra 말풍선이 아닌 자리에서 바뀐 것(접수 카드의 결과 — DS 28-2)
+ */
+export function unreadCount(total: number, read: number, extra = 0): number {
+  return Math.max(0, total - Math.max(0, read)) + Math.max(0, extra);
+}
+
+/** 사람이 읽을 개수 표현 — 세 자리를 넘으면 정확한 숫자보다 「많다」가 더 정확하다. */
+function countPhrase(n: number): string {
+  return n > 99 ? '99개 이상' : `${n}개`;
+}
+
+/** 런처 위 숫자 — 세 자리를 넘으면 58px 원을 덮으므로 줄인다(뜻은 접근 이름이 전한다). */
+export function unreadBadge(n: number): string {
+  return n > 99 ? '99+' : String(n);
+}
+
+/**
+ * 런처의 접근 이름. 읽지 않은 답이 있으면 **숫자 뱃지가 말하는 것과 같은 것**을 말한다 —
+ * 색과 숫자만으로 알리면 화면을 보지 않는 고객에게는 아무 일도 일어나지 않는다.
+ */
+export function launcherLabel(open: boolean, title: string, unread: number): string {
+  if (open) return `${title} 최소화`;
+  if (unread <= 0) return `${title} 열기`;
+  return `${title} 열기 — 읽지 않은 답변 ${countPhrase(unread)}`;
+}
+
+/**
+ * 접어 둔 런처가 스크린리더에 전하는 말. 뱃지는 **보는 사람에게만** 보인다 —
+ * 접힌 상담창의 대화 목록은 DOM 에서 사라져 있어 그쪽 `aria-live` 는 아무 말도 하지 못한다.
+ * 알릴 것이 없으면 빈 문자열(살아 있는 영역에 빈 글을 두어야 다음 변화가 읽힌다).
+ */
+export function unreadNotice(title: string, unread: number): string {
+  if (unread <= 0) return '';
+  return `${title} 새 답변 ${countPhrase(unread)} — 상담창을 열어 확인해 주세요.`;
+}
+
+/**
+ * 접수 카드의 결과가 접어 둔 사이에 바뀌었는가 (DS 28-2).
+ *
+ * 접수(상담원 연결)의 결과는 말풍선이 아니라 **카드 안에서** 바뀐다(접수 중 → 접수번호 / 실패).
+ * 그래서 말풍선 수로 세는 판정에는 걸리지 않는다 — 접수를 누르고 상담창을 접은 고객은 접수번호가
+ * 발급됐는지, 실패해 다시 눌러야 하는지를 런처에서 알 수 없었다. 「그 사이에 바뀌었는가」이므로
+ * 접기 전에 이미 보여 준 단계(seen)와 대조한다(접수 완료를 보고 접은 사람에게 다시 알리지 않는다).
+ */
+export function handoffChanged(stage: string | undefined, seen: string | undefined): boolean {
+  return stage !== seen && (stage === 'done' || stage === 'error');
+}
+
+/**
  * 위젯 아이콘 — 16px 뷰박스 선 아이콘(stroke 1.4).
  * 랜딩(`app/page.tsx`)·관리 콘솔과 같은 규약을 쓴다. 이모지를 쓰지 않는다:
  * 이모지는 기기·OS마다 모양이 달라 브랜드가 화면마다 어긋나고, 색을 따라오지 않는다.
@@ -593,6 +655,22 @@ export default function ChatWidget({
   // 대화를 저장·복원할 때 쓰는 열쇠 — 테넌트마다 따로 둔다(다른 안내 챗봇의 대화가 섞이지 않게).
   const threadId = tenant?.id || 'default';
 
+  // ── 접어 둔 사이에 온 답 (DS 28-1·28-2·28-3) ──
+  // 읽은 지점은 그려지는 값이 아니므로 ref 에 둔다(state 로 두면 말풍선마다 한 번 더 그린다).
+  // 처음 그려지는 인사말은 읽은 것으로 본다 — 열어 본 적도 없는 런처에 「1」이 떠 있으면 안 된다.
+  const readLenRef = useRef(1);
+  const seenStageRef = useRef<HandoffState['stage'] | undefined>(undefined);
+  const [unread, setUnread] = useState(0);
+  // 다시 열었을 때 「여기부터」를 그릴 자리. 자리 번호가 아니라 **말풍선 열쇠**로 둔다 —
+  // 「다시 보내기」가 안내 말풍선을 지우면 번호는 어긋나지만 열쇠는 사라질 뿐이다(DS 28-3).
+  const [newFromKey, setNewFromKey] = useState<number | null>(null);
+  const newFromRef = useRef<HTMLParagraphElement>(null);
+  const jumpRef = useRef(false);
+  // 펼치는 순간 「지금 무엇이 안 읽혔는가」를 알아야 하는데, 그 자리(이벤트)에서는 최신 state 를
+  // 볼 수 없다 — 이벤트가 보는 값을 ref 로 따로 둔다(genRef 와 같은 방식).
+  const openRef = useRef(open);
+  const msgsRef = useRef(msgs);
+
   // 시각 표기는 마운트 이후에만 — 서버 렌더 결과와 어긋나지 않게 한다.
   // 같은 방문에서 이어가던 대화가 있으면 여기서 되살린다(서버 렌더에는 저장소가 없다).
   useEffect(() => {
@@ -608,6 +686,9 @@ export default function ChatWidget({
       // 화면 안 일련번호는 이 렌더에서 다시 매긴다(저장된 번호와 겹치지 않게).
       setMsgs(saved.msgs.map((m) => ({ ...m, key: nextKey() })));
       setResumed(true);
+      // 되살린 말풍선은 **이미 본 것**이다 — 읽은 지점을 함께 옮기지 않으면 페이지를 옮길 때마다
+      // 접힌 런처에 지난 대화 전체가 「읽지 않은 답」으로 뜬다(DS 28-1).
+      readLenRef.current = saved.msgs.length;
       return;
     }
     setMsgs((m) => m.map((x) => (x.at === 0 ? { ...x, at: Date.now() } : x)));
@@ -653,9 +734,48 @@ export default function ChatWidget({
     return () => mq.removeEventListener('change', sync);
   }, [embedded]);
 
+  // 이벤트가 보는 값(위 ref 2개)을 최신으로 맞춘다.
+  useEffect(() => { openRef.current = open; msgsRef.current = msgs; }, [open, msgs]);
+
+  // 접혀 있는 동안 늘어난 것을 센다. 열려 있는 동안은 **보이는 즉시** 읽은 것이다.
+  const stage = handoff?.stage;
+  useEffect(() => {
+    if (!open) {
+      setUnread(unreadCount(msgs.length, readLenRef.current, handoffChanged(stage, seenStageRef.current) ? 1 : 0));
+      return;
+    }
+    readLenRef.current = msgs.length;
+    seenStageRef.current = stage;
+    setUnread(0);
+  }, [open, msgs, stage]);
+
+  /**
+   * 상담창을 펼치는 문 하나 — 런처·호스트 화면의 「상담창 열기」가 모두 여기로 들어온다.
+   * 「여기부터 읽지 않은 답변」 경계를 **펼치는 그 렌더에서 함께** 정한다(한 렌더 뒤에 정하면
+   * 대화 맨 위가 한 번 비쳤다가 자리를 옮긴다). 이미 열려 있으면 입력칸으로 초점만 옮긴다.
+   */
+  const openPanel = useCallback(() => {
+    if (openRef.current) { setTimeout(() => inputRef.current?.focus(), 0); return; }
+    const first = msgsRef.current[readLenRef.current];
+    setNewFromKey(first ? first.key : null);
+    jumpRef.current = !!first;
+    setOpen(true);
+  }, []);
+
   // 새 말풍선으로 따라 내려간다. 모션 최소화 설정에서는 미끄러지지 않고 곧장 옮긴다(DS 8-3) —
   // 대화는 말할 때마다 움직이므로 제품에서 가장 잦은 모션이다.
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: scrollBehavior() }); }, [msgs, busy, open]);
+  // 접어 둔 사이에 답이 온 경우에는 **맨 아래가 아니라** 안 읽은 자리로 간다(DS 28-3):
+  // 긴 답변을 끝부터 보여 주면 고객은 답의 시작을 찾아 거슬러 올라가야 한다.
+  useEffect(() => {
+    if (jumpRef.current) {
+      // 구분선은 바로 다음 렌더에 그려진다 — 그려지기 전에는 아무 데도 가지 않고 기다린다.
+      if (!newFromRef.current) return;
+      jumpRef.current = false;
+      newFromRef.current.scrollIntoView({ behavior: 'auto', block: 'start' });
+      return;
+    }
+    endRef.current?.scrollIntoView({ behavior: scrollBehavior() });
+  }, [msgs, busy, open, newFromKey]);
   // 대화 목록이 넘치면 목록 자체가 초점을 받아야 한다 — 키보드로 거슬러 올라갈 수 있게(DS 26-2).
   const [logRef, logScrolls] = useScrollableY<HTMLDivElement>(`${msgs.length}:${open}`);
 
@@ -693,14 +813,11 @@ export default function ChatWidget({
     const onClick = (ev: MouseEvent) => {
       const el = ev.target instanceof Element ? ev.target.closest('[data-gowon-open]') : null;
       if (!el) return;
-      setOpen((o) => {
-        if (o) setTimeout(() => inputRef.current?.focus(), 0);
-        return true;
-      });
+      openPanel();
     };
     document.addEventListener('click', onClick);
     return () => document.removeEventListener('click', onClick);
-  }, [embedded]);
+  }, [embedded, openPanel]);
 
   // 임베드 모드: 위젯이 그려졌음을 부모(embed.js)에 알린다 → 그때 iframe이 나타난다(첫 로드 깜빡임 제거).
   useEffect(() => {
@@ -746,6 +863,12 @@ export default function ChatWidget({
       clearThread(threadId);
       setSessionId(newSessionId());
       setResumed(false);
+      // 지운 대화에는 읽지 않은 것도 없다 — 읽은 지점·접수 단계·구분선을 인사말 하나로 되돌린다.
+      // (옮기지 않으면 다음에 펼칠 때 사라진 말풍선을 가리키는 경계가 남는다 — DS 28-1·28-3)
+      readLenRef.current = 1;
+      seenStageRef.current = undefined;
+      setNewFromKey(null);
+      jumpRef.current = false;
     }
     setTimeout(() => launcherRef.current?.focus(), 0);
   }, [greeting, threadId]);
@@ -789,6 +912,8 @@ export default function ChatWidget({
     const text = raw.trim();
     if (!text || busy) return;
     if (text.length > MAX_INPUT_LEN) return;
+    // 다시 말을 거는 사람에게 「여기부터 읽지 않은 답변」은 이미 지난 경계다(DS 28-3).
+    setNewFromKey(null);
     if (retryOf !== undefined) {
       setMsgs((m) => m.filter((x) => x.key !== retryOf));
     } else {
@@ -1014,12 +1139,17 @@ export default function ChatWidget({
             )}
             {msgs.map((m) => {
               const mine = m.role === 'user';
+              // 접어 둔 사이에 온 답의 시작 — 다시 열면 이 자리가 화면 위에 온다(DS 28-3).
+              const divider = m.key === newFromKey ? (
+                <p ref={newFromRef} className="gw-newline" role="separator">여기부터 읽지 않은 답변</p>
+              ) : null;
               // 전송 실패 안내는 답변이 아니다 — 아바타 없이 경고 톤 카드로 그리고 곧바로 다시 보낼 수 있게 한다.
               if (m.failed !== undefined) {
                 const failedText = m.failed;
                 return (
+                  <Fragment key={m.key}>
+                  {divider}
                   <div
-                    key={m.key}
                     className="gw-rise"
                     role="alert"
                     style={{
@@ -1040,10 +1170,13 @@ export default function ChatWidget({
                       </button>
                     </div>
                   </div>
+                  </Fragment>
                 );
               }
               return (
-                <div key={m.key} className="gw-rise" style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexDirection: mine ? 'row-reverse' : 'row' }}>
+                <Fragment key={m.key}>
+                {divider}
+                <div className="gw-rise" style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexDirection: mine ? 'row-reverse' : 'row' }}>
                   {!mine && (
                     <span
                       aria-hidden="true"
@@ -1302,6 +1435,7 @@ export default function ChatWidget({
                     )}
                   </div>
                 </div>
+                </Fragment>
               );
             })}
 
@@ -1393,20 +1527,30 @@ export default function ChatWidget({
         </div>
       )}
 
+      {/* 접어 둔 런처는 **보는 사람에게만** 숫자를 보여 준다 — 화면을 보지 않는 고객에게는
+          이 영역이 알린다. 비어 있어도 항상 DOM 에 둔다(없던 영역이 생기면 읽히지 않는다). */}
+      <span className="gw-srhide" role="status" aria-live="polite">{open ? '' : unreadNotice(title, unread)}</span>
+
       {/* 전체화면일 때는 헤더의 닫기 버튼이 그 역할을 하므로 런처를 감춘다. */}
       {!fullscreen && (
         <button
           ref={launcherRef}
-          onClick={() => setOpen((o) => !o)}
-          aria-label={open ? `${title} 최소화` : `${title} 열기`}
+          onClick={() => { if (open) closePanel(false); else openPanel(); }}
+          aria-label={launcherLabel(open, title, unread)}
           aria-expanded={open}
           style={{
+            position: 'relative',
             width: 58, height: 58, borderRadius: '50%', background: 'var(--brand)', color: '#fff',
             boxShadow: 'var(--shadow-pop)', marginLeft: 'auto', display: 'flex',
             alignItems: 'center', justifyContent: 'center',
           }}
         >
           <WIcon name={open ? 'close' : 'chat'} size={24} />
+          {/* 접어 둔 사이에 온 답의 개수(DS 28-1). 색만으로 말하지 않는다 — 숫자가 곧 뜻이고,
+              이름은 위 접근 이름과 `role="status"` 영역이 전한다. */}
+          {!open && unread > 0 && (
+            <span className="gw-unread" aria-hidden="true">{unreadBadge(unread)}</span>
+          )}
         </button>
       )}
     </div>

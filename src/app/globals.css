@@ -77,6 +77,18 @@ main:focus{outline:none}
  * 거슬러 올라갈 수 없었다(DS 26-2). 넘치는 동안에는 목록 자체가 초점을 받는다 —
  * 초점 테두리는 목록 안쪽에 그린다(바깥에 그리면 상담창 테두리에 잘린다). */
 .gw-log:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
+/* 접어 둔 사이에 온 답의 개수(DS 28-1) — 런처 위 오른쪽.
+ * 테넌트 색(--brand)이 무엇이든(이음 #BE5535) 구분되게 카드 색 테두리를 두른다.
+ * 색만으로 말하지 않는다: 숫자가 곧 뜻이고, 이름은 런처의 접근 이름·.gw-srhide 가 전한다. */
+.gw-unread{position:absolute;top:-1px;right:-1px;min-width:21px;height:21px;padding:0 5px;
+  border-radius:999px;background:var(--danger);color:#fff;border:2px solid var(--surface);
+  font-size:11px;font-weight:800;line-height:17px;text-align:center;font-variant-numeric:tabular-nums}
+/* 다시 열었을 때 「어디부터 새 답인가」(DS 28-3) — 양쪽으로 선을 뻗은 한 줄. */
+.gw-newline{display:flex;align-items:center;gap:8px;margin:0;font-size:10.5px;font-weight:800;
+  color:var(--danger);letter-spacing:-.01em;white-space:nowrap}
+.gw-newline::before,.gw-newline::after{content:"";flex:1;height:1px;background:var(--danger-200)}
+/* 화면에서는 감추고 스크린리더에만 남기는 글 — 콘솔의 .ac-srhide 와 같은 규격. */
+.gw-srhide{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
 /* 모션 최소화 설정을 존중한다(전정 장애 등). */
 @media (prefers-reduced-motion: reduce){
