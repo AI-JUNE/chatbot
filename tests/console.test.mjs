@@ -1415,3 +1415,61 @@ test('지운 자료를 가리키던 편집 폼을 거둔다 (DS 27-3)', opts, ()
   // 초기화는 **수정 중일 때만** 거둔다 — 새로 적던 글은 지워진 것과 아무 상관이 없다.
   assert.match(body('resetAll'), /if \(editingId\) \{ setEditingId\(null\); loadKbForm\(EMPTY_FORM\); setKbErr\(\{\}\); \}/, '초기화가 적던 새 자료까지 버린다');
 });
+
+/* ══════════ 29순위 — 백로그 소진 후 26차 재감사 (DS 29-x) ══════════ */
+
+/** 모듈 안에만 있는 최상위 함수를 컴파일된 JS 에서 떼어내 실제로 돌린다(DS 27-2 와 같은 방식). */
+async function loadConsoleFns(names) {
+  await loadConsole();
+  const parts = names.map((n) => {
+    const i = cachedJs.indexOf(`function ${n}(`);
+    assert.ok(i >= 0, `${n} 선언을 찾지 못했다`);
+    const end = cachedJs.indexOf('\n}', i);
+    assert.ok(end > i, `${n} 의 끝을 찾지 못했다`);
+    return cachedJs.slice(i, end + 2);
+  });
+  return new Function(`${parts.join('\n')}\nreturn { ${names.join(', ')} };`)();
+}
+
+/**
+ * DS 29-1 — 「첫 오류 칸」 판정을 실제로 돌린다.
+ * 소스 검사는 「그 문을 지나는가」만 보고, 어느 칸으로 데려가는지는 이 판정이 정한다.
+ */
+test('거절한 칸 중 화면에서 가장 먼저 나오는 칸을 고른다 (DS 29-1)', opts, async () => {
+  const { firstErrorId } = await loadConsoleFns(['firstErrorId']);
+  const order = [['question', 'kb-question'], ['keywords', 'kb-keywords'], ['answer', 'kb-answer']];
+
+  assert.equal(firstErrorId({}, order), null, '틀린 칸이 없으면 초점을 옮기지 않는다');
+  assert.equal(firstErrorId({ answer: '답변을 입력해 주세요.' }, order), 'kb-answer');
+  // 아래쪽 칸으로 데려가면 위에 남은 오류를 지나친다 — 반드시 화면 순서의 첫 칸이다.
+  assert.equal(firstErrorId({ answer: 'x', question: 'y' }, order), 'kb-question');
+  assert.equal(firstErrorId({ keywords: 'x', answer: 'y' }, order), 'kb-keywords');
+  // 지워진 오류(undefined)·목록에 없는 키는 고르지 않는다.
+  assert.equal(firstErrorId({ question: undefined, answer: 'y' }, order), 'kb-answer');
+  assert.equal(firstErrorId({ category: '틀림' }, order), null, '화면 순서에 없는 칸으로 데려가면 안 된다');
+  assert.equal(firstErrorId({ question: '' }, order), null, '빈 문구는 오류가 아니다');
+});
+
+test('콘솔의 조사 판정이 lib 사본과 같은 답을 낸다 (DS 29-3)', opts, async () => {
+  const { josa } = await loadConsoleFns(['josa']);
+  for (const [word, withB, withoutB, want] of [
+    ['감사 로그', '을', '를', '감사 로그를'],
+    ['대화 기록', '을', '를', '대화 기록을'],
+    ['백업', '을', '를', '백업을'],
+    ['CSV', '을', '를', 'CSV를'],
+    ['', '을', '를', '를'],
+  ]) {
+    assert.equal(josa(word, withB, withoutB), want, `${word} 의 조사가 틀렸다`);
+  }
+});
+
+/**
+ * DS 29-2 — 첫 화면에는 알림이 없다. 머무는 실패 알림을 만들었으므로, 아무 일도 하지 않은
+ * 사람에게 떠 있지 않다는 것(그리고 `role="alert"` 가 빈 채로 읽히지 않는다는 것)을 못 박는다.
+ */
+test('첫 화면에 알림이 떠 있지 않다 (DS 29-2)', opts, async () => {
+  const html = await render();
+  assert.equal(/class="ac-toast/.test(html), false, '아무 일도 하지 않았는데 알림이 떠 있다');
+  assert.equal(/role="alert"/.test(html), false, '첫 화면에 실패 알림이 있다');
+  assert.equal(/알림 닫기/.test(html), false, '치울 알림이 없는데 닫기 버튼이 초점 순서에 있다');
+});

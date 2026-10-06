@@ -200,7 +200,8 @@ test('복구 실패 경로: 손상된 스냅샷은 거부하고 기존 데이터
   for (const bad of [null, 'text', 42, {}, { kb: [], customRules: [] }, { kb: 'x', ruleOverrides: {}, customRules: [] }]) {
     const r = store.importSnapshot(bad);
     assert.equal(r.ok, false, `${JSON.stringify(bad)} 를 통과시키면 안 된다`);
-    assert.match(r.error, /필요|올바|유효/);
+    // 거절 문장은 코드 어휘 대신 다음에 할 일을 말한다(DS 29-3).
+    assert.match(r.error, /백업 파일 형식이 아닙니다/);
   }
   assert.equal(store.listKB().length, keep, '거부된 복원이 기존 데이터를 건드리면 안 된다');
 });
@@ -1136,9 +1137,10 @@ test('잘못된 입력은 거절하고 이유를 돌려준다(실패 경로)', o
   assert.equal(P.upsertAccount({ name: '  ' }).error, '고객사명을 입력해 주세요.');
   assert.match(P.upsertAccount({ name: 'BB', partnerId: 'PTR-9999' }).error, /존재하지 않는 파트너/);
   assert.match(P.upsertAccount({ name: 'BB', source: 'partner' }).error, /파트너를 지정/);
-  assert.match(P.upsertAccount({ name: 'BB', contractedAt: '2026-02-31' }).error, /실제 날짜/);
+  // 형식 토큰(YYYY-MM-DD)·내부 단위(bp)는 거절 문장에 적지 않는다(DS 29-3).
+  assert.match(P.upsertAccount({ name: 'BB', contractedAt: '2026-02-31' }).error, /2026-09-01 처럼 연-월-일/);
   assert.match(P.upsertAccount({ name: 'BB', status: 'contracted' }).error, /계약일이 필요/);
-  assert.match(P.upsertPartner({ name: 'X', feeRateBp: 99999 }).error, /0~10000bp/);
+  assert.match(P.upsertPartner({ name: 'X', feeRateBp: 99999 }).error, /0~100% 사이의 숫자/);
   assert.match(P.upsertPartner({ name: '' }).error, /파트너명/);
 });
 
@@ -1429,7 +1431,7 @@ test('기준월 형식이 틀리면 이유와 함께 거절한다(실패 경로)
   for (const bad of ['2026-13', '2026/09', '2026', '', 'abcd-ef']) {
     const r = S.buildSettlement({ month: bad });
     assert.equal(r.ok, false, `${bad} 는 거절되어야 한다`);
-    assert.match(r.error, /YYYY-MM/);
+    assert.match(r.error, /2026-09 처럼 연-월/, '형식 토큰(YYYY-MM) 대신 예시로 말한다 — DS 29-3');
   }
   assert.equal(S.isValidMonth('2026-09'), true);
   assert.equal(S.monthEnd('2026-02'), '2026-02-28');
@@ -1500,11 +1502,11 @@ test('잘못된 평가 입력은 사유와 함께 거절된다(실패 경로)', 
 
   const bad = F.recordFeedback({ sessionHash: 'h1', verdict: '최고' });
   assert.equal(bad.ok, false);
-  assert.match(bad.error, /verdict/);
+  assert.match(bad.error, /평가를 기록하지 못했습니다/, '고객 화면까지 올라가는 문장이다 — DS 29-3');
 
   const noSession = F.recordFeedback({ sessionHash: '', verdict: 'up' });
   assert.equal(noSession.ok, false);
-  assert.match(noSession.error, /sessionHash/);
+  assert.match(noSession.error, /평가를 기록하지 못했습니다/);
 
   assert.equal(F.feedbackSummary().total, 0, '거절된 입력이 집계에 들어가면 안 된다');
   F.resetFeedback();
@@ -2013,4 +2015,87 @@ test('없는 식별자로 저장하면 지운 자료가 되살아난다 (DS 27-3
   assert.ok(store.listKB().some((e) => e.id === 'ds27-ghost'), '지운 자료가 되살아나지 않았다면 이 검증의 전제가 깨졌다');
 
   store.deleteKB('ds27-ghost');
+});
+
+/* ══════════ 디자인 스프린트 — 26차 재감사 (DS 29-x) ══════════ */
+
+/**
+ * DS 29-3 — 거절 문장을 쓰는 한 곳(`src/lib/refusal.ts`)을 **실제로 돌린다**.
+ * 소스 검사만으로는 「조사가 맞게 붙는가」·「이름 없는 키가 코드 키를 흘리지 않는가」를 못 본다.
+ */
+test('거절 문장이 받침에 맞는 조사로 쓰인다 (DS 29-3)', opts, async () => {
+  const R = await importLib('refusal', []);
+
+  // 받침 있음 → 은/을/이 · 받침 없음 → 는/를/가
+  assert.equal(R.josa('문서 본문', '은', '는'), '문서 본문은');
+  assert.equal(R.josa('카테고리', '은', '는'), '카테고리는');
+  assert.equal(R.josa('문서명', '을', '를'), '문서명을');
+  assert.equal(R.josa('연락처', '을', '를'), '연락처를');
+  assert.equal(R.josa('이름', '이', '가'), '이름이');
+  assert.equal(R.josa('방문 희망일', '이', '가'), '방문 희망일이');
+  // 한글이 아닌 끝 글자·빈 값에서도 괄호를 남기지 않는다(판정 불가 → 받침 없는 쪽).
+  assert.equal(R.josa('CSV', '은', '는'), 'CSV는');
+  assert.equal(R.josa('', '은', '는'), '는');
+  for (const w of ['문서명', '연락처', 'CSV', '']) {
+    assert.equal(/[()]/.test(R.josa(w, '은', '는')), false, `조사 괄호가 남았다: ${w}`);
+  }
+});
+
+test('거절 문장은 이름 있는 칸만 이름으로 부른다 (DS 29-3)', opts, async () => {
+  const R = await importLib('refusal', []);
+
+  // 화면에 그 칸이 있는 자리 — 라벨과 같은 말로 부른다.
+  assert.equal(R.requiredMessage('title'), '문서명을 입력해 주세요.');
+  assert.equal(R.tooLongMessage('text', 100000), '문서 본문은 100,000자까지 적을 수 있습니다.');
+  assert.equal(R.tooLongMessage('reply', 1000), '답변은 1,000자까지 적을 수 있습니다.');
+  assert.equal(R.notTextMessage('contact'), '연락처 칸에는 글자만 적을 수 있습니다.');
+
+  // 사용자가 적은 적도 없는 자리 — 이름을 말하지 않는다. 코드 키가 새어 나오면 안 된다.
+  for (const key of ['sessionId', 'citation', 'tenant', 'scenarioId', 'id', 'intent', 'verdict', 'kind']) {
+    assert.equal(R.fieldLabel(key), null, `${key} 에는 화면 이름이 없어야 한다`);
+    for (const msg of [R.requiredMessage(key), R.tooLongMessage(key, 60), R.notTextMessage(key)]) {
+      assert.equal(msg.includes(key), false, `거절 문장에 코드 키가 새어 나왔다: ${msg}`);
+      assert.equal(/[A-Za-z_]{2,}/.test(msg), false, `거절 문장에 영문 토큰이 남았다: ${msg}`);
+    }
+  }
+});
+
+test('고객에게 되묻는 말에 조사 괄호가 없다 (DS 29-3)', opts, async () => {
+  const S = await importLib('slots', ['normalize', 'handoff', 'kst', 'refusal']);
+  const slot = { key: 'name', label: '이름', kind: 'text', hint: '예: 홍길동', required: true };
+  const dateSlot = { key: 'visitAt', label: '방문 희망일', kind: 'datetime', hint: '예: 내일 오후 3시', required: true };
+
+  const empty = S.validateSlot(slot, '   ');
+  assert.equal(empty.ok, false);
+  assert.ok(empty.message.startsWith('이름을 입력해 주세요.'), `되묻는 말이 바뀌었다: ${empty.message}`);
+
+  const short = S.validateSlot(slot, '김');
+  assert.equal(short.ok, false);
+  assert.ok(short.message.startsWith('이름을 조금 더'), short.message);
+
+  const tooLong = S.validateSlot(slot, '가'.repeat(S.MAX_SLOT_VALUE_LEN + 1));
+  assert.equal(tooLong.ok, false);
+  assert.ok(tooLong.message.startsWith('이름이 너무 길어요'), tooLong.message);
+
+  // 받침 없는 라벨도 같은 문을 지난다.
+  const badDate = S.validateSlot(dateSlot, '아무때나');
+  assert.equal(badDate.ok, false);
+  for (const m of [empty.message, short.message, tooLong.message, badDate.message]) {
+    assert.equal(/을\(를\)|이\(가\)|은\(는\)/.test(m), false, `괄호 조사가 남았다: ${m}`);
+  }
+});
+
+test('접수 상태·대상 거절 문장에 코드 어휘가 없다 (DS 29-3)', opts, async () => {
+  const E = await importLib('escalation', ['handoff', 'storage', 'refusal']);
+
+  const gone = E.updateTicket('ESC-없는번호', { status: 'done' });
+  assert.equal(gone.ok, false);
+  assert.equal(/티켓/.test(gone.error), false, `내부 어휘가 남았다: ${gone.error}`);
+  assert.match(gone.error, /목록을 새로 불러온 뒤/, '다음에 할 일을 말해야 한다');
+
+  const { ticket } = E.createTicket({ sessionId: 's-29', reason: 'user_request', message: '사람 바꿔 주세요' });
+  const bad = E.updateTicket(ticket.id, { status: 'ESCALATED' });
+  assert.equal(bad.ok, false);
+  assert.equal(/상태값|open|in_progress/.test(bad.error), false, `허용값 목록이 새어 나왔다: ${bad.error}`);
+  assert.match(bad.error, /목록에서 다시 골라/, '다음에 할 일을 말해야 한다');
 });

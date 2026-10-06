@@ -22,6 +22,9 @@
   --success-50:#F0FDF4; --warn-50:#FFFBEB; --danger-50:#FEF2F2;
   /* 같은 계열의 테두리 — 틴트 배경 위에 얹는 경고·오류 배너가 쓴다(배경보다 한 단 진하다). */
   --success-200:#BBF7D0; --warn-200:#FDE68A; --danger-200:#FECACA;
+  /* 짙은 면(--ink·--danger) 위에 얹는 윤곽·눌림 — 바탕색을 모르는 채로 한 단 밝게 한다.
+   * 상태색마다 테두리를 또 만들면 색 짝이 하나 더 늘어난다(DS 11-2 가 막은 것). */
+  --on-dark-line:rgba(255,255,255,.22); --on-dark-hover:rgba(255,255,255,.18);
   /* 화면 배율 — 「큰 글씨」(DS 25-1)가 켜지면 1 이 아니다.
    * `zoom` 은 하위 요소의 길이를 모두 곱하는데 **뷰포트 단위(vh·vw)까지 함께 곱한다** —
    * 100vh 가 113vh 가 되면 사이드바 아래쪽이 화면 밖으로 밀리고 서랍이 화면보다 넓어진다.
@@ -143,7 +146,15 @@ main:focus{outline:none}
 .ac-gsearch-empty{padding:14px 10px;font-size:13px;color:var(--mut);text-align:center;line-height:1.5}
 /* 스크린리더에만 읽히는 라벨(화면에서는 보이지 않는다). */
 .ac-srhide{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
-.ac-toast{position:fixed;right:20px;bottom:20px;z-index:60;background:var(--ink);color:#fff;font-size:13px;font-weight:600;border-radius:12px;padding:11px 16px;box-shadow:var(--shadow-pop);max-width:min(360px,calc(100vw / var(--vz) - 32px))}
+.ac-toast{position:fixed;right:20px;bottom:20px;z-index:60;display:flex;align-items:flex-start;gap:9px;background:var(--ink);color:#fff;font-size:13px;font-weight:600;border-radius:12px;padding:11px 16px;box-shadow:var(--shadow-pop);max-width:min(360px,calc(100vw / var(--vz) - 32px))}
+/* 실패는 성공과 **같은 모양으로 말하지 않는다**(DS 29-2). 색만으로 구분하지 않도록
+   경고 아이콘과 머무는 「닫기」를 함께 둔다(색을 못 보는 사람에게도 다른 알림이다). */
+.ac-toast-fail{background:var(--danger);border:1px solid var(--on-dark-line);padding-right:8px}
+.ac-toast-icon{flex:none;margin-top:1px}
+.ac-toast-msg{min-width:0;line-height:1.5;overflow-wrap:anywhere}
+.ac-toast-x{flex:none;display:grid;place-items:center;width:28px;height:28px;margin:-3px 0 -3px 2px;border-radius:8px;color:#fff}
+.ac-toast-x:hover{background:var(--on-dark-hover)}
+.ac-toast-x:focus-visible{outline:2px solid #fff;outline-offset:-2px}
 
 /* KPI 카드 · 표 (콘솔 공통) */
 .ac-kpi{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(186px,1fr))}
@@ -482,6 +493,10 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
   .gw-unread{border:2px solid ButtonText}
   /* 「여기부터 읽지 않은 답변」 구분선 — 선(--line-2)이 지워지면 글자만 남는다 */
   .gw-newline::before,.gw-newline::after{background:ButtonText}
+  /* 실패 알림(DS 29-2) — 바탕(--danger)이 지워지면 성공 알림과 똑같아진다. 아이콘은 남지만
+     덮개 테두리가 없으면 화면 위에 떠 있는 상자로 보이지 않는다 */
+  .ac-toast{border:1px solid ButtonText}
+  .ac-toast-fail{border:2px solid ButtonText}
   /* 카드 경계는 1px 테두리뿐이라 이 모드에서 서로 붙어 한 덩어리로 읽힌다 */
   .ac-kpicard,.ac-nscard,.ac-stat,.ac-preview,.lg-card,.ac-login-card{border-width:2px}
   /* 불러오는 중 자리 표시 — 배경색이 지워져 빈 칸이 된다(막대가 없으면 멈춘 화면으로 보인다) */

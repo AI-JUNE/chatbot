@@ -1144,7 +1144,8 @@ test('문서 업로드 폼이 라벨·인라인 검증·실패 처리를 갖춘�
   const body = s.slice(s.indexOf('const runImport = async'));
   const fn = body.slice(0, body.indexOf('\n  };'));
   assert.equal(/flash\('문서명과 본문을 입력해 주세요/.test(fn), false, '검증이 토스트로 남아 있다');
-  assert.match(fn, /document\.getElementById\(first\)\?\.focus\(\)/, '첫 오류 칸으로 초점을 옮겨야 한다');
+  // 초점 옮기기는 DS 29-1 에서 폼 5곳이 쓰는 한 문(`focusErrorField`)으로 모았다.
+  assert.match(fn, /focusErrorField\(firstErrorId\(errs, IMP_FIELD_ORDER\)\)/, '첫 오류 칸으로 초점을 옮겨야 한다');
   assert.match(fn, /catch \{/, '네트워크 실패를 삼키면 안 된다(§3)');
   assert.match(fn, /기존 자료는 그대로입니다/, '등록 실패 시 무엇이 남았는지 밝혀야 한다');
   assert.match(fn, /if \(impBusy\) return;/, '버튼을 잠그지 않으므로 중복 실행을 함수가 막아야 한다');
@@ -2371,4 +2372,167 @@ test('뒤 화면 잠금·넘침 측정이 위젯과 콘솔에서 같은 사본�
   }
   // 고객사 사이트(호스트 문서)는 embed.js 가 같은 규칙으로 잠근다 — 이쪽은 계약이라 그대로 둔다.
   assert.match(read('public/embed.js'), /function lockHost\(on\)/, '호스트 스크롤 잠금이 사라졌다');
+});
+
+/* ══════════ 29순위 — 백로그 소진 후 26차 재감사 (DS 29-x) ══════════ */
+
+/** 문자열 리터럴 안의 `${…}` 를 걷어낸다(식은 화면에 뜨는 글자가 아니다). */
+function litText(raw) {
+  return raw.replace(/\$\{[^{}]*\}/g, '');
+}
+
+/**
+ * DS 29-3 — 서버가 거절하며 적어 보낸 문장은 **그대로 화면에 뜬다**.
+ * 콘솔은 `data.message || data.error` 를 토스트·인라인 오류로 옮겨 적고, 위젯도 같은 본문을
+ * 읽는다. 그런데 「화면 문자열에 내부 문구 0건」 검사(DS 2-8)는 JSX 만 훑기 때문에 이 자리가
+ * 사각이었다 — 운영자는 「reply는 1000자 이하여야 합니다」·「잘못된 상태값입니다(허용: open, …)」
+ * 를, 고객은 「방문 희망일을(를) 입력해 주세요」를 보고 있었다.
+ */
+test('거절 문장에 코드 어휘가 없다 — 서버가 쓰는 문장도 화면 문구다 (DS 29-3)', () => {
+  const files = [
+    'src/lib/http.ts', 'src/lib/refusal.ts', 'src/lib/adminStore.ts', 'src/lib/audit.ts',
+    'src/lib/convlog.ts', 'src/lib/escalation.ts', 'src/lib/partners.ts', 'src/lib/settlement.ts',
+    'src/lib/feedback.ts', 'src/lib/knowledge.ts',
+    'src/app/api/admin/auth/route.ts', 'src/app/api/admin/kb/route.ts', 'src/app/api/admin/kb/import/route.ts',
+    'src/app/api/admin/rules/route.ts', 'src/app/api/admin/partners/route.ts',
+    'src/app/api/admin/escalations/route.ts', 'src/app/api/admin/settlement/route.ts',
+    'src/app/api/admin/backup/route.ts', 'src/app/api/chat/route.ts', 'src/app/api/escalation/route.ts',
+    'src/app/api/feedback/route.ts',
+  ].filter(has);
+  assert.ok(files.length >= 20, '검사 대상 파일이 사라졌다');
+
+  // 화면 이름이 되어도 좋은 영문 약어(제품에서 그대로 부르는 말).
+  const OK_WORDS = new Set(['CSV', 'URL', 'AI', 'GOWON']);
+  // 쓰면 안 되는 한국어 — 코드 구조를 그대로 옮긴 말.
+  const BANNED_KO = ['배열', '객체', '파싱', '티켓', '상태값', '네임스페이스', '스냅샷'];
+
+  for (const f of files) {
+    const src = stripComments(read(f));
+    // ① `fail('code', '<문장>')` 의 둘째 인자 ② 객체의 `error: '<문장>'` ③ 거절 문장 상수·사전
+    const found = [
+      ...src.matchAll(/fail\(\s*'[a-z_]+'\s*,\s*(?:'([^']*)'|`([^`]*)`)/g),
+      ...src.matchAll(/\berror:\s*(?:'([^']*)'|`([^`]*)`)/g),
+      ...src.matchAll(/\breason\s*=\s*(?:'([^']*)'|`([^`]*)`)/g), // 로그인 화면이 그대로 그리는 사유
+
+      ...src.matchAll(/^\s*(?:export const )?[A-Z_]*MESSAGE[A-Z_]*\s*=\s*(?:'([^']*)'|`([^`]*)`)/gm),
+      ...src.matchAll(/^\s{2}[a-z_]+:\s*'([^']*)'/gm), // DEFAULT_MESSAGE 사전
+    ].map((m) => litText(m[1] ?? m[2] ?? ''));
+
+    for (const msg of found) {
+      if (!/[가-힣]/.test(msg)) continue; // 코드 식별자(에러 코드 등)는 문장이 아니다
+      for (const word of msg.match(/[A-Za-z_]{2,}/g) || []) {
+        assert.ok(OK_WORDS.has(word), `${f}: 거절 문장에 코드 어휘 「${word}」 — ${msg}`);
+      }
+      for (const ko of BANNED_KO) {
+        assert.equal(msg.includes(ko), false, `${f}: 거절 문장에 내부 어휘 「${ko}」 — ${msg}`);
+      }
+      // 형식 토큰·내부 단위도 화면 말이 아니다(DS 2-12 가 걷어낸 bp, DS 21 의 YYYY-MM).
+      assert.equal(/YYYY|MM-DD|\bbp\b/.test(msg), false, `${f}: 거절 문장에 형식·단위 토큰 — ${msg}`);
+    }
+  }
+});
+
+test('화면에 뜨는 말에 괄호 조사가 없다 (DS 29-3)', () => {
+  for (const f of ['src/lib/slots.ts', 'src/lib/chat.ts', 'src/app/admin/page.tsx', 'src/components/ChatWidget.tsx', 'src/app/page.tsx']) {
+    const s = read(f);
+    assert.equal(/을\(를\)|이\(가\)|은\(는\)|와\(과\)/.test(stripComments(s)), false, `${f}: 괄호 조사가 화면에 보인다`);
+  }
+  // 조사 판정은 한 곳에서만 만든다 — 콘솔은 lib 을 불러오지 않으므로 사본이고, 두 사본이
+  // 같은 규칙인지 글자로 대조한다(DS 26-1 과 같은 방식).
+  const lib = read('src/lib/refusal.ts');
+  const console_ = read('src/app/admin/page.tsx');
+  for (const s of [lib, console_]) {
+    assert.match(s, /0xac00/, '받침 판정이 한글 음절 범위를 쓰지 않는다');
+    assert.match(s, /% 28 !== 0/, '받침 판정식이 바뀌었다');
+  }
+  assert.match(console_, /원본은 `src\/lib\/refusal\.ts`\(josa\)/, '사본임을 밝히지 않으면 다음 사람이 따로 고친다');
+});
+
+/**
+ * DS 29-1 — 거절은 **그 칸에서** 해야 한다.
+ * 이유를 칸 아래에 적어 두기만 하면 ① 스티키 폼이 자기 상자 안에서 스크롤되므로(DS 26-3)
+ * 위쪽 칸의 오류가 눈에 보이지 않고 ② `aria-invalid`·`aria-describedby` 는 초점이 닿을 때만
+ * 읽히므로 스크린리더는 **거절당한 줄도 모른다**. 위젯 접수 카드는 처음부터 초점을 옮기고
+ * 있었는데(`contactRef`) 콘솔 폼 4곳은 그렇지 않았다 — 같은 일을 두 화면이 다르게 했다.
+ */
+test('폼이 거절하면 틀린 칸으로 데려간다 (DS 29-1)', () => {
+  const s = read('src/app/admin/page.tsx');
+  const bare = stripComments(s);
+
+  // 판정·이동을 각각 한 곳에서만 만든다.
+  assert.equal((bare.match(/function firstErrorId\(/g) || []).length, 1, 'firstErrorId 선언이 하나가 아니다');
+  assert.equal((bare.match(/function focusErrorField\(/g) || []).length, 1, 'focusErrorField 선언이 하나가 아니다');
+
+  // 거절하는 폼 5곳이 모두 그 문을 지난다(한 곳만 빠져도 그 폼은 조용히 거절한다).
+  const orders = ['IMP_FIELD_ORDER', 'KB_FIELD_ORDER', 'CR_FIELD_ORDER', 'ACCOUNT_FIELD_ORDER', 'PARTNER_FIELD_ORDER'];
+  for (const o of orders) {
+    assert.ok(bare.includes(`focusErrorField(firstErrorId(errs, ${o}))`), `${o} 를 쓰는 거절 경로가 없다`);
+    assert.match(bare, new RegExp(`const ${o} = \\[`), `${o} 선언이 없다`);
+  }
+  assert.equal((bare.match(/focusErrorField\(firstErrorId\(/g) || []).length, orders.length, '거절 경로 수가 폼 수와 다르다');
+
+  // 순서는 「화면에 그려진 순서」여야 한다 — 아래쪽 칸으로 데려가면 위에 남은 오류를 지나친다.
+  for (const [order, ids] of [
+    ['KB_FIELD_ORDER', ['kb-question', 'kb-keywords', 'kb-answer']],
+    ['CR_FIELD_ORDER', ['cr-label', 'cr-keywords', 'cr-reply']],
+    ['ACCOUNT_FIELD_ORDER', ['a-name', 'a-partner', 'a-date', 'a-fee']],
+  ]) {
+    const decl = bare.slice(bare.indexOf(`const ${order} = [`));
+    const line = decl.slice(0, decl.indexOf('\n'));
+    let at = -1;
+    for (const id of ids) {
+      const next = line.indexOf(`'${id}'`);
+      assert.ok(next > at, `${order}: ${id} 가 화면 순서와 어긋난다`);
+      at = next;
+    }
+    // 가리키는 id 가 실제로 그 화면에 있어야 한다(없으면 초점이 아무 데도 가지 않는다).
+    for (const id of ids) assert.match(s, new RegExp(`id="${id}"`), `${id} 칸이 화면에 없다`);
+  }
+
+  // 키워드는 새 자료의 필수 항목이다 — 종전에는 서버만 알고 있어 토스트로 거절당했다.
+  assert.match(bare, /errs\.keywords = '고객이 쓸 표현을 한 개 이상/, '키워드 거절을 화면이 먼저 말하지 않는다');
+  assert.match(bare, /aria-describedby=\{kbErr\.keywords \? 'kb-keywords-err' : undefined\}/, '키워드 오류가 칸과 묶여 읽히지 않는다');
+
+  // 기본 규칙 답변은 서버 상한을 화면이 먼저 막는다(칸을 벗어난 뒤 토스트로 거절당하지 않게).
+  const store = read('src/lib/adminStore.ts');
+  const max = /MAX_RULE_REPLY_LEN = (\d+)/.exec(store);
+  assert.ok(max, '서버의 답변 상한을 찾지 못했다');
+  assert.match(s, new RegExp(`const MAX_RULE_REPLY_LEN = ${max[1]};`), '답변 상한이 서버와 다르다');
+  assert.match(bare, /maxLength=\{MAX_RULE_REPLY_LEN\}/, '인라인 답변 편집에 상한이 없다');
+});
+
+/**
+ * DS 29-2 — 실패를 성공과 같은 모양·같은 2.5초로 말하면, 저장을 누른 뒤 표를 보던 운영자는
+ * 실패한 줄 모르고 다음 일을 한다. 게다가 앞의 안내가 걸어 둔 타이머를 거두지 않아
+ * **두 번째 안내가 0.5초만 뜨는** 자리가 있었다(2.5초 안에 두 번 일어난 경우).
+ */
+test('실패는 성공과 다른 통로로 알린다 (DS 29-2)', () => {
+  const s = read('src/app/admin/page.tsx');
+  const bare = stripComments(s);
+
+  // 알림을 띄우는 문은 하나다 — 타이머를 거두는 자리가 거기뿐이어야 어긋나지 않는다.
+  assert.equal((bare.match(/const notify = \(/g) || []).length, 1, 'notify 선언이 하나가 아니다');
+  const notify = topFn(bare.replace('const notify = (', 'function notify('), 'function notify(');
+  assert.match(notify, /window\.clearTimeout\(noticeTimer\.current\)/, '앞의 안내 타이머를 거두지 않는다');
+  assert.match(notify, /if \(kind === 'ok'\) noticeTimer\.current = window\.setTimeout/, '실패가 스스로 사라진다');
+  assert.match(notify, /noticeSeq\.current \+= 1/, '같은 문장이 연달아 오면 다시 읽히지 않는다');
+
+  // 실패만 `role="alert"` — 읽던 것을 끊고 먼저 읽는다. 성공은 그대로 polite 다.
+  assert.match(bare, /role=\{notice\.kind === 'fail' \? 'alert' : 'status'\}/, '실패 알림의 역할이 성공과 같다');
+  assert.match(bare, /aria-live=\{notice\.kind === 'fail' \? 'assertive' : 'polite'\}/, '실패를 나중에 읽는다');
+  // 색만으로 구분하지 않는다 — 아이콘과 머무는 「닫기」가 함께 있어야 한다.
+  assert.match(bare, /className="ac-toast-icon"/, '실패 아이콘이 없다');
+  assert.match(bare, /aria-label="알림 닫기"/, '머무는 알림을 치울 수단이 없다');
+  assert.match(bare, /onClick=\{dismissNotice\}/, '닫기가 알림을 치우지 않는다');
+
+  // 실패 문구가 성공 통로(flash)로 새어 나가지 않는다.
+  for (const m of bare.match(/flash\(`?'?[^\n]*?\)/g) || []) {
+    assert.equal(/하지 못했|오류로|없습니다\./.test(m), false, `실패를 성공 통로로 알린다: ${m}`);
+  }
+  assert.match(bare, /const failed = \([\s\S]{0,200}notify\([\s\S]{0,80}'fail'\)/, '실패 공통 통로가 notify 를 쓰지 않는다');
+
+  // 머무는 알림에 모양이 있어야 성공과 구분된다(색은 토큰에서만 — DS 11-2).
+  const css = read('src/app/globals.css');
+  assert.match(css, /\.ac-toast-fail\{background:var\(--danger\)/, '실패 알림 색이 토큰을 우회했거나 없다');
+  assert.match(css, /\.ac-toast-fail\{border:2px solid ButtonText\}/, '고대비 모드에서 실패 알림이 성공과 같아진다');
 });

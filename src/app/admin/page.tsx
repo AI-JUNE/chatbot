@@ -76,6 +76,9 @@ function focusErrorField(id: string | null): void {
   if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
 }
 
+/** 성공 안내가 스스로 사라지는 시간. 실패는 사라지지 않는다(DS 29-2). */
+const NOTICE_MS = 2500;
+
 /** 폼마다 「칸 → 그 칸의 id」를 **화면에 그려진 순서로** 적어 둔다(DS 29-1). */
 const IMP_FIELD_ORDER = [['title', 'kb-imp-title'], ['maxChars', 'kb-imp-chunk'], ['text', 'kb-imp-text']] as const;
 const KB_FIELD_ORDER = [['question', 'kb-question'], ['keywords', 'kb-keywords'], ['answer', 'kb-answer']] as const;
@@ -1788,7 +1791,14 @@ export default function AdminPage() {
   useEffect(() => {
     try { setOrigin(window.location.origin); } catch { setOrigin(''); }
   }, []);
-  const [notice, setNotice] = useState('');
+  /**
+   * 알림(토스트) — 성공과 실패를 **같은 자리에서 다르게** 말한다(DS 29-2).
+   * `seq` 는 같은 문장이 연달아 올 때 다시 읽히게 하려고 둔다(aria-live 는 글자가
+   * 그대로면 두 번째를 읽지 않는다 — 두 번 실패한 사람에게 한 번만 말하는 셈이었다).
+   */
+  const [notice, setNotice] = useState<{ msg: string; kind: 'ok' | 'fail'; seq: number } | null>(null);
+  const noticeTimer = useRef<number | null>(null);
+  const noticeSeq = useRef(0);
 
   // ---- 관리 토큰(ADMIN_TOKEN 설정 시 x-admin-token 필수) ----
   // 보관처는 탭 단위 저장소다 — 위 `tokenStore()` 주석 참고(DS 14-3).
@@ -1897,7 +1907,7 @@ export default function AdminPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [kbQuery, setKbQuery] = useState('');
   const [kbCat, setKbCat] = useState('');
-  const [kbErr, setKbErr] = useState<{ question?: string; answer?: string }>({});
+  const [kbErr, setKbErr] = useState<{ question?: string; keywords?: string; answer?: string }>({});
   const [kbBusy, setKbBusy] = useState(false);
   const kbFormRef = useRef<HTMLDivElement | null>(null);
 
@@ -1957,7 +1967,7 @@ export default function AdminPage() {
       if (on401(res)) return;
       const data = await res.json();
       if (!data.ok) {
-        flash(data.error || '문서를 처리하지 못했습니다.');
+        failed('문서를 처리하지 못했습니다', data.message || data.error);
         return;
       }
       if (commit) {
@@ -1971,7 +1981,7 @@ export default function AdminPage() {
       }
     } catch {
       // catch 가 없어 오프라인·서버 끊김에서 예외가 조용히 사라졌다 — 사용자는 등록된 줄 알고 떠났다.
-      flash(commit ? '네트워크 오류로 등록하지 못했습니다. 기존 자료는 그대로입니다.' : '네트워크 오류로 미리보기를 만들지 못했습니다.');
+      notify(commit ? '네트워크 오류로 등록하지 못했습니다. 기존 자료는 그대로입니다.' : '네트워크 오류로 미리보기를 만들지 못했습니다.', 'fail');
     } finally {
       setImpBusy('');
     }
@@ -2214,7 +2224,10 @@ export default function AdminPage() {
       if (!Number.isFinite(n) || n < 0 || n > 100) errs.feeRatePct = '수수료율은 0~100 사이의 숫자(%)여야 합니다.';
     }
     setPErr(errs);
-    if (Object.keys(errs).length > 0) return;
+    if (Object.keys(errs).length > 0) {
+      focusErrorField(firstErrorId(errs, PARTNER_FIELD_ORDER));
+      return;
+    }
     setPartnerErr('');
     setPartnerSaving(true);
     try {
@@ -2255,7 +2268,10 @@ export default function AdminPage() {
       if (!Number.isFinite(n) || n < 0) errs.monthlyFeeKrw = '월 이용료는 0 이상의 숫자(원)여야 합니다.';
     }
     setAErr(errs);
-    if (Object.keys(errs).length > 0) return;
+    if (Object.keys(errs).length > 0) {
+      focusErrorField(firstErrorId(errs, ACCOUNT_FIELD_ORDER));
+      return;
+    }
     setPartnerErr('');
     setPartnerSaving(true);
     try {
@@ -2409,7 +2425,7 @@ export default function AdminPage() {
   const downloadSettlementCsv = () => {
     // 잠긴 버튼도 눌러 볼 수 있다(초점을 잃지 않으려고 `disabled` 를 쓰지 않는다) — 이유를 밝힌다.
     if (!settleView || settleView.rows.length === 0) {
-      flash('내려받을 산출 근거가 없습니다. 기준월을 바꾸거나 「다시 계산」을 눌러 주세요.');
+      notify('내려받을 산출 근거가 없습니다. 기준월을 바꾸거나 「다시 계산」을 눌러 주세요.', 'fail');
       return;
     }
     const qs = new URLSearchParams({ month: settleMonth, format: 'csv' });
@@ -2550,10 +2566,27 @@ export default function AdminPage() {
     if (tab === 'tenant' && !tenantView && !tenantBusy && !tenantErr) loadTenant(tenantId);
   }, [tab, partnerLoaded, partnerBusy, loadPartners, partnerFilter, settleView, settleBusy, settleErr, loadSettlement, settleMonth, settlePartner, tenantView, tenantBusy, tenantErr, loadTenant, tenantId]);
 
-  const flash = (msg: string) => {
-    setNotice(msg);
-    window.setTimeout(() => setNotice(''), 2500);
+  /**
+   * 알림을 띄우는 **한 문** (DS 29-2).
+   * ① 앞의 안내가 걸어 둔 타이머를 반드시 거둔다 — 거두지 않으면 2.5초 안에 두 번째 일이
+   *    일어났을 때 **첫 번째의 타이머가 두 번째 안내를 지운다**(종전에는 두 번째가 0.5초만 떴다).
+   * ② 실패는 스스로 사라지지 않는다. 운영자는 저장을 누른 뒤 표·다른 탭을 보므로, 2.5초 뒤
+   *    사라지는 안내는 **실패한 줄 모르고 다음 일을 하게** 만든다(QUALITY_BAR §1·§3).
+   */
+  const notify = (msg: string, kind: 'ok' | 'fail') => {
+    if (noticeTimer.current !== null) { window.clearTimeout(noticeTimer.current); noticeTimer.current = null; }
+    noticeSeq.current += 1;
+    setNotice({ msg, kind, seq: noticeSeq.current });
+    if (kind === 'ok') noticeTimer.current = window.setTimeout(() => setNotice(null), NOTICE_MS);
   };
+  const dismissNotice = () => {
+    if (noticeTimer.current !== null) { window.clearTimeout(noticeTimer.current); noticeTimer.current = null; }
+    setNotice(null);
+  };
+  // 화면을 떠날 때 타이머를 남기지 않는다(없어진 화면에 setState 하지 않는다).
+  useEffect(() => () => { if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current); }, []);
+
+  const flash = (msg: string) => notify(msg, 'ok');
 
   // ── 보이는 동안에만 도는 자동 확인 (DS 24-1) ──
   // 로그인 전에는 돌지 않는다(잠금 화면에서 관리 API를 두드리지 않는다).
@@ -2656,10 +2689,11 @@ export default function AdminPage() {
   /**
    * 실패한 동작을 조용히 넘기지 않는다(QUALITY_BAR §3).
    * 네트워크 예외·JSON 파싱 실패까지 잡아 사용자가 읽을 수 있는 문구로 알린다.
+   * 실패는 성공과 **다른 통로**로 알린다(DS 29-2) — 머물러 있고, 스크린리더가 먼저 끼어들어 읽는다.
    */
   const failed = (what: string, detail?: unknown) => {
     const hint = typeof detail === 'string' && detail.trim() ? detail.trim() : '';
-    flash(hint ? `${what}: ${hint}` : `${what}. 잠시 후 다시 시도해 주세요.`);
+    notify(hint ? `${what}: ${hint}` : `${what}. 잠시 후 다시 시도해 주세요.`, 'fail');
   };
 
   const submitKB = async () => {
@@ -2807,7 +2841,10 @@ export default function AdminPage() {
     if (splitKeywords(crForm.keywords).length === 0) errs.keywords = '고객이 쓸 표현을 한 개 이상 입력해 주세요.';
     if (!crForm.reply.trim()) errs.reply = '고객에게 보낼 답변을 입력해 주세요.';
     setCrErr(errs);
-    if (Object.keys(errs).length) return;
+    if (Object.keys(errs).length) {
+      focusErrorField(firstErrorId(errs, CR_FIELD_ORDER));
+      return;
+    }
     if (!claim('rule')) return;
     const body = {
       ...(crEditing ? { intent: crEditing } : {}),
@@ -2826,7 +2863,7 @@ export default function AdminPage() {
       if (on401(res)) return;
       const data = await res.json();
       if (!data.ok) {
-        flash(`저장하지 못했습니다: ${data.message || data.error}`);
+        failed('저장하지 못했습니다', data.message || data.error);
         return;
       }
       loadRuleForm(EMPTY_CR_FORM);
@@ -2834,7 +2871,7 @@ export default function AdminPage() {
       await loadRules();
       flash(crEditing ? '규칙을 수정했습니다.' : '규칙을 추가했습니다.');
     } catch {
-      flash('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      notify('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.', 'fail');
     } finally {
       setCrBusy(false);
       release('rule');
@@ -2917,7 +2954,7 @@ export default function AdminPage() {
           const d = await res.json();
           detail = typeof d?.message === 'string' ? d.message : typeof d?.error === 'string' ? d.error : '';
         } catch { /* 본문을 읽지 못해도 아래에서 일반 안내를 보여준다 */ }
-        failed(`${what}을(를) 내려받지 못했습니다`, detail);
+        failed(`${josa(what, '을', '를')} 내려받지 못했습니다`, detail);
         return;
       }
       const blob = await res.blob();
@@ -2932,9 +2969,9 @@ export default function AdminPage() {
       a.click();
       a.remove();
       URL.revokeObjectURL(href);
-      flash(`${what}을(를) 내려받았습니다.`);
+      flash(`${josa(what, '을', '를')} 내려받았습니다.`);
     } catch {
-      failed(`${what}을(를) 내려받지 못했습니다`, '연결을 확인한 뒤 다시 시도해 주세요.');
+      failed(`${josa(what, '을', '를')} 내려받지 못했습니다`, '연결을 확인한 뒤 다시 시도해 주세요.');
     } finally {
       setDlBusy('');
     }
@@ -3021,7 +3058,7 @@ export default function AdminPage() {
         failed('상태를 바꾸지 못했습니다', data.message || data.error);
       }
     } catch {
-      flash('상태를 바꾸지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.');
+      notify('상태를 바꾸지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.', 'fail');
     } finally {
       setTicketBusy(false);
       release('ticket');
@@ -3751,8 +3788,21 @@ export default function AdminPage() {
                   {kbErr.question && <p id="kb-question-err" className="ac-err">{kbErr.question}</p>}
                 </div>
                 <div className="ac-field">
-                  <label htmlFor="kb-keywords">키워드 <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(쉼표로 구분)</span></label>
-                  <input id="kb-keywords" style={S.input} placeholder="예: 요금, 가격, 얼마" value={form.keywords} onChange={(e) => setForm({ ...form, keywords: e.target.value })} />
+                  <label htmlFor="kb-keywords">
+                    키워드 <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(쉼표로 구분)</span>
+                    {!editingId && <span aria-hidden="true" style={{ color: 'var(--danger)' }}> *</span>}
+                  </label>
+                  <input
+                    id="kb-keywords"
+                    style={{ ...S.input, ...(kbErr.keywords ? { borderColor: 'var(--danger)' } : {}) }}
+                    placeholder="예: 요금, 가격, 얼마"
+                    value={form.keywords}
+                    aria-required={!editingId ? 'true' : undefined}
+                    aria-invalid={kbErr.keywords ? 'true' : undefined}
+                    aria-describedby={kbErr.keywords ? 'kb-keywords-err' : undefined}
+                    onChange={(e) => { setForm({ ...form, keywords: e.target.value }); if (kbErr.keywords) setKbErr({ ...kbErr, keywords: undefined }); }}
+                  />
+                  {kbErr.keywords && <p id="kb-keywords-err" className="ac-err">{kbErr.keywords}</p>}
                 </div>
                 <div className="ac-field">
                   <label htmlFor="kb-answer">답변 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span></label>
@@ -3939,6 +3989,9 @@ export default function AdminPage() {
                               className="ac-rulereply-input"
                               defaultValue={r.effectiveReply}
                               rows={2}
+                              /* 서버와 같은 상한 — 넘겨 적고 칸을 벗어난 뒤 토스트로 거절당하지 않게
+                                 브라우저가 먼저 막는다(DS 29-1). */
+                              maxLength={MAX_RULE_REPLY_LEN}
                               onBlur={(ev) => {
                                 const v = ev.target.value.trim();
                                 if (v !== r.effectiveReply) patchRule(r.intent, { reply: v === r.defaultReply ? null : v });
@@ -5182,9 +5235,32 @@ export default function AdminPage() {
       {/* 되돌릴 수 없는 동작 확인 — 삭제·초기화는 전부 이 대화상자를 거친다(DS 5-4). */}
       {confirmReq && <ConfirmDialog req={confirmReq} />}
 
-      {/* 저장·삭제 결과 알림(토스트) — 화면 어디에 있든 같은 자리에서 알린다. */}
+      {/* 저장·삭제 결과 알림(토스트) — 화면 어디에 있든 같은 자리에서 알린다.
+          실패는 성공과 다르게 말한다(DS 29-2): 머물러 있고, 아이콘·색이 다르고,
+          스크린리더가 읽던 것을 끊고 먼저 읽는다(`role="alert"`). `key` 는 같은 문장이
+          연달아 올 때 다시 읽히게 하는 장치다. */}
       {notice && (
-        <div className="ac-toast" role="status" aria-live="polite">{notice}</div>
+        <div
+          key={notice.seq}
+          className={notice.kind === 'fail' ? 'ac-toast ac-toast-fail' : 'ac-toast'}
+          role={notice.kind === 'fail' ? 'alert' : 'status'}
+          aria-live={notice.kind === 'fail' ? 'assertive' : 'polite'}
+        >
+          {notice.kind === 'fail' && (
+            <svg className="ac-toast-icon" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 7.5v5.5M12 16.4v.2" strokeLinecap="round" />
+            </svg>
+          )}
+          <span className="ac-toast-msg">{notice.msg}</span>
+          {notice.kind === 'fail' && (
+            <button type="button" className="ac-toast-x" onClick={dismissNotice} aria-label="알림 닫기">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
