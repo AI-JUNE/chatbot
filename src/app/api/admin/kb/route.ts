@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server';
 import { listKB, upsertKB, deleteKB, resetKB } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, reqQuery, requireAdmin, isAdminAuthed } from '@/lib/http';
+import { STALE_TARGET_MESSAGE } from '@/lib/refusal';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,7 +43,7 @@ export async function DELETE(req: NextRequest) {
   if (denied) return denied;
   const id = reqQuery(req, 'id');
   if (!id.ok) return id.res;
-  if (!deleteKB(id.value)) return fail('not_found', '해당 id가 없습니다.');
+  if (!deleteKB(id.value)) return fail('not_found', STALE_TARGET_MESSAGE);
   logAudit({ action: 'kb.delete', target: id.value, authed: isAdminAuthed(req) });
   return ok({});
 }

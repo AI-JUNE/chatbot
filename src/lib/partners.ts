@@ -16,6 +16,7 @@
 //
 // [승인 필요] 실제 정산·청구, 파트너 계정 로그인(partner_admin 권한), 화이트라벨.
 import { loadJson, scheduleSave } from '@/lib/storage';
+import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 
 export const PARTNERS_NS = 'partners';
 
@@ -162,7 +163,8 @@ export function upsertPartner(input: PartnerInput): PartnerResult {
   if (input.feeRateBp !== undefined && input.feeRateBp !== null && input.feeRateBp !== '') {
     const n = Number(input.feeRateBp);
     if (!Number.isFinite(n) || n < 0 || n > 10000) {
-      return { ok: false, error: '수수료율은 0~10000bp(0~100%) 사이의 숫자여야 합니다.' };
+      // 화면은 %로 묻고 받는다(DS 2-12) — 거절 문장에도 내부 단위(bp)를 적지 않는다(DS 29-3).
+      return { ok: false, error: '수수료율은 0~100% 사이의 숫자로 적어주세요.' };
     }
     feeRateBp = Math.round(n);
   }
@@ -273,7 +275,7 @@ export function upsertAccount(input: AccountInput): AccountResult {
 
   const contractedAt = clean(input.contractedAt, 10);
   if (contractedAt && !isValidDate(contractedAt)) {
-    return { ok: false, error: '계약일은 YYYY-MM-DD 형식의 실제 날짜여야 합니다. (예: 2026-09-01)' };
+    return { ok: false, error: '계약일은 2026-09-01 처럼 연-월-일로 적어주세요.' };
   }
 
   const fee = parseMonthlyFee(input.monthlyFeeKrw);
@@ -449,10 +451,10 @@ function persist(): void {
 
 /** 스냅샷 복원. 형식이 어긋난 항목은 건너뛰고 개수를 돌려준다. */
 export function importPartners(input: unknown): { ok: true; partners: number; accounts: number } | { ok: false; error: string } {
-  if (!input || typeof input !== 'object') return { ok: false, error: '유효한 JSON 객체가 아닙니다.' };
+  if (!input || typeof input !== 'object') return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   const snap = input as Partial<PartnerSnapshot>;
   if (!Array.isArray(snap.partners) || !Array.isArray(snap.accounts)) {
-    return { ok: false, error: 'partners·accounts 배열이 필요합니다.' };
+    return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   }
 
   const nextPartners: Partner[] = [];

@@ -104,7 +104,9 @@ export async function POST(req: NextRequest) {
     return ok({ account: r.account, created: r.created });
   }
 
-  return fail('invalid_input', 'kind는 "partner" 또는 "account"여야 합니다.');
+  // 화면의 세그먼트(고객사/파트너)가 늘 하나를 고르므로 여기까지 오지 않는다 —
+  // 그래도 코드 어휘를 보여 주지 않는다(DS 29-3).
+  return fail('invalid_input');
 }
 
 // 파트너 삭제: DELETE /api/admin/partners?partnerId=PTR-0001

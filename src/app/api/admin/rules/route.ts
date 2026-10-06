@@ -2,9 +2,10 @@
 // 내장 룰: 활성화·응답문만 편집(패턴은 코드 관리). 커스텀 룰: 키워드 기반 추가/수정/삭제(POST/DELETE).
 import { NextRequest } from 'next/server';
 import { RULES } from '@/lib/rules';
-import { getRuleOverride, setRuleOverride, listCustomRules, upsertCustomRule, deleteCustomRule, CustomRuleInput } from '@/lib/adminStore';
+import { getRuleOverride, setRuleOverride, listCustomRules, upsertCustomRule, deleteCustomRule, MAX_RULE_REPLY_LEN, CustomRuleInput } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, reqQuery, optStr, requireAdmin, isAdminAuthed } from '@/lib/http';
+import { STALE_TARGET_MESSAGE, tooLongMessage } from '@/lib/refusal';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,7 +42,9 @@ export async function POST(req: NextRequest) {
   if (!intentField.ok) return intentField.res;
   const intent = intentField.value;
   if (intent && RULES.some((r) => r.intent === intent)) {
-    return fail('conflict', '내장 룰과 같은 intent는 사용할 수 없습니다.', undefined, { status: 400 });
+    // 이 문장들은 콘솔 토스트에 그대로 뜬다 — 「룰」·「intent」·「reply」는 DS 2-5 가 화면에서
+    // 걷어낸 코드 어휘다(화면 문자열 검사가 서버 문장까지 보지 못했다 — DS 29-3).
+    return fail('conflict', '기본 규칙과 같은 이름은 쓸 수 없습니다. 규칙 이름을 바꿔 주세요.', undefined, { status: 400 });
   }
   const result = upsertCustomRule(parsed.data);
   if (!result.ok) return fail('invalid_input', result.error);
@@ -60,7 +63,7 @@ export async function DELETE(req: NextRequest) {
   if (denied) return denied;
   const intent = reqQuery(req, 'intent');
   if (!intent.ok) return intent.res;
-  if (!deleteCustomRule(intent.value)) return fail('not_found', '존재하지 않는 커스텀 룰입니다.');
+  if (!deleteCustomRule(intent.value)) return fail('not_found', STALE_TARGET_MESSAGE);
   logAudit({ action: 'rule.custom.delete', target: intent.value, authed: isAdminAuthed(req) });
   return ok({});
 }
@@ -76,15 +79,15 @@ export async function PATCH(req: NextRequest) {
   const intentField = optStr(body.intent, 'intent', 60);
   if (!intentField.ok) return intentField.res;
   const intent = intentField.value;
-  if (!RULES.some((r) => r.intent === intent)) return fail('not_found', '존재하지 않는 intent입니다.');
+  if (!RULES.some((r) => r.intent === intent)) return fail('not_found', STALE_TARGET_MESSAGE);
   if (body.enabled !== undefined && typeof body.enabled !== 'boolean') {
-    return fail('invalid_input', 'enabled는 true/false여야 합니다.');
+    return fail('invalid_input');
   }
   if (body.reply !== undefined && body.reply !== null && typeof body.reply !== 'string') {
-    return fail('invalid_input', 'reply는 문자열 또는 null이어야 합니다.');
+    return fail('invalid_input');
   }
-  if (typeof body.reply === 'string' && body.reply.length > 1000) {
-    return fail('invalid_input', 'reply는 1000자 이하여야 합니다.');
+  if (typeof body.reply === 'string' && body.reply.length > MAX_RULE_REPLY_LEN) {
+    return fail('invalid_input', tooLongMessage('reply', MAX_RULE_REPLY_LEN));
   }
 
   const enabled = body.enabled as boolean | undefined;

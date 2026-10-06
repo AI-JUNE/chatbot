@@ -6,6 +6,7 @@
 // 이관 사유 코드(reasonCode)와 요약(summary)은 AICC-Core `src/core/handoffSummary.ts` 어휘를 따른다.
 import { isHandoffReason, type HandoffReason } from '@/lib/handoff';
 import { loadJson, scheduleSave } from '@/lib/storage';
+import { BAD_STATUS_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE } from '@/lib/refusal';
 
 export type EscalationStatus = 'open' | 'in_progress' | 'resolved' | 'canceled';
 
@@ -81,9 +82,9 @@ function persist(): void {
 
 /** 스냅샷 복원. 형식이 어긋난 항목은 건너뛰고 개수를 돌려준다. */
 export function importTickets(input: unknown): { ok: true; count: number } | { ok: false; error: string } {
-  if (!input || typeof input !== 'object') return { ok: false, error: '유효한 JSON 객체가 아닙니다.' };
+  if (!input || typeof input !== 'object') return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   const snap = input as Partial<TicketSnapshot>;
-  if (!Array.isArray(snap.tickets)) return { ok: false, error: 'tickets 배열이 필요합니다.' };
+  if (!Array.isArray(snap.tickets)) return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   const restored: EscalationTicket[] = [];
   for (const t of snap.tickets) {
     if (!t || typeof t !== 'object') continue;
@@ -171,9 +172,10 @@ export type UpdateTicketResult = { ok: true; ticket: EscalationTicket } | { ok: 
 
 export function updateTicket(id: string, patch: { status?: EscalationStatus; note?: string }): UpdateTicketResult {
   const t = tickets.find((x) => x.id === id);
-  if (!t) return { ok: false, error: '해당 티켓이 없습니다.' };
+  // 「티켓」·「상태값」은 코드 어휘다 — 운영자 화면은 「접수」라고 부른다(DS 29-3).
+  if (!t) return { ok: false, error: STALE_TARGET_MESSAGE };
   if (patch.status !== undefined) {
-    if (!ESCALATION_STATUSES.includes(patch.status)) return { ok: false, error: '잘못된 상태값입니다.' };
+    if (!ESCALATION_STATUSES.includes(patch.status)) return { ok: false, error: BAD_STATUS_MESSAGE };
     t.status = patch.status;
   }
   if (patch.note !== undefined) t.note = String(patch.note).trim().slice(0, 500) || undefined;

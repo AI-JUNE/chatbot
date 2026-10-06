@@ -5,6 +5,7 @@
 // 토큰 값 등 시크릿은 절대 기록하지 않는다(인증 사용 여부만 boolean으로 기록).
 import { loadJson, scheduleSave } from '@/lib/storage';
 import { csvRow } from '@/lib/csv';
+import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 
 export type AuditAction =
   | 'kb.upsert'
@@ -126,9 +127,9 @@ const ACTIONS = new Set<string>([
 
 /** 스냅샷 복원. 알 수 없는 action·형식 위반 항목은 건너뛴다. */
 export function importAudit(input: unknown): { ok: true; count: number } | { ok: false; error: string } {
-  if (!input || typeof input !== 'object') return { ok: false, error: '유효한 JSON 객체가 아닙니다.' };
+  if (!input || typeof input !== 'object') return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   const snap = input as Partial<AuditSnapshot>;
-  if (!Array.isArray(snap.events)) return { ok: false, error: 'events 배열이 필요합니다.' };
+  if (!Array.isArray(snap.events)) return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   const restored: AuditEvent[] = [];
   for (const raw of snap.events) {
     if (!raw || typeof raw !== 'object') continue;

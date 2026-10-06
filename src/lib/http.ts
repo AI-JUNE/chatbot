@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { safeEqual } from '@/lib/webhookAuth';
 import { resolvePrincipal, canWrite, type Principal } from '@/lib/rbac';
+import { requiredMessage, tooLongMessage, notTextMessage } from '@/lib/refusal';
 
 export type ErrorCode =
   | 'invalid_json'
@@ -33,12 +34,13 @@ const STATUS: Record<ErrorCode, number> = {
   internal: 500,
 };
 
+// 화면에 그대로 뜨는 문장이다(DS 29-3) — 코드 어휘 대신 다음에 할 일을 적는다.
 const DEFAULT_MESSAGE: Record<ErrorCode, string> = {
-  invalid_json: '요청 형식이 올바르지 않습니다(JSON 파싱 실패).',
-  invalid_input: '입력값이 올바르지 않습니다.',
+  invalid_json: '보낸 내용을 읽지 못했습니다. 잠시 후 다시 시도해 주세요.',
+  invalid_input: '입력한 값이 올바르지 않습니다. 다시 확인해 주세요.',
   unauthorized: '인증이 필요합니다.',
   not_found: '대상을 찾을 수 없습니다.',
-  payload_too_large: '요청 본문이 너무 큽니다.',
+  payload_too_large: '보낸 내용이 너무 큽니다. 길이를 줄여 다시 시도해 주세요.',
   rate_limited: '요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요.',
   forbidden: '이 작업을 수행할 권한이 없습니다.',
   conflict: '요청을 처리할 수 없는 상태입니다.',
@@ -108,9 +110,9 @@ export async function readJsonWithRaw<T extends Record<string, unknown>>(
   maxBytes: number = MAX_BODY_BYTES,
 ): Promise<ParsedRaw<T>> {
   const declared = Number(req.headers.get('content-length') || 0);
-  const tooBig = (n: number) =>
-    fail('payload_too_large', `요청 본문이 너무 큽니다(최대 ${Math.floor(maxBytes / 1024)}KB).`);
-  if (Number.isFinite(declared) && declared > maxBytes) return { ok: false, res: tooBig(declared) };
+  // 상한 바이트 수는 화면에 적지 않는다 — 운영자가 줄일 수 있는 단위(글자)가 아니다(DS 29-3).
+  const tooBig = () => fail('payload_too_large');
+  if (Number.isFinite(declared) && declared > maxBytes) return { ok: false, res: tooBig() };
 
   let raw: string;
   try {
@@ -118,7 +120,7 @@ export async function readJsonWithRaw<T extends Record<string, unknown>>(
   } catch {
     return { ok: false, res: fail('invalid_json') };
   }
-  if (raw.length > maxBytes) return { ok: false, res: tooBig(raw.length) };
+  if (raw.length > maxBytes) return { ok: false, res: tooBig() };
 
   let parsed: unknown;
   try {
@@ -127,7 +129,7 @@ export async function readJsonWithRaw<T extends Record<string, unknown>>(
     return { ok: false, res: fail('invalid_json') };
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { ok: false, res: fail('invalid_input', 'JSON 객체 형식의 본문이 필요합니다.') };
+    return { ok: false, res: fail('invalid_input') };
   }
   return { ok: true, data: parsed as T, raw };
 }
@@ -145,12 +147,16 @@ export async function readJson<T extends Record<string, unknown>>(
 
 export type Field<T> = { ok: true; value: T } | { ok: false; res: NextResponse };
 
-/** 선택 문자열: undefined/null이면 fallback. 문자열이 아니면 400. 길이 초과 시 400. */
+/**
+ * 선택 문자열: undefined/null이면 fallback. 문자열이 아니면 400. 길이 초과 시 400.
+ * `field` 는 코드 키이고, 거절 문장은 그 키의 **사람 말 이름**으로 쓴다(DS 29-3) —
+ * 이름이 없는 키(`sessionId`·`citation` 등 사용자가 적은 적 없는 자리)는 이름을 말하지 않는다.
+ */
 export function optStr(v: unknown, field: string, max: number, fallback = ''): Field<string> {
   if (v === undefined || v === null) return { ok: true, value: fallback };
-  if (typeof v !== 'string') return { ok: false, res: fail('invalid_input', `${field}은(는) 문자열이어야 합니다.`) };
+  if (typeof v !== 'string') return { ok: false, res: fail('invalid_input', notTextMessage(field)) };
   const s = v.trim();
-  if (s.length > max) return { ok: false, res: fail('invalid_input', `${field}은(는) ${max}자 이하여야 합니다.`) };
+  if (s.length > max) return { ok: false, res: fail('invalid_input', tooLongMessage(field, max)) };
   return { ok: true, value: s };
 }
 
@@ -158,7 +164,7 @@ export function optStr(v: unknown, field: string, max: number, fallback = ''): F
 export function reqStr(v: unknown, field: string, max: number): Field<string> {
   const r = optStr(v, field, max);
   if (!r.ok) return r;
-  if (!r.value) return { ok: false, res: fail('invalid_input', `${field}이(가) 필요합니다.`) };
+  if (!r.value) return { ok: false, res: fail('invalid_input', requiredMessage(field)) };
   return r;
 }
 
@@ -204,11 +210,12 @@ export function requireAdmin(req: NextRequest, opts?: { allowQueryToken?: boolea
   const token = process.env.ADMIN_TOKEN;
   if (!token) {
     if (!ADMIN_AUTH_REQUIRED) return null;
-    return fail('unauthorized', '관리자 인증이 활성화되었으나 ADMIN_TOKEN이 설정되지 않았습니다.');
+    // 어느 환경변수가 비었는지는 화면이 아니라 RUNBOOK·서버 로그가 말한다(DS 29-3).
+    return fail('unauthorized', '관리자 인증 설정이 끝나지 않았습니다. 서버 설정을 확인해 주세요.');
   }
   // 토큰 비교는 상수 시간으로 한다(문자 단위 비교는 타이밍으로 값이 새어 나갈 수 있다).
   if (!safeEqual(presentedToken(req, allowQueryToken) ?? '', token)) {
-    return fail('unauthorized', '관리자 토큰이 필요합니다.');
+    return fail('unauthorized', '관리 토큰이 필요합니다. 다시 로그인해 주세요.');
   }
   return null;
 }
@@ -227,7 +234,7 @@ export function requirePrincipal(req: NextRequest, opts?: { allowQueryToken?: bo
   const presented = presentedToken(req, opts?.allowQueryToken === true);
   const principal = resolvePrincipal(presented, { adminAuthRequired: ADMIN_AUTH_REQUIRED });
   if (!principal) {
-    return { ok: false, res: fail('unauthorized', '관리자 토큰이 필요합니다.') };
+    return { ok: false, res: fail('unauthorized', '관리 토큰이 필요합니다. 다시 로그인해 주세요.') };
   }
   return { ok: true, principal };
 }

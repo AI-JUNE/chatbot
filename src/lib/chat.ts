@@ -12,6 +12,7 @@ import { RULES, type Rule } from '@/lib/rules';
 import { prepare } from '@/lib/normalize';
 import { listKB, getRuleOverride, listCustomRules, matchCustomRule } from '@/lib/adminStore';
 import { intentLabelMap } from '@/lib/intents';
+import { josa } from '@/lib/refusal';
 import { appendTurn, getSession, setSlot, updateSession } from '@/lib/session';
 import { createTicket, queuePosition } from '@/lib/escalation';
 import { buildHandoffSummary, type HandoffReason } from '@/lib/handoff';
@@ -281,7 +282,7 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
         const q = queuePosition(ticket.id);
         return {
           reply:
-            `제가 ${res.slot.label}을(를) 계속 알아듣지 못해서 상담원에게 연결해 드릴게요. 접수번호는 ${ticket.id}입니다.` +
+            `제가 ${josa(res.slot.label, '을', '를')} 계속 알아듣지 못해서 상담원에게 연결해 드릴게요. 접수번호는 ${ticket.id}입니다.` +
             (q ? ` 현재 접수 순번은 ${q.position}번입니다.` : '') +
             ' 지금까지 입력하신 내용은 상담원에게 함께 전달됩니다.' +
             (hasContact ? '' : ' 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기")'),

@@ -121,7 +121,7 @@ export type SettlementResult = { ok: true; report: SettlementReport } | { ok: fa
 export function buildSettlement(input: SettlementInput): SettlementResult {
   const month = String(input.month ?? '').trim();
   if (!isValidMonth(month)) {
-    return { ok: false, error: '정산 기준월은 YYYY-MM 형식이어야 합니다. (예: 2026-09)' };
+    return { ok: false, error: '기준월은 2026-09 처럼 연-월로 적어주세요.' };
   }
   const periodStart = `${month}-01`;
   const periodEnd = monthEnd(month);

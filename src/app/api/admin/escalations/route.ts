@@ -7,6 +7,7 @@ import { intentLabel, intentLabelMap } from '@/lib/intents';
 import { listCustomRules } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, reqStr, optStr, requireAdmin, isAdminAuthed } from '@/lib/http';
+import { BAD_STATUS_MESSAGE } from '@/lib/refusal';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,7 +52,8 @@ export async function PATCH(req: NextRequest) {
     const s = optStr(body.status, 'status', 20);
     if (!s.ok) return s.res;
     if (!ESCALATION_STATUSES.includes(s.value as EscalationStatus)) {
-      return fail('invalid_input', `잘못된 상태값입니다(허용: ${ESCALATION_STATUSES.join(', ')}).`);
+      // 허용값 목록은 코드 어휘다 — 늘어놓지 않고 다음에 할 일만 말한다(DS 29-3).
+      return fail('invalid_input', BAD_STATUS_MESSAGE);
     }
     status = s.value as EscalationStatus;
   }

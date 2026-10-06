@@ -5,6 +5,7 @@
 import type { ReplySource } from '@/lib/chat';
 import { loadJson, scheduleSave } from '@/lib/storage';
 import { kstDate } from '@/lib/kst';
+import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 
 export interface ChatTurnLog {
   id: string;
@@ -68,9 +69,9 @@ const CHANNELS = new Set(['web', 'kakao', 'call']);
 
 /** 스냅샷 복원. 형식 위반 항목은 건너뛴다. */
 export function importTurns(input: unknown): { ok: true; count: number } | { ok: false; error: string } {
-  if (!input || typeof input !== 'object') return { ok: false, error: '유효한 JSON 객체가 아닙니다.' };
+  if (!input || typeof input !== 'object') return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   const snap = input as Partial<ConvLogSnapshot>;
-  if (!Array.isArray(snap.turns)) return { ok: false, error: 'turns 배열이 필요합니다.' };
+  if (!Array.isArray(snap.turns)) return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   const restored: ChatTurnLog[] = [];
   for (const raw of snap.turns) {
     if (!raw || typeof raw !== 'object') continue;

@@ -48,9 +48,10 @@ export function recordFeedback(input: {
   citation?: unknown;
   channel?: unknown;
 }): { ok: true; entry: FeedbackEntry } | { ok: false; error: string } {
-  if (!isVerdict(input.verdict)) return { ok: false, error: 'verdict는 up 또는 down이어야 합니다.' };
+  // 고객 화면(위젯 「도움이 됐나요」)까지 올라가는 문장이다 — 코드 어휘를 싣지 않는다(DS 29-3).
+  if (!isVerdict(input.verdict)) return { ok: false, error: '평가를 기록하지 못했습니다. 다시 눌러 주세요.' };
   if (typeof input.sessionHash !== 'string' || !input.sessionHash) {
-    return { ok: false, error: 'sessionHash가 필요합니다.' };
+    return { ok: false, error: '평가를 기록하지 못했습니다. 다시 눌러 주세요.' };
   }
   const citation = typeof input.citation === 'string' ? input.citation.slice(0, MAX_CITATION_LEN) : '';
   const channel = typeof input.channel === 'string' && input.channel ? input.channel : 'web';

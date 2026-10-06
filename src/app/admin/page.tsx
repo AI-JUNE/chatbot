@@ -34,6 +34,54 @@ const EMPTY_IMPORT: ImportForm = { title: '', category: '문서', maxChars: '500
 const MAX_DOC_CHARS = 100_000;
 const MIN_CHUNK_CHARS = 120;
 const MAX_CHUNK_CHARS = 2000;
+/** 기본 규칙 답변 덮어쓰기 길이 상한 — 원본은 `src/lib/adminStore.ts`(MAX_RULE_REPLY_LEN). */
+const MAX_RULE_REPLY_LEN = 1000;
+
+/**
+ * 조사를 받침에 맞춰 붙인다 — 원본은 `src/lib/refusal.ts`(josa).
+ * 콘솔은 lib 을 불러오지 않으므로 여기에 옮겨 적고, 테스트가 두 결과를 맞춰 고정한다.
+ * 종전에는 「감사 로그을(를) 내려받지 못했습니다」처럼 괄호가 그대로 보였다(DS 29-3).
+ */
+function josa(word: string, withBatchim: string, withoutBatchim: string): string {
+  const last = (word || '').trim().slice(-1);
+  const code = last ? last.charCodeAt(0) : 0;
+  const hangul = code >= 0xac00 && code <= 0xd7a3;
+  return `${word}${hangul && (code - 0xac00) % 28 !== 0 ? withBatchim : withoutBatchim}`;
+}
+
+/**
+ * 거절한 칸 중 **화면에서 가장 먼저 나오는 칸**의 id (DS 29-1).
+ * `order` 는 폼에 그려진 순서다 — 아래쪽 칸으로 데려가면 위에 남은 오류를 지나친다.
+ */
+function firstErrorId(errs: Record<string, unknown>, order: readonly (readonly [string, string])[]): string | null {
+  for (const [key, id] of order) if (errs[key]) return id;
+  return null;
+}
+
+/**
+ * 거절한 칸으로 **데려간다** (DS 29-1).
+ * 이유를 칸 아래에 적어 두기만 하면 두 사람이 그것을 못 본다:
+ *  ① 스티키 편집 폼은 화면에 들어갈 만큼만 차지하고 넘치는 만큼은 자기 상자 안에서
+ *     스크롤하므로(DS 26-3), 「저장」을 누른 사람 눈에 위쪽 칸의 오류가 보이지 않는다.
+ *  ② `aria-invalid`·`aria-describedby` 는 **초점이 닿을 때만** 읽힌다 — 초점이 버튼에
+ *     남아 있으면 스크린리더는 아무 말도 하지 않는다(거절당한 줄도 모른다).
+ * 그래서 거절하는 자리마다 이 문을 지난다. 칸이 없으면 아무 일도 하지 않는다(초점을 잃지 않는다).
+ */
+function focusErrorField(id: string | null): void {
+  if (!id || typeof document === 'undefined') return;
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.focus();
+  // 상자 안에 가려진 칸은 끌어온다. `nearest` 라 이미 보이는 칸은 움직이지 않는다(화면이 튀지 않는다).
+  if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
+}
+
+/** 폼마다 「칸 → 그 칸의 id」를 **화면에 그려진 순서로** 적어 둔다(DS 29-1). */
+const IMP_FIELD_ORDER = [['title', 'kb-imp-title'], ['maxChars', 'kb-imp-chunk'], ['text', 'kb-imp-text']] as const;
+const KB_FIELD_ORDER = [['question', 'kb-question'], ['keywords', 'kb-keywords'], ['answer', 'kb-answer']] as const;
+const CR_FIELD_ORDER = [['label', 'cr-label'], ['keywords', 'cr-keywords'], ['reply', 'cr-reply']] as const;
+const ACCOUNT_FIELD_ORDER = [['name', 'a-name'], ['partnerId', 'a-partner'], ['contractedAt', 'a-date'], ['monthlyFeeKrw', 'a-fee']] as const;
+const PARTNER_FIELD_ORDER = [['name', 'p-name'], ['feeRatePct', 'p-fee']] as const;
 
 interface RuleView {
   intent: string;
@@ -1889,9 +1937,8 @@ export default function AdminPage() {
     }
     setImpErr(errs);
     if (Object.keys(errs).length > 0) {
-      // 화면 밖에 있는 칸이 틀렸을 수 있으므로 첫 오류 칸으로 초점을 옮긴다.
-      const first = errs.title ? 'kb-imp-title' : errs.maxChars ? 'kb-imp-chunk' : 'kb-imp-text';
-      document.getElementById(first)?.focus();
+      // 화면 밖에 있는 칸이 틀렸을 수 있으므로 첫 오류 칸으로 초점을 옮긴다(DS 29-1).
+      focusErrorField(firstErrorId(errs, IMP_FIELD_ORDER));
       return;
     }
     setImpBusy(commit ? 'commit' : 'preview');
@@ -2616,11 +2663,19 @@ export default function AdminPage() {
   };
 
   const submitKB = async () => {
-    const errs: { question?: string; answer?: string } = {};
+    const errs: { question?: string; keywords?: string; answer?: string } = {};
     if (!form.question.trim()) errs.question = '대표 질문을 입력해 주세요.';
     if (!form.answer.trim()) errs.answer = '답변을 입력해 주세요.';
+    // 새 자료는 키워드가 한 개 이상 있어야 서버가 받는다 — 보내 보고 토스트로 거절당하는 대신
+    // 그 칸에서 먼저 말한다(DS 29-1). 수정할 때는 서버도 요구하지 않으므로 묻지 않는다.
+    if (!editingId && splitKeywords(form.keywords).length === 0) {
+      errs.keywords = '고객이 쓸 표현을 한 개 이상 입력해 주세요(쉼표로 구분).';
+    }
     setKbErr(errs);
-    if (errs.question || errs.answer) return;
+    if (Object.keys(errs).length > 0) {
+      focusErrorField(firstErrorId(errs, KB_FIELD_ORDER));
+      return;
+    }
     if (kbBusy) return;
     setKbBusy(true);
     const body = {

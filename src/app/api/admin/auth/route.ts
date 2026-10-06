@@ -37,7 +37,8 @@ export async function GET(req: NextRequest) {
 
   let reason = '';
   if (denied) {
-    if (!tokenConfigured) reason = '관리자 인증이 활성화되었으나 서버에 ADMIN_TOKEN이 설정되지 않았습니다. 운영자에게 문의하세요.';
+    // 이 문장은 로그인 화면에 그대로 뜬다 — 어느 환경변수가 비었는지는 RUNBOOK 이 말한다(DS 29-3).
+    if (!tokenConfigured) reason = '관리자 인증 설정이 끝나지 않아 로그인할 수 없습니다. 서버 설정을 확인해 주세요.';
     else if (!presented) reason = '관리 토큰을 입력해 주세요.';
     else if (after.locked) reason = `인증 시도가 너무 많습니다. ${Math.ceil(after.retryAfterSec / 60)}분 후 다시 시도해 주세요.`;
     else reason = `토큰이 올바르지 않습니다. 다시 확인해 주세요. (남은 시도 ${after.remaining}회)`;

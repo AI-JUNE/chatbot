@@ -15,6 +15,7 @@
 import { maskPii } from '@/lib/handoff';
 import { compact, keywordHit, prepare } from '@/lib/normalize';
 import { compareYmd, kstYmd, normalizeYmd, ymdToString } from '@/lib/kst';
+import { josa } from '@/lib/refusal';
 
 /** 슬롯 값의 종류. 종류마다 검증·정규화 규칙이 다르다. */
 export type SlotKind = 'text' | 'contact' | 'datetime' | 'choice';
@@ -280,12 +281,16 @@ export function matchChoice(choices: string[], input: string): string | null {
   return null;
 }
 
-/** 슬롯 1건 검증. 실패 시 "어느 항목이 왜 틀렸는지 + 예시"를 담은 안내를 돌려준다. */
+/**
+ * 슬롯 1건 검증. 실패 시 "어느 항목이 왜 틀렸는지 + 예시"를 담은 안내를 돌려준다.
+ * 안내는 **고객 말풍선에 그대로 뜬다** — 조사는 받침에 맞춰 고른다(DS 29-3).
+ * 종전에는 「방문 희망일을(를) 입력해 주세요.」처럼 괄호가 그대로 보였다.
+ */
 export function validateSlot(slot: SlotSpec, input: string, now: Date = new Date()): SlotResult {
   const raw = (input || '').trim();
-  if (!raw) return { ok: false, message: `${slot.label}을(를) 입력해 주세요. ${slot.hint}` };
+  if (!raw) return { ok: false, message: `${josa(slot.label, '을', '를')} 입력해 주세요. ${slot.hint}` };
   if (raw.length > MAX_SLOT_VALUE_LEN) {
-    return { ok: false, message: `${slot.label}이(가) 너무 길어요(${MAX_SLOT_VALUE_LEN}자 이내). 짧게 다시 알려주세요.` };
+    return { ok: false, message: `${josa(slot.label, '이', '가')} 너무 길어요(${MAX_SLOT_VALUE_LEN}자 이내). 짧게 다시 알려주세요.` };
   }
 
   if (slot.kind === 'contact') {
@@ -306,12 +311,12 @@ export function validateSlot(slot: SlotSpec, input: string, now: Date = new Date
     const choices = slot.choices ?? [];
     const picked = matchChoice(choices, raw);
     if (picked) return { ok: true, value: picked };
-    return { ok: false, message: `${slot.label}을(를) 알아보지 못했어요. ${renderChoices(choices)} 중에서 골라주세요.` };
+    return { ok: false, message: `${josa(slot.label, '을', '를')} 알아보지 못했어요. ${renderChoices(choices)} 중에서 골라주세요.` };
   }
 
   // text — 의미 없는 한 글자·기호만 입력은 되묻는다.
   if (compact(raw).length < 2) {
-    return { ok: false, message: `${slot.label}을(를) 조금 더 자세히 알려주세요. ${slot.hint}` };
+    return { ok: false, message: `${josa(slot.label, '을', '를')} 조금 더 자세히 알려주세요. ${slot.hint}` };
   }
   return { ok: true, value: raw };
 }
@@ -403,7 +408,7 @@ export function applyInput(form: FormSpec, state: FormState, text: string, clock
         kind: 'invalid',
         state: { ...state, retries },
         slot,
-        message: `${slot.label}은(는) 접수에 꼭 필요해서 건너뛸 수 없어요.`,
+        message: `${josa(slot.label, '은', '는')} 접수에 꼭 필요해서 건너뛸 수 없어요.`,
       };
     }
     return advance(form, { ...state, values: { ...state.values }, retries: 0 }, slot, { skipped: true });

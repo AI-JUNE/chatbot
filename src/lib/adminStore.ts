@@ -4,6 +4,7 @@
 import { KB, KBEntry } from '@/lib/knowledge';
 import { keywordHit, prepare } from '@/lib/normalize';
 import { flushSaves, loadJson, saveJson, scheduleSave } from '@/lib/storage';
+import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 
 function cloneEntry(e: KBEntry): KBEntry {
   return { ...e, keywords: [...e.keywords] };
@@ -41,7 +42,7 @@ export function upsertKB(input: KBUpsertInput): UpsertResult {
     const question = (input.question || '').trim();
     const answer = (input.answer || '').trim();
     if (!question || !answer || keywords.length === 0) {
-      return { ok: false, error: 'question, answer, keywords(1개 이상)는 필수입니다.' };
+      return { ok: false, error: '대표 질문·답변·키워드를 모두 입력해 주세요.' };
     }
     const source = (input.source || '').trim();
     const entry: KBEntry = {
@@ -97,6 +98,12 @@ export function resetKB(): void {
 }
 
 // ---- 시나리오(인텐트 룰) 오버라이드: 활성화 여부·응답문만 편집(패턴은 코드 관리) ----
+/**
+ * 기본 규칙 답변을 덮어쓸 때의 길이 상한. 화면도 같은 값을 알고 있어야
+ * **보내기 전에** 이유를 밝힐 수 있다(DS 29-1 — 거절은 그 칸에서 해야 한다).
+ */
+export const MAX_RULE_REPLY_LEN = 1000;
+
 export interface RuleOverride {
   enabled: boolean;
   reply?: string; // 응답문 오버라이드(없으면 기본 응답)
@@ -165,7 +172,7 @@ export function upsertCustomRule(input: CustomRuleInput): CustomRuleResult {
     const label = (input.label || '').trim();
     const reply = (input.reply || '').trim();
     if (!label || !reply || keywords.length === 0) {
-      return { ok: false, error: 'label, reply, keywords(1개 이상)는 필수입니다.' };
+      return { ok: false, error: '규칙 이름·고객이 쓸 표현·답변을 모두 입력해 주세요.' };
     }
     const rule: CustomRule = {
       intent,
@@ -253,10 +260,10 @@ export type ImportResult =
 
 /** 스냅샷 검증 후 관리 콘텐츠 전체 교체. 무효 항목은 건너뛴다. */
 export function importSnapshot(input: unknown, opts: { persist?: boolean } = {}): ImportResult {
-  if (!input || typeof input !== 'object') return { ok: false, error: '유효한 JSON 객체가 아닙니다.' };
+  if (!input || typeof input !== 'object') return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   const snap = input as Partial<AdminSnapshot>;
   if (!Array.isArray(snap.kb) || !Array.isArray(snap.customRules) || typeof snap.ruleOverrides !== 'object' || snap.ruleOverrides === null) {
-    return { ok: false, error: 'kb·customRules 배열과 ruleOverrides 객체가 필요합니다.' };
+    return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   }
 
   const kb: KBEntry[] = [];
