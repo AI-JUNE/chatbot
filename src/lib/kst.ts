@@ -56,6 +56,21 @@ export function kstDate(at: Date = new Date()): string {
   return ymdToString(kstYmd(at));
 }
 
+/**
+ * 한국 시간 기준 지금의 시·분. 「이미 지난 때인가」를 재는 자리에서 쓴다 —
+ * 날짜만으로는 **오늘의 지난 시각**(오후 3시에 말한 「오늘 오전 9시」)을 가려낼 수 없다.
+ */
+export function kstHm(at: Date = new Date()): { h: number; mi: number } {
+  const d = new Date(at.getTime() + KST_OFFSET_MS);
+  return { h: d.getUTCHours(), mi: d.getUTCMinutes() };
+}
+
+/** 한국 시간 기준 지금 시각 'HH:MM'. 같은 형식끼리 글자 비교로 앞뒤를 가릴 수 있다. */
+export function kstTime(at: Date = new Date()): string {
+  const v = kstHm(at);
+  return `${pad2(v.h)}:${pad2(v.mi)}`;
+}
+
 /** 한국 시간 기준 이번 달 'YYYY-MM'. */
 export function kstMonth(at: Date = new Date()): string {
   const v = kstYmd(at);

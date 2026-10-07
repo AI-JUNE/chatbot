@@ -2536,3 +2536,60 @@ test('실패는 성공과 다른 통로로 알린다 (DS 29-2)', () => {
   assert.match(css, /\.ac-toast-fail\{background:var\(--danger\)/, '실패 알림 색이 토큰을 우회했거나 없다');
   assert.match(css, /\.ac-toast-fail\{border:2px solid ButtonText\}/, '고대비 모드에서 실패 알림이 성공과 같아진다');
 });
+
+/* ══════════ 30순위 — 백로그 소진 후 27차 재감사 (DS 30-x) ══════════ */
+
+/**
+ * DS 30-1·30-2 — 「지금보다 앞인가」를 재는 자리는 한국 시간 하나를 봐야 한다(DS 21 이 세운 규약).
+ * 들고 있는 반쪽을 비우는 자리가 늘어나면 다른 항목에 지난 시각이 따라붙으므로 개수를 고정한다.
+ */
+test('예약 일시는 한국 시간으로 앞뒤를 재고, 반쪽을 비우는 자리가 셋이다 (DS 30-1·30-2)', () => {
+  const s = read('src/lib/slots.ts');
+  const bare = stripComments(s);
+
+  // 시각 비교도 달력과 같은 출처(@/lib/kst)에서 온다 — `new Date().getHours()` 는 서버 시간대다.
+  assert.match(bare, /import \{[^}]*kstTime[^}]*\} from '@\/lib\/kst'/, '한국 시각을 kst 에서 받지 않는다');
+  assert.equal(/getHours\(\)|getMinutes\(\)/.test(bare), false, '기계 시간대로 시각을 읽는 자리가 있다');
+  const past = topFn(bare, 'function isPastKst(');
+  assert.match(past, /ymdToString\(kstYmd\(now\)\)/, '오늘을 한국 달력으로 세지 않는다');
+  assert.match(past, /time < kstTime\(now\)/, '같은 날의 지난 시각을 가려내지 않는다');
+
+  // 반쪽은 돌려주고(1곳), 비우는 자리는 「이전」·확정·완료 셋뿐이다.
+  assert.equal((bare.match(/partial: res\.parts/g) || []).length, 1, '반쪽을 들고 있는 자리가 하나가 아니다');
+  assert.equal((bare.match(/partial: undefined/g) || []).length, 3, '반쪽을 비우는 자리가 셋이 아니다');
+
+  // 반쪽만으로는 확정하지 않는다 — 두 거절은 각각 모르는 쪽만 묻는다.
+  assert.match(bare, /parts: \{ date, time: null \}[\s\S]{0,80}몇 시가 좋을까요/, '날짜만 받고 넘어간다');
+  assert.match(bare, /parts: \{ date: null, time \}[\s\S]{0,80}며칠이 좋을까요/, '시간만 받고 넘어간다');
+  // 파서는 반쪽 표기를 그대로 둔다(판단은 검증 쪽 몫 — 다른 호출자의 계약을 바꾸지 않는다).
+  assert.match(bare, /export function parseDateTimeParts\(/, '반쪽 파서가 없다');
+  assert.match(bare, /\(시간 미정\)/, '파서의 반쪽 표기가 사라졌다');
+
+  // 고객에게 되읽어 주는 말에 형식 토큰·영문이 없다(DS 29-3 과 같은 규칙).
+  for (const fn of ['function dateWords(', 'function timeWords(']) {
+    const body = topFn(bare, fn);
+    assert.equal(/YYYY|[A-Z]{2,}/.test(body.split('\n').slice(1).join('\n')), false, `${fn}: 형식 토큰이 화면에 나간다`);
+  }
+});
+
+/**
+ * DS 30-3 — 아직 오지 않은 달을 고르면 계약 중인 고객사가 전부 걸려 **일어나지 않은 달의
+ * 수수료 합계**가 확정 수치처럼 떴다(§13 가짜 수치 금지 · 이 파일 첫 원칙 「없는 숫자를 만들지
+ * 않는다」). 화면이 먼저 막고 서버가 거절한다 — 두 값이 갈라지지 않게 함께 고정한다.
+ */
+test('정산은 아직 오지 않은 달을 산출하지 않는다 (DS 30-3)', () => {
+  const lib = stripComments(read('src/lib/settlement.ts'));
+  const page = read('src/app/admin/page.tsx');
+
+  // 서버: 형식 검사 바로 뒤에 「이번 달까지」 관문이 있고, 기준은 한국 시간이다.
+  assert.match(lib, /const now = currentMonth\(input\.at \?\? new Date\(\)\);\s*if \(month > now\)/, '미래 달 관문이 없다');
+  assert.match(lib, /아직 오지 않은 달은 산출할 수 없습니다\./, '거절 문장이 바뀌었다');
+  assert.match(lib, /\$\{monthWords\(now\)\}까지 고를 수 있습니다\./, '어디까지 고를 수 있는지 말하지 않는다');
+  assert.equal(/YYYY-MM|\bbp\b/.test('아직 오지 않은 달은 산출할 수 없습니다.'), false);
+  assert.match(lib, /function monthWords\(/, '달을 사람 말로 적는 자리가 없다');
+
+  // 화면: 달 고르개가 아직 오지 않은 달을 내주지 않고, 주소로 들어온 값도 이번 달로 끌어온다.
+  assert.match(page, /max=\{kstMonthNow\(\)\}/, '기준월 고르개에 상한이 없다');
+  assert.match(page, /const asked = MONTH_RE\.test\(m\) \? m : settleCond\.current\.month;/, '주소 값 검사가 바뀌었다');
+  assert.match(page, /const month = asked > thisMonth \? thisMonth : asked;/, '주소로는 미래 달을 열 수 있다');
+});

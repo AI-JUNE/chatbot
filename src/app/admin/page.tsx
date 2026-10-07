@@ -2346,7 +2346,10 @@ export default function AdminPage() {
       if (t !== 'settle') return;
       const m = params.get('m') ?? '';
       const pid = (params.get('p') ?? '').slice(0, 64);
-      const month = MONTH_RE.test(m) ? m : settleCond.current.month;
+      const asked = MONTH_RE.test(m) ? m : settleCond.current.month;
+      // 아직 오지 않은 달은 주소로도 열 수 없다 — 서버가 거절하는 조건을 화면이 먼저 지킨다(DS 30-3).
+      const thisMonth = kstMonthNow();
+      const month = asked > thisMonth ? thisMonth : asked;
       if (month === settleCond.current.month && pid === settleCond.current.partnerId) return;
       settleCond.current = { month, partnerId: pid };
       // 뒤로/앞으로도 「보고 싶어 하는 조건」의 변경이다 — 도는 계산이 이 조건까지 따라오게 한다.
@@ -4608,6 +4611,9 @@ export default function AdminPage() {
                   id="s-month"
                   type="month"
                   className="ac-select"
+                  // 달 고르개가 아직 오지 않은 달을 내주지 않는다(DS 30-3). 손으로 적어 넣으면
+                  // 서버가 사유와 함께 거절하고 그 문장이 그대로 뜬다 — 두 겹으로 막는다.
+                  max={kstMonthNow()}
                   value={settleMonth}
                   onChange={(e) => { setSettleMonth(e.target.value); loadSettlement(e.target.value, settlePartner); }}
                 />

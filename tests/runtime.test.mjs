@@ -2099,3 +2099,159 @@ test('접수 상태·대상 거절 문장에 코드 어휘가 없다 (DS 29-3)',
   assert.equal(/상태값|open|in_progress/.test(bad.error), false, `허용값 목록이 새어 나왔다: ${bad.error}`);
   assert.match(bad.error, /목록에서 다시 골라/, '다음에 할 일을 말해야 한다');
 });
+
+/* ══════════ 27차 재감사 — 시간의 방향 (DS 30-x) ══════════ */
+
+// 슬롯 엔진만 돌리는 컴파일 묶음(DS 29-3 테스트와 같은 캐시 키를 써 컴파일을 공유한다).
+const slotsLib = () => importLib('slots', ['normalize', 'handoff', 'kst', 'refusal']);
+
+/** 예약 슬롯 1개 — 폼 정의를 건드리지 않고 datetime 검증만 돌린다. */
+const DT_SLOT = { key: 'datetime', label: '희망 일시', kind: 'datetime', hint: '예: 내일 오후 2시', required: true };
+
+test('지나간 날짜·시각은 예약으로 받지 않는다 (DS 30-1)', opts, async () => {
+  const S = await slotsLib();
+
+  // 앞으로의 때는 그대로 받는다(정상 경로를 먼저 고정한다).
+  assert.deepEqual(S.validateSlot(DT_SLOT, '오늘 오후 2시', FIXED_NOW), { ok: true, value: '2026-09-03 14:00' });
+  assert.deepEqual(S.validateSlot(DT_SLOT, '내일 오전 9시', FIXED_NOW), { ok: true, value: '2026-09-04 09:00' });
+  // 지금과 같은 분은 아직 지나지 않았다(경계는 받는 쪽).
+  assert.deepEqual(S.validateSlot(DT_SLOT, '오늘 10:00', FIXED_NOW), { ok: true, value: '2026-09-03 10:00' });
+
+  // 연도를 적은 지난 날짜 — 「지났으면 내년」 보정이 닿지 않던 자리다.
+  const lastWinter = S.validateSlot(DT_SLOT, '2026-01-05 14:00', FIXED_NOW);
+  assert.equal(lastWinter.ok, false);
+  assert.match(lastWinter.message, /1월 5일 오후 2시는 이미 지났어요/, lastWinter.message);
+  assert.match(lastWinter.message, /앞으로의 날짜·시간/, '다음에 할 일을 말해야 한다');
+  // 지난 때는 반쪽이 아니다 — 들고 있을 값이 없다.
+  assert.equal(lastWinter.parts, undefined);
+
+  // 오늘의 지난 시각 — 날짜만 비교하면 걸리지 않는 자리(오전 10시에 말한 「오늘 오전 9시」).
+  const earlierToday = S.validateSlot(DT_SLOT, '오늘 오전 9시', FIXED_NOW);
+  assert.equal(earlierToday.ok, false);
+  assert.match(earlierToday.message, /9월 3일 오전 9시는 이미 지났어요/, earlierToday.message);
+  // 분 단위까지 본다.
+  assert.equal(S.validateSlot(DT_SLOT, '오늘 09:59', FIXED_NOW).ok, false);
+
+  // 한국 시간으로 잰다 — 서버 달력이 아직 어제인 구간(KST 자정~오전 9시)에서도 같은 판정이다.
+  const kstEarly = new Date('2026-10-01T02:00:00+09:00');
+  assert.equal(S.validateSlot(DT_SLOT, '오늘 오후 2시', kstEarly).ok, true, 'KST 오늘 오후는 앞으로의 때다');
+  assert.equal(S.validateSlot(DT_SLOT, '2026-09-30 23:00', kstEarly).ok, false, 'KST 로는 어제다');
+
+  // 거절 문장에 코드 어휘·형식 토큰·괄호 조사가 없다(DS 29-3 과 같은 규칙).
+  for (const m of [lastWinter.message, earlierToday.message]) {
+    assert.equal(/[A-Za-z]/.test(m), false, `영문 토큰이 남았다: ${m}`);
+    assert.equal(/을\(를\)|이\(가\)|은\(는\)/.test(m), false, `괄호 조사가 남았다: ${m}`);
+  }
+});
+
+test('날짜·시간 반쪽으로는 확정하지 않고 모르는 쪽만 묻는다 (DS 30-2)', opts, async () => {
+  const S = await slotsLib();
+
+  // 날짜만 — 알아들은 쪽을 되읽어 주고 시간을 묻는다. 그 반쪽은 돌려받는다.
+  const dateOnly = S.validateSlot(DT_SLOT, '내일', FIXED_NOW);
+  assert.equal(dateOnly.ok, false);
+  assert.match(dateOnly.message, /^9월 4일, 몇 시가 좋을까요\?$/, dateOnly.message);
+  assert.deepEqual(dateOnly.parts, { date: '2026-09-04', time: null });
+
+  // 시간만 — 같은 방식으로 날짜를 묻는다.
+  const timeOnly = S.validateSlot(DT_SLOT, '오후 2시 30분에요', FIXED_NOW);
+  assert.equal(timeOnly.ok, false);
+  assert.match(timeOnly.message, /^오후 2시 30분, 며칠이 좋을까요\?$/, timeOnly.message);
+  assert.deepEqual(timeOnly.parts, { date: null, time: '14:30' });
+
+  // 둘 다 못 알아들으면 들고 있을 반쪽이 없다(종전 문구 그대로).
+  const neither = S.validateSlot(DT_SLOT, '아무때나요', FIXED_NOW);
+  assert.equal(neither.ok, false);
+  assert.match(neither.message, /날짜·시간을 알아보지 못했어요/);
+  assert.equal(neither.parts, undefined);
+
+  // 앞 턴의 반쪽과 합쳐 푼다 — 이번 입력에 있는 쪽이 이긴다.
+  assert.deepEqual(S.validateSlot(DT_SLOT, '오후 2시', FIXED_NOW, dateOnly.parts), { ok: true, value: '2026-09-04 14:00' });
+  assert.deepEqual(S.validateSlot(DT_SLOT, '내일', FIXED_NOW, timeOnly.parts), { ok: true, value: '2026-09-04 14:30' });
+  assert.deepEqual(
+    S.validateSlot(DT_SLOT, '9월 10일 11시', FIXED_NOW, dateOnly.parts),
+    { ok: true, value: '2026-09-10 11:00' },
+    '새로 말한 날짜가 들고 있던 반쪽을 덮어쓴다',
+  );
+  // 합친 결과도 지난 때면 거절한다(반쪽이라고 통과시키지 않는다).
+  assert.equal(S.validateSlot(DT_SLOT, '오늘', FIXED_NOW, { date: null, time: '09:00' }).ok, false);
+
+  // 반쪽 표기 자체는 파서에 그대로 남는다 — 다시 묻는 판단은 검증 쪽 몫이다.
+  assert.equal(S.parseDateTime('내일', FIXED_NOW).value, '2026-09-04 (시간 미정)');
+  assert.deepEqual(S.parseDateTimeParts('내일', FIXED_NOW), { date: '2026-09-04', time: null });
+  assert.deepEqual(S.parseDateTimeParts('', FIXED_NOW), { date: null, time: null });
+});
+
+test('나눠 말한 날짜·시간이 한 번에 합쳐져 다음 항목으로 넘어간다 (DS 30-2)', opts, async () => {
+  const S = await slotsLib();
+  const form = S.getForm('reservation');
+  let st = S.startForm(form).state;
+  st = S.applyInput(form, st, '홍길동', FIXED_NOW).state;
+  assert.equal(st.asked, 'datetime');
+  assert.equal(st.partial, undefined, '새 항목은 반쪽을 들고 시작하지 않는다');
+
+  // ① 날짜만 말했다 — 같은 항목을 다시 묻되 알아들은 쪽은 들고 있는다.
+  const half = S.applyInput(form, st, '내일', FIXED_NOW);
+  assert.equal(half.kind, 'invalid');
+  assert.equal(half.slot.key, 'datetime');
+  assert.deepEqual(half.state.partial, { date: '2026-09-04', time: null });
+
+  // ② 시간만 말했다 — 합쳐져 확정되고 다음 항목으로 간다. 들고 있던 반쪽은 비워진다.
+  const whole = S.applyInput(form, half.state, '오후 2시', FIXED_NOW);
+  assert.equal(whole.kind, 'progress');
+  assert.equal(whole.slot.key, 'contact');
+  assert.equal(whole.state.values.datetime, '2026-09-04 14:00');
+  assert.equal(whole.state.partial, undefined, '확정 뒤에도 반쪽이 남으면 다음 항목에 따라붙는다');
+
+  // 「이전」으로 돌아가도 반쪽은 버린다.
+  const back = S.applyInput(form, half.state, '이전', FIXED_NOW);
+  assert.equal(back.kind, 'progress');
+  assert.equal(back.state.partial, undefined);
+
+  // 알아듣지 못한 턴이 끼어도 들고 있던 날짜는 지킨다 — 다시 말하게 하지 않는다.
+  const unclear = S.applyInput(form, half.state, '아무때나요', FIXED_NOW);
+  assert.equal(unclear.kind, 'invalid');
+  assert.deepEqual(unclear.state.partial, { date: '2026-09-04', time: null });
+  assert.match(unclear.message, /몇 시가 좋을까요/, '아는 쪽을 또 묻지 않는다');
+
+  // 합친 결과가 지난 때면 반쪽을 비운다 — 틀린 쪽이 날짜인지 시각인지 알 수 없어서,
+  // 한쪽만 남겨 두면 다음 턴에 지난 때가 조용히 확정될 수 있다.
+  const toTime = S.applyInput(form, st, '오후 2시', FIXED_NOW);
+  assert.deepEqual(toTime.state.partial, { date: null, time: '14:00' });
+  const past = S.applyInput(form, { ...toTime.state, partial: { date: null, time: '09:00' } }, '오늘', FIXED_NOW);
+  assert.equal(past.kind, 'invalid');
+  assert.match(past.message, /이미 지났어요/);
+  assert.equal(past.state.partial, undefined);
+
+  // 반쪽만 되풀이해도 무한히 되묻지 않는다 — 한도를 넘으면 상담원에게 넘어간다.
+  let loop = S.applyInput(form, st, '내일', FIXED_NOW);
+  loop = S.applyInput(form, loop.state, '내일', FIXED_NOW);
+  loop = S.applyInput(form, loop.state, '내일', FIXED_NOW);
+  assert.equal(loop.kind, 'max_retry', `반쪽만 ${S.MAX_SLOT_RETRIES}번이면 사람에게 넘겨야 한다`);
+});
+
+test('아직 오지 않은 달의 수수료 합계는 산출하지 않는다 (DS 30-3)', opts, async () => {
+  const { S } = await settlementLib();
+  const at = new Date('2026-10-07T10:00:00+09:00');
+
+  const future = S.buildSettlement({ month: '2027-01', accounts: [], at });
+  assert.equal(future.ok, false, '내년 달이 산출되면 일어나지 않은 금액이 확정 수치처럼 뜬다');
+  assert.match(future.error, /아직 오지 않은 달은 산출할 수 없습니다/);
+  assert.match(future.error, /2026년 10월까지 고를 수 있습니다/, '어디까지 고를 수 있는지 말해야 한다');
+  // 바로 다음 달도 막는다(한 달 차이가 더 그럴듯해서 더 위험하다).
+  assert.equal(S.buildSettlement({ month: '2026-11', accounts: [], at }).ok, false);
+
+  // 이번 달·지난달은 그대로 산출한다.
+  assert.equal(S.buildSettlement({ month: '2026-10', accounts: [], at }).ok, true);
+  assert.equal(S.buildSettlement({ month: '2026-09', accounts: [], at }).ok, true);
+
+  // 「이번 달」은 한국 시간으로 센다 — 서버 달력이 아직 지난달인 구간(KST 1일 새벽)에서도
+  // 운영자가 보고 있는 달은 열려 있어야 한다(DS 21-2 와 같은 기준).
+  const kstFirst = new Date('2026-11-01T02:00:00+09:00');
+  assert.equal(S.buildSettlement({ month: '2026-11', accounts: [], at: kstFirst }).ok, true);
+  assert.equal(S.buildSettlement({ month: '2026-12', accounts: [], at: kstFirst }).ok, false);
+
+  // 거절 문장에 코드 어휘·형식 토큰이 없다(DS 29-3 과 같은 규칙).
+  assert.equal(/[A-Za-z]/.test(future.error), false, `영문 토큰이 남았다: ${future.error}`);
+  assert.equal(/\d{4}-\d{2}/.test(future.error), false, `형식 그대로의 달 표기가 남았다: ${future.error}`);
+});

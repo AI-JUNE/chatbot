@@ -8,13 +8,16 @@
 // - 순수 함수만 둔다. 세션 저장·티켓 생성 같은 부수효과는 호출자(src/lib/chat.ts)가 맡는다.
 // - 사용자는 언제든 빠져나갈 수 있다: "취소"(중단) · "이전"(직전 항목 다시) · "건너뛰기"(선택 항목).
 // - 잘못된 입력은 삼키지 않는다. 어느 항목이 왜 틀렸는지 + 입력 예시를 함께 돌려준다.
+// - **접수한 값은 그대로 쓸 수 있어야 한다**: 지난 날짜·시각은 받지 않고, 날짜·시간 중 반쪽만
+//   알아들었으면 확정하지 않고 모르는 쪽만 다시 묻는다(DS 30-1·30-2). 반쪽짜리 예약은
+//   운영자가 다시 전화해 물어야 하는 일거리이고, 지난 시각 예약은 접수된 적 없는 약속이다.
 // - 재시도 한도(MAX_SLOT_RETRIES)를 넘으면 상담원 이관(max_retry) — 고객을 무한 재질문에 가두지 않는다.
 // - 개인정보 슬롯(pii)은 확인 문구에서 마스킹해 보여준다(src/lib/handoff maskPii 재사용).
 //
 // [승인 필요] 관리 콘솔에서 폼을 편집·추가하는 기능, 수집 결과의 외부 업무시스템 전송.
 import { maskPii } from '@/lib/handoff';
 import { compact, keywordHit, prepare } from '@/lib/normalize';
-import { compareYmd, kstYmd, normalizeYmd, ymdToString } from '@/lib/kst';
+import { compareYmd, kstTime, kstYmd, normalizeYmd, ymdToString } from '@/lib/kst';
 import { josa } from '@/lib/refusal';
 
 /** 슬롯 값의 종류. 종류마다 검증·정규화 규칙이 다르다. */
@@ -53,6 +56,12 @@ export interface FormSpec {
 /** 같은 항목에서 이만큼 연속으로 인식 실패하면 상담원에게 넘긴다(정책 상수, 성능 지표 아님). */
 export const MAX_SLOT_RETRIES = 3;
 
+/** 알아들은 날짜('YYYY-MM-DD')·시각('HH:MM') 각각. 한쪽만 알아들었으면 다른 쪽이 null 이다. */
+export interface DateTimeParts {
+  date: string | null;
+  time: string | null;
+}
+
 /** 진행 중인 수집 상태. 세션(src/lib/session.ts)에 그대로 저장된다. */
 export interface FormState {
   formId: string;
@@ -63,6 +72,12 @@ export interface FormState {
   /** 현재 슬롯에서 연속 인식 실패 횟수 */
   retries: number;
   startedAt: string;
+  /**
+   * 날짜·시간 중 **한쪽만** 알아들은 채 같은 항목을 다시 묻고 있을 때 그 한쪽(DS 30-2).
+   * 다음 턴 입력과 합쳐서 푼다 — 사람은 「내일」 · 「오후 2시」로 나눠 말한다.
+   * 항목이 바뀌거나 값이 확정되면 비운다(남으면 다른 날짜에 지난 시각이 따라붙는다).
+   */
+  partial?: DateTimeParts;
 }
 
 // ---- 폼 정의 ----
@@ -188,7 +203,11 @@ const EMAIL_RE = /[\w.+-]+@[\w-]+(\.[\w-]+)+/;
 
 export const MAX_SLOT_VALUE_LEN = 200;
 
-export type SlotResult = { ok: true; value: string } | { ok: false; message: string };
+/**
+ * 검증 결과. 거절할 때 `parts` 가 있으면 **한쪽은 알아들었다**는 뜻이다 —
+ * 부르는 쪽이 그 한쪽을 들고 있다가 다음 턴 입력과 합친다(DS 30-2).
+ */
+export type SlotResult = { ok: true; value: string } | { ok: false; message: string; parts?: DateTimeParts };
 
 /** 상대 날짜 표현 → 오늘로부터의 일수. */
 const RELATIVE_DAYS: [RegExp, number][] = [
@@ -203,16 +222,18 @@ function pad(n: number): string {
 }
 
 /**
- * 한국어 날짜·시간 표현을 파싱한다.
+ * 한국어 날짜·시간 표현에서 **알아들은 쪽만** 뽑는다(둘 다 못 찾으면 둘 다 null).
  * 지원: 오늘/내일/모레/글피 · YYYY-MM-DD · M/D · M월 D일 · HH시(분) · 오전·오후 · HH:MM
- * 날짜와 시간 중 하나도 못 찾으면 null.
  *
  * "오늘"·"내일"·연도 없는 "9/30" 은 **한국 시간 달력**으로 푼다(@/lib/kst) — 서버가 UTC 로 돌면
  * 한국 자정~오전 9시에 말한 "오늘"이 어제가 되어 지난 날짜로 예약이 접수된다.
+ *
+ * 한쪽만 알아들은 결과를 **버리지 않고 돌려주는** 이유: 사람은 날짜와 시간을 한 번에 말하지
+ * 않는다(「내일」 → 「오후 2시」). 합치는 일은 부르는 쪽(validateSlot)이 맡는다.
  */
-export function parseDateTime(input: string, now: Date = new Date()): { value: string } | null {
+export function parseDateTimeParts(input: string, now: Date = new Date()): DateTimeParts {
   const t = (input || '').trim();
-  if (!t) return null;
+  if (!t) return { date: null, time: null };
 
   let date: string | null = null;
   const iso = t.match(/(20\d{2})[-./](\d{1,2})[-./](\d{1,2})/);
@@ -253,10 +274,44 @@ export function parseDateTime(input: string, now: Date = new Date()): { value: s
     if (h >= 0 && h <= 23 && mnt >= 0 && mnt <= 59) time = `${pad(h)}:${pad(mnt)}`;
   }
 
+  return { date, time };
+}
+
+/**
+ * 위와 같은 파싱을 **한 문장**으로 적어 돌려준다(둘 다 못 찾으면 null).
+ * 반쪽만 알아들은 경우의 표기(「(시간 미정)」·「날짜 미정」)는 그대로 둔다 — 사람에게 다시
+ * 묻는 판단은 `validateSlot` 이 하고, 이 함수는 파싱 결과를 적는 자리다.
+ */
+export function parseDateTime(input: string, now: Date = new Date()): { value: string } | null {
+  const { date, time } = parseDateTimeParts(input, now);
   if (!date && !time) return null;
   if (date && time) return { value: `${date} ${time}` };
   if (date) return { value: `${date} (시간 미정)` };
   return { value: `날짜 미정 ${time}` };
+}
+
+/** 「10월 2일」 — 고객에게 되읽어 주는 날짜. 연도는 말하지 않는다(올해·내년을 이미 풀어 둔 값이다). */
+function dateWords(date: string): string {
+  const [, m, d] = date.split('-');
+  return `${Number(m)}월 ${Number(d)}일`;
+}
+
+/** 「오후 2시」·「오전 9시 30분」 — 24시 표기를 사람이 말하는 대로 되읽는다. */
+function timeWords(time: string): string {
+  const [hh, mm] = time.split(':').map(Number);
+  const half = hh < 12 ? '오전' : '오후';
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  return mm === 0 ? `${half} ${h12}시` : `${half} ${h12}시 ${mm}분`;
+}
+
+/**
+ * 그 날짜·시각이 **한국 시간으로** 이미 지났는가. 둘 다 같은 형식이라 글자 비교로 앞뒤가 가려진다.
+ * 날짜만 비교하면 오후 3시에 말한 「오늘 오전 9시」가 그대로 접수된다.
+ */
+function isPastKst(date: string, time: string, now: Date): boolean {
+  const today = ymdToString(kstYmd(now));
+  if (date !== today) return date < today;
+  return time < kstTime(now);
 }
 
 /** 선택지 매칭 — 번호("2", "2번")와 표기(동의어·오타 허용) 양쪽을 받는다. */
@@ -285,8 +340,10 @@ export function matchChoice(choices: string[], input: string): string | null {
  * 슬롯 1건 검증. 실패 시 "어느 항목이 왜 틀렸는지 + 예시"를 담은 안내를 돌려준다.
  * 안내는 **고객 말풍선에 그대로 뜬다** — 조사는 받침에 맞춰 고른다(DS 29-3).
  * 종전에는 「방문 희망일을(를) 입력해 주세요.」처럼 괄호가 그대로 보였다.
+ *
+ * @param carry 날짜·시간 중 앞 턴에 알아들은 한쪽(DS 30-2). 이번 입력에 없는 쪽만 메운다.
  */
-export function validateSlot(slot: SlotSpec, input: string, now: Date = new Date()): SlotResult {
+export function validateSlot(slot: SlotSpec, input: string, now: Date = new Date(), carry?: DateTimeParts): SlotResult {
   const raw = (input || '').trim();
   if (!raw) return { ok: false, message: `${josa(slot.label, '을', '를')} 입력해 주세요. ${slot.hint}` };
   if (raw.length > MAX_SLOT_VALUE_LEN) {
@@ -302,9 +359,24 @@ export function validateSlot(slot: SlotSpec, input: string, now: Date = new Date
   }
 
   if (slot.kind === 'datetime') {
-    const parsed = parseDateTime(raw, now);
-    if (parsed) return { ok: true, value: parsed.value };
-    return { ok: false, message: `날짜·시간을 알아보지 못했어요. ${slot.hint}` };
+    // 이번 입력에서 알아들은 쪽이 먼저고, 비어 있는 쪽만 앞 턴에서 알아들은 값으로 메운다.
+    const got = parseDateTimeParts(raw, now);
+    const date = got.date ?? carry?.date ?? null;
+    const time = got.time ?? carry?.time ?? null;
+
+    // 반쪽만으로는 확정하지 않는다 — 「날짜 미정」인 예약 접수는 운영자가 다시 전화해 물어야
+    // 하는 일거리이고, 그러면 챗봇이 접수한 의미가 사라진다. 알아들은 쪽은 되읽어 주고
+    // 모르는 쪽만 묻는다(처음부터 다시 말하게 하지 않는다).
+    if (date !== null && time === null) return { ok: false, parts: { date, time: null }, message: `${dateWords(date)}, 몇 시가 좋을까요?` };
+    if (date === null && time !== null) return { ok: false, parts: { date: null, time }, message: `${timeWords(time)}, 며칠이 좋을까요?` };
+    if (date === null || time === null) return { ok: false, message: `날짜·시간을 알아보지 못했어요. ${slot.hint}` };
+
+    // 지난 때는 받지 않는다. 받아 두면 운영자에게 **이미 끝난 시각**으로 적힌 예약이 가고,
+    // 고객은 접수됐다고 믿는다(연도를 적은 날짜는 「지났으면 내년」 보정이 닿지 않는 자리였다).
+    if (isPastKst(date, time, now)) {
+      return { ok: false, message: `${josa(`${dateWords(date)} ${timeWords(time)}`, '은', '는')} 이미 지났어요. 앞으로의 날짜·시간으로 알려주세요.` };
+    }
+    return { ok: true, value: `${date} ${time}` };
   }
 
   if (slot.kind === 'choice') {
@@ -397,7 +469,8 @@ export function applyInput(form: FormSpec, state: FormState, text: string, clock
     }
     const values = { ...state.values };
     delete values[prev.key];
-    return { kind: 'progress', state: { ...state, asked: prev.key, values, retries: 0 }, slot: prev, back: true };
+    // 앞 항목으로 돌아가면 들고 있던 반쪽 날짜·시간은 버린다(다른 항목에 따라붙지 않게).
+    return { kind: 'progress', state: { ...state, asked: prev.key, values, retries: 0, partial: undefined }, slot: prev, back: true };
   }
 
   if (control === 'skip') {
@@ -414,11 +487,17 @@ export function applyInput(form: FormSpec, state: FormState, text: string, clock
     return advance(form, { ...state, values: { ...state.values }, retries: 0 }, slot, { skipped: true });
   }
 
-  const res = validateSlot(slot, text, clock);
+  // 날짜·시간은 앞 턴에 알아들은 반쪽을 함께 넘긴다 — 그러지 않으면 「내일」 → 「오후 2시」로
+  // 나눠 말한 고객이 같은 질문을 세 번 받고 상담원으로 넘어간다(DS 30-2).
+  const res = validateSlot(slot, text, clock, slot.kind === 'datetime' ? state.partial : undefined);
   if (!res.ok) {
     const retries = state.retries + 1;
     if (retries >= MAX_SLOT_RETRIES) return { kind: 'max_retry', state: { ...state, retries }, slot };
-    return { kind: 'invalid', state: { ...state, retries }, slot, message: res.message };
+    // 알아들은 반쪽은 들고 있는다 — 알아듣지 못한 턴이 끼어도(「아무때나요」) 날짜를 다시
+    // 말하게 하지 않는다. 합친 결과가 **지난 때**면 반쪽을 돌려받지 않으므로 여기서 비워진다:
+    // 그 경우 틀린 쪽이 날짜인지 시각인지 알 수 없어, 한쪽만 남겨 두면 다음 턴에 지난 때가
+    // 조용히 확정될 수 있다.
+    return { kind: 'invalid', state: { ...state, retries, partial: res.parts }, slot, message: res.message };
   }
 
   const values = { ...state.values, [slot.key]: res.value };
@@ -430,8 +509,9 @@ function advance(form: FormSpec, state: FormState, current: SlotSpec, opts: { sk
   const idx = form.slots.findIndex((s) => s.key === current.key);
   const rest = form.slots.slice(idx + 1);
   const next = rest.find((s) => !(s.key in state.values)) ?? null;
-  if (!next) return { kind: 'complete', state: { ...state, asked: '' }, values: state.values };
-  const nextState: FormState = { ...state, asked: next.key, retries: 0 };
+  // 값이 확정됐거나 건너뛰었으면 들고 있던 반쪽 날짜·시간은 비운다(DS 30-2).
+  if (!next) return { kind: 'complete', state: { ...state, asked: '', partial: undefined }, values: state.values };
+  const nextState: FormState = { ...state, asked: next.key, retries: 0, partial: undefined };
   return opts.skipped
     ? { kind: 'progress', state: nextState, slot: next, skipped: true }
     : { kind: 'progress', state: nextState, slot: next };

@@ -41,6 +41,12 @@ export function currentMonth(at: Date = new Date()): string {
   return kstMonth(at);
 }
 
+/** 'YYYY-MM' → 「2026년 10월」. 거절 문장에 적는 사람 말 표기(형식 토큰을 보이지 않는다). */
+function monthWords(month: string): string {
+  const [y, m] = month.split('-');
+  return `${Number(y)}년 ${Number(m)}월`;
+}
+
 export type SettlementIssue = 'none' | 'no_fee_rate' | 'no_base_amount' | 'no_fee_rate_and_base';
 
 export const SETTLEMENT_ISSUE_LABELS: Record<SettlementIssue, string> = {
@@ -102,6 +108,8 @@ export interface SettlementInput {
   filter?: AccountQuery;
   /** 테스트·재현용 주입(미지정 시 저장소에서 읽는다). */
   accounts?: Account[];
+  /** 「이번 달」 판정 기준 시각(테스트에서 고정). 미지정 시 지금. */
+  at?: Date;
 }
 
 /**
@@ -122,6 +130,14 @@ export function buildSettlement(input: SettlementInput): SettlementResult {
   const month = String(input.month ?? '').trim();
   if (!isValidMonth(month)) {
     return { ok: false, error: '기준월은 2026-09 처럼 연-월로 적어주세요.' };
+  }
+  // 아직 오지 않은 달은 산출하지 않는다. 대상 판정이 「계약일이 기간 말일 이전」이라서,
+  // 내년 달을 고르면 계약 중인 고객사가 **전부** 걸려 그 달의 수수료 합계가 확정 수치처럼 떴다
+  // (화면·CSV에 「일부 미산출」 경고도 붙지 않는다 — 근거가 다 갖춰진 행들이기 때문이다).
+  // 이 파일의 첫 원칙이 「없는 숫자를 만들지 않는다」이고, 일어나지 않은 달의 금액이 그것이다.
+  const now = currentMonth(input.at ?? new Date());
+  if (month > now) {
+    return { ok: false, error: `아직 오지 않은 달은 산출할 수 없습니다. ${monthWords(now)}까지 고를 수 있습니다.` };
   }
   const periodStart = `${month}-01`;
   const periodEnd = monthEnd(month);
