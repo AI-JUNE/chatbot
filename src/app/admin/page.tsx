@@ -808,6 +808,138 @@ function SkeletonRows({ rows = 4, label }: { rows?: number; label: string }) {
 }
 
 /**
+ * ── 행이 많아진 뒤의 표 (DS 31-1·31-2) ──
+ *
+ * 콘솔의 표 8장은 모두 「자료 열 몇 건」을 전제로 그려졌다 — 거른 행을 **등록순으로 전부** 그리고,
+ * 끝이 없다. 운영 반년이면 안내 자료 수백 건·접수 수천 건이 한 화면에 쌓이고, 그 안에서
+ * 「오래 기다린 접수」·「수수료가 큰 고객사」를 찾는 길이 브라우저 찾기(Ctrl+F)밖에 없다.
+ *
+ * 기준 원본(`callbot-portal/public/admin.html`)은 같은 문제를 이미 겪고 두 가지를 넣어 두었다 —
+ * 헤더 클릭 정렬(B91: 「콘솔 표에는 정렬 기능이 전혀 없어 행이 많아지면 원하는 값을 찾기 어려웠음」,
+ * `aria-sort`·Enter/Space·숫자/한국어 비교)과 15행 페이저(`총 N건 · p/pages 페이지`).
+ * 색·카드·표 머리 규격만 이식하고 **표를 다루는 기능**은 가져오지 않았던 자리다(DS 25-1 과 같은 종류의 누락).
+ */
+const TABLE_PAGE_ROWS = 15;
+type SortDir = 'asc' | 'desc';
+interface SortState { col: string; dir: SortDir }
+type Cell = string | number | null | undefined;
+type SortCols<T> = Record<string, (r: T) => Cell>;
+
+/**
+ * 셀 하나의 비교. 숫자는 숫자로, 글자는 한국어 사전 순으로 본다(`numeric` — 「2건」과 「10건」이
+ * 자리수대로 선다). **빈 값은 방향과 무관하게 뒤로 보낸다**: 미입력(「—」)이 위로 몰리면 오름차순
+ * 첫 장이 빈 칸으로 가득 차, 정렬한 사람이 보려던 값은 어느 장에도 보이지 않는다.
+ */
+function compareCell(a: Cell, b: Cell, dir: SortDir): number {
+  const empty = (v: Cell) => v === null || v === undefined || v === '';
+  if (empty(a) && empty(b)) return 0;
+  if (empty(a)) return 1;
+  if (empty(b)) return -1;
+  const r = typeof a === 'number' && typeof b === 'number'
+    ? a - b
+    : String(a).localeCompare(String(b), 'ko', { numeric: true });
+  return dir === 'asc' ? r : -r;
+}
+
+/**
+ * 고른 열로 정렬한 **사본**. 고른 열이 없으면 원래 순서를 그대로 돌려준다 —
+ * 기본 순서가 뜻을 가진 표가 있다(접수는 최신순, 고객사는 이름순). 같은 값끼리는 원래 순서를
+ * 지킨다(`Array.prototype.sort` 는 안정 정렬이다) — 정렬을 걸 때마다 같은 값들이 섞이면
+ * 「방금 본 행이 어디로 갔는가」를 매번 다시 찾게 된다.
+ */
+function sortRows<T>(rows: T[], sort: SortState | undefined, cols: SortCols<T>): T[] {
+  const pick = sort ? cols[sort.col] : undefined;
+  if (!sort || !pick) return rows;
+  return rows.slice().sort((x, y) => compareCell(pick(x), pick(y), sort.dir));
+}
+
+/** 「몇 건 중 몇 번째 줄을 보고 있는가」 — 페이저가 말하는 것은 이 숫자뿐이다. */
+interface PageInfo { page: number; pages: number; total: number; from: number; to: number }
+
+/**
+ * 한 장 잘라낸다. 들어온 `page` 가 범위를 넘으면(거르고 나니 장 수가 줄었다) 마지막 장으로 끌어온다 —
+ * 빈 장을 보여 주면 「조건에 맞는 것이 없다」와 구분할 수 없다.
+ */
+function pageSlice<T>(rows: T[], page: number, size = TABLE_PAGE_ROWS): PageInfo & { rows: T[] } {
+  const pages = Math.max(1, Math.ceil(rows.length / size));
+  const cur = Math.min(Math.max(1, Math.floor(page) || 1), pages);
+  const from = (cur - 1) * size;
+  const slice = rows.slice(from, from + size);
+  return { rows: slice, page: cur, pages, total: rows.length, from: rows.length ? from + 1 : 0, to: from + slice.length };
+}
+
+/**
+ * 정렬되는 머리칸. 글자는 그대로 두고(`th` 의 접근 이름이 「질문 기준으로 정렬」로 길어지면
+ * 셀마다 그 문장이 따라 읽힌다) 방향은 `aria-sort` 로 알린다 — 화면에는 ↕/↑/↓ 글리프가 붙는다
+ * (색이 아니라 **글자**라서 고대비·흑백 인쇄에서도 남는다).
+ */
+function SortTh({ label, col, sort, onSort, className, width, align }: {
+  label: string;
+  col: string;
+  sort: SortState | undefined;
+  onSort: (col: string) => void;
+  className?: string;
+  width?: number;
+  /** 금액 열처럼 값이 오른쪽에 붙는 열 — 머리칸도 같은 쪽에 선다. */
+  align?: 'right';
+}) {
+  const active = sort?.col === col;
+  return (
+    <th
+      scope="col"
+      className={`ac-th-sort${className ? ` ${className}` : ''}`}
+      style={width ? { width } : undefined}
+      aria-sort={active ? (sort?.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      <button
+        type="button"
+        className={`ac-sortbtn${align === 'right' ? ' ac-sortbtn-right' : ''}`}
+        title={`${label} 기준으로 정렬`}
+        onClick={() => onSort(col)}
+      >
+        {label}
+      </button>
+    </th>
+  );
+}
+
+/**
+ * 표 아래 페이저. 장이 하나면 아무것도 그리지 않는다 — 없는 조작을 보이면 그 자체가 방해다.
+ *
+ * `disabled` 를 쓰지 않는다(DS 8-1): 키보드로 「다음」을 눌러 마지막 장에 닿는 순간 그 버튼이
+ * 비활성이 되면 초점이 본문 밖으로 떨어져 화면 맨 위부터 Tab 을 다시 눌러야 한다.
+ * 끝에서는 `aria-disabled` 로 알리고 눌러도 아무 일이 없게 한다.
+ */
+function Pager({ info, label, unit = '건', onPage }: { info: PageInfo; label: string; unit?: string; onPage: (p: number) => void }) {
+  if (info.pages <= 1) return null;
+  const first = info.page <= 1;
+  const last = info.page >= info.pages;
+  return (
+    <nav className="ac-pager" aria-label={`${label} 페이지 이동`}>
+      <span className="ac-pager-cnt" role="status" aria-live="polite">
+        총 {info.total.toLocaleString('ko-KR')}{unit} 중 {info.from}–{info.to}번째 · {info.page}/{info.pages} 페이지
+      </span>
+      <button
+        type="button"
+        {...busyBtn(false, first)}
+        aria-label={`${label} 이전 페이지`}
+        onClick={() => { if (!first) onPage(info.page - 1); }}
+      >
+        ‹ 이전
+      </button>
+      <button
+        type="button"
+        {...busyBtn(false, last)}
+        aria-label={`${label} 다음 페이지`}
+        onClick={() => { if (!last) onPage(info.page + 1); }}
+      >
+        다음 ›
+      </button>
+    </nav>
+  );
+}
+
+/**
  * 가로로 넘칠 수 있는 영역(표·코드 블록)의 공통 껍데기 — DS 9-1.
  *
  * 좁은 화면에서 표는 칸을 줄일 수 없는 지점이 있다(버튼·배지·날짜는 줄바꿈하면 더 나빠진다).
@@ -1338,17 +1470,28 @@ function NavIcon({ tab }: { tab: TabKey }) {
 // ---- 전역 검색(헤더) — 대화·안내 자료·규칙·상담원 요청·고객사를 한 칸에서 찾아 그 화면으로 보낸다 ----
 type SearchKind = '화면' | '지식베이스' | '시나리오 룰' | '상담원 요청' | '최근 대화' | '고객사' | '파트너';
 const SEARCH_KIND_ORDER: SearchKind[] = ['화면', '상담원 요청', '최근 대화', '지식베이스', '시나리오 룰', '고객사', '파트너'];
-/** 종류별 최대 표시 수 · 전체 상한 — 목록이 화면을 덮지 않게 한다. */
+/**
+ * 종류별 최대 표시 수 — 목록이 화면을 덮지 않게 한다. 전체 상한은 두지 않는다(종전에는 12건이었다):
+ * 종류가 일곱이라 목록은 이미 「7종 × (3건 + 모두 보기 1줄)」로 묶여 있고, 전체를 또 자르면
+ * **뒤쪽 종류가 통째로 사라지면서** 그 사실을 말할 자리가 없다(DS 31-3).
+ */
 const SEARCH_PER_KIND = 3;
-const SEARCH_MAX = 12;
 
 interface SearchHit {
   key: string;
   kind: SearchKind;
   title: string;
   detail: string;
+  /** 「… n건 모두 보기」 줄 — 결과가 아니라 **그 종류의 전체로 가는 길**이다(건수에서 뺀다). */
+  more?: boolean;
   /** 선택 시 실행. `from` 은 검색 입력칸 — 서랍을 열면 닫힐 때 초점이 여기로 돌아온다. */
   run: (from: HTMLElement | null) => void;
+}
+
+/** 집어 온 목록 + **종류별로 실제 찾은 건수**(보여 준 수와 다를 수 있다). */
+interface SearchResult {
+  hits: SearchHit[];
+  found: Partial<Record<SearchKind, number>>;
 }
 
 /** 띄어쓰기·대소문자를 무시하고 포함 여부를 본다(한국어 검색에서 띄어쓰기 차이로 놓치지 않게). */
@@ -1364,7 +1507,7 @@ function clip(v: string, n = 64): string {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 }
 
-function GlobalSearch({ search, onFirstOpen }: { search: (q: string) => SearchHit[]; onFirstOpen?: () => void }) {
+function GlobalSearch({ search, onFirstOpen }: { search: (term: string, raw: string) => SearchResult; onFirstOpen?: () => void }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -1389,7 +1532,11 @@ function GlobalSearch({ search, onFirstOpen }: { search: (q: string) => SearchHi
   }, []);
 
   const term = searchNorm(q);
-  const hits = open && term ? search(term) : [];
+  const result = open && term ? search(term, q) : { hits: [], found: {} };
+  const hits = result.hits;
+  /** 보여 준 수가 아니라 **찾은 수** — 종류별 상한에 걸려 잘린 것까지 센다(DS 31-3). */
+  const foundTotal = Object.values(result.found).reduce((s, n) => s + (n ?? 0), 0);
+  const shownTotal = hits.filter((h) => !h.more).length;
   const listId = 'ac-gsearch-list';
   const optId = (i: number) => `ac-gsearch-opt-${i}`;
   const activeIdx = Math.min(active, Math.max(hits.length - 1, 0));
@@ -1459,7 +1606,13 @@ function GlobalSearch({ search, onFirstOpen }: { search: (q: string) => SearchHi
       />
       <kbd className="ac-gsearch-kbd" aria-hidden="true">Ctrl K</kbd>
       <span id="ac-gsearch-hint" className="ac-srhide">Ctrl+K 로 바로 열 수 있습니다. 위아래 화살표로 고르고 Enter 로 이동합니다.</span>
-      <span role="status" aria-live="polite" className="ac-srhide">{open && term ? `검색 결과 ${hits.length}건` : ''}</span>
+      <span role="status" aria-live="polite" className="ac-srhide">
+        {open && term
+          ? foundTotal > shownTotal
+            ? `검색 결과 ${foundTotal}건 — 종류별 상위 ${SEARCH_PER_KIND}건을 보여 줍니다. 나머지는 「모두 보기」로 엽니다.`
+            : `검색 결과 ${foundTotal}건`
+          : ''}
+      </span>
       {open && term && (
         <div className="ac-gsearch-pop">
           <ul id={listId} role="listbox" aria-label="검색 결과" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -1468,10 +1621,16 @@ function GlobalSearch({ search, onFirstOpen }: { search: (q: string) => SearchHi
                 「{clip(q, 30)}」에 맞는 항목이 없습니다. 다른 말로 찾아보세요.
               </li>
             )}
-            {grouped.map((g) => (
+            {grouped.map((g) => {
+              // 머리줄은 「무엇을 찾았는가」까지 적는다 — 세 줄만 보이는 종류에 84건이 있다는 사실은
+              // 목록 어디에도 없었다(DS 31-3). 그룹 이름(aria-label)에도 같은 수를 담는다.
+              const total = result.found[g.kind] ?? 0;
+              const shown = g.items.filter(({ h }) => !h.more).length;
+              const count = total > shown ? `${total}건 중 ${shown}건` : `${total}건`;
+              return (
               <li key={g.kind} role="presentation">
-                <div className="ac-gsearch-group" aria-hidden="true">{g.kind}</div>
-                <ul role="group" aria-label={g.kind} style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                <div className="ac-gsearch-group" aria-hidden="true">{g.kind} <span className="ac-gsearch-gcnt">{count}</span></div>
+                <ul role="group" aria-label={`${g.kind} ${count}`} style={{ listStyle: 'none', margin: 0, padding: 0 }}>
                   {g.items.map(({ h, i }) => (
                     <li
                       key={h.key}
@@ -1479,6 +1638,7 @@ function GlobalSearch({ search, onFirstOpen }: { search: (q: string) => SearchHi
                       role="option"
                       aria-selected={i === activeIdx}
                       className="ac-gsearch-opt"
+                      data-more={h.more ? 'true' : undefined}
                       onMouseDown={(e) => e.preventDefault()}
                       onMouseEnter={() => setActive(i)}
                       onClick={() => pick(h)}
@@ -1489,7 +1649,8 @@ function GlobalSearch({ search, onFirstOpen }: { search: (q: string) => SearchHi
                   ))}
                 </ul>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </div>
       )}
@@ -1882,6 +2043,33 @@ export default function AdminPage() {
       window.removeEventListener('offline', sync);
     };
   }, []);
+
+  /**
+   * ── 표의 정렬·페이지 (DS 31-1·31-2) ──
+   * 표마다 따로 기억한다(같은 화면에 표가 둘인 탭이 있다 — 고객사/파트너, 합계/근거).
+   * 페이지는 **무엇을 거른 결과의 몇 장인가**이므로 그때의 조건(`sig`)과 함께 들고 있다가
+   * 조건이 바뀌면 1장으로 돌아간다 — 3장을 보던 중 검색어를 고치면 그 조건에는 1장뿐이라
+   * 빈 표가 뜨고, 운영자는 「검색 결과가 없다」고 읽는다.
+   */
+  const [tableSort, setTableSort] = useState<Record<string, SortState>>({});
+  const [tablePage, setTablePage] = useState<Record<string, { page: number; sig: string }>>({});
+  const toggleSort = useCallback((id: string) => (col: string) => {
+    setTableSort((m) => {
+      const cur = m[id];
+      return { ...m, [id]: { col, dir: cur && cur.col === col && cur.dir === 'asc' ? 'desc' : 'asc' } };
+    });
+    // 순서가 바뀌면 지금 보던 장의 내용도 전부 바뀐다 — 첫 장에서 다시 본다.
+    setTablePage((m) => (m[id] ? { ...m, [id]: { ...m[id], page: 1 } } : m));
+  }, []);
+  /** 거른 행에 정렬·페이지를 입혀 「그릴 한 장」을 만든다. `sig` 는 지금의 필터 조건이다. */
+  const tableView = <T,>(id: string, rows: T[], cols: SortCols<T>, sig: string, size = TABLE_PAGE_ROWS) => {
+    const sorted = sortRows(rows, tableSort[id], cols);
+    const saved = tablePage[id];
+    const view = pageSlice(sorted, saved && saved.sig === sig ? saved.page : 1, size);
+    return { ...view, onPage: (p: number) => setTablePage((m) => ({ ...m, [id]: { page: p, sig } })) };
+  };
+  /** 페이지를 나누지 않는 표(행 수가 계약 수로 묶여 있는 표) — 정렬만 입힌다. */
+  const sortedRows = <T,>(id: string, rows: T[], cols: SortCols<T>) => sortRows(rows, tableSort[id], cols);
 
   /**
    * ── 적던 내용의 기준선 (DS 27-2) ──
@@ -3199,14 +3387,35 @@ export default function AdminPage() {
     );
   }
 
-  /** 전역 검색 색인 — 화면에 이미 불러온 목록만 뒤진다(추가 API 호출 없음). 연락처·세션 원문은 색인하지 않는다. */
-  const searchAll = (term: string): SearchHit[] => {
+  /**
+   * 전역 검색 색인 — 화면에 이미 불러온 목록만 뒤진다(추가 API 호출 없음). 연락처·세션 원문은 색인하지 않는다.
+   *
+   * 종류별로 상위 몇 건만 집어 오는데(목록이 화면을 덮지 않게), **찾은 수는 그와 다르다**(DS 31-3) —
+   * 그래서 집어 온 건수와 함께 **실제로 몇 건을 찾았는지**를 돌려주고, 넘치는 종류에는
+   * 「모두 보기」 한 줄을 붙여 그 탭의 같은 검색어로 데려간다. 보여 준 수를 찾은 수라고 말하면
+   * 운영자는 「세 건뿐」이라고 읽고 나머지를 영영 찾지 않는다.
+   */
+  const searchAll = (term: string, raw: string): SearchResult => {
     const hits: SearchHit[] = [];
-    const take = (list: SearchHit[]) => {
+    const found: Partial<Record<SearchKind, number>> = {};
+    const word = raw.trim();
+    /** @param all 「모두 보기」가 데려갈 곳. 없으면(화면 목록처럼 전부 보이는 종류) 붙이지 않는다. */
+    const take = (kind: SearchKind, list: SearchHit[], all?: () => void) => {
+      found[kind] = list.length;
       hits.push(...list.slice(0, SEARCH_PER_KIND));
+      if (all && list.length > SEARCH_PER_KIND) {
+        hits.push({
+          key: `more:${kind}`,
+          kind,
+          more: true,
+          title: `${kind} ${list.length}건 모두 보기`,
+          detail: `상위 ${SEARCH_PER_KIND}건만 여기에 보입니다`,
+          run: all,
+        });
+      }
     };
 
-    take(TAB_GROUPS.flatMap((g) => g.tabs.map(([key, label]) => ({ key, label, group: g.group })))
+    take('화면', TAB_GROUPS.flatMap((g) => g.tabs.map(([key, label]) => ({ key, label, group: g.group })))
       .filter(({ key, label, group }) => searchMatch(term, label, TAB_DESC[key], group))
       .map(({ key, label }) => ({
         key: `tab:${key}`,
@@ -3216,7 +3425,7 @@ export default function AdminPage() {
         run: () => goTab(key),
       })));
 
-    take(tickets
+    take('상담원 요청', tickets
       .filter((t) => searchMatch(term, t.message, t.reason, shortTicket(t.id), HANDOFF_REASON_LABELS[t.reasonCode ?? ''], TICKET_STATUS_LABELS[t.status]))
       .map((t) => ({
         key: `ticket:${t.id}`,
@@ -3224,9 +3433,9 @@ export default function AdminPage() {
         title: `${shortTicket(t.id)} · ${TICKET_STATUS_LABELS[t.status]}`,
         detail: clip(t.message),
         run: (from: HTMLElement | null) => { goTab('esc'); setEscFilter('all'); setEscQuery(''); openTicket(t.id, from); },
-      })));
+      })), () => { goTab('esc'); setEscFilter('all'); setEscQuery(word); });
 
-    take(recentTurns
+    take('최근 대화', recentTurns
       .filter((t) => searchMatch(term, t.message, t.reply, shortSession(t.sessionId)))
       .map((t) => ({
         key: `turn:${t.id}`,
@@ -3234,9 +3443,9 @@ export default function AdminPage() {
         title: clip(t.message, 48),
         detail: `${timeLabel(t.at)} · 대화 ${shortSession(t.sessionId)} · ${t.escalate ? '상담원 제안' : '자동 응대'}`,
         run: (from: HTMLElement | null) => { goTab('dash'); openDrawer(t.sessionId, from); },
-      })));
+      })), () => goTab('dash'));
 
-    take(entries
+    take('지식베이스', entries
       .filter((e) => searchMatch(term, e.question, e.answer, e.category, e.keywords.join(' ')))
       .map((e) => ({
         key: `kb:${e.id}`,
@@ -3244,9 +3453,9 @@ export default function AdminPage() {
         title: clip(e.question, 48),
         detail: `${e.category || '분류 없음'} · ${clip(e.answer, 56)}`,
         run: () => { goTab('kb'); setKbCat(''); setKbQuery(e.question); },
-      })));
+      })), () => { goTab('kb'); setKbCat(''); setKbQuery(word); });
 
-    take([
+    take('시나리오 룰', [
       ...customRules
         .filter((r) => searchMatch(term, r.label, r.keywords.join(' '), r.reply))
         .map((r) => ({
@@ -3265,9 +3474,9 @@ export default function AdminPage() {
           detail: `기본 규칙 · ${patternExamples(r.pattern).slice(0, 4).join(', ')}`,
           run: () => { goTab('rules'); setRuleQuery(r.label); },
         })),
-    ]);
+    ], () => { goTab('rules'); setRuleQuery(word); });
 
-    take(accounts
+    take('고객사', accounts
       .filter((a) => searchMatch(term, a.name, a.ownerName, ACCOUNT_STATUS_LABELS[a.status]))
       .map((a) => ({
         key: `account:${a.id}`,
@@ -3275,9 +3484,9 @@ export default function AdminPage() {
         title: a.name,
         detail: `${ACCOUNT_STATUS_LABELS[a.status]} · ${a.partnerId ? `${partners.find((p) => p.id === a.partnerId)?.name ?? '이름 없는 파트너'} 귀속` : '직접 계약'}`,
         run: () => { goTab('partner'); setAccountQuery(a.name); },
-      })));
+      })), () => { goTab('partner'); setAccountQuery(word); });
 
-    take(partners
+    take('파트너', partners
       .filter((p) => searchMatch(term, p.name, p.managerName))
       .map((p) => ({
         key: `partner:${p.id}`,
@@ -3285,12 +3494,20 @@ export default function AdminPage() {
         title: p.name,
         detail: `파트너 · ${p.status === 'active' ? '운영 중' : '일시 중지'}${p.managerName ? ` · 담당 ${p.managerName}` : ''}`,
         run: () => { goTab('partner'); setAccountQuery(''); setPartnerFormKind('partner'); },
-      })));
+      })), () => { goTab('partner'); setAccountQuery(''); setPartnerFormKind('partner'); });
 
-    return hits.slice(0, SEARCH_MAX);
+    return { hits, found };
   };
 
   const currentLabel = TAB_LABEL[tab] ?? '대시보드';
+
+  // 테넌트 FAQ·감사 로그 표는 탭 본문이 IIFE 가 아니라 여기서 한 장을 만든다(그릴 때 쓰는 값은 같다).
+  const tenantFaqView = tableView('tenantFaq', tenantView?.faq ?? [], {
+    citation: (f: TenantFAQView) => f.citation,
+    question: (f: TenantFAQView) => f.question,
+    answer: (f: TenantFAQView) => f.answer,
+    keywords: (f: TenantFAQView) => f.keywords.length,
+  }, tenantId);
 
   return (
     <div className="ac-shell">
@@ -3597,6 +3814,10 @@ export default function AdminPage() {
           if (!q) return true;
           return [e.question, e.answer, e.category, e.id, e.keywords.join(' '), e.source || ''].join(' ').toLowerCase().includes(q);
         });
+        const kbView = tableView('kb', shown, {
+          cat: (e: KBEntryView) => e.category || '',
+          q: (e: KBEntryView) => e.question,
+        }, `${kbQuery}|${kbCat}`);
         return (
         <>
           <div className="ac-split">
@@ -3641,14 +3862,14 @@ export default function AdminPage() {
                       <caption className="ac-srhide">안내 자료 목록</caption>
                       <thead>
                         <tr>
-                          <th scope="col" style={{ width: 96 }}>카테고리</th>
-                          <th scope="col">질문 · 답변</th>
+                          <SortTh label="카테고리" col="cat" width={96} sort={tableSort.kb} onSort={toggleSort('kb')} />
+                          <SortTh label="질문 · 답변" col="q" sort={tableSort.kb} onSort={toggleSort('kb')} />
                           <th scope="col" style={{ width: 160 }} className="ac-col-wide">키워드</th>
                           <th scope="col" style={{ width: 116 }}><span className="ac-srhide">작업</span></th>
                         </tr>
                       </thead>
                       <tbody>
-                        {shown.map((e) => (
+                        {kbView.rows.map((e) => (
                           <tr key={e.id} data-editing={editingId === e.id ? 'true' : undefined}>
                             <td><span className="ac-pill">{e.category || '미분류'}</span></td>
                             <td style={{ minWidth: 220 }}>
@@ -3669,6 +3890,7 @@ export default function AdminPage() {
                     </table>
                   </ScrollX>
                 )}
+                <Pager info={kbView} label="안내 자료" onPage={kbView.onPage} />
               </section>
 
           <section style={S.card} aria-labelledby="ac-kb-import">
@@ -4135,6 +4357,16 @@ export default function AdminPage() {
           .filter((t) => !q || [t.message, t.reason, t.id, HANDOFF_REASON_LABELS[t.reasonCode ?? ''] ?? ''].some((v) => (v ?? '').toLowerCase().includes(q)))
           .slice()
           .sort((x, y) => new Date(y.createdAt).getTime() - new Date(x.createdAt).getTime());
+        // 상태는 글자 순(대기·상담 중·완료·취소)이 아니라 **처리 순서**로 센다 — 운영자가 상태로
+        // 정렬하는 까닭은 「먼저 손대야 하는 것」을 위로 올리기 위해서다.
+        const statusRank: Record<TicketView['status'], number> = { open: 0, in_progress: 1, resolved: 2, canceled: 3 };
+        const escView = tableView('esc', filtered, {
+          id: (t: TicketView) => t.id,
+          status: (t: TicketView) => statusRank[t.status],
+          msg: (t: TicketView) => t.message || '',
+          reason: (t: TicketView) => (t.reasonCode ? HANDOFF_REASON_LABELS[t.reasonCode] ?? t.reasonCode : t.reason),
+          at: (t: TicketView) => t.createdAt,
+        }, `${escFilter}|${escQuery}`);
         const turnsTotal = stats?.conversation.totalTurns ?? 0;
         const autoRate = stats && turnsTotal > 0 ? `${Math.round(stats.conversation.autoRate * 100)}%` : MEASURING;
         const FILTERS: { key: 'all' | TicketView['status']; label: string; n: number }[] = [
@@ -4208,16 +4440,16 @@ export default function AdminPage() {
                     <caption className="ac-srhide">상담원 요청 목록</caption>
                     <thead>
                       <tr>
-                        <th scope="col">접수</th>
-                        <th scope="col">상태</th>
-                        <th scope="col">고객이 마지막으로 한 말</th>
-                        <th scope="col" className="ac-col-wide">사유</th>
-                        <th scope="col" className="ac-col-wide">접수 시각</th>
+                        <SortTh label="접수" col="id" sort={tableSort.esc} onSort={toggleSort('esc')} />
+                        <SortTh label="상태" col="status" sort={tableSort.esc} onSort={toggleSort('esc')} />
+                        <SortTh label="고객이 마지막으로 한 말" col="msg" sort={tableSort.esc} onSort={toggleSort('esc')} />
+                        <SortTh label="사유" col="reason" className="ac-col-wide" sort={tableSort.esc} onSort={toggleSort('esc')} />
+                        <SortTh label="접수 시각" col="at" className="ac-col-wide" sort={tableSort.esc} onSort={toggleSort('esc')} />
                         <th scope="col"><span className="ac-srhide">처리</span></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {filtered.map((t) => {
+                      {escView.rows.map((t) => {
                         const act = nextAction(t);
                         return (
                           <tr key={t.id}>
@@ -4261,6 +4493,7 @@ export default function AdminPage() {
                   </table>
                 </ScrollX>
               )}
+              <Pager info={escView} label="상담원 요청" onPage={escView.onPage} />
             </section>
             {ticketsPersisted === false && (
               <p style={{ ...S.tag, marginTop: -6 }}>
@@ -4283,6 +4516,23 @@ export default function AdminPage() {
           .sort((x, y) => x.name.localeCompare(y.name, 'ko'));
         const rollupOf = (id: string | null) => rollup.find((r) => (r.partnerId ?? null) === id);
         const directRollup = rollupOf(null);
+        const accountView = tableView('account', filteredAccounts, {
+          name: (a: AccountView) => a.name,
+          partner: (a: AccountView) => partnerName(a.partnerId),
+          status: (a: AccountView) => ACCOUNT_STATUS_LABELS[a.status],
+          source: (a: AccountView) => SOURCE_LABELS[a.source] ?? '',
+          date: (a: AccountView) => a.contractedAt || '',
+          fee: (a: AccountView) => a.monthlyFeeKrw,
+        }, `${partnerFilter}|${accountQuery}`);
+        // 파트너 표는 페이지를 나누지 않는다 — 행 수가 계약한 파트너 수(수십 곳)로 묶여 있고,
+        // 마지막에 세는 단위가 다른 「직접 계약」 합계 행이 붙는다(장을 나누면 그 행이 중간 장에 떨어진다).
+        const partnerRows = sortedRows('partner', partners, {
+          name: (p: PartnerView) => p.name,
+          status: (p: PartnerView) => (p.status === 'active' ? '운영 중' : '중지'),
+          fee: (p: PartnerView) => p.feeRateBp,
+          manager: (p: PartnerView) => p.managerName || '',
+          accounts: (p: PartnerView) => rollupOf(p.id)?.total ?? 0,
+        });
         const filtering = Boolean(partnerFilter) || Boolean(q);
         const inputStyle = (bad?: string) => ({ ...S.input, ...(bad ? { borderColor: 'var(--danger)' } : {}) });
         return (
@@ -4354,17 +4604,17 @@ export default function AdminPage() {
                         <caption className="ac-srhide">고객사 목록</caption>
                         <thead>
                           <tr>
-                            <th scope="col">고객사</th>
-                            <th scope="col">귀속</th>
-                            <th scope="col">상태</th>
-                            <th scope="col" className="ac-col-wide">유입 경로</th>
-                            <th scope="col" className="ac-col-wide">계약일</th>
-                            <th scope="col" className="ac-col-wide">월 이용료</th>
+                            <SortTh label="고객사" col="name" sort={tableSort.account} onSort={toggleSort('account')} />
+                            <SortTh label="귀속" col="partner" sort={tableSort.account} onSort={toggleSort('account')} />
+                            <SortTh label="상태" col="status" sort={tableSort.account} onSort={toggleSort('account')} />
+                            <SortTh label="유입 경로" col="source" className="ac-col-wide" sort={tableSort.account} onSort={toggleSort('account')} />
+                            <SortTh label="계약일" col="date" className="ac-col-wide" sort={tableSort.account} onSort={toggleSort('account')} />
+                            <SortTh label="월 이용료" col="fee" className="ac-col-wide" sort={tableSort.account} onSort={toggleSort('account')} />
                             <th scope="col"><span className="ac-srhide">동작</span></th>
                           </tr>
                         </thead>
                         <tbody>
-                          {filteredAccounts.map((a) => (
+                          {accountView.rows.map((a) => (
                             <tr key={a.id} data-editing={aForm.id === a.id ? 'true' : undefined}>
                               <td style={{ minWidth: 140 }}>
                                 <button
@@ -4395,6 +4645,7 @@ export default function AdminPage() {
                       </table>
                     </ScrollX>
                   )}
+                  <Pager info={accountView} label="고객사" unit="곳" onPage={accountView.onPage} />
                 </section>
 
                 <section style={{ ...S.card, padding: 0 }} aria-labelledby="partner-list-h">
@@ -4421,16 +4672,16 @@ export default function AdminPage() {
                         <caption className="ac-srhide">파트너 목록</caption>
                         <thead>
                           <tr>
-                            <th scope="col">파트너</th>
-                            <th scope="col">상태</th>
-                            <th scope="col">수수료율</th>
-                            <th scope="col" className="ac-col-wide">담당</th>
-                            <th scope="col">고객사</th>
+                            <SortTh label="파트너" col="name" sort={tableSort.partner} onSort={toggleSort('partner')} />
+                            <SortTh label="상태" col="status" sort={tableSort.partner} onSort={toggleSort('partner')} />
+                            <SortTh label="수수료율" col="fee" sort={tableSort.partner} onSort={toggleSort('partner')} />
+                            <SortTh label="담당" col="manager" className="ac-col-wide" sort={tableSort.partner} onSort={toggleSort('partner')} />
+                            <SortTh label="고객사" col="accounts" sort={tableSort.partner} onSort={toggleSort('partner')} />
                             <th scope="col"><span className="ac-srhide">동작</span></th>
                           </tr>
                         </thead>
                         <tbody>
-                          {partners.map((p) => {
+                          {partnerRows.map((p) => {
                             const r = rollupOf(p.id);
                             return (
                               <tr key={p.id} data-editing={pForm.id === p.id ? 'true' : undefined}>
@@ -4601,6 +4852,23 @@ export default function AdminPage() {
         const feeEmpty = !r || r.rows.length === 0 || r.totals.billable === 0;
         const monthLabel = r ? `${r.month.slice(0, 4)}년 ${Number(r.month.slice(5, 7))}월` : '';
         const ISSUE_TONE = TONE.warn;
+        // 합계 표는 파트너 수만큼이라 페이지가 생길 일이 없다 — 정렬만. 근거 표는 고객사 수만큼 길어진다.
+        const sumRows = r ? sortedRows('settleSum', r.partnerTotals, {
+          name: (t: SettlementPartnerTotalView) => t.partnerName,
+          accounts: (t: SettlementPartnerTotalView) => t.accounts,
+          billable: (t: SettlementPartnerTotalView) => t.billable,
+          incomplete: (t: SettlementPartnerTotalView) => t.incomplete,
+          base: (t: SettlementPartnerTotalView) => t.baseAmountKrw,
+          fee: (t: SettlementPartnerTotalView) => t.feeAmountKrw,
+        }) : [];
+        const rowView = tableView('settleRows', r ? r.rows : [], {
+          name: (row: SettlementRowView) => row.accountName,
+          partner: (row: SettlementRowView) => row.partnerName,
+          date: (row: SettlementRowView) => row.contractedAt,
+          base: (row: SettlementRowView) => row.baseAmountKrw,
+          rate: (row: SettlementRowView) => row.feeRateBp,
+          fee: (row: SettlementRowView) => row.feeAmountKrw,
+        }, `${settleMonth}|${settlePartner}`);
         return (
           <>
             <section style={{ ...S.card, padding: 0 }} aria-labelledby="settle-h">
@@ -4687,16 +4955,16 @@ export default function AdminPage() {
                       <caption className="ac-srhide">파트너별 합계</caption>
                       <thead>
                         <tr>
-                          <th scope="col">파트너</th>
-                          <th scope="col">대상</th>
-                          <th scope="col">산출</th>
-                          <th scope="col">미산출</th>
-                          <th scope="col" className="ac-col-wide">기준금액</th>
-                          <th scope="col" style={{ textAlign: 'right' }}>수수료</th>
+                          <SortTh label="파트너" col="name" sort={tableSort.settleSum} onSort={toggleSort('settleSum')} />
+                          <SortTh label="대상" col="accounts" sort={tableSort.settleSum} onSort={toggleSort('settleSum')} />
+                          <SortTh label="산출" col="billable" sort={tableSort.settleSum} onSort={toggleSort('settleSum')} />
+                          <SortTh label="미산출" col="incomplete" sort={tableSort.settleSum} onSort={toggleSort('settleSum')} />
+                          <SortTh label="기준금액" col="base" className="ac-col-wide" sort={tableSort.settleSum} onSort={toggleSort('settleSum')} />
+                          <SortTh label="수수료" col="fee" align="right" sort={tableSort.settleSum} onSort={toggleSort('settleSum')} />
                         </tr>
                       </thead>
                       <tbody>
-                        {r.partnerTotals.map((t) => (
+                        {sumRows.map((t) => (
                           <tr key={t.partnerId}>
                             <td style={{ fontWeight: 700 }}>{t.partnerName}</td>
                             <td>{t.accounts}</td>
@@ -4721,16 +4989,16 @@ export default function AdminPage() {
                       <caption className="ac-srhide">고객사별 산출 근거</caption>
                       <thead>
                         <tr>
-                          <th scope="col">고객사</th>
-                          <th scope="col">파트너</th>
-                          <th scope="col" className="ac-col-wide">계약일</th>
-                          <th scope="col" className="ac-col-wide">월 이용료</th>
-                          <th scope="col" className="ac-col-wide">수수료율</th>
-                          <th scope="col" style={{ textAlign: 'right' }}>수수료</th>
+                          <SortTh label="고객사" col="name" sort={tableSort.settleRows} onSort={toggleSort('settleRows')} />
+                          <SortTh label="파트너" col="partner" sort={tableSort.settleRows} onSort={toggleSort('settleRows')} />
+                          <SortTh label="계약일" col="date" className="ac-col-wide" sort={tableSort.settleRows} onSort={toggleSort('settleRows')} />
+                          <SortTh label="월 이용료" col="base" className="ac-col-wide" sort={tableSort.settleRows} onSort={toggleSort('settleRows')} />
+                          <SortTh label="수수료율" col="rate" className="ac-col-wide" sort={tableSort.settleRows} onSort={toggleSort('settleRows')} />
+                          <SortTh label="수수료" col="fee" align="right" sort={tableSort.settleRows} onSort={toggleSort('settleRows')} />
                         </tr>
                       </thead>
                       <tbody>
-                        {r.rows.map((row) => (
+                        {rowView.rows.map((row) => (
                           <tr key={row.accountId}>
                             <td style={{ fontWeight: 700, minWidth: 120 }}>
                               {row.accountName}
@@ -4748,6 +5016,7 @@ export default function AdminPage() {
                       </tbody>
                     </table>
                   </ScrollX>
+                  <Pager info={rowView} label="고객사별 산출 근거" onPage={rowView.onPage} />
                   <details style={{ padding: '12px 16px' }}>
                     <summary style={{ fontSize: 12.5, color: 'var(--mut)', cursor: 'pointer' }}>산출 기준·한계 {r.notes.length}건</summary>
                     <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 12.5, color: 'var(--sub)' }}>
@@ -4867,14 +5136,14 @@ export default function AdminPage() {
                     <caption className="ac-srhide">테넌트 FAQ 목록</caption>
                     <thead>
                       <tr>
-                        <th scope="col">근거</th>
-                        <th scope="col">질문</th>
-                        <th scope="col" className="ac-col-wide">답변</th>
-                        <th scope="col" className="ac-col-wide">표현</th>
+                        <SortTh label="근거" col="citation" sort={tableSort.tenantFaq} onSort={toggleSort('tenantFaq')} />
+                        <SortTh label="질문" col="question" sort={tableSort.tenantFaq} onSort={toggleSort('tenantFaq')} />
+                        <SortTh label="답변" col="answer" className="ac-col-wide" sort={tableSort.tenantFaq} onSort={toggleSort('tenantFaq')} />
+                        <SortTh label="표현" col="keywords" className="ac-col-wide" sort={tableSort.tenantFaq} onSort={toggleSort('tenantFaq')} />
                       </tr>
                     </thead>
                     <tbody>
-                      {tenantView.faq.map((f) => (
+                      {tenantFaqView.rows.map((f) => (
                         <tr key={f.id}>
                           <td style={{ whiteSpace: 'nowrap' }}><span className="ac-pill">{f.citation}</span></td>
                           <td style={{ minWidth: 160 }}>
@@ -4889,6 +5158,7 @@ export default function AdminPage() {
                   </table>
                 </ScrollX>
               )}
+              <Pager info={tenantFaqView} label="테넌트 FAQ" onPage={tenantFaqView.onPage} />
             </section>
           )}
         </>
@@ -4900,6 +5170,12 @@ export default function AdminPage() {
         for (const e of auditEvents) if (!actionNames.has(e.action)) actionNames.set(e.action, e.actionLabel || UNNAMED_AUDIT_ACTION);
         const actions = Array.from(actionNames.keys());
         const shown = auditEvents.filter((e) => auditFilter === 'all' || e.action === auditFilter);
+        const auditView = tableView('audit', shown, {
+          at: (e: AuditView) => e.at,
+          action: (e: AuditView) => e.actionLabel || UNNAMED_AUDIT_ACTION,
+          target: (e: AuditView) => e.target || e.detail || '',
+          authed: (e: AuditView) => (e.authed ? '로그인됨' : '인증 없이 수행'),
+        }, auditFilter);
         return (
           <>
             <section style={{ ...S.card, padding: 0 }} aria-labelledby="audit-h">
@@ -4945,14 +5221,14 @@ export default function AdminPage() {
                     <caption className="ac-srhide">관리 작업 기록</caption>
                     <thead>
                       <tr>
-                        <th scope="col">시각</th>
-                        <th scope="col">작업</th>
-                        <th scope="col">대상·내용</th>
-                        <th scope="col" className="ac-col-wide">인증</th>
+                        <SortTh label="시각" col="at" sort={tableSort.audit} onSort={toggleSort('audit')} />
+                        <SortTh label="작업" col="action" sort={tableSort.audit} onSort={toggleSort('audit')} />
+                        <SortTh label="대상·내용" col="target" sort={tableSort.audit} onSort={toggleSort('audit')} />
+                        <SortTh label="인증" col="authed" className="ac-col-wide" sort={tableSort.audit} onSort={toggleSort('audit')} />
                       </tr>
                     </thead>
                     <tbody>
-                      {shown.map((e) => (
+                      {auditView.rows.map((e) => (
                         <tr key={e.id}>
                           <td style={{ whiteSpace: 'nowrap', color: 'var(--sub)' }}>{timeLabel(e.at)}</td>
                           <td style={{ whiteSpace: 'nowrap' }}><span className="ac-pill">{e.actionLabel || UNNAMED_AUDIT_ACTION}</span></td>
@@ -4972,6 +5248,7 @@ export default function AdminPage() {
                   </table>
                 </ScrollX>
               )}
+              <Pager info={auditView} label="관리 작업 기록" onPage={auditView.onPage} />
             </section>
 
             <section style={S.card} aria-labelledby="storage-h">
