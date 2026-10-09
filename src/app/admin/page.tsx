@@ -914,6 +914,8 @@ function Pager({ info, label, unit = '건', onPage }: { info: PageInfo; label: s
   if (info.pages <= 1) return null;
   const first = info.page <= 1;
   const last = info.page >= info.pages;
+  // 버튼 규격은 콘솔 공통(S.btnGhost)에서 가져오고 크기만 줄인다 — 표 아래 줄이 툴바처럼 두꺼워지지 않게.
+  const btn = { ...S.btnGhost, fontSize: 12.5, padding: '6px 10px', minHeight: 32 } as const;
   return (
     <nav className="ac-pager" aria-label={`${label} 페이지 이동`}>
       <span className="ac-pager-cnt" role="status" aria-live="polite">
@@ -921,7 +923,7 @@ function Pager({ info, label, unit = '건', onPage }: { info: PageInfo; label: s
       </span>
       <button
         type="button"
-        {...busyBtn(false, first)}
+        {...busyBtn(false, first, btn)}
         aria-label={`${label} 이전 페이지`}
         onClick={() => { if (!first) onPage(info.page - 1); }}
       >
@@ -929,7 +931,7 @@ function Pager({ info, label, unit = '건', onPage }: { info: PageInfo; label: s
       </button>
       <button
         type="button"
-        {...busyBtn(false, last)}
+        {...busyBtn(false, last, btn)}
         aria-label={`${label} 다음 페이지`}
         onClick={() => { if (!last) onPage(info.page + 1); }}
       >

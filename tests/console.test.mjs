@@ -454,7 +454,9 @@ test('테넌트 지식이 요약 카드+FAQ 표로 렌더되고 편집 UI 가 �
   for (const k of ['상담창 이름', '적재된 FAQ', '신청 버튼 주소', 'AI 고지 문구']) assert.ok(t.includes(k), `요약 누락: ${k}`);
   assert.match(t, /배포 설정 적용됨[\s\S]*기본값 — 배포 설정 미등록/, 'CTA 출처를 사람 말로');
   assert.match(t, /<table className="ac-table">/, 'FAQ 표');
-  assert.match(t, /<th scope="col">근거<\/th>/, '근거 라벨 열');
+  // 머리칸은 정렬되는 머리칸(SortTh)으로 바뀌었다(DS 31-1) — scope 는 SortTh 가 붙인다.
+  assert.match(t, /<SortTh label="근거" col="citation"/, '근거 라벨 열');
+  assert.match(src, /function SortTh\([\s\S]{0,900}scope="col"/, 'SortTh 가 scope 를 붙여야 어느 열인지 읽힌다');
   assert.match(t, /적재된 FAQ가 0건입니다/, '0건 경고 상태');
   assert.match(t, /aria-hidden="true" style=\{\{ width: 14, height: 14, borderRadius: '50%', background: tenantView\.config\.brandColor/, '브랜드 색 견본은 장식');
   assert.equal(/<textarea|<input(?![^>]*type="search")/.test(t), false, '편집 입력이 없어야 한다');
@@ -1472,4 +1474,159 @@ test('첫 화면에 알림이 떠 있지 않다 (DS 29-2)', opts, async () => {
   assert.equal(/class="ac-toast/.test(html), false, '아무 일도 하지 않았는데 알림이 떠 있다');
   assert.equal(/role="alert"/.test(html), false, '첫 화면에 실패 알림이 있다');
   assert.equal(/알림 닫기/.test(html), false, '치울 알림이 없는데 닫기 버튼이 초점 순서에 있다');
+});
+
+/**
+ * ── DS 31-1·31-2 — 행이 많아진 뒤의 표 ──
+ * 콘솔의 데이터 표는 거른 행을 전부 등록순으로 그렸다. 기준 원본(admin.html)이 이미 넣어 둔
+ * 두 가지(헤더 정렬·페이저)를 이식했는지, 그리고 그 둘이 키보드·스크린리더·종이에서도 서는지를
+ * 못 박는다. 아래 둘은 화면 쪽(머리칸·페이저), 그 다음은 판정 자체를 실제로 돌린다.
+ */
+test('데이터 표의 머리칸이 정렬되는 머리칸이다 — 방향은 색이 아니라 글자로 말한다 (DS 31-1)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+
+  // ① 머리칸 한 곳(SortTh)만 쓴다 — 표마다 따로 적으면 aria-sort 가 또 빠진다(DS 6-2 와 같은 종류).
+  const comp = src.slice(src.indexOf('function SortTh('), src.indexOf('function Pager('));
+  assert.match(comp, /scope="col"/, '어느 열인지 읽히려면 scope 가 필요하다');
+  assert.match(comp, /aria-sort=\{active \? \(sort\?\.dir === 'asc' \? 'ascending' : 'descending'\) : 'none'\}/, '정렬 상태를 스크린리더에 알린다');
+  assert.match(comp, /<button\n?\s*type="button"/, '머리칸은 눌리는 것이므로 button 이어야 한다(Enter·Space 가 그냥 된다)');
+  assert.match(comp, /title=\{`\$\{label\} 기준으로 정렬`\}/, '무엇을 하는 머리칸인지 알려준다');
+  assert.equal(/\{label\}<span/.test(comp), false, '머리칸 이름에 설명을 덧붙이면 셀마다 그 문장이 따라 읽힌다');
+
+  // ② 데이터 표 8장 전부가 정렬되는 머리칸을 가진다(설치 「선택 옵션」 표는 고정 안내라 제외).
+  const lines = src.split('\n');
+  const skip = new Set(['설치 선택 옵션']);
+  let checked = 0;
+  lines.forEach((ln, i) => {
+    if (!ln.includes('<table className="ac-table">')) return;
+    let j = i - 1;
+    while (j >= 0 && lines[j].trim() === '') j -= 1;
+    const label = (lines[j].match(/<ScrollX label="([^"]+)">/) || [])[1];
+    if (skip.has(label)) return;
+    const head = lines.slice(i, i + 14).join('\n');
+    assert.match(head, /<SortTh label="/, `${label} 표의 머리칸에 정렬이 없다`);
+    checked += 1;
+  });
+  assert.equal(checked, 8, `정렬되는 표가 ${checked}장이다 — 데이터 표 8장 전부여야 한다`);
+
+  // ③ 방향 표시는 글리프(↕ ↑ ↓)다 — 색만으로 말하면 색을 구분하지 못하는 사람에게는 표시가 없다.
+  assert.match(css, /\.ac-sortbtn::after\{content:'↕'/, '정렬 가능 표시');
+  assert.match(css, /\.ac-th-sort\[aria-sort="ascending"\] \.ac-sortbtn::after\{content:'↑'/, '오름차순 표시');
+  assert.match(css, /\.ac-th-sort\[aria-sort="descending"\] \.ac-sortbtn::after\{content:'↓'/, '내림차순 표시');
+  assert.match(css, /\.ac-sortbtn:focus-visible\{outline:2px solid var\(--brand\)/, '키보드 초점 표시');
+  assert.match(css, /\.ac-sortbtn\{[^}]*width:100%/, '머리칸 전체가 누르는 영역이어야 손가락이 빗나가지 않는다');
+});
+
+test('표가 길어지면 장을 나누고 「몇 건 중 어디인가」를 말한다 (DS 31-2)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  const comp = src.slice(src.indexOf('function Pager('), src.indexOf('가로로 넘칠 수 있는 영역'));
+
+  // 한 장에 들어가면 조작을 보이지 않는다.
+  assert.match(comp, /if \(info\.pages <= 1\) return null;/, '장이 하나면 페이저를 그리지 않는다');
+  // 총 건수·보고 있는 범위·장 번호를 모두 말한다(「n건」만 말하면 어디까지 보여 주는지 알 수 없다).
+  assert.match(comp, /총 \{info\.total\.toLocaleString\('ko-KR'\)\}\{unit\} 중 \{info\.from\}–\{info\.to\}번째 · \{info\.page\}\/\{info\.pages\} 페이지/, '페이저 문구');
+  assert.match(comp, /role="status" aria-live="polite"/, '장을 넘기면 바뀐 범위를 읽어 준다');
+  assert.match(comp, /<nav className="ac-pager" aria-label=\{`\$\{label\} 페이지 이동`\}/, '페이저에 이름이 있어야 어느 표의 것인지 안다');
+  // 끝에서 `disabled` 를 쓰지 않는다(DS 8-1) — 누른 버튼이 비활성이 되면 초점이 본문 밖으로 떨어진다.
+  assert.equal(/\sdisabled/.test(comp.replace(/aria-disabled/g, '')), false, 'disabled 속성을 쓰면 안 된다');
+  assert.match(comp, /busyBtn\(false, first, btn\)[\s\S]*busyBtn\(false, last, btn\)/, '끝은 aria-disabled 로 알린다');
+  assert.match(comp, /if \(!first\) onPage\(info\.page - 1\)/, '끝에서는 눌려도 아무 일이 없어야 한다');
+
+  // 길어지는 표 6장에 페이저가 붙어 있다(파트너·정산 합계는 행 수가 계약 수로 묶여 있어 정렬만).
+  for (const label of ['안내 자료', '상담원 요청', '고객사', '고객사별 산출 근거', '테넌트 FAQ', '관리 작업 기록']) {
+    assert.match(src, new RegExp(`<Pager info=\\{\\w+\\} label="${label}"`), `페이저 누락: ${label}`);
+  }
+  assert.equal((src.match(/<Pager info=/g) || []).length, 6, '페이저 수');
+  assert.match(src, /const TABLE_PAGE_ROWS = 15;/, '한 장의 행 수는 기준 원본과 같은 15행');
+
+  // 거르면 장 수가 줄어든다 — 조건이 바뀌면 1장으로 돌아가야 빈 표를 「결과 없음」으로 읽지 않는다.
+  const view = src.slice(src.indexOf('const tableView = '), src.indexOf('const sortedRows = '));
+  assert.match(view, /saved && saved\.sig === sig \? saved\.page : 1/, '조건(sig)이 바뀌면 첫 장으로');
+  const toggle = src.slice(src.indexOf('const toggleSort = '), src.indexOf('const tableView = '));
+  assert.match(toggle, /setTablePage\(\(m\) => \(m\[id\] \? \{ \.\.\.m, \[id\]: \{ \.\.\.m\[id\], page: 1 \} \} : m\)\)/, '정렬이 바뀌면 첫 장으로');
+
+  // 종이: 넘길 수 없는 버튼은 덜어내되 「몇 건 중 어디까지」는 남긴다.
+  const pr = css.slice(css.indexOf('@media print{'));
+  assert.match(pr, /\.ac-pager button\{display:none\}/, '종이에 페이지 버튼을 찍지 않는다');
+  assert.equal(/\.ac-pager\{display:none\}/.test(pr), false, '건수 줄까지 지우면 한 장만 찍힌 표를 전체로 읽는다');
+});
+
+test('표 정렬·페이지 판정을 실제로 돌린다 (DS 31-1·31-2)', opts, async () => {
+  const { compareCell, sortRows, pageSlice } = await loadConsoleFns(['compareCell', 'sortRows', 'pageSlice']);
+
+  // ① 숫자는 숫자로 — 글자로 비교하면 「10」이 「2」보다 앞에 선다.
+  assert.ok(compareCell(2, 10, 'asc') < 0, '숫자 오름차순');
+  assert.ok(compareCell(2, 10, 'desc') > 0, '숫자 내림차순');
+  assert.ok(compareCell('2건', '10건', 'asc') < 0, '숫자가 섞인 글자도 자리수대로');
+  assert.ok(compareCell('가나', '다라', 'asc') < 0, '한국어 사전 순');
+  // 빈 값은 방향과 무관하게 뒤 — 오름차순 첫 장이 「—」로 가득 차면 정렬한 뜻이 없다.
+  for (const dir of ['asc', 'desc']) {
+    assert.ok(compareCell(null, 1000, dir) > 0, `빈 값(null)은 뒤: ${dir}`);
+    assert.ok(compareCell('', '가', dir) > 0, `빈 값(빈 문자열)은 뒤: ${dir}`);
+    assert.ok(compareCell(undefined, 0, dir) > 0, `빈 값(undefined)은 뒤: ${dir}`);
+  }
+  assert.equal(compareCell(null, '', 'asc'), 0, '둘 다 비었으면 순서를 바꾸지 않는다');
+
+  // ② 고른 열이 없으면 원래 순서 그대로 — 기본 순서가 뜻을 가진 표가 있다(접수는 최신순).
+  const rows = [{ n: '다', v: 3 }, { n: '가', v: 1 }, { n: '나', v: null }, { n: '라', v: 1 }];
+  const cols = { n: (r) => r.n, v: (r) => r.v };
+  assert.equal(sortRows(rows, undefined, cols), rows, '정렬 전에는 받은 배열을 그대로 돌려준다');
+  assert.deepEqual(sortRows(rows, { col: '없는열', dir: 'asc' }, cols).map((r) => r.n), ['다', '가', '나', '라'], '모르는 열은 순서를 바꾸지 않는다');
+
+  // 정렬은 사본에만 한다(원본이 흔들리면 다른 화면의 셈이 어긋난다).
+  assert.deepEqual(sortRows(rows, { col: 'n', dir: 'asc' }, cols).map((r) => r.n), ['가', '나', '다', '라']);
+  assert.deepEqual(rows.map((r) => r.n), ['다', '가', '나', '라'], '원본을 건드리면 안 된다');
+  assert.deepEqual(sortRows(rows, { col: 'n', dir: 'desc' }, cols).map((r) => r.n), ['라', '다', '나', '가']);
+  // 빈 값은 끝으로, 같은 값은 원래 순서(안정 정렬)
+  assert.deepEqual(sortRows(rows, { col: 'v', dir: 'asc' }, cols).map((r) => r.n), ['가', '라', '다', '나'], '같은 값은 원래 순서를 지키고 빈 값은 맨 뒤');
+
+  // ③ 한 장 잘라내기 — 「몇 건 중 몇 번째」가 틀리면 페이저가 거짓말을 한다.
+  const many = Array.from({ length: 23 }, (_, i) => i + 1);
+  const p1 = pageSlice(many, 1, 10);
+  assert.deepEqual([p1.page, p1.pages, p1.total, p1.from, p1.to], [1, 3, 23, 1, 10]);
+  assert.deepEqual(p1.rows, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  const p3 = pageSlice(many, 3, 10);
+  assert.deepEqual([p3.page, p3.from, p3.to, p3.rows.length], [3, 21, 23, 3], '마지막 장은 남은 만큼만');
+  // 거르고 나니 장이 줄었다 — 빈 장을 보여 주면 「조건에 맞는 것이 없다」와 구분되지 않는다.
+  assert.equal(pageSlice(many, 9, 10).page, 3, '범위를 넘은 장은 마지막 장으로 끌어온다');
+  assert.equal(pageSlice(many, 0, 10).page, 1, '0장·음수는 첫 장');
+  const empty = pageSlice([], 2, 10);
+  assert.deepEqual([empty.page, empty.pages, empty.total, empty.from, empty.to, empty.rows.length], [1, 1, 0, 0, 0, 0], '0건이면 「0번째」라고 말하지 않는다');
+  assert.equal(pageSlice(many, 1, 50).pages, 1, '한 장에 다 들어가면 장이 하나(페이저를 그리지 않는다)');
+});
+
+/**
+ * ── DS 31-3 — 보여 준 수는 찾은 수가 아니다 ──
+ * 전역 검색은 종류별로 3건만 집어 오면서 「검색 결과 3건」이라고 말했다. 자료 300건에서
+ * 「환불」을 찾은 운영자는 세 건을 보고 「이것뿐」이라 읽고, 나머지로 가는 길도 없었다.
+ */
+test('전역 검색이 보여 준 수가 아니라 찾은 수를 말하고 전체로 가는 길을 둔다 (DS 31-3)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const index = src.slice(src.indexOf('const searchAll = '), src.indexOf('const currentLabel ='));
+
+  // 색인은 종류별로 **찾은 건수**를 함께 돌려준다.
+  assert.match(index, /const searchAll = \(term: string, raw: string\): SearchResult =>/, '찾은 건수를 담아 돌려준다');
+  assert.match(index, /found\[kind\] = list\.length;/, '자르기 전의 건수를 센다');
+  assert.match(index, /hits\.push\(\.\.\.list\.slice\(0, SEARCH_PER_KIND\)\)/, '보여 주는 것은 종류별 상위 몇 건');
+  assert.match(index, /if \(all && list\.length > SEARCH_PER_KIND\)/, '넘칠 때만 「모두 보기」를 붙인다');
+  assert.match(index, /title: `\$\{kind\} \$\{list\.length\}건 모두 보기`/, '「모두 보기」에 실제 건수를 적는다');
+  assert.equal(/SEARCH_MAX/.test(src), false, '전체 상한으로 또 자르면 뒤쪽 종류가 말없이 사라진다');
+
+  // 「모두 보기」는 그 탭의 같은 검색어로 데려간다 — 길이 없으면 건수만 알려 주고 끝이다.
+  assert.match(index, /const word = raw\.trim\(\);/, '정규화한 말이 아니라 사람이 친 말로 데려간다');
+  for (const setter of ['setEscQuery(word)', 'setKbQuery(word)', 'setRuleQuery(word)', 'setAccountQuery(word)']) {
+    assert.ok(index.includes(setter), `「모두 보기」가 검색어를 넘기지 않는다: ${setter}`);
+  }
+  // 개인정보 규칙(DS 2-15)은 그대로 — 「모두 보기」 경로에도 연락처가 없다.
+  assert.equal(/\.contact\b/.test(index), false, '연락처는 검색 색인·이동 경로에 넣지 않는다');
+
+  const comp = src.slice(src.indexOf('function GlobalSearch('), src.indexOf('관리 토큰 보관함'));
+  assert.match(comp, /const foundTotal = Object\.values\(result\.found\)\.reduce/, '건수는 찾은 수의 합이다');
+  assert.match(comp, /const shownTotal = hits\.filter\(\(h\) => !h\.more\)\.length;/, '「모두 보기」 줄은 결과 수에서 뺀다');
+  assert.match(comp, /검색 결과 \$\{foundTotal\}건 — 종류별 상위 \$\{SEARCH_PER_KIND\}건을 보여 줍니다/, '잘렸으면 잘렸다고 읽어 준다');
+  assert.match(comp, /const count = total > shown \? `\$\{total\}건 중 \$\{shown\}건` : `\$\{total\}건`;/, '머리줄에 「n건 중 m건」');
+  assert.match(comp, /aria-label=\{`\$\{g\.kind\} \$\{count\}`\}/, '그룹 이름에도 같은 수를 담는다(머리줄은 장식이다)');
+  assert.match(comp, /data-more=\{h\.more \? 'true' : undefined\}/, '「모두 보기」 줄을 구분해 둔다');
 });
