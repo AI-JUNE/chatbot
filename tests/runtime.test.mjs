@@ -2258,3 +2258,93 @@ test('아직 오지 않은 달의 수수료 합계는 산출하지 않는다 (DS
   assert.equal(/[A-Za-z]/.test(future.error), false, `영문 토큰이 남았다: ${future.error}`);
   assert.equal(/\d{4}-\d{2}/.test(future.error), false, `형식 그대로의 달 표기가 남았다: ${future.error}`);
 });
+
+/* ══════════ 디자인 스프린트 — 29차 재감사 (DS 32-1·32-2) ══════════ */
+
+const CONVLOG_DEPS = ['chat', 'storage', 'logger', 'monitoring', 'knowledge', 'normalize', 'rules', 'adminStore', 'slots', 'session', 'llm', 'tenantKB', 'ingest'];
+
+test('답하지 못한 질문을 묶어 세고, 보여 준 수를 찾은 수라고 말하지 않는다 (DS 32-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const { logTurn, resetLogs, unansweredQuestions } = await importLib('convlog', CONVLOG_DEPS);
+  resetLogs();
+
+  const turn = (message, source) => logTurn({
+    sessionId: `s-${message}-${source}`, channel: 'web', message, reply: '답', intent: 'fallback',
+    source, escalate: false,
+  });
+
+  // 기록이 없으면 지어내지 않는다.
+  assert.deepEqual(unansweredQuestions(), { items: [], groups: 0, turns: 0 });
+
+  // 같은 질문은 띄어쓰기·대소문자가 달라도 한 묶음이다 — 운영자에게는 같은 질문이다.
+  turn('환불 되나요?', 'fallback');
+  turn('환불되나요?', 'fallback');
+  turn('ENVIRONMENT 인증서 주나요', 'fallback');
+  turn('environment 인증서 주나요', 'fallback');
+  // 자료·규칙으로 답한 대화는 「답하지 못한 질문」이 아니다.
+  turn('영업시간 알려주세요', 'kb');
+  turn('규칙으로 답한 질문', 'rule');
+
+  const r = unansweredQuestions();
+  assert.equal(r.groups, 2, '같은 질문이 묶이지 않았다');
+  assert.equal(r.turns, 4, '묶기 전의 총 횟수를 세야 한다');
+  assert.equal(r.items.length, 2);
+  assert.equal(r.items.every((i) => i.count === 2), true, '묶음마다 몇 번 왔는지 세야 한다');
+  // 화면에 보이는 표기는 **가장 최근에 받은 것**이다(뒤에 온 것으로 갱신).
+  assert.equal(r.items.find((i) => i.question.includes('환불')).question, '환불되나요?');
+
+  // 자주 온 질문이 위에 온다.
+  turn('주차 되나요', 'fallback');
+  turn('주차 되나요', 'fallback');
+  turn('주차 되나요', 'fallback');
+  assert.equal(unansweredQuestions().items[0].question, '주차 되나요', '자주 온 질문이 위에 있어야 한다');
+
+  // 잘라도 **자르기 전의 묶음 수**를 함께 돌려준다(DS 31-3 — 보여 준 수 ≠ 찾은 수).
+  const cut = unansweredQuestions(1);
+  assert.equal(cut.items.length, 1);
+  assert.equal(cut.groups, 3, '자른 수를 전체라고 말하면 나머지를 영영 찾지 않는다');
+  assert.equal(cut.turns, 7);
+  resetLogs();
+});
+
+test('답변 평가는 재시작을 넘겨 남고, 어긋난 스냅샷은 건너뛴다 (DS 32-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const F = await importLib('feedback', ['storage', 'logger', 'monitoring', 'refusal']);
+  F.resetFeedback();
+
+  assert.equal(F.FEEDBACK_NS, 'feedback', '저장소 네임스페이스가 없으면 재시작마다 평가가 사라진다');
+  F.recordFeedback({ sessionHash: 'h1', verdict: 'up', citation: '이음 FAQ 1. 신청' });
+  F.recordFeedback({ sessionHash: 'h2', verdict: 'down', citation: '이음 FAQ 3. 활동 시간' });
+  const snap = F.exportFeedback();
+  assert.equal(snap.entries.length, 2);
+
+  F.resetFeedback();
+  assert.equal(F.feedbackSummary().total, 0);
+  const back = F.importFeedback(snap);
+  assert.equal(back.ok, true);
+  assert.equal(back.count, 2, '복원이 평가를 잃었다');
+  const sum = F.feedbackSummary();
+  assert.equal(sum.total, 2);
+  assert.equal(sum.helpfulRate, 50);
+  assert.equal(sum.topDown[0].citation, '이음 FAQ 3. 활동 시간');
+
+  // 평가값이 아닌 항목은 집계를 비뚤게 만든다 — 건너뛴다.
+  const dirty = F.importFeedback({
+    version: 1,
+    savedAt: '',
+    seq: 9,
+    entries: [
+      { id: 'F-000001', sessionHash: 'h1', verdict: '최고', citation: 'x', channel: 'web', at: '' },
+      { id: '', sessionHash: 'h2', verdict: 'up', citation: 'x', channel: 'web', at: '' },
+      { id: 'F-000003', sessionHash: '', verdict: 'up', citation: 'x', channel: 'web', at: '' },
+      { id: 'F-000004', sessionHash: 'h4', verdict: 'down', citation: 'y', channel: 'web', at: '2026-10-10T00:00:00.000Z' },
+    ],
+  });
+  assert.equal(dirty.ok, true);
+  assert.equal(dirty.count, 1, '형식이 어긋난 평가가 집계에 들어갔다');
+
+  // 형식 자체가 아닌 것은 사유를 돌려준다(복원 실패를 조용히 삼키지 않는다).
+  assert.equal(F.importFeedback(null).ok, false);
+  assert.equal(F.importFeedback({ version: 1 }).ok, false);
+  F.resetFeedback();
+});

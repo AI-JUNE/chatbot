@@ -1631,3 +1631,82 @@ test('전역 검색이 보여 준 수가 아니라 찾은 수를 말하고 전�
   assert.match(comp, /aria-label=\{`\$\{g\.kind\} \$\{count\}`\}/, '그룹 이름에도 같은 수를 담는다(머리줄은 장식이다)');
   assert.match(comp, /data-more=\{h\.more \? 'true' : undefined\}/, '「모두 보기」 줄을 구분해 둔다');
 });
+
+/**
+ * ── DS 32-1 — 고객이 누른 평가를 볼 수 있는가 ──
+ * 위젯은 답변마다 「도움이 됐나요」를 묻고, 서버는 「개선 대상 상위 5」까지 계산해 두었는데
+ * 그 집계를 부르는 라우트·화면이 한 곳도 없었다. 랜딩은 「평가가 곧 보완 목록」이라 약속한다.
+ */
+test('고객이 누른 평가가 대시보드에 모이고, 0건을 0%로 단정하지 않는다 (DS 32-1)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const route = readFileSync(new URL('../src/app/api/admin/escalations/route.ts', import.meta.url), 'utf8');
+  const lib = readFileSync(new URL('../src/lib/feedback.ts', import.meta.url), 'utf8');
+
+  // 1) 서버가 집계를 실제로 내려보낸다 — 함수만 있고 부르는 곳이 없으면 화면은 영원히 비어 있다.
+  assert.match(route, /import \{ feedbackSummary \} from '@\/lib\/feedback'/, '평가 집계를 불러오지 않는다');
+  assert.match(route, /feedback: feedbackSummary\(\)/, '응답에 평가가 실리지 않는다');
+
+  // 2) 평가는 재시작을 넘겨 남는다(저장소 네임스페이스 등록 + 기록할 때마다 예약).
+  const storage = readFileSync(new URL('../src/lib/storage.ts', import.meta.url), 'utf8');
+  const nsBlock = (storage.split('export const NAMESPACES')[1] ?? '').split('};')[0];
+  assert.match(nsBlock, /feedback:[^\n]*pii: false/, '평가 네임스페이스가 등록되지 않았다');
+  assert.match(lib, /scheduleSave\(FEEDBACK_NS, exportFeedback\)/, '평가를 기록해도 저장을 예약하지 않는다');
+
+  // 3) 화면 — 카드·KPI 값·보완 목록·개인정보 안내.
+  const dash = src.slice(src.indexOf("{tab === 'dash' && ("), src.indexOf('{/* ── 최근 대화 ── */}'));
+  assert.ok(dash.includes('<h2 style={S.h2}>답변 평가</h2>'), '대시보드에 평가 카드가 없다');
+  assert.match(dash, /stats\.feedback && stats\.feedback\.total > 0/, '평가 0건에서도 비율을 그린다');
+  assert.match(dash, /stats\.feedback\.helpfulRate === null \? MEASURING/, '표본이 없는데 비율을 단정한다');
+  assert.ok(dash.includes('보완이 필요한 자료'), '👎가 많은 자료 목록이 없다');
+  assert.ok(dash.includes('평가에는 대화 내용이 들어 있지 않습니다'), '무엇을 기록하는지 밝히지 않는다');
+  // 보완 목록은 그 자료가 있는 곳으로 데려간다 — 건수만 보여 주면 고칠 길이 없다.
+  assert.match(dash, /onClick=\{\(\) => \{ goTab\('kb'\); setKbCat\(''\); setKbQuery\(d\.citation\); \}\}/, '자료로 데려가지 않는다');
+  // 「근거 없음」은 고칠 자료가 없다 — 데려갈 곳이 없으므로 버튼으로 만들지 않는다.
+  assert.match(dash, /if \(d\.citation === NO_CITATION_LABEL\)/, '근거 없음 행도 자료처럼 누르게 둔다');
+  assert.match(dash, /<div className="ac-row" data-static="">/, '누를 수 없는 행이 누를 수 있어 보인다');
+
+  // 4) 「근거 없음」 표기는 서버 사전과 같아야 한다 — 어긋나면 그 행만 영영 자료로 데려간다.
+  const label = (src.match(/const NO_CITATION_LABEL = '([^']+)'/) || [])[1];
+  assert.ok(label, 'NO_CITATION_LABEL 이 없다');
+  assert.ok(lib.includes(`e.citation || '${label}'`), `서버의 근거 없음 표기와 어긋난다: ${label}`);
+
+  // 5) 첫 렌더(집계 도착 전)에는 평가 카드를 그리지 않는다 — 불러오는 중 ≠ 평가 0건.
+  const html = await render();
+  assert.equal(html.includes('답변 평가'), false, '집계가 오기 전에 평가 카드를 단정한다');
+  const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
+  assert.match(css, /\.ac-row\[data-static\]:hover\{background:transparent\}/, '누를 수 없는 행이 손을 올리면 밝아진다');
+});
+
+/**
+ * ── DS 32-2 — 「기본 안내 n건」을 무엇을 더 쓸지로 바꾼다 ──
+ * 대시보드는 근거 pill 로 「기본 안내 12건」이라 말하면서 그 12건이 **어떤 질문**이었는지는
+ * 어디에도 보여 주지 않았다. 숫자를 줄이는 길이 화면에 없으면 그 숫자는 읽고 넘기는 글자다.
+ */
+test('답하지 못한 질문 목록이 뜨고 그 질문으로 자료를 만들 수 있다 (DS 32-2)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const route = readFileSync(new URL('../src/app/api/admin/escalations/route.ts', import.meta.url), 'utf8');
+
+  assert.match(route, /unanswered: unansweredQuestions\(8\)/, '서버가 답하지 못한 질문을 내려보내지 않는다');
+
+  const dash = src.slice(src.indexOf("{tab === 'dash' && ("), src.indexOf('{/* ── 답변 평가'));
+  assert.ok(dash.includes('<h2 style={S.h2}>자료에 없어 답하지 못한 질문</h2>'), '답하지 못한 질문 카드가 없다');
+  // 보여 준 수를 찾은 수라 말하지 않는다(DS 31-3 과 같은 규칙) — 묶음 수·총 횟수를 함께 적는다.
+  assert.match(dash, /unanswered\.groups > unanswered\.items\.length/, '자른 수를 전체라고 말한다');
+  assert.match(dash, /가지 중 \$\{unanswered\.items\.length\}가지/, '몇 가지 중 몇 가지인지 말하지 않는다');
+  assert.match(dash, /<span style=\{S\.tag\} role="status">/, '건수가 바뀌어도 스크린리더가 모른다');
+  // 아직 받지 못한 것과 0건을 구분한다 — null 이면 카드 자체를 그리지 않는다.
+  assert.match(dash, /\{unanswered && unanswered\.items\.length > 0 && \(/, '불러오기 전에 0건을 단정한다');
+  assert.match(src, /const \[unanswered, setUnanswered\] = useState<UnansweredView \| null>\(null\)/, '초기값이 0건이면 안 된다');
+  assert.match(src, /setUnanswered\(data\.unanswered \|\| null\)/, '받은 목록을 화면에 싣지 않는다');
+
+  // 질문을 베껴 적게 하지 않는다 — 폼의 질문 칸에 그대로 채우고 폼으로 데려간다.
+  assert.match(dash, /onClick=\{\(\) => draftKbFromQuestion\(u\.question\)\}/, '「이 질문으로 자료 만들기」가 없다');
+  const fn = src.slice(src.indexOf('const draftKbFromQuestion = async'), src.indexOf('const removeKB = async'));
+  assert.match(fn, /confirmDiscard\(formDirty\(form, formBase\.current\.kb\)/, '적던 내용을 말없이 갈아 끼운다(DS 27-2)');
+  assert.match(fn, /loadKbForm\(\{ \.\.\.EMPTY_FORM, question \}\)/, '질문을 채우지 않거나 기준선을 옮기지 않는다');
+  assert.match(fn, /setEditingId\(null\)/, '수정 중인 자료를 가리킨 채 새 자료를 만든다');
+  assert.match(fn, /kbFormRef\.current\?\.scrollIntoView/, '좁은 화면에서 폼이 보이지 않는다');
+
+  const html = await render();
+  assert.equal(html.includes('자료에 없어 답하지 못한 질문'), false, '목록이 오기 전에 카드를 단정한다');
+});

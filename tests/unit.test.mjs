@@ -345,7 +345,8 @@ test('개인정보 포함 네임스페이스는 승인 플래그 없이 저장�
   for (const ns of ['tickets', 'convlog']) {
     assert.ok(new RegExp(`${ns}:[^\\n]*pii: true`).test(nsBlock), `${ns}는 pii:true 로 등록되어야 한다`);
   }
-  for (const ns of ['admin', 'audit']) {
+  // 평가는 평가값·근거 라벨·세션 해시뿐이라 개인정보가 없다(DS 32-1) — 승인 게이트 없이 저장한다.
+  for (const ns of ['admin', 'audit', 'feedback']) {
     assert.ok(new RegExp(`${ns}:[^\\n]*pii: false`).test(nsBlock), `${ns}는 개인정보 없음(pii:false)으로 등록되어야 한다`);
   }
 });

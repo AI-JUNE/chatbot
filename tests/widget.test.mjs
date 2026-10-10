@@ -817,3 +817,27 @@ test('열린 상담창에는 구분선도 읽지 않은 숫자도 없다 (DS 28-
   assert.equal(/class="gw-unread"/.test(html), false, '열린 상담창의 런처에 숫자가 뜬다');
   assert.match(html, /aria-label="이음 안내 챗봇 최소화"/, '열린 런처의 이름이 최소화가 아니다');
 });
+
+/**
+ * ── DS 32-3 — 「도움이 되지 않았다」고 말한 사람 ──
+ * 👎 를 누른 사람은 **아직 답을 받지 못했다**. 종전에는 감사 인사 한 줄로 끝났고,
+ * 상담원 연결 버튼은 엔진이 전환을 제안한 답변에만 붙어 있었다.
+ */
+test('아쉬워요를 누른 사람에게 다음 길을 준다 (DS 32-3)', opts, () => {
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  const rate = src.slice(src.indexOf('{/* 답변 평가'), src.indexOf('{/* 타이핑 인디케이터'));
+
+  assert.match(rate, /rated\[m\.key\] === 'down' && \(/, '아쉬워요 뒤에 아무 길도 없다');
+  assert.match(rate, />\s*상담원 연결하기\s*</, '아쉬워요를 누른 사람이 사람에게 닿을 길이 없다');
+  assert.match(rate, /onClick=\{\(\) => openHandoff\(m\.key\)\}/, '같은 접수 카드를 쓰지 않는다');
+  // 엔진이 이미 전환을 제안한 답변에는 위에 같은 버튼이 있다 — 두 번 보여 주지 않는다.
+  assert.match(rate, /\{!m\.escalate && \(/, '같은 버튼이 한 말풍선에 두 개 뜬다');
+  // 이미 접수한 사람에게 다시 권하지 않는다 — 접수번호를 알려 준다.
+  assert.match(rate, /handoff\?\.stage === 'done' && handoff\.ticket \?/, '접수한 사람에게 또 접수를 권한다');
+  // 지키지 못할 약속은 하지 않는다 — 보완 목록은 운영 콘솔에 실제로 있다(DS 32-1).
+  assert.equal(rate.includes('안내 자료를 보완할게요'), false, '약속 문구가 그대로 남았다');
+
+  // 카드를 열면 버튼이 사라진다 — 키보드 초점이 대화창 밖으로 떨어지지 않게 첫 칸으로 옮긴다.
+  const open = src.slice(src.indexOf('function openHandoff('), src.indexOf('// 접수 요청.'));
+  assert.match(open, /setTimeout\(\(\) => contactRef\.current\?\.focus\(\), 0\)/, '카드를 열면 초점이 사라진다');
+});
