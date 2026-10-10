@@ -2,7 +2,8 @@
 // 인증: lib/http requireAdmin. 시크릿은 Vercel 환경변수로만.
 import { NextRequest } from 'next/server';
 import { listTickets, updateTicket, getTicket, escalationStats, ESCALATION_STATUSES, STATUS_LABELS, EscalationStatus } from '@/lib/escalation';
-import { convStats, listTurns } from '@/lib/convlog';
+import { convStats, listTurns, unansweredQuestions } from '@/lib/convlog';
+import { feedbackSummary } from '@/lib/feedback';
 import { intentLabel, intentLabelMap } from '@/lib/intents';
 import { listCustomRules } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
@@ -29,9 +30,16 @@ export async function GET(req: NextRequest) {
         ...conversation,
         topIntents: conversation.topIntents.map((t) => ({ ...t, label: intentLabel(t.intent, labels) })),
       },
+      // 고객이 누른 평가(👍/👎). 종전에는 받아 두고도 이 집계를 부르는 곳이 없어
+      // 운영자가 볼 화면이 하나도 없었다(DS 32-1).
+      feedback: feedbackSummary(),
     },
     ...(withLogs
-      ? { recentTurns: listTurns(30).map((t) => ({ ...t, intentLabel: intentLabel(t.intent, labels) })) }
+      ? {
+          recentTurns: listTurns(30).map((t) => ({ ...t, intentLabel: intentLabel(t.intent, labels) })),
+          // 「기본 안내 n건」이라는 수를 **무엇을 더 써야 하는지**로 바꾸는 목록(DS 32-2).
+          unanswered: unansweredQuestions(8),
+        }
       : {}),
   });
 }

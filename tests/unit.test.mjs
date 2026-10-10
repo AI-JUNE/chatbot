@@ -1347,7 +1347,8 @@ test('모션 최소화 설정에서 화면이 미끄러지지 않는다 (DS 8-3)
   const w = read('src/components/ChatWidget.tsx');
   assert.match(w, /endRef\.current\?\.scrollIntoView\(\{ behavior: scrollBehavior\(\) \}\)/, '대화 자동 스크롤이 설정을 따르지 않는다');
   const a = read('src/app/admin/page.tsx');
-  assert.equal((a.match(/behavior: scrollBehavior\(\), block: 'start'/g) || []).length, 3, '폼으로 스크롤하는 3곳이 모두 설정을 따라야 한다');
+  // 4곳: 안내 자료 수정·「이 질문으로 자료 만들기」(DS 32-2)·고객사 수정·파트너 수정
+  assert.equal((a.match(/behavior: scrollBehavior\(\), block: 'start'/g) || []).length, 4, '폼으로 스크롤하는 4곳이 모두 설정을 따라야 한다');
 });
 
 

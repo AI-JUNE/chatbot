@@ -166,6 +166,28 @@ interface OpsStats {
     avgLatencyMs?: number | null;
     latencySamples?: number;
   };
+  /**
+   * 고객이 누른 답변 평가(DS 32-1). 구버전 응답 대비 optional —
+   * 값이 없으면 카드는 「측정 중」이고, 0% 로 단정하지 않는다.
+   */
+  feedback?: {
+    total: number;
+    up: number;
+    down: number;
+    /** 도움됨 비율(%). 평가 0건이면 null. */
+    helpfulRate: number | null;
+    /** 👎가 많은 근거(=보완 대상) 순 상위 목록. */
+    topDown: { citation: string; down: number }[];
+  };
+}
+
+/** 자료에 없어 기본 안내로 끝난 질문 묶음(DS 32-2). 서버 `unansweredQuestions()` 와 같은 모양. */
+interface UnansweredView {
+  items: { key: string; question: string; count: number; lastAt: string }[];
+  /** 자르기 전의 전체 묶음 수 — 보여 준 수를 찾은 수라고 말하지 않는다(DS 31-3). */
+  groups: number;
+  /** 그 질문들이 받은 총 횟수. */
+  turns: number;
 }
 
 /** 처리 시간을 사람이 읽는 단위로 — 1초 미만은 ms, 그 이상은 소수 1자리 초. */
@@ -176,6 +198,13 @@ function latencyLabel(ms: number): string {
 
 /** 값이 아직 없는 지표는 0을 지어내지 않고 「측정 중」으로 표시한다(§13). */
 const MEASURING = '측정 중';
+
+/**
+ * 근거 없이 답한 답변에 달린 평가를 묶는 이름 — 서버 `@/lib/feedback` 의 같은 문자열과 맞춰야 한다
+ * (콘솔은 lib 을 불러오지 않으므로 옮겨 적고 **테스트가 두 쪽을 대조한다** — `MAX_DOC_CHARS` 와 같은 방식).
+ * 이 줄은 자료가 아니므로 「지식베이스에서 찾기」로 데려가지 않는다.
+ */
+const NO_CITATION_LABEL = '근거 없음';
 
 /** 대화 식별자는 화면에 전부 보여주지 않는다(개인 추적 방지) — 앞 6자만. */
 function shortSession(id: string): string {
@@ -2209,6 +2238,8 @@ export default function AdminPage() {
   const [tickets, setTickets] = useState<TicketView[]>([]);
   const [stats, setStats] = useState<OpsStats | null>(null);
   const [recentTurns, setRecentTurns] = useState<TurnView[]>([]);
+  /** 자료에 없어 답하지 못한 질문(DS 32-2). 아직 받지 못했으면 null — 0건과 구분한다. */
+  const [unanswered, setUnanswered] = useState<UnansweredView | null>(null);
 
   // ---- 최근 대화 상세 서랍(대시보드) ----
   const [drawerSession, setDrawerSession] = useState<string | null>(null);
@@ -2297,6 +2328,7 @@ export default function AdminPage() {
         setTickets(data.tickets);
         setStats(data.stats);
         setRecentTurns(data.recentTurns || []);
+        setUnanswered(data.unanswered || null);
         setEscSyncAt(Date.now());
       }
       if (data.ok || !quiet) markPhase('esc', data.ok ? 'done' : 'error');
@@ -2947,6 +2979,20 @@ export default function AdminPage() {
     loadKbForm({ id: e.id, category: e.category, question: e.question, keywords: e.keywords.join(', '), answer: e.answer });
     goTab('kb');
     // 좁은 화면에서는 편집 폼이 표 아래에 있으므로 보이는 곳으로 옮긴다.
+    window.setTimeout(() => kbFormRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }), 0);
+  };
+
+  /**
+   * 「이 질문으로 자료 만들기」(DS 32-2) — 답하지 못한 질문을 등록 폼의 질문 칸에 그대로 채운다.
+   * 목록에서 질문을 베껴 적게 하면 오타가 생기고, 그 오타가 다음 매칭을 또 놓친다.
+   * 편집 중이던 자료가 있으면 그것을 말없이 갈아 끼우지 않는다(DS 27-2) — `editKB` 와 같은 관문이다.
+   */
+  const draftKbFromQuestion = async (question: string) => {
+    if (!(await confirmDiscard(formDirty(form, formBase.current.kb), '안내 자료 편집 폼'))) return;
+    setEditingId(null);
+    setKbErr({});
+    loadKbForm({ ...EMPTY_FORM, question });
+    goTab('kb');
     window.setTimeout(() => kbFormRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }), 0);
   };
 
@@ -3758,6 +3804,118 @@ export default function AdminPage() {
                   <span key={k} className="ac-pill">{CHANNEL_LABELS[k] || k} {v}건</span>
                 ))}
               </div>
+            </section>
+          )}
+
+          {/*
+            ── 보완 목록 ──
+            이 제품의 고리는 「자료 등록 → 근거로 답변 → 못 답한 것·나쁜 평가 → 자료 보완」인데
+            돌아오는 쪽 절반이 화면에 없었다(DS 32-1·32-2). 숫자는 보여 주면서 **무엇을 고칠지**는
+            말하지 않았고, 평가는 받아 두고도 부르는 곳이 없었다. 두 카드가 그 자리를 메운다.
+          */}
+          {unanswered && unanswered.items.length > 0 && (
+            <section style={S.card}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                <h2 style={S.h2}>자료에 없어 답하지 못한 질문</h2>
+                <span style={S.tag} role="status">
+                  {unanswered.groups > unanswered.items.length
+                    ? `${unanswered.groups.toLocaleString('ko-KR')}가지 중 ${unanswered.items.length}가지 · 모두 ${unanswered.turns.toLocaleString('ko-KR')}번`
+                    : `${unanswered.groups.toLocaleString('ko-KR')}가지 · 모두 ${unanswered.turns.toLocaleString('ko-KR')}번`}
+                </span>
+              </div>
+              <p style={{ fontSize: 13, color: 'var(--sub)', marginBottom: 12 }}>
+                등록된 자료·규칙에서 답을 찾지 못해 기본 안내로 끝난 질문입니다. 자주 온 질문이 위에 있습니다.
+              </p>
+              <ul className="ac-rows" aria-label="답하지 못한 질문 목록">
+                {unanswered.items.map((u) => (
+                  <li key={u.key}>
+                    <div className="ac-row" data-static="">
+                      <span className="ac-row-main">
+                        <span className="ac-row-msg" title={u.question}>{clip(u.question, 90)}</span>
+                        <span className="ac-row-reply">마지막 {timeLabel(u.lastAt)}</span>
+                      </span>
+                      <span className="ac-row-side">
+                        <span className="ac-pill" style={TONE.warn}>{u.count}번</span>
+                        <button
+                          type="button"
+                          className="ac-viewbtn"
+                          onClick={() => draftKbFromQuestion(u.question)}
+                        >
+                          이 질문으로 자료 만들기
+                        </button>
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {/* ── 답변 평가(고객이 누른 👍/👎) ── */}
+          {stats && (
+            <section style={S.card}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                <h2 style={S.h2}>답변 평가</h2>
+                <span style={S.tag}>상담창에서 고객이 누른 평가</span>
+              </div>
+              {stats.feedback && stats.feedback.total > 0 ? (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 30, fontWeight: 800, letterSpacing: '-.02em', fontVariantNumeric: 'tabular-nums' }}>
+                      {stats.feedback.helpfulRate === null ? MEASURING : `${stats.feedback.helpfulRate}%`}
+                    </span>
+                    <span style={{ fontSize: 13, color: 'var(--sub)' }}>도움이 됐다는 응답</span>
+                    <span className="ac-pill" style={TONE.ok}>도움됐어요 {stats.feedback.up.toLocaleString('ko-KR')}건</span>
+                    <span className="ac-pill" style={TONE.warn}>아쉬워요 {stats.feedback.down.toLocaleString('ko-KR')}건</span>
+                  </div>
+                  {stats.feedback.topDown.length > 0 && (
+                    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+                      <h3 style={{ fontSize: 13.5, fontWeight: 800, marginBottom: 8 }}>보완이 필요한 자료</h3>
+                      <ul className="ac-rows" aria-label="아쉬워요가 많은 자료">
+                        {stats.feedback.topDown.map((d) => {
+                          const pill = <span className="ac-pill" style={TONE.warn}>아쉬워요 {d.down}건</span>;
+                          // 근거 없이 답한 답변은 고칠 자료가 없다 — 데려갈 곳이 없으므로 버튼으로 만들지 않는다.
+                          if (d.citation === NO_CITATION_LABEL) {
+                            return (
+                              <li key={d.citation}>
+                                <div className="ac-row" data-static="">
+                                  <span className="ac-row-main">
+                                    <span className="ac-row-msg">{NO_CITATION_LABEL}</span>
+                                    <span className="ac-row-reply">등록된 자료 없이 답한 답변입니다. 위의 「답하지 못한 질문」부터 채워 주세요.</span>
+                                  </span>
+                                  <span className="ac-row-side">{pill}</span>
+                                </div>
+                              </li>
+                            );
+                          }
+                          return (
+                            <li key={d.citation}>
+                              <button
+                                type="button"
+                                className="ac-row"
+                                onClick={() => { goTab('kb'); setKbCat(''); setKbQuery(d.citation); }}
+                              >
+                                <span className="ac-row-main">
+                                  <span className="ac-row-msg" title={d.citation}>{clip(d.citation, 90)}</span>
+                                  <span className="ac-row-reply">지식베이스에서 이 자료를 찾습니다</span>
+                                </span>
+                                <span className="ac-row-side">{pill}</span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p style={{ fontSize: 13.5, color: 'var(--mut)' }}>
+                  {MEASURING} — 아직 평가가 없습니다. 상담창의 답변 아래 「도움이 됐나요」를 고객이 누르면 여기에 모입니다.
+                </p>
+              )}
+              <p style={{ ...S.tag, marginTop: 12 }}>
+                평가에는 대화 내용이 들어 있지 않습니다. 어떤 자료를 근거로 답했는지와 평가값만 기록합니다.
+              </p>
             </section>
           )}
 

@@ -47,6 +47,8 @@ export const NAMESPACES: Record<string, Namespace> = {
   admin: { id: 'admin', label: '관리 콘텐츠(KB·룰)', pii: false },
   audit: { id: 'audit', label: '감사 로그', pii: false },
   partners: { id: 'partners', label: '파트너·계약 귀속', pii: false },
+  // 평가는 평가값·서버가 만든 근거 라벨·세션 해시뿐이라 개인정보가 없다(DS 32-1).
+  feedback: { id: 'feedback', label: '답변 평가', pii: false },
   tickets: { id: 'tickets', label: '상담 티켓', pii: true },
   convlog: { id: 'convlog', label: '대화 로그', pii: true },
 };

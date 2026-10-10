@@ -1359,10 +1359,11 @@ test('적던 내용이 있는지 값으로 가린다 (DS 27-2)', opts, async () 
 test('적던 내용을 덮어쓰거나 들고 떠날 때 먼저 묻는다 (DS 27-2)', opts, () => {
   const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
 
-  // 1) 폼을 통째로 갈아 끼우는 자리 5곳이 전부 확인을 지난다(안내 자료·규칙·고객사·파트너·「파트너 추가」).
-  assert.equal((src.match(/confirmDiscard\(formDirty\(/g) || []).length, 5, '덮어쓰기 자리 하나가 확인을 지나지 않는다');
+  // 1) 폼을 통째로 갈아 끼우는 자리 6곳이 전부 확인을 지난다
+  //    (안내 자료·「이 질문으로 자료 만들기」(DS 32-2)·규칙·고객사·파트너·「파트너 추가」).
+  assert.equal((src.match(/confirmDiscard\(formDirty\(/g) || []).length, 6, '덮어쓰기 자리 하나가 확인을 지나지 않는다');
   // 확인을 **기다려야** 하므로 전부 async 다 — 동기 함수면 물어보는 사이에 폼이 이미 갈린다.
-  for (const decl of ['const editKB = async', 'const editPartner = async', 'const editAccount = async', 'const onEdit = async']) {
+  for (const decl of ['const editKB = async', 'const draftKbFromQuestion = async', 'const editPartner = async', 'const editAccount = async', 'const onEdit = async']) {
     assert.ok(src.includes(decl), `확인을 기다리지 않는다: ${decl}`);
   }
   // 적은 것이 없으면 묻지 않는다 — 뜻 없는 확인이 잦으면 삭제 확인까지 읽지 않고 누른다.

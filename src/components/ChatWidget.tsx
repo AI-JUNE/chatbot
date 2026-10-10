@@ -996,8 +996,14 @@ export default function ChatWidget({
 
   // ── 상담원 전환 ──
   // 버튼을 누르면 바로 접수하지 않고 연락처 입력 카드를 연다(회신 수단이 있어야 상담이 이어진다).
+  /**
+   * 카드를 열면 **버튼은 사라진다**(`handoff.key === m.key` 가 되면 다른 가지를 그린다) —
+   * 누른 손가락은 괜찮지만 키보드는 초점을 잃고 대화창 밖으로 떨어진다(DS 8-1 과 같은 종류).
+   * 그래서 여는 쪽이 카드의 첫 칸으로 초점을 옮긴다.
+   */
   function openHandoff(key: number) {
     setHandoff({ key, stage: 'form', contact: '', error: '' });
+    setTimeout(() => contactRef.current?.focus(), 0);
   }
 
   // 접수 요청. 연락처는 비워도 접수되지만(`skipContact`), 그때는 대화창으로만 안내가 돌아간다.
@@ -1426,7 +1432,29 @@ export default function ChatWidget({
                           </>
                         )}
                         {rated[m.key] === 'up' && <span role="status">의견 감사합니다.</span>}
-                        {rated[m.key] === 'down' && <span role="status">알려주셔서 감사합니다. 안내 자료를 보완할게요.</span>}
+                        {/*
+                          「도움이 되지 않았다」고 말한 사람은 **아직 답을 받지 못했다**(DS 32-3).
+                          종전에는 감사 인사 한 줄로 끝나, 고객은 다음에 할 일을 스스로 찾아야 했다 —
+                          상담원 연결 버튼은 엔진이 전환을 제안한 답변(`m.escalate`)에만 붙어 있었고,
+                          자료로 답했지만 틀린 답변에는 아무 길이 없었다. 그 자리에서 사람에게 넘긴다.
+                        */}
+                        {rated[m.key] === 'down' && (
+                          <>
+                            <span role="status">알려주셔서 감사합니다. 안내 자료를 보완하겠습니다.</span>
+                            {!m.escalate && (
+                              handoff?.stage === 'done' && handoff.ticket ? (
+                                <span>접수번호 {handoff.ticket.id}로 상담원 연결이 접수돼 있어요.</span>
+                              ) : handoff?.key !== m.key ? (
+                                <button
+                                  onClick={() => openHandoff(m.key)}
+                                  style={{ ...chipStyle, padding: '4px 11px', minHeight: 26 }}
+                                >
+                                  상담원 연결하기
+                                </button>
+                              ) : null
+                            )}
+                          </>
+                        )}
                         {rated[m.key] === 'error' && (
                           <>
                             <span role="status" style={{ color: 'var(--danger)' }}>평가를 보내지 못했어요.</span>

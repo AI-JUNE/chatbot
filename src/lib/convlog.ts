@@ -107,6 +107,57 @@ export function listAllTurns(): ChatTurnLog[] {
   return logs.map((l) => ({ ...l }));
 }
 
+/** 등록 자료·규칙에서 답을 찾지 못해 기본 안내로 끝난 질문(DS 32-2). */
+export interface UnansweredQuestion {
+  /** 같은 질문을 묶는 열쇠(공백·대소문자 무시). 목록의 식별자로도 쓴다. */
+  key: string;
+  /** 화면에 보일 질문 — 같은 묶음 중 **가장 최근에 받은** 표기를 쓴다. */
+  question: string;
+  /** 같은 질문이 몇 번 왔는가. */
+  count: number;
+  /** 마지막으로 받은 시각(ISO). */
+  lastAt: string;
+}
+
+/** 묶음 열쇠 — 「환불 되나요?」와 「환불되나요?」는 운영자에게 같은 질문이다. */
+function questionKey(message: string): string {
+  return message.trim().toLowerCase().replace(/\s+/g, '');
+}
+
+/**
+ * 「자료에 없어 답하지 못한 질문」 목록. 대시보드가 보여 주던 「기본 안내 n건」은 **수뿐**이어서
+ * 그 수를 줄이려면 어떤 자료를 더 써야 하는지 알 길이 없었다(DS 32-2).
+ *
+ * - 보존된 로그 전체(최대 500건)에서 세고, 자주 온 질문을 앞에 둔다 — 같은 횟수면 최근 것이 먼저다.
+ * - 빈 메시지(`source: 'empty'`)·연결 오류는 자료의 문제가 아니므로 세지 않는다.
+ * @returns 묶은 질문 목록과 **자르기 전의 전체 묶음 수**(DS 31-3 — 보여 준 수를 찾은 수라 말하지 않는다)
+ */
+export function unansweredQuestions(limit = 8): { items: UnansweredQuestion[]; groups: number; turns: number } {
+  const byKey = new Map<string, UnansweredQuestion>();
+  let turns = 0;
+  for (const l of logs) {
+    if (l.source !== 'fallback') continue;
+    const message = (l.message || '').trim();
+    if (!message) continue;
+    turns += 1;
+    const key = questionKey(message);
+    const prev = byKey.get(key);
+    if (!prev) {
+      byKey.set(key, { key, question: message, count: 1, lastAt: l.at });
+      continue;
+    }
+    prev.count += 1;
+    // 로그는 시간순이라 뒤에 오는 것이 더 최근이다 — 표기와 시각을 최신으로 갱신한다.
+    prev.question = message;
+    prev.lastAt = l.at;
+  }
+  const n = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 8;
+  const items = [...byKey.values()]
+    .sort((a, b) => b.count - a.count || (a.lastAt < b.lastAt ? 1 : a.lastAt > b.lastAt ? -1 : 0))
+    .slice(0, n);
+  return { items, groups: byKey.size, turns };
+}
+
 export interface ConvStats {
   totalTurns: number;
   sessions: number;

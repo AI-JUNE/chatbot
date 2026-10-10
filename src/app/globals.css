@@ -244,6 +244,9 @@ main:focus{outline:none}
 .ac-rows{list-style:none;border-top:1px solid var(--line)}
 .ac-row{display:flex;gap:12px;align-items:flex-start;width:100%;text-align:left;padding:11px 8px;border-bottom:1px solid var(--line);border-radius:0;font-family:inherit;color:inherit}
 .ac-row:hover{background:var(--bg)}
+/* 누를 수 없는 행 — 손이 올라가도 밝아지지 않는다(밝아지면 누를 수 있다고 읽힌다). */
+.ac-row[data-static]{cursor:default}
+.ac-row[data-static]:hover{background:transparent}
 .ac-row-main{flex:1;min-width:0}
 .ac-row-msg{display:block;font-size:14px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ac-row-reply{display:block;font-size:12.5px;color:var(--sub);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

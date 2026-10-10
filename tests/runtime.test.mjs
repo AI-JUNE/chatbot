@@ -1477,7 +1477,8 @@ test('월 이용료는 검증된 값만 저장되고 미입력과 0원을 구분
 /* ══════════ 답변 평가 저장소 ══════════ */
 
 test('답변 평가는 집계되고, 평가가 없으면 비율을 만들어내지 않는다', opts, async () => {
-  const F = await importLib('feedback', []);
+  process.env.ADMIN_PERSIST = 'false'; // 테스트가 로컬 파일을 건드리지 않게 한다
+  const F = await importLib('feedback', ['storage', 'logger', 'monitoring', 'refusal']);
   F.resetFeedback();
 
   assert.equal(F.feedbackSummary().helpfulRate, null, '평가 0건이면 비율은 null(「측정 중」)이어야 한다');
@@ -1497,7 +1498,8 @@ test('답변 평가는 집계되고, 평가가 없으면 비율을 만들어내�
 });
 
 test('잘못된 평가 입력은 사유와 함께 거절된다(실패 경로)', opts, async () => {
-  const F = await importLib('feedback', []);
+  process.env.ADMIN_PERSIST = 'false';
+  const F = await importLib('feedback', ['storage', 'logger', 'monitoring', 'refusal']);
   F.resetFeedback();
 
   const bad = F.recordFeedback({ sessionHash: 'h1', verdict: '최고' });
@@ -1513,7 +1515,8 @@ test('잘못된 평가 입력은 사유와 함께 거절된다(실패 경로)', 
 });
 
 test('평가 근거 라벨은 길이를 잘라 저장한다', opts, async () => {
-  const F = await importLib('feedback', []);
+  process.env.ADMIN_PERSIST = 'false';
+  const F = await importLib('feedback', ['storage', 'logger', 'monitoring', 'refusal']);
   F.resetFeedback();
   const long = 'ㄱ'.repeat(300);
   const r = F.recordFeedback({ sessionHash: 'h1', verdict: 'up', citation: long });
