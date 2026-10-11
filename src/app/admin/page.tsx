@@ -4960,7 +4960,7 @@ export default function AdminPage() {
                         <h2 id="partner-form-h" style={{ ...S.h2, marginBottom: 12 }}>{pForm.id ? '파트너 수정' : '새 파트너'}</h2>
                         <div className="ac-field">
                           <label htmlFor="p-name">파트너명 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span></label>
-                          <input id="p-name" style={inputStyle(pErr.name)} value={pForm.name} placeholder="예: 제이투모로우원" aria-required="true"
+                          <input id="p-name" style={inputStyle(pErr.name)} value={pForm.name} placeholder="예: 운영 대행사명" aria-required="true"
                             aria-invalid={pErr.name ? 'true' : undefined} aria-describedby={pErr.name ? 'p-name-err' : undefined}
                             onChange={(e) => { setPForm({ ...pForm, name: e.target.value }); if (pErr.name) setPErr({ ...pErr, name: undefined }); }} />
                           {pErr.name && <p id="p-name-err" className="ac-err">{pErr.name}</p>}
