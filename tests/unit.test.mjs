@@ -1228,7 +1228,8 @@ test('위젯이 같은 방문 안에서 대화를 이어간다 (DS 7-1)', () => 
   assert.match(s, /const \[sessionId, setSessionId\] = useState\(newSessionId\)/, '세션을 이어받을 수 없다');
   assert.match(s, /setSessionId\(saved\.id\)/, '복원한 대화가 서버 문맥과 이어지지 않는다');
   assert.match(s, /const saved = loadThread\(threadId\)/, '마운트 후 복원 경로가 없다');
-  assert.match(s, /saveThread\(threadId, sessionId, msgs\)/, '대화가 저장되지 않는다');
+  // 이미 누른 평가도 같은 자리에 함께 저장한다(DS 33-2) — 되살리지 않으면 페이지마다 다시 묻는다.
+  assert.match(s, /saveThread\(threadId, sessionId, msgs, Date\.now\(\), rated\)/, '대화가 저장되지 않는다');
   // 공용 PC 에 다음 사람이 읽을 대화를 남기지 않는다 — 탭을 닫으면 사라지는 저장소여야 한다.
   assert.match(s, /window\.sessionStorage/, '세션 저장소를 쓰지 않는다');
   // 주석은 「localStorage 가 아니라 sessionStorage 를 쓴다」고 적혀 있다 — 실제 코드만 본다.

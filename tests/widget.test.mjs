@@ -827,11 +827,11 @@ test('아쉬워요를 누른 사람에게 다음 길을 준다 (DS 32-3)', opts,
   const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
   const rate = src.slice(src.indexOf('{/* 답변 평가'), src.indexOf('{/* 타이핑 인디케이터'));
 
-  assert.match(rate, /rated\[m\.key\] === 'down' && \(/, '아쉬워요 뒤에 아무 길도 없다');
+  assert.match(rate, /vote\?\.verdict === 'down'/, '아쉬워요 뒤에 아무 길도 없다');
   assert.match(rate, />\s*상담원 연결하기\s*</, '아쉬워요를 누른 사람이 사람에게 닿을 길이 없다');
   assert.match(rate, /onClick=\{\(\) => openHandoff\(m\.key\)\}/, '같은 접수 카드를 쓰지 않는다');
   // 엔진이 이미 전환을 제안한 답변에는 위에 같은 버튼이 있다 — 두 번 보여 주지 않는다.
-  assert.match(rate, /\{!m\.escalate && \(/, '같은 버튼이 한 말풍선에 두 개 뜬다');
+  assert.match(rate, /vote\?\.verdict === 'down' && !m\.escalate && \(/, '같은 버튼이 한 말풍선에 두 개 뜬다');
   // 이미 접수한 사람에게 다시 권하지 않는다 — 접수번호를 알려 준다.
   assert.match(rate, /handoff\?\.stage === 'done' && handoff\.ticket \?/, '접수한 사람에게 또 접수를 권한다');
   // 지키지 못할 약속은 하지 않는다 — 보완 목록은 운영 콘솔에 실제로 있다(DS 32-1).
@@ -840,4 +840,110 @@ test('아쉬워요를 누른 사람에게 다음 길을 준다 (DS 32-3)', opts,
   // 카드를 열면 버튼이 사라진다 — 키보드 초점이 대화창 밖으로 떨어지지 않게 첫 칸으로 옮긴다.
   const open = src.slice(src.indexOf('function openHandoff('), src.indexOf('// 접수 요청.'));
   assert.match(open, /setTimeout\(\(\) => contactRef\.current\?\.focus\(\), 0\)/, '카드를 열면 초점이 사라진다');
+});
+
+/**
+ * ── DS 33-1 — 「다시 시도」가 누른 값을 바꿔 보내던 것 ──
+ * 평가 상태를 한 칸(`'up'|'down'|'error'`)에 섞어 두어, 전송이 실패하면 **무엇을 눌렀는지**가
+ * 지워졌다. 그 자리의 「다시 시도」는 `rate(m, 'up')` 고정이라 👎 의 재시도가 👍 로 기록됐다 —
+ * 운영 콘솔의 도움됨 비율과 보완 목록(DS 32-1)이 고객이 말한 것과 **반대로** 움직인다.
+ */
+test('보내지 못한 평가를 다시 보낼 때 누른 값이 바뀌지 않는다 (DS 33-1)', opts, () => {
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  const rate = src.slice(src.indexOf('{/* 답변 평가'), src.indexOf('{/* 타이핑 인디케이터'));
+
+  // 「다시 시도」는 누른 값을 그대로 보낸다.
+  assert.match(rate, /onClick=\{\(\) => rate\(m, vote\.verdict\)\}/, '다시 시도가 누른 값을 들고 있지 않다');
+  // 값을 고정으로 보내는 곳은 처음 묻는 버튼 둘뿐이다.
+  assert.equal((rate.match(/rate\(m, 'up'\)/g) || []).length, 1, "rate(m, 'up') 이 묻는 자리 밖에도 있다");
+  assert.equal((rate.match(/rate\(m, 'down'\)/g) || []).length, 1, "rate(m, 'down') 이 묻는 자리 밖에도 있다");
+  // 「다시 시도」의 이름이 어느 평가를 다시 보내는지 말해 준다(화면에 글자는 「다시 시도」뿐이다).
+  assert.match(rate, /aria-label=\{vote\.verdict === 'up' \?/, '다시 시도가 어느 평가인지 읽어 주지 않는다');
+  // 실패를 평가값과 섞어 들고 있지 않다 — 섞으면 누른 값이 지워진다.
+  assert.equal(/=== 'error'/.test(rate), false, '실패가 평가값 자리에 그대로 들어 있다');
+
+  // 실패 경로가 누른 값을 보존한다.
+  const fn = src.slice(src.indexOf('async function rate(m: Msg'), src.indexOf('// ── 상담원 전환 ──'));
+  assert.equal((fn.match(/\{ verdict, failed: true \}/g) || []).length, 2, '실패 두 경로(응답·예외) 중 하나가 값을 잃는다');
+  assert.equal(/'error'/.test(fn), false, '실패를 평가값으로 적고 있다');
+
+  // 평가가 닿지 못한 👎 에도 사람에게 가는 길은 남는다 — 답을 못 받은 사실은 같다(DS 32-3).
+  assert.equal(/vote\?\.verdict === 'down' && !m\.escalate/.test(rate), true, '평가 전송 실패가 다음 길까지 가져간다');
+});
+
+/**
+ * ── DS 33-2 — 되살린 대화가 이미 누른 평가를 다시 묻던 것 ──
+ * 임베드 위젯은 호스트가 페이지를 옮길 때마다 새로 뜬다(그래서 DS 7-1 이 대화를 되살린다).
+ * 평가는 되살리지 않아, 이미 평가한 답변이 페이지마다 「도움이 됐나요?」를 다시 물었다 —
+ * 한 사람이 같은 답변을 몇 번이고 평가할 수 있고, 운영자는 그 수를 **사람 수**로 읽는다.
+ */
+test('되살린 대화는 이미 누른 평가를 다시 묻지 않는다 (DS 33-2)', opts, async () => {
+  const m = await loadModule();
+  const st = fakeStorage();
+  await withStorage(st, () => {
+    const msgs = [
+      { key: 1, role: 'bot', text: '안녕하세요', at: 1000 },
+      { key: 2, role: 'user', text: '환불은 며칠까지 가능한가요?', at: 2000 },
+      { key: 3, role: 'bot', text: '수령일로부터 7일 이내입니다.', at: 3000 },
+      { key: 4, role: 'user', text: '배송은요?', at: 4000 },
+      { key: 5, role: 'bot', text: '2~3일 걸립니다.', at: 5000 },
+    ];
+    m.saveThread('eum', 'web_abc', msgs, 6000, {
+      3: { verdict: 'down' },
+      5: { verdict: 'up', failed: true }, // 보내지 못한 평가 — 다시 물어야 한다
+      9: { verdict: 'up' },               // 없는 말풍선 — 붙을 자리가 없다
+    });
+    const back = m.loadThread('eum', 7000);
+    assert.ok(back, '되살리지 못했다');
+    assert.deepEqual(back.rated, { 3: 'down' }, '이미 누른 평가가 되살아나지 않거나, 보내지 못한 평가까지 되살린다');
+  });
+
+  // 깨진 값이 섞여 있어도 평가로 받아들이지 않는다(남의 저장값·구버전).
+  const dirty = fakeStorage();
+  dirty.calls.set(
+    'gowon-chat-thread:eum',
+    JSON.stringify({
+      v: 1, id: 'web_x', at: 1000,
+      msgs: [{ key: 1, role: 'bot', text: '안녕하세요', at: 1 }, { key: 2, role: 'bot', text: '답', at: 2 }],
+      rated: { 1: 'maybe', 2: 'up' },
+    }),
+  );
+  await withStorage(dirty, () => {
+    const back = m.loadThread('eum', 1000);
+    assert.deepEqual(back.rated, { 2: 'up' }, '평가값이 아닌 것을 평가로 받아들인다');
+  });
+
+  // 화면 안 일련번호는 복원할 때 다시 매긴다 — 평가도 **새 번호로** 옮겨야 엉뚱한 말풍선에 붙지 않는다.
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  const restore = src.slice(src.indexOf('const saved = loadThread(threadId);'), src.indexOf('// 대화가 바뀔 때마다 저장한다'));
+  assert.match(restore, /saved\.rated\?\.\[m\.key\]/, '저장된 번호로 평가를 찾지 않는다');
+  assert.match(restore, /setRated\(movedRated\)/, '옮긴 평가를 화면에 올리지 않는다');
+  // 저장 쪽도 평가를 함께 넘긴다(넘기지 않으면 되살릴 것이 없다).
+  assert.match(src, /saveThread\(threadId, sessionId, msgs, Date\.now\(\), rated\)/, '저장할 때 평가를 넘기지 않는다');
+});
+
+/**
+ * ── DS 33-3 — 「연락처 없이 접수」가 실패한 뒤의 「다시 시도」 ──
+ * 접수가 네트워크에서 실패하면 그 자리의 버튼은 「다시 시도」로 바뀐다. 그런데 연락처를 남기지
+ * 않기로 한 선택을 들고 있지 않아, 누르면 「연락 받으실 전화번호나 이메일을 입력해 주세요」로
+ * 거절하며 **이미 누른 버튼을 다시 누르라고** 안내했다.
+ */
+test('연락처 없이 접수가 실패해도 다시 시도가 같은 접수를 보낸다 (DS 33-3)', opts, () => {
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+
+  // 선택을 상태에 들고 있다.
+  assert.match(src, /skipped\?: boolean/, '연락처 없이 접수한 선택을 들고 있지 않다');
+  const submit = src.slice(src.indexOf('async function submitHandoff('), src.indexOf('const fullscreen ='));
+  // 보내기 전·응답 실패·예외 — 세 자리 모두 선택을 다시 적는다(`handoff` 는 보내기 전의 값이다).
+  assert.equal((submit.match(/skipped: skipContact/g) || []).length, 3, '실패한 자리에서 선택이 사라진다');
+  // 연락처를 요구하는 쪽으로 돌아갈 때는 선택을 거둔다.
+  assert.match(submit, /stage: 'form', error: why, skipped: false/, '연락처를 묻는 자리에 지난 선택이 남는다');
+
+  // 「다시 시도」가 그 선택대로 다시 보낸다 — 그 사이에 연락처를 적었으면 그것이 먼저다.
+  const card = src.slice(src.indexOf("{handoff.stage === 'sending' ? '접수 중…'") - 1600, src.indexOf('연락처 없이 접수\n'));
+  assert.match(
+    card,
+    /submitHandoff\(handoff\.contact, Boolean\(handoff\.skipped\) && !handoff\.contact\.trim\(\)\)/,
+    '다시 시도가 방금 실패한 접수를 다시 보내지 않는다',
+  );
 });

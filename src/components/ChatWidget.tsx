@@ -13,9 +13,24 @@ interface HandoffState {
   stage: 'form' | 'sending' | 'done' | 'error';
   contact: string;
   error: string;
+  /**
+   * 「연락처 없이 접수」로 보낸 것인가 (DS 33-3).
+   * 실패한 뒤의 「다시 시도」는 **방금 실패한 그 접수**를 다시 보내는 자리다 — 이 값을 들고 있지
+   * 않으면 연락처를 남기지 않기로 한 사람에게 연락처를 요구하며 거절한다.
+   */
+  skipped?: boolean;
   ticket?: { id: string; statusLabel: string; created: boolean };
   queue?: QueueInfo;
 }
+
+/**
+ * 답변 평가(👍/👎)의 상태 — **누른 값과 보냈는지 여부를 따로** 들고 있다 (DS 33-1).
+ * 종전에는 한 칸에 `'up' | 'down' | 'error'` 를 섞어 넣어, 전송이 실패하면 **무엇을 눌렀는지가
+ * 지워졌다**. 그 자리의 「다시 시도」는 되살릴 값이 없어 `'up'` 을 고정으로 보냈고, 👎 를 누른
+ * 사람의 재시도가 👍 로 기록됐다 — 운영 콘솔의 도움됨 비율과 「보완이 필요한 자료」(DS 32-1)가
+ * 고객이 말한 것과 반대로 움직인다.
+ */
+interface RateState { verdict: 'up' | 'down'; failed?: boolean }
 
 // 멀티턴 접수(예약·장애 신고) 진행 단계 — 서버가 알려주는 화면 상태값.
 interface FormProgress { id: string; title: string; step: number; total: number; label: string; canSkip: boolean }
@@ -360,7 +375,12 @@ const THREAD_MAX_MSGS = 40;
 /** 저장 상한(직렬화 길이). 넘으면 저장을 건너뛴다 — 저장소를 가득 채워 호스트 페이지를 망가뜨리지 않는다. */
 const THREAD_MAX_BYTES = 100_000;
 
-export interface SavedThread { v: number; id: string; at: number; msgs: Msg[] }
+/**
+ * 저장된 대화. `rated` 는 **이미 평가한 말풍선**(말풍선 열쇠 → 누른 값)이다 — DS 33-2.
+ * 대화를 되살리면서 이것을 함께 되살리지 않으면, 호스트 페이지를 옮길 때마다 이미 평가한 답변이
+ * 「도움이 됐나요?」를 다시 묻고, 한 사람이 같은 답변을 몇 번이고 평가할 수 있다.
+ */
+export interface SavedThread { v: number; id: string; at: number; msgs: Msg[]; rated?: Record<number, 'up' | 'down'> }
 
 /**
  * 저장소 접근 **자체가 예외를 던질 수 있다** — 서드파티 쿠키를 막은 브라우저의 iframe,
@@ -393,15 +413,35 @@ export function loadThread(tenantId: string, now: number = Date.now()): SavedThr
       (m): m is Msg => !!m && (m.role === 'bot' || m.role === 'user') && typeof m.text === 'string',
     );
     if (msgs.length === 0) return null;
-    return { v: THREAD_VER, id: d.id, at: d.at, msgs };
+    // 평가는 **남아 있는 말풍선의 것만** 되살린다 — 사라진 열쇠의 평가는 붙을 자리가 없다.
+    const keys = new Set(msgs.map((m) => m.key));
+    const rated: Record<number, 'up' | 'down'> = {};
+    const savedRated = d.rated;
+    if (savedRated && typeof savedRated === 'object') {
+      for (const [k, v] of Object.entries(savedRated)) {
+        const key = Number(k);
+        if ((v === 'up' || v === 'down') && keys.has(key)) rated[key] = v;
+      }
+    }
+    return { v: THREAD_VER, id: d.id, at: d.at, msgs, rated };
   } catch {
     // 남의 데이터·깨진 JSON — 새 대화로 시작한다(사용자에게 알릴 실패가 아니다).
     return null;
   }
 }
 
-/** 대화를 저장한다. 실패(용량 초과·차단)해도 대화 자체는 계속된다. */
-export function saveThread(tenantId: string, id: string, msgs: Msg[], now: number = Date.now()): void {
+/**
+ * 대화를 저장한다. 실패(용량 초과·차단)해도 대화 자체는 계속된다.
+ * @param rated 이미 평가한 말풍선(DS 33-2). 보내지 못한 평가(`failed`)는 담지 않는다 —
+ *   전송 실패 안내를 저장하지 않는 것과 같은 까닭이다(그때의 상황이고, 다시 물어야 한다).
+ */
+export function saveThread(
+  tenantId: string,
+  id: string,
+  msgs: Msg[],
+  now: number = Date.now(),
+  rated: Record<number, RateState> = {},
+): void {
   const st = threadStore();
   if (!st) return;
   try {
@@ -409,7 +449,12 @@ export function saveThread(tenantId: string, id: string, msgs: Msg[], now: numbe
     const keep = msgs.filter((m) => m.failed === undefined).slice(-THREAD_MAX_MSGS);
     // 인사말 하나뿐이면 이어갈 대화가 없다.
     if (keep.length <= 1) { st.removeItem(threadKey(tenantId)); return; }
-    const raw = JSON.stringify({ v: THREAD_VER, id, at: now, msgs: keep } satisfies SavedThread);
+    const keptRated: Record<number, 'up' | 'down'> = {};
+    for (const m of keep) {
+      const r = rated[m.key];
+      if (r && !r.failed) keptRated[m.key] = r.verdict;
+    }
+    const raw = JSON.stringify({ v: THREAD_VER, id, at: now, msgs: keep, rated: keptRated } satisfies SavedThread);
     if (raw.length > THREAD_MAX_BYTES) return;
     st.setItem(threadKey(tenantId), raw);
   } catch {
@@ -631,8 +676,8 @@ export default function ChatWidget({
   // 연결이 끊겼는지 — 서버 렌더에서는 알 수 없으므로 false 로 시작한다(콘솔 DS 4-3 과 같은 방식).
   const [offline, setOffline] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([{ key: nextKey(), role: 'bot', text: greeting, at: 0 }]);
-  // 답변 평가 상태 — 메시지 key → 보낸 평가('up'|'down') 또는 'error'(재시도 안내).
-  const [rated, setRated] = useState<Record<number, 'up' | 'down' | 'error'>>({});
+  // 답변 평가 상태 — 메시지 key → 누른 값 + 보냈는지 여부(DS 33-1).
+  const [rated, setRated] = useState<Record<number, RateState>>({});
   // 상담원 전환 — 한 번에 한 건만 진행한다(중복 접수 방지).
   const [handoff, setHandoff] = useState<HandoffState | null>(null);
   const [sessionId, setSessionId] = useState(newSessionId);
@@ -684,7 +729,16 @@ export default function ChatWidget({
     if (saved) {
       setSessionId(saved.id);
       // 화면 안 일련번호는 이 렌더에서 다시 매긴다(저장된 번호와 겹치지 않게).
-      setMsgs(saved.msgs.map((m) => ({ ...m, key: nextKey() })));
+      // 이미 누른 평가도 **새 번호로 옮겨** 되살린다 — 옮기지 않으면 페이지를 옮길 때마다
+      // 같은 답변이 「도움이 됐나요?」를 다시 묻고, 한 사람의 평가가 몇 건으로 쌓인다(DS 33-2).
+      const movedRated: Record<number, RateState> = {};
+      setMsgs(saved.msgs.map((m) => {
+        const key = nextKey();
+        const verdict = saved.rated?.[m.key];
+        if (verdict) movedRated[key] = { verdict };
+        return { ...m, key };
+      }));
+      setRated(movedRated);
       setResumed(true);
       // 되살린 말풍선은 **이미 본 것**이다 — 읽은 지점을 함께 옮기지 않으면 페이지를 옮길 때마다
       // 접힌 런처에 지난 대화 전체가 「읽지 않은 답」으로 뜬다(DS 28-1).
@@ -698,8 +752,8 @@ export default function ChatWidget({
   // 인사말만 있는 상태로 덮어써 이어갈 대화를 지워 버리면 안 된다.
   useEffect(() => {
     if (!mounted) return;
-    saveThread(threadId, sessionId, msgs);
-  }, [mounted, threadId, sessionId, msgs]);
+    saveThread(threadId, sessionId, msgs, Date.now(), rated);
+  }, [mounted, threadId, sessionId, msgs, rated]);
 
   // 적던 말도 글자마다 보관한다(DS 27-1). 대화 본문과 열쇠가 달라 말풍선을 다시 쓰지 않는다.
   // 복원 전(서버 렌더 직후)에는 쓰지 않는다 — 빈 칸으로 덮어써 되살릴 글을 지워 버리면 안 된다.
@@ -979,18 +1033,22 @@ export default function ChatWidget({
   const tooLong = input.length > MAX_INPUT_LEN;
   function send() { if (!tooLong) sendText(input); }
 
-  // 답변 평가(👍/👎) — 평가값과 근거 라벨만 보낸다(대화 본문은 보내지 않는다).
+  /**
+   * 답변 평가(👍/👎) — 평가값과 근거 라벨만 보낸다(대화 본문은 보내지 않는다).
+   * 실패해도 **누른 값은 지우지 않는다**(DS 33-1) — 그 자리의 「다시 시도」가 다시 보낼 값이고,
+   * 👎 를 누른 사람에게 줄 다음 길(상담원 연결)도 그 값으로 갈린다.
+   */
   async function rate(m: Msg, verdict: 'up' | 'down') {
-    setRated((s) => ({ ...s, [m.key]: verdict }));
+    setRated((s) => ({ ...s, [m.key]: { verdict } }));
     try {
       const { r } = await postJson(
         '/api/feedback',
         { sessionId, verdict, citation: m.citation?.source || '' },
         POST_TIMEOUT_MS,
       );
-      if (!r.ok) setRated((s) => ({ ...s, [m.key]: 'error' }));
+      if (!r.ok) setRated((s) => ({ ...s, [m.key]: { verdict, failed: true } }));
     } catch {
-      setRated((s) => ({ ...s, [m.key]: 'error' }));
+      setRated((s) => ({ ...s, [m.key]: { verdict, failed: true } }));
     }
   }
 
@@ -1014,13 +1072,15 @@ export default function ChatWidget({
     if (!skipContact) {
       const why = contactError(trimmed);
       if (why) {
-        setHandoff({ ...handoff, contact, stage: 'form', error: why });
+        setHandoff({ ...handoff, contact, stage: 'form', error: why, skipped: false });
         setTimeout(() => contactRef.current?.focus(), 0);
         return;
       }
     }
     const gen = genRef.current;
-    setHandoff({ ...handoff, contact, stage: 'sending', error: '' });
+    // 연락처를 남기지 않기로 한 선택을 들고 간다 — 실패한 뒤의 「다시 시도」가 그 선택을 잊으면
+    // 「연락 받으실 곳을 입력해 주세요」로 거절하며, 이미 누른 버튼을 다시 누르라고 한다(DS 33-3).
+    setHandoff({ ...handoff, contact, stage: 'sending', error: '', skipped: skipContact });
     try {
       const { r, data: d } = await postJson(
         '/api/escalation',
@@ -1050,13 +1110,15 @@ export default function ChatWidget({
         });
         return;
       }
-      setHandoff({ ...handoff, contact, stage: 'error', error: errorText(d, r) });
+      // `handoff` 는 보내기 **전**의 값이다 — 선택(`skipped`)을 다시 적지 않으면 실패한 자리에서 사라진다.
+      setHandoff({ ...handoff, contact, stage: 'error', error: errorText(d, r), skipped: skipContact });
     } catch (e) {
       if (gen !== genRef.current) return;
       setHandoff({
         ...handoff,
         contact,
         stage: 'error',
+        skipped: skipContact,
         // 접수는 「되었는지 몰라서 또 누르는」 자리다 — 기한이 지나 끊었다는 사실을 밝히고 다시 시도하게 한다.
         error: isTimeout(e)
           ? '접수 결과가 오지 않아 기다리기를 멈췄습니다. 다시 시도해 주세요.'
@@ -1145,6 +1207,8 @@ export default function ChatWidget({
             )}
             {msgs.map((m) => {
               const mine = m.role === 'user';
+              // 이 답변에 누른 평가(없으면 undefined). 되살린 대화에서도 이미 누른 것이 들어 있다(DS 33-2).
+              const vote = rated[m.key];
               // 접어 둔 사이에 온 답의 시작 — 다시 열면 이 자리가 화면 위에 온다(DS 28-3).
               // `role="separator"` 는 **내용에서 이름을 만들지 않는다**(ARIA) — 눈으로 보는 글과
               // 같은 말을 이름으로 함께 적어야 스크린리더도 「여기부터」를 듣는다.
@@ -1366,7 +1430,9 @@ export default function ChatWidget({
                             )}
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 9 }}>
                               <button
-                                onClick={() => submitHandoff(handoff.contact)}
+                                /* 「다시 시도」는 **방금 실패한 그 접수**를 다시 보낸다 — 연락처를 남기지 않기로
+                                 * 했다면 그대로 다시 보낸다(DS 33-3). 그 사이에 연락처를 적었다면 그것이 먼저다. */
+                                onClick={() => submitHandoff(handoff.contact, Boolean(handoff.skipped) && !handoff.contact.trim())}
                                 aria-busy={handoff.stage === 'sending' || undefined}
                                 aria-disabled={handoff.stage === 'sending' || undefined}
                                 style={{
@@ -1424,42 +1490,54 @@ export default function ChatWidget({
                     {/* 답변 평가 — 근거가 붙은 답변에만 묻는다(인사·오류 안내에는 묻지 않는다). */}
                     {!mine && m.citation && (
                       <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, fontSize: 11.5, color: 'var(--mut)' }}>
-                        {rated[m.key] === undefined && (
+                        {vote === undefined && (
                           <>
                             <span>도움이 됐나요?</span>
                             <button onClick={() => rate(m, 'up')} aria-label="이 답변이 도움이 됐어요" style={{ ...chipStyle, padding: '4px 9px', minHeight: 26 }}><WIcon name="thumb" size={14} /></button>
                             <button onClick={() => rate(m, 'down')} aria-label="이 답변이 도움이 되지 않았어요" style={{ ...chipStyle, padding: '4px 9px', minHeight: 26 }}><WIcon name="thumb" size={14} flip /></button>
                           </>
                         )}
-                        {rated[m.key] === 'up' && <span role="status">의견 감사합니다.</span>}
+                        {/*
+                          보내지 못했으면 **누른 값 그대로** 다시 보낸다(DS 33-1).
+                          종전의 「다시 시도」는 늘 👍 를 보냈다(실패가 평가값 자리를 덮어써 누른 값이
+                          남아 있지 않았다) — 👎 를 누른 사람의 재시도가 👍 로 기록되어, 운영 콘솔의
+                          도움됨 비율과 보완 목록(DS 32-1)이 고객이 말한 것과 반대로 움직였다.
+                        */}
+                        {vote?.failed && (
+                          <>
+                            <span role="status" style={{ color: 'var(--danger)' }}>평가를 보내지 못했어요.</span>
+                            <button
+                              onClick={() => rate(m, vote.verdict)}
+                              aria-label={vote.verdict === 'up' ? '도움이 됐어요 평가를 다시 보내기' : '도움이 되지 않았어요 평가를 다시 보내기'}
+                              // 복구 동작이라 평가 칩(26px)보다 큰 손가락 목표를 준다 — 「다시 보내기」와 같은 규격.
+                              style={{ ...chipStyle, padding: '7px 12px', minHeight: 34, color: 'var(--danger)', borderColor: 'var(--danger)' }}
+                            >
+                              다시 시도
+                            </button>
+                          </>
+                        )}
+                        {vote?.verdict === 'up' && !vote.failed && <span role="status">의견 감사합니다.</span>}
+                        {vote?.verdict === 'down' && !vote.failed && (
+                          <span role="status">알려주셔서 감사합니다. 안내 자료를 보완하겠습니다.</span>
+                        )}
                         {/*
                           「도움이 되지 않았다」고 말한 사람은 **아직 답을 받지 못했다**(DS 32-3).
                           종전에는 감사 인사 한 줄로 끝나, 고객은 다음에 할 일을 스스로 찾아야 했다 —
                           상담원 연결 버튼은 엔진이 전환을 제안한 답변(`m.escalate`)에만 붙어 있었고,
                           자료로 답했지만 틀린 답변에는 아무 길이 없었다. 그 자리에서 사람에게 넘긴다.
+                          평가가 서버에 닿지 못한 경우에도 이 길은 남긴다 — 그 사람이 답을 못 받은 사실은 같다.
                         */}
-                        {rated[m.key] === 'down' && (
-                          <>
-                            <span role="status">알려주셔서 감사합니다. 안내 자료를 보완하겠습니다.</span>
-                            {!m.escalate && (
-                              handoff?.stage === 'done' && handoff.ticket ? (
-                                <span>접수번호 {handoff.ticket.id}로 상담원 연결이 접수돼 있어요.</span>
-                              ) : handoff?.key !== m.key ? (
-                                <button
-                                  onClick={() => openHandoff(m.key)}
-                                  style={{ ...chipStyle, padding: '4px 11px', minHeight: 26 }}
-                                >
-                                  상담원 연결하기
-                                </button>
-                              ) : null
-                            )}
-                          </>
-                        )}
-                        {rated[m.key] === 'error' && (
-                          <>
-                            <span role="status" style={{ color: 'var(--danger)' }}>평가를 보내지 못했어요.</span>
-                            <button onClick={() => rate(m, 'up')} aria-label="평가 다시 보내기" style={{ ...chipStyle, padding: '4px 9px', minHeight: 26 }}>다시 시도</button>
-                          </>
+                        {vote?.verdict === 'down' && !m.escalate && (
+                          handoff?.stage === 'done' && handoff.ticket ? (
+                            <span>접수번호 {handoff.ticket.id}로 상담원 연결이 접수돼 있어요.</span>
+                          ) : handoff?.key !== m.key ? (
+                            <button
+                              onClick={() => openHandoff(m.key)}
+                              style={{ ...chipStyle, padding: '4px 11px', minHeight: 26 }}
+                            >
+                              상담원 연결하기
+                            </button>
+                          ) : null
                         )}
                       </div>
                     )}
