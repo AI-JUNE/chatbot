@@ -92,6 +92,20 @@ export async function POST(req: NextRequest) {
           statusLabel: STATUS_LABELS[ticket.status],
           reasonCode: ticket.reasonCode,
           createdAt: ticket.createdAt,
+          /**
+           * 이 접수에 **회신할 곳이 남아 있는가** (DS 34-2). 연락처 원문은 내려보내지 않는다 —
+           * 위젯이 알아야 하는 것은 「연락을 받을 수 있는가」 하나뿐이다.
+           *
+           * 세션당 열린 접수는 재사용되므로(`createTicket`), 앞서 다른 길로 연락처를 남긴 사람이
+           * (서버가 묻고 고객이 입력한 경우 — `lib/chat.ts` 의 연락처 수집) 뒤에 위젯에서
+           * 「연락처 없이 접수」를 누르는 일이 생긴다. 그때 위젯은 자기가 방금 보낸 것만 알아서
+           * 「연락처를 남기지 않으셔서 이 대화창으로 안내드립니다」라고 말했다 — 서버에는 연락처가
+           * 그대로 있는데 고객에게는 아무도 연락하지 않는다고 알린 것이다.
+           *
+           * GET(접수번호 조회)에는 **싣지 않는다** — 그쪽은 인증이 없고 접수번호가 연번이라,
+           * 번호를 훑으며 「연락처를 남긴 접수」를 골라낼 수 있다.
+           */
+          contactOnFile: Boolean(ticket.contact),
         },
         ...(q ? { queue: q } : {}),
       },

@@ -19,7 +19,19 @@ interface HandoffState {
    * 않으면 연락처를 남기지 않기로 한 사람에게 연락처를 요구하며 거절한다.
    */
   skipped?: boolean;
-  ticket?: { id: string; statusLabel: string; created: boolean };
+  /**
+   * 이미 접수된 건에 **연락처만 더하러** 들어온 자리인가 (DS 34-3).
+   * 「연락처 없이 접수」를 누른 사람에게는 마음을 바꿀 길이 없었다 — 접수 완료 카드에는 버튼이
+   * 하나도 없고, 그 카드가 떠 있는 동안에는 「상담원 연결하기」도 안내 문구로 바뀌어 있다.
+   * 이 값이 참이면 같은 카드가 「연락처 남기기」로 동작하고, 끝내면 접수 완료 카드로 돌아간다.
+   */
+  addingContact?: boolean;
+  /**
+   * `contactOnFile` 은 **서버가 말해 주는** 「이 접수에 회신할 곳이 있는가」다 (DS 34-2).
+   * 위젯이 방금 보낸 값으로 판단하면, 앞서 다른 길로(서버가 묻고 고객이 입력) 연락처를 남긴
+   * 사람이 뒤에 「연락처 없이 접수」를 눌렀을 때 「연락처를 남기지 않으셔서」라고 **거짓**을 말한다.
+   */
+  ticket?: { id: string; statusLabel: string; created: boolean; contactOnFile: boolean };
   queue?: QueueInfo;
 }
 
@@ -380,7 +392,28 @@ const THREAD_MAX_BYTES = 100_000;
  * 대화를 되살리면서 이것을 함께 되살리지 않으면, 호스트 페이지를 옮길 때마다 이미 평가한 답변이
  * 「도움이 됐나요?」를 다시 묻고, 한 사람이 같은 답변을 몇 번이고 평가할 수 있다.
  */
-export interface SavedThread { v: number; id: string; at: number; msgs: Msg[]; rated?: Record<number, 'up' | 'down'> }
+/**
+ * 되살릴 접수 — **접수가 끝난 카드**만 담는다 (DS 34-1).
+ *
+ * 접수번호는 화면 상태(React)에만 있었다. 임베드 위젯은 호스트가 페이지를 옮길 때마다 iframe 이
+ * 통째로 다시 뜨므로(DS 7-1), 접수하고 한 번 링크를 누른 사람의 화면에서 **접수번호가 사라진다** —
+ * 그 자리에는 다시 「상담원 연결하기」가 떠, 접수한 사실조차 없던 일이 된다. 서버가 만드는 접수는
+ * 접수번호를 답변 본문에 적어 두어(`lib/chat.ts`) 대화와 함께 살아남는데, 위젯이 만드는 접수만
+ * 그렇지 않았다 — 같은 접수번호가 어느 길로 왔는지에 따라 남거나 사라진다.
+ *
+ * 담지 않는 것: 연락처 원문(개인정보 — 「있는가」만 담는다), 접수 순번(그 순간의 숫자다),
+ * 「이번에 만들어졌는가」(`created` — 되살린 시점에는 「방금」이 아니다).
+ */
+export interface SavedHandoff { key: number; ticket: { id: string; statusLabel: string; contactOnFile: boolean } }
+
+export interface SavedThread {
+  v: number;
+  id: string;
+  at: number;
+  msgs: Msg[];
+  rated?: Record<number, 'up' | 'down'>;
+  handoff?: SavedHandoff;
+}
 
 /**
  * 저장소 접근 **자체가 예외를 던질 수 있다** — 서드파티 쿠키를 막은 브라우저의 iframe,
@@ -396,6 +429,23 @@ function threadStore(): Storage | null {
 }
 
 function threadKey(tenantId: string): string { return `${THREAD_KEY}:${tenantId}`; }
+
+/**
+ * 저장된 접수를 받아들일지 판정한다 (DS 34-1). 남의 저장값·구버전·손으로 고친 값이 들어올 수
+ * 있는 자리이므로 **모양이 맞고 붙을 말풍선이 남아 있을 때만** 통과시킨다 — 접수번호는 고객이
+ * 그대로 읽고 상담원에게 말하는 값이라, 못 믿을 값을 그려 주는 것이 비워 두는 것보다 나쁘다.
+ */
+function readSavedHandoff(v: unknown, keys: Set<number>): SavedHandoff | null {
+  if (!v || typeof v !== 'object') return null;
+  const h = v as Partial<SavedHandoff>;
+  if (typeof h.key !== 'number' || !keys.has(h.key)) return null;
+  const t = h.ticket;
+  if (!t || typeof t !== 'object') return null;
+  if (typeof t.id !== 'string' || !t.id.trim()) return null;
+  if (typeof t.statusLabel !== 'string') return null;
+  if (typeof t.contactOnFile !== 'boolean') return null;
+  return { key: h.key, ticket: { id: t.id, statusLabel: t.statusLabel, contactOnFile: t.contactOnFile } };
+}
 
 /** 저장된 대화를 읽는다. 없거나·형식이 다르거나·서버 세션이 만료됐으면 `null`(새 대화로 시작). */
 export function loadThread(tenantId: string, now: number = Date.now()): SavedThread | null {
@@ -423,7 +473,9 @@ export function loadThread(tenantId: string, now: number = Date.now()): SavedThr
         if ((v === 'up' || v === 'down') && keys.has(key)) rated[key] = v;
       }
     }
-    return { v: THREAD_VER, id: d.id, at: d.at, msgs, rated };
+    // 접수도 **붙을 자리가 남아 있을 때만** 되살린다 — 평가와 같은 규칙이다(DS 34-1).
+    const handoff = readSavedHandoff(d.handoff, keys);
+    return { v: THREAD_VER, id: d.id, at: d.at, msgs, rated, ...(handoff ? { handoff } : {}) };
   } catch {
     // 남의 데이터·깨진 JSON — 새 대화로 시작한다(사용자에게 알릴 실패가 아니다).
     return null;
@@ -434,6 +486,9 @@ export function loadThread(tenantId: string, now: number = Date.now()): SavedThr
  * 대화를 저장한다. 실패(용량 초과·차단)해도 대화 자체는 계속된다.
  * @param rated 이미 평가한 말풍선(DS 33-2). 보내지 못한 평가(`failed`)는 담지 않는다 —
  *   전송 실패 안내를 저장하지 않는 것과 같은 까닭이다(그때의 상황이고, 다시 물어야 한다).
+ * @param handoff 진행 중인 접수 카드(DS 34-1). **끝난 접수(`done`)만** 담는다 — 보내는 중·실패는
+ *   그때의 상황이고(같은 규칙: 전송 실패 안내·보내지 못한 평가), 되살려 놓으면 이미 끝났을지도
+ *   모르는 요청을 「접수 중…」으로 그려 둔 채 영원히 기다리게 한다.
  */
 export function saveThread(
   tenantId: string,
@@ -441,6 +496,7 @@ export function saveThread(
   msgs: Msg[],
   now: number = Date.now(),
   rated: Record<number, RateState> = {},
+  handoff?: HandoffState | null,
 ): void {
   const st = threadStore();
   if (!st) return;
@@ -454,7 +510,18 @@ export function saveThread(
       const r = rated[m.key];
       if (r && !r.failed) keptRated[m.key] = r.verdict;
     }
-    const raw = JSON.stringify({ v: THREAD_VER, id, at: now, msgs: keep, rated: keptRated } satisfies SavedThread);
+    // 접수 카드는 어느 말풍선에 붙어 있었는지가 함께 있어야 한다 — 잘려 나간 말풍선의 카드는 담지 않는다.
+    const keptHandoff: SavedHandoff | undefined =
+      handoff && handoff.stage === 'done' && handoff.ticket && keep.some((m) => m.key === handoff.key)
+        ? {
+            key: handoff.key,
+            // 연락처 원문은 담지 않는다 — 화면이 필요로 하는 것은 「회신할 곳이 있는가」뿐이다.
+            ticket: { id: handoff.ticket.id, statusLabel: handoff.ticket.statusLabel, contactOnFile: handoff.ticket.contactOnFile },
+          }
+        : undefined;
+    const raw = JSON.stringify({
+      v: THREAD_VER, id, at: now, msgs: keep, rated: keptRated, ...(keptHandoff ? { handoff: keptHandoff } : {}),
+    } satisfies SavedThread);
     if (raw.length > THREAD_MAX_BYTES) return;
     st.setItem(threadKey(tenantId), raw);
   } catch {
@@ -732,13 +799,34 @@ export default function ChatWidget({
       // 이미 누른 평가도 **새 번호로 옮겨** 되살린다 — 옮기지 않으면 페이지를 옮길 때마다
       // 같은 답변이 「도움이 됐나요?」를 다시 묻고, 한 사람의 평가가 몇 건으로 쌓인다(DS 33-2).
       const movedRated: Record<number, RateState> = {};
+      // 저장된 번호 → 이번 렌더의 번호. 접수 카드도 **같은 자리로** 옮긴다(DS 34-1).
+      const moved = new Map<number, number>();
       setMsgs(saved.msgs.map((m) => {
         const key = nextKey();
+        moved.set(m.key, key);
         const verdict = saved.rated?.[m.key];
         if (verdict) movedRated[key] = { verdict };
         return { ...m, key };
       }));
       setRated(movedRated);
+      // 끝난 접수를 되살린다 — 접수번호가 화면 상태에만 있어, 페이지를 옮기면 접수한 사실이
+      // 없던 일이 되고 그 자리에 다시 「상담원 연결하기」가 떴다(DS 34-1).
+      // 연락처 원문은 저장하지 않았으므로 빈 칸으로 두고, 회신 여부는 `contactOnFile` 이 말한다.
+      // `created` 는 거짓이다 — 되살린 시점에 「방금 접수됐어요」는 지난 일이다.
+      const savedHandoff = saved.handoff;
+      const handoffKey = savedHandoff ? moved.get(savedHandoff.key) : undefined;
+      if (savedHandoff && handoffKey !== undefined) {
+        setHandoff({
+          key: handoffKey,
+          stage: 'done',
+          contact: '',
+          error: '',
+          ticket: { ...savedHandoff.ticket, created: false },
+        });
+        // 되살린 카드는 이미 본 결과다 — 접기 전 단계로 적어 두지 않으면 접어 둔 런처에
+        // 「접수 결과가 바뀌었다」가 한 번 더 뜬다(DS 28-2).
+        seenStageRef.current = 'done';
+      }
       setResumed(true);
       // 되살린 말풍선은 **이미 본 것**이다 — 읽은 지점을 함께 옮기지 않으면 페이지를 옮길 때마다
       // 접힌 런처에 지난 대화 전체가 「읽지 않은 답」으로 뜬다(DS 28-1).
@@ -748,12 +836,20 @@ export default function ChatWidget({
     setMsgs((m) => m.map((x) => (x.at === 0 ? { ...x, at: Date.now() } : x)));
   }, [threadId]);
 
+  /**
+   * 저장할 접수는 **끝난 것**뿐이다(DS 34-1). 이 값을 거쳐 넘기는 또 다른 까닭: `handoff` 를 그대로
+   * 아래 효과의 의존값에 두면 연락처를 **한 글자 칠 때마다** 말풍선 40개를 다시 직렬화한다
+   * (초안을 다른 열쇠로 떼어 둔 것과 같은 까닭 — DS 27-1). 끝나지 않은 단계에서는 늘 `null` 이라
+   * 의존값이 흔들리지 않는다.
+   */
+  const doneHandoff = handoff && handoff.stage === 'done' && handoff.ticket ? handoff : null;
+
   // 대화가 바뀔 때마다 저장한다. 복원 전(서버 렌더 직후)에는 쓰지 않는다 —
   // 인사말만 있는 상태로 덮어써 이어갈 대화를 지워 버리면 안 된다.
   useEffect(() => {
     if (!mounted) return;
-    saveThread(threadId, sessionId, msgs, Date.now(), rated);
-  }, [mounted, threadId, sessionId, msgs, rated]);
+    saveThread(threadId, sessionId, msgs, Date.now(), rated, doneHandoff);
+  }, [mounted, threadId, sessionId, msgs, rated, doneHandoff]);
 
   // 적던 말도 글자마다 보관한다(DS 27-1). 대화 본문과 열쇠가 달라 말풍선을 다시 쓰지 않는다.
   // 복원 전(서버 렌더 직후)에는 쓰지 않는다 — 빈 칸으로 덮어써 되살릴 글을 지워 버리면 안 된다.
@@ -1064,6 +1160,20 @@ export default function ChatWidget({
     setTimeout(() => contactRef.current?.focus(), 0);
   }
 
+  /**
+   * 이미 접수한 건에 연락처만 더한다 (DS 34-3).
+   * 「연락처 없이 접수」를 누른 사람에게는 마음을 바꿀 길이 하나도 없었다 — 접수 완료 카드에는
+   * 버튼이 없고, 그 카드가 떠 있는 동안 다른 답변의 「상담원 연결하기」도 안내 문구로 바뀐다.
+   * 대화창에 전화번호를 적어도 그것은 연락처가 아니라 **새 질문**으로 처리된다(서버가 연락처를
+   * 받는 자리는 서버가 먼저 물었을 때뿐이다 — `lib/chat.ts` 의 `awaitingContact`).
+   * 접수번호는 그대로 들고 간다 — 적는 동안에도 어느 접수에 더하는지 보여야 한다.
+   */
+  function addContact() {
+    if (!handoff) return;
+    setHandoff({ ...handoff, stage: 'form', contact: '', error: '', skipped: false, addingContact: true });
+    setTimeout(() => contactRef.current?.focus(), 0);
+  }
+
   // 접수 요청. 연락처는 비워도 접수되지만(`skipContact`), 그때는 대화창으로만 안내가 돌아간다.
   async function submitHandoff(contact: string, skipContact = false) {
     if (!handoff || handoff.stage === 'sending') return;
@@ -1101,10 +1211,16 @@ export default function ChatWidget({
           stage: 'done',
           contact,
           error: '',
+          addingContact: handoff.addingContact,
           ticket: {
             id: String(d.ticket.id),
             statusLabel: typeof d.ticket.statusLabel === 'string' ? d.ticket.statusLabel : '',
             created: d.created !== false,
+            // **서버가 말하는 것이 먼저다**(DS 34-2) — 세션당 열린 접수는 재사용되므로, 앞서 다른
+            // 길로 남긴 연락처가 서버에 있을 수 있다. 그 사실을 모르면 「연락처를 남기지 않으셔서
+            // 이 대화창으로 안내드립니다」라고 거짓을 말한다. 서버가 말해 주지 않는 경우에만
+            // 방금 보낸 것으로 판단한다(이전 계약과 같은 동작).
+            contactOnFile: d.ticket.contactOnFile === true ? true : Boolean(trimmed),
           },
           queue: isQueue(d.queue) ? d.queue : undefined,
         });
@@ -1386,9 +1502,15 @@ export default function ChatWidget({
                       >
                         {(handoff.stage === 'form' || handoff.stage === 'sending' || handoff.stage === 'error') && (
                           <>
-                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--brand-600)' }}>상담원 연결</div>
+                            {/* 이미 접수한 건에 연락처만 더하는 자리는 **새 접수가 아니다**(DS 34-3) —
+                                접수번호를 함께 보여 주지 않으면 다시 접수되는 줄 알고 그만둔다. */}
+                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--brand-600)' }}>
+                              {handoff.addingContact ? '연락처 남기기' : '상담원 연결'}
+                            </div>
                             <p style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--sub)', marginTop: 4 }}>
-                              연락 받으실 곳을 남겨 주세요. 지금까지 나눈 대화가 상담원에게 함께 전달됩니다.
+                              {handoff.addingContact && handoff.ticket
+                                ? `접수번호 ${handoff.ticket.id}에 연락 받으실 곳을 추가합니다. 새로 접수되지는 않습니다.`
+                                : '연락 받으실 곳을 남겨 주세요. 지금까지 나눈 대화가 상담원에게 함께 전달됩니다.'}
                             </p>
                             <label htmlFor="gw-handoff-contact" style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--ink)', margin: '9px 0 5px' }}>
                               연락처 (전화번호 또는 이메일)
@@ -1441,17 +1563,33 @@ export default function ChatWidget({
                                   opacity: handoff.stage === 'sending' ? 0.5 : 1,
                                 }}
                               >
-                                {handoff.stage === 'sending' ? '접수 중…' : handoff.stage === 'error' ? '다시 시도' : '접수하기'}
+                                {handoff.stage === 'sending'
+                                  ? (handoff.addingContact ? '보내는 중…' : '접수 중…')
+                                  : handoff.stage === 'error' ? '다시 시도'
+                                  : handoff.addingContact ? '연락처 남기기' : '접수하기'}
                               </button>
+                              {/* 이미 접수된 건에 연락처를 더하러 온 자리에는 「연락처 없이 접수」가 없다 —
+                                  그 선택은 이미 했고, 눌러도 같은 접수가 그대로 돌아온다(DS 34-3). */}
+                              {!handoff.addingContact && (
+                                <button
+                                  onClick={() => submitHandoff('', true)}
+                                  aria-disabled={handoff.stage === 'sending' || undefined}
+                                  style={chip(handoff.stage === 'sending')}
+                                >
+                                  연락처 없이 접수
+                                </button>
+                              )}
                               <button
-                                onClick={() => submitHandoff('', true)}
-                                aria-disabled={handoff.stage === 'sending' || undefined}
-                                style={chip(handoff.stage === 'sending')}
-                              >
-                                연락처 없이 접수
-                              </button>
-                              <button
-                                onClick={() => { if (handoff.stage !== 'sending') setHandoff(null); }}
+                                /* 연락처를 더하다 그만둘 때는 **접수 완료 카드로 돌아간다** — 카드를
+                                   거두면 고객이 들고 있어야 할 접수번호까지 화면에서 사라진다(DS 34-3). */
+                                onClick={() => {
+                                  if (handoff.stage === 'sending') return;
+                                  if (handoff.addingContact && handoff.ticket) {
+                                    setHandoff({ key: handoff.key, stage: 'done', contact: '', error: '', ticket: handoff.ticket });
+                                    return;
+                                  }
+                                  setHandoff(null);
+                                }}
                                 aria-disabled={handoff.stage === 'sending' || undefined}
                                 style={chip(handoff.stage === 'sending', { color: 'var(--mut)' })}
                               >
@@ -1465,7 +1603,14 @@ export default function ChatWidget({
                           <div role="status" aria-live="polite">
                             <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--brand-600)', display: 'flex', alignItems: 'center', gap: 5 }}>
                               <WIcon name="check" size={13} />
-                              <span>{handoff.ticket.created ? '상담원 연결이 접수됐어요' : '이미 접수된 요청이 있어요'}</span>
+                              {/* 「방금 무엇이 일어났는가」를 그대로 말한다. 새 접수가 생긴 것이
+                                  가장 큰 사실이므로 먼저 본다 — 연락처를 더하러 들어왔더라도 그
+                                  사이에 앞 접수가 닫혔으면 번호가 **새로** 발급된다(DS 34-3). */}
+                              <span>
+                                {handoff.ticket.created ? '상담원 연결이 접수됐어요'
+                                  : handoff.addingContact ? '연락처를 남겼어요'
+                                  : '이미 접수된 요청이 있어요'}
+                              </span>
                             </div>
                             <div style={{ fontSize: 12.5, color: 'var(--ink)', marginTop: 6 }}>
                               접수번호 <strong>{handoff.ticket.id}</strong>
@@ -1477,11 +1622,27 @@ export default function ChatWidget({
                               </div>
                             )}
                             <p style={{ fontSize: 11.5, lineHeight: 1.55, color: 'var(--sub)', marginTop: 7 }}>
-                              {handoff.contact.trim()
+                              {/* **서버가 아는 것**으로 말한다(DS 34-2). 방금 보낸 값으로 판단하면, 앞서
+                                  다른 길로 연락처를 남긴 사람이 뒤에 「연락처 없이 접수」를 눌렀을 때
+                                  「연락처를 남기지 않으셔서」라고 거짓을 말한다 — 서버에는 그 번호가
+                                  그대로 있는데 고객은 아무도 연락하지 않는다고 읽는다. */}
+                              {handoff.ticket.contactOnFile
                                 ? '남겨주신 연락처로 상담원이 확인 후 연락드립니다.'
                                 : '연락처를 남기지 않으셔서, 이 대화창으로 안내드립니다.'}
                               {' '}추가로 궁금한 점은 계속 물어보셔도 괜찮아요.
                             </p>
+                            {/* 연락처 없이 접수한 사람이 마음을 바꿀 길 — 종전에는 이 카드에 버튼이
+                                하나도 없었고, 대화창에 적은 전화번호는 연락처가 아니라 새 질문으로
+                                처리됐다(DS 34-3). */}
+                            {!handoff.ticket.contactOnFile && (
+                              <button
+                                onClick={addContact}
+                                aria-label={`접수번호 ${handoff.ticket.id}에 연락처 남기기`}
+                                style={{ ...chipStyle, marginTop: 8, padding: '7px 12px', minHeight: 34 }}
+                              >
+                                연락처 남기기
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
