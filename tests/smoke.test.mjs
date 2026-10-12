@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CHECKS, DEFAULT_BASE_URL, exitCodeFor, formatReport, runSmoke } from '../scripts/smoke.mjs';
+import { CHECKS, DEFAULT_BASE_URL, UNKNOWN_QUESTION, exitCodeFor, formatReport, runSmoke } from '../scripts/smoke.mjs';
 
 const src = readFileSync(new URL('../scripts/smoke.mjs', import.meta.url), 'utf8');
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -69,11 +69,12 @@ function stubFetch(override = {}) {
             : respond(400, { code: 'invalid_input', error: 'invalid_input', message: 'message가 너무 깁니다.' });
         }
         if (body?.tenant && !/^[a-z0-9][a-z0-9_-]{0,31}$/.test(body.tenant)) {
+          if (override.badTenantStatus) return respond(override.badTenantStatus, { code: 'internal', error: 'internal', message: '오류' });
           return override.badTenant
             ? respond(200, override.badTenant)
             : respond(400, { code: 'invalid_input', error: 'invalid_input', message: 'tenant 형식이 잘못됐습니다.' });
         }
-        if (/마일리지/.test(body?.message || '')) return respond(200, override.chatUnknown ?? CHAT_UNKNOWN_OK);
+        if (body?.message === UNKNOWN_QUESTION) return respond(200, override.chatUnknown ?? CHAT_UNKNOWN_OK);
         return respond(200, override.chatFaq ?? CHAT_FAQ_OK);
       }
       return respond(404, { code: 'not_found', error: 'not_found', message: '없는 경로' });
@@ -129,7 +130,9 @@ const failureCases = [
   ['FAQ 질문이 매칭되지 않으면 잡는다', { chatFaq: { ...CHAT_FAQ_OK, source: 'fallback' } }, /매칭되지 않았다/],
   ['모르는 질문에 단정하면 잡는다', { chatUnknown: { reply: '네, 마일리지로 교환할 수 있습니다.', source: 'fallback' } }, /단정|담당자 연결 안내가 없다/],
   ['모르는 질문을 FAQ 답변으로 내보내면 잡는다', { chatUnknown: { ...CHAT_UNKNOWN_OK, source: 'kb' } }, /FAQ 답변으로 내보냈다/],
-  ['잘못된 테넌트를 200으로 받아주면 잡는다', { badTenant: CHAT_FAQ_OK }, /400이어야 하는데 200/],
+  ['잘못된 테넌트에 이음 FAQ·CTA가 적용되면 잡는다', { badTenant: CHAT_FAQ_OK }, /이음 설정이 적용됐다/],
+  ['잘못된 테넌트에 CTA만 붙어도 잡는다', { badTenant: { reply: '안내', source: 'kb', citation: { source: '도입 절차' }, cta: { url: 'https://eum.gowon.co.kr' } } }, /이음 설정이 적용됐다/],
+  ['잘못된 테넌트에 5xx로 답하면 잡는다', { badTenantStatus: 500 }, /200\(무시\) 또는 400\(거절\)이어야 하는데 500/],
   ['긴 입력을 200으로 받아주면 잡는다', { tooLong: CHAT_FAQ_OK }, /400이어야 하는데 200/],
 ];
 
@@ -142,6 +145,22 @@ for (const [title, override, pattern] of failureCases) {
     assert.equal(exitCodeFor(report), 1);
   });
 }
+
+test('잘못된 테넌트를 무시하고 기본 답을 주는 배포(라이브의 실제 계약)는 통과한다', async () => {
+  const report = await run({
+    badTenant: { reply: '도입은 상담 → 시나리오 설계 → 시험 운영 → 오픈 순서로 진행돼요.', source: 'kb', citation: { source: '도입 절차와 기간은 어떻게 되나요?' } },
+  });
+  assert.deepEqual(report.results.filter((r) => !r.ok).map((r) => `${r.name}: ${r.detail}`), []);
+  assert.equal(exitCodeFor(report), 0);
+});
+
+test('「모르는 질문」은 이음 FAQ 키워드와 겹치지 않는다 — 겹치면 라이브가 FAQ 로 답해 스모크가 매일 거짓 실패한다', () => {
+  const faq = JSON.parse(readFileSync(new URL('../data/eum-faq.json', import.meta.url), 'utf8'));
+  const keywords = faq.faq.flatMap((e) => e.keywords || []);
+  assert.ok(keywords.length > 0, 'FAQ 키워드를 읽지 못했다');
+  const hits = keywords.filter((k) => UNKNOWN_QUESTION.includes(k));
+  assert.deepEqual(hits, [], `UNKNOWN_QUESTION 이 FAQ 키워드와 겹친다: ${hits.join(', ')}`);
+});
 
 test('tenants 필드가 없는 구버전 배포는 사유를 밝히고 실패한다', async () => {
   const report = await run({ health: { ...HEALTH_OK, dependencies: { storage: HEALTH_OK.dependencies.storage } } });

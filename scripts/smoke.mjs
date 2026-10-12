@@ -25,6 +25,9 @@ export class SmokeUnreachable extends Error {}
 
 const DEFAULT_TIMEOUT_MS = 15000;
 
+/** 이음 FAQ 10건 어디에도 해당하지 않는 질문(키워드가 겹치지 않아야 한다). */
+export const UNKNOWN_QUESTION = '이음 본사 건물에 엘리베이터가 있나요?';
+
 function normalizeBase(raw) {
   const value = String(raw || '').trim();
   if (!value) throw new Error('대상 주소가 비어 있습니다.');
@@ -159,7 +162,10 @@ export const CHECKS = [
         ctx.fetchImpl,
         ctx.base,
         {
-          message: '이음 활동으로 받은 포인트를 항공 마일리지로 바꿀 수 있나요?',
+          // 이음 FAQ 어디에도 없는 질문이어야 한다. 2026-10-12 전까지는 「포인트를 항공 마일리지로」를
+          // 물었는데, FAQ 10(보상)이 '포인트'·'마일리지'를 키워드로 갖고 있어 라이브가 FAQ 로 정상 응답했고
+          // 이 검사가 매일 거짓 실패했다. FAQ 에 키워드를 늘릴 때 이 질문과 겹치지 않는지 확인할 것.
+          message: UNKNOWN_QUESTION,
           tenant: 'eum',
           sessionId: smokeSession('unknown'),
         },
@@ -167,24 +173,37 @@ export const CHECKS = [
       );
       if (r.status !== 200) throw new Error(`상태코드 ${r.status}`);
       const reply = r.json?.reply || '';
-      if (r.json?.source === 'kb') throw new Error('없는 내용을 FAQ 답변으로 내보냈다');
+      if (r.json?.source === 'kb') {
+        throw new Error(`없는 내용을 FAQ 답변으로 내보냈다(근거=${r.json?.citation?.source || '?'})`);
+      }
       if (!/담당|코디네이터|연결/.test(reply)) throw new Error(`담당자 연결 안내가 없다: ${reply.slice(0, 60)}`);
       if (/할 수 있습니다|가능합니다/.test(reply)) throw new Error(`근거 없이 단정했다: ${reply.slice(0, 60)}`);
       return '추측 없이 담당자 연결 안내';
     },
   },
   {
-    name: 'chat: 형식이 잘못된 테넌트 값은 400으로 거절한다(실패 경로)',
+    // 계약(EUM_INTEGRATION.md·/api/chat 주석): 형식이 어긋나거나 모르는 테넌트 값은 **무시하고 기본 동작**으로
+    // 되돌아간다. 예전 검사는 400 을 요구했는데 서버는 처음부터 그렇게 만든 적이 없어 매일 거짓 실패했다.
+    // 실제로 지켜야 할 것은 "형식이 깨진 값이 이음 설정(FAQ 근거·신청 CTA)을 켜지 못한다"이다.
+    // 400 으로 거절하는 것도 안전하므로 통과로 본다. 그 외 상태코드(5xx 등)는 실패다.
+    name: 'chat: 형식이 잘못된 테넌트 값은 이음 설정을 켜지 못한다(실패 경로)',
     async run(ctx) {
       const r = await chat(
         ctx.fetchImpl,
         ctx.base,
-        { message: '안녕하세요', tenant: '이음!!', sessionId: smokeSession('badtenant') },
+        { message: '신청은 어떻게 하나요?', tenant: 'eum!!', sessionId: smokeSession('badtenant') },
         ctx.timeoutMs,
       );
-      if (r.status !== 400) throw new Error(`400이어야 하는데 ${r.status}`);
-      if (!r.json?.code) throw new Error('표준 에러 응답(code)이 아니다');
-      return `code=${r.json.code}`;
+      if (r.status === 400) {
+        if (!r.json?.code) throw new Error('표준 에러 응답(code)이 아니다');
+        return `거절 code=${r.json.code}`;
+      }
+      if (r.status !== 200) throw new Error(`200(무시) 또는 400(거절)이어야 하는데 ${r.status}`);
+      const source = r.json?.citation?.source || '';
+      if (/^이음 FAQ/.test(source) || r.json?.cta?.url) {
+        throw new Error(`형식이 잘못된 테넌트에 이음 설정이 적용됐다(근거=${source || '없음'}, CTA=${r.json?.cta?.url || '없음'})`);
+      }
+      return '무시하고 기본 동작';
     },
   },
   {

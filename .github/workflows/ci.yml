@@ -20,9 +20,9 @@ jobs:
     env:
       AICC_CORE_TOKEN: ${{ secrets.AICC_CORE_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           # Core 는 TS 소스를 그대로 export 한다. 타입 스트립(22.6+)이 없으면
           # 계약·드리프트 검사가 전부 '판정보류'로 빠져 사실상 검사가 사라진다.
@@ -68,7 +68,7 @@ jobs:
       - name: AICC-Core 체크아웃 (채널 계약 검사용)
         id: aicc_core
         if: env.AICC_CORE_TOKEN != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: AI-JUNE/aicc-core
           path: .aicc-core
