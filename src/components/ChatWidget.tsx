@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 
 interface Suggestion { id: string; question: string }
 // 근거 인용 — 서버가 KB 원문에서 그대로 뽑은 문장(생성 요약 아님).
@@ -406,6 +406,18 @@ const THREAD_MAX_BYTES = 100_000;
  */
 export interface SavedHandoff { key: number; ticket: { id: string; statusLabel: string; contactOnFile: boolean } }
 
+/**
+ * 저장 쪽이 보는 접수 카드 — 화면 상태(`HandoffState`)가 그대로 들어맞는 좁은 모양이다 (DS 35-1).
+ * **연락처·오류 글은 받지 않는다**: 저장에 쓰이지 않는 값을 끼우면 한 글자 칠 때마다 카드가
+ * 새 값이 되어, 말풍선 40개를 다시 직렬화한다(초안을 다른 열쇠로 떼어 둔 것과 같은 까닭 — DS 27-1).
+ */
+export interface SavableHandoff {
+  key: number;
+  stage: HandoffState['stage'];
+  addingContact?: boolean;
+  ticket?: { id: string; statusLabel: string; contactOnFile: boolean };
+}
+
 export interface SavedThread {
   v: number;
   id: string;
@@ -486,9 +498,12 @@ export function loadThread(tenantId: string, now: number = Date.now()): SavedThr
  * 대화를 저장한다. 실패(용량 초과·차단)해도 대화 자체는 계속된다.
  * @param rated 이미 평가한 말풍선(DS 33-2). 보내지 못한 평가(`failed`)는 담지 않는다 —
  *   전송 실패 안내를 저장하지 않는 것과 같은 까닭이다(그때의 상황이고, 다시 물어야 한다).
- * @param handoff 진행 중인 접수 카드(DS 34-1). **끝난 접수(`done`)만** 담는다 — 보내는 중·실패는
- *   그때의 상황이고(같은 규칙: 전송 실패 안내·보내지 못한 평가), 되살려 놓으면 이미 끝났을지도
- *   모르는 요청을 「접수 중…」으로 그려 둔 채 영원히 기다리게 한다.
+ * @param handoff 진행 중인 접수 카드(DS 34-1). **접수번호가 확정된 뒤**만 담는다 — 확정 전의
+ *   보내는 중·실패는 그때의 상황이고(같은 규칙: 전송 실패 안내·보내지 못한 평가), 되살려 놓으면
+ *   이미 끝났을지도 모르는 요청을 「접수 중…」으로 그려 둔 채 영원히 기다리게 한다.
+ *   확정 뒤에 **연락처만 더하는 동안**(`addingContact` — DS 34-3)은 담는다: 그 단계에서 들고 있는
+ *   접수번호는 서버가 이미 발급한 값이고, 적는 중에 호스트 페이지를 옮기면 iframe 이 다시 뜬다
+ *   (DS 35-1 — 종전에는 이 사이에 저장된 접수번호가 지워져 DS 34-1 이 닫은 자리가 다시 열렸다).
  */
 export function saveThread(
   tenantId: string,
@@ -496,7 +511,7 @@ export function saveThread(
   msgs: Msg[],
   now: number = Date.now(),
   rated: Record<number, RateState> = {},
-  handoff?: HandoffState | null,
+  handoff?: SavableHandoff | null,
 ): void {
   const st = threadStore();
   if (!st) return;
@@ -510,13 +525,15 @@ export function saveThread(
       const r = rated[m.key];
       if (r && !r.failed) keptRated[m.key] = r.verdict;
     }
+    // 접수번호가 **확정된** 카드만 담는다: 끝난 접수(`done`)와, 그 뒤에 연락처만 더하는 중(DS 35-1).
     // 접수 카드는 어느 말풍선에 붙어 있었는지가 함께 있어야 한다 — 잘려 나간 말풍선의 카드는 담지 않는다.
+    const filed = handoff && handoff.ticket && (handoff.stage === 'done' || handoff.addingContact) ? handoff : null;
     const keptHandoff: SavedHandoff | undefined =
-      handoff && handoff.stage === 'done' && handoff.ticket && keep.some((m) => m.key === handoff.key)
+      filed && filed.ticket && keep.some((m) => m.key === filed.key)
         ? {
-            key: handoff.key,
+            key: filed.key,
             // 연락처 원문은 담지 않는다 — 화면이 필요로 하는 것은 「회신할 곳이 있는가」뿐이다.
-            ticket: { id: handoff.ticket.id, statusLabel: handoff.ticket.statusLabel, contactOnFile: handoff.ticket.contactOnFile },
+            ticket: { id: filed.ticket.id, statusLabel: filed.ticket.statusLabel, contactOnFile: filed.ticket.contactOnFile },
           }
         : undefined;
     const raw = JSON.stringify({
@@ -837,19 +854,40 @@ export default function ChatWidget({
   }, [threadId]);
 
   /**
-   * 저장할 접수는 **끝난 것**뿐이다(DS 34-1). 이 값을 거쳐 넘기는 또 다른 까닭: `handoff` 를 그대로
-   * 아래 효과의 의존값에 두면 연락처를 **한 글자 칠 때마다** 말풍선 40개를 다시 직렬화한다
-   * (초안을 다른 열쇠로 떼어 둔 것과 같은 까닭 — DS 27-1). 끝나지 않은 단계에서는 늘 `null` 이라
-   * 의존값이 흔들리지 않는다.
+   * 저장에 넘길 접수 카드 — **저장이 보는 값만** 담은 사본이다 (DS 35-1).
+   *
+   * `handoff` 를 그대로 아래 효과의 의존값에 두면 연락처를 **한 글자 칠 때마다** 말풍선 40개를
+   * 다시 직렬화한다(초안을 다른 열쇠로 떼어 둔 것과 같은 까닭 — DS 27-1). 종전에는 `stage`가
+   * `'done'` 일 때만 넘겨 그 비용을 피했는데, 그 때문에 **연락처를 더하는 동안**(DS 34-3)
+   * 저장분에서 접수가 통째로 빠졌다 — 적는 중에 호스트 페이지를 옮기면 iframe 이 다시 뜨고
+   * (그래서 DS 7-1 이 대화를 되살린다) 고객이 상담원에게 읽어 줄 접수번호는 어디에도 없다.
+   * 담을지 말지는 `saveThread` 가 정한다 — 여기서는 **흔들리지 않는 사본**을 만드는 일만 한다.
    */
-  const doneHandoff = handoff && handoff.stage === 'done' && handoff.ticket ? handoff : null;
+  const cardKey = handoff?.key ?? -1;
+  const cardStage = handoff?.stage ?? 'form';
+  const cardAdding = handoff?.addingContact === true;
+  const cardId = handoff?.ticket?.id ?? '';
+  const cardStatus = handoff?.ticket?.statusLabel ?? '';
+  const cardOnFile = handoff?.ticket?.contactOnFile === true;
+  const filedCard = useMemo<SavableHandoff | null>(
+    () =>
+      cardId
+        ? {
+            key: cardKey,
+            stage: cardStage,
+            ...(cardAdding ? { addingContact: true } : {}),
+            ticket: { id: cardId, statusLabel: cardStatus, contactOnFile: cardOnFile },
+          }
+        : null,
+    [cardKey, cardStage, cardAdding, cardId, cardStatus, cardOnFile],
+  );
 
   // 대화가 바뀔 때마다 저장한다. 복원 전(서버 렌더 직후)에는 쓰지 않는다 —
   // 인사말만 있는 상태로 덮어써 이어갈 대화를 지워 버리면 안 된다.
   useEffect(() => {
     if (!mounted) return;
-    saveThread(threadId, sessionId, msgs, Date.now(), rated, doneHandoff);
-  }, [mounted, threadId, sessionId, msgs, rated, doneHandoff]);
+    saveThread(threadId, sessionId, msgs, Date.now(), rated, filedCard);
+  }, [mounted, threadId, sessionId, msgs, rated, filedCard]);
 
   // 적던 말도 글자마다 보관한다(DS 27-1). 대화 본문과 열쇠가 달라 말풍선을 다시 쓰지 않는다.
   // 복원 전(서버 렌더 직후)에는 쓰지 않는다 — 빈 칸으로 덮어써 되살릴 글을 지워 버리면 안 된다.
@@ -1250,6 +1288,20 @@ export default function ChatWidget({
   const avatarChar = tenant?.badge || 'G';
   const lastKey = msgs[msgs.length - 1]?.key;
 
+  /**
+   * 이미 받아 둔 접수번호 (DS 35-2). 카드가 **어느 단계에 있든 접수는 이미 됐다** —
+   * 종전에는 `stage === 'done'` 으로 갈라, 연락처를 더하는 동안(DS 34-3) 다른 답변의
+   * 「상담원 연결하기」가 되살아났다. 그 버튼은 `openHandoff` 로 카드를 새로 열어 **접수번호를
+   * 들고 있던 상태를 지운다** — 화면에서도, 저장소에서도(DS 35-1) 번호가 사라지고 그 자리에
+   * 처음 보는 접수 폼이 뜬다. 접수번호는 고객이 그대로 읽고 상담원에게 말하는 유일한 값이다.
+   */
+  const filedTicket = handoff?.ticket ?? null;
+  /**
+   * 접수번호를 아직 받지 못한 채 보내는 중 — 이때 다른 답변에서 또 누르면 보내 둔 요청의 답이
+   * **먼저 누른 말풍선**으로 돌아가(`submitHandoff` 가 들고 있는 열쇠다) 방금 적던 카드를 덮는다.
+   */
+  const filing = handoff?.stage === 'sending' && !handoff.ticket;
+
   const wrapStyle: CSSProperties = fullscreen
     ? { position: 'fixed', inset: 0, zIndex: 50, fontFamily: 'var(--font)', ...brandVars(tenant?.brandColor) }
     : { position: 'fixed', right: 22, bottom: 22, zIndex: 50, fontFamily: 'var(--font)', ...brandVars(tenant?.brandColor) };
@@ -1475,9 +1527,13 @@ export default function ChatWidget({
 
                     {/* ── 상담원 전환: 버튼 → 연락처 카드 → 접수 완료 ── */}
                     {m.escalate && !m.ticketId && handoff?.key !== m.key && (
-                      handoff?.stage === 'done' && handoff.ticket ? (
+                      filedTicket ? (
                         <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--sub)' }}>
-                          접수번호 {handoff.ticket.id}로 상담원 연결이 접수돼 있어요.
+                          접수번호 {filedTicket.id}로 상담원 연결이 접수돼 있어요.
+                        </div>
+                      ) : filing ? (
+                        <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--sub)' }}>
+                          상담원 연결을 접수하고 있어요.
                         </div>
                       ) : (
                         <button
@@ -1689,8 +1745,10 @@ export default function ChatWidget({
                           평가가 서버에 닿지 못한 경우에도 이 길은 남긴다 — 그 사람이 답을 못 받은 사실은 같다.
                         */}
                         {vote?.verdict === 'down' && !m.escalate && (
-                          handoff?.stage === 'done' && handoff.ticket ? (
-                            <span>접수번호 {handoff.ticket.id}로 상담원 연결이 접수돼 있어요.</span>
+                          filedTicket ? (
+                            <span>접수번호 {filedTicket.id}로 상담원 연결이 접수돼 있어요.</span>
+                          ) : filing ? (
+                            <span>상담원 연결을 접수하고 있어요.</span>
                           ) : handoff?.key !== m.key ? (
                             <button
                               onClick={() => openHandoff(m.key)}

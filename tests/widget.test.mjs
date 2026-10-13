@@ -837,7 +837,8 @@ test('아쉬워요를 누른 사람에게 다음 길을 준다 (DS 32-3)', opts,
   // 엔진이 이미 전환을 제안한 답변에는 위에 같은 버튼이 있다 — 두 번 보여 주지 않는다.
   assert.match(rate, /vote\?\.verdict === 'down' && !m\.escalate && \(/, '같은 버튼이 한 말풍선에 두 개 뜬다');
   // 이미 접수한 사람에게 다시 권하지 않는다 — 접수번호를 알려 준다.
-  assert.match(rate, /handoff\?\.stage === 'done' && handoff\.ticket \?/, '접수한 사람에게 또 접수를 권한다');
+  // 판정은 **접수번호를 들고 있는가**다(DS 35-2) — 카드 단계로 가르면 연락처를 더하는 동안 되살아난다.
+  assert.match(rate, /filedTicket \?/, '접수한 사람에게 또 접수를 권한다');
   // 지키지 못할 약속은 하지 않는다 — 보완 목록은 운영 콘솔에 실제로 있다(DS 32-1).
   assert.equal(rate.includes('안내 자료를 보완할게요'), false, '약속 문구가 그대로 남았다');
 
@@ -923,7 +924,7 @@ test('되살린 대화는 이미 누른 평가를 다시 묻지 않는다 (DS 33
   assert.match(restore, /saved\.rated\?\.\[m\.key\]/, '저장된 번호로 평가를 찾지 않는다');
   assert.match(restore, /setRated\(movedRated\)/, '옮긴 평가를 화면에 올리지 않는다');
   // 저장 쪽도 평가를 함께 넘긴다(넘기지 않으면 되살릴 것이 없다).
-  assert.match(src, /saveThread\(threadId, sessionId, msgs, Date\.now\(\), rated, doneHandoff\)/, '저장할 때 평가를 넘기지 않는다');
+  assert.match(src, /saveThread\(threadId, sessionId, msgs, Date\.now\(\), rated, filedCard\)/, '저장할 때 평가를 넘기지 않는다');
 });
 
 /**
@@ -1038,10 +1039,10 @@ test('되살린 대화가 접수번호를 들고 온다 (DS 34-1)', opts, async 
   assert.match(restore, /moved\.get\(savedHandoff\.key\)/, '접수 카드를 저장된 번호 그대로 붙인다');
   assert.match(restore, /stage: 'done'/, '되살린 접수를 끝난 카드로 그리지 않는다');
   assert.match(restore, /created: false/, '되살린 접수를 「방금 접수됐어요」로 말한다');
-  // 저장 쪽은 **끝난 접수만** 넘긴다(연락처를 한 글자 칠 때마다 대화를 다시 직렬화하지 않는 까닭도 같다).
+  // 담을지 말지는 `saveThread` 가 정한다 — 화면 쪽은 **흔들리지 않는 사본**만 만든다(DS 35-1).
   assert.match(
     src,
-    /const doneHandoff = handoff && handoff\.stage === 'done' && handoff\.ticket \? handoff : null/,
+    /const filed = handoff && handoff\.ticket && \(handoff\.stage === 'done' \|\| handoff\.addingContact\) \? handoff : null/,
     '저장 대상을 가리지 않는다',
   );
 });
@@ -1122,4 +1123,88 @@ test('연락처 없이 접수한 뒤에도 연락처를 남길 수 있다 (DS 34
   assert.match(form, /\{!handoff\.addingContact && \(/, '이미 한 선택을 다시 권한다');
   // 그만둘 때는 **접수 완료 카드로 돌아간다** — 카드를 거두면 접수번호까지 화면에서 사라진다.
   assert.match(form, /if \(handoff\.addingContact && handoff\.ticket\) \{/, '그만두면 접수번호가 사라진다');
+});
+
+/**
+ * ── DS 35-1 — 연락처를 더하는 **사이에** 접수번호가 저장분에서 빠지던 것 ──
+ * DS 34-1 은 끝난 접수(`done`)를 대화와 같은 자리에 보관해 접수번호를 살렸고, DS 34-3 은 그
+ * 카드에 「연락처 남기기」를 두어 같은 카드를 `form` 단계로 되돌린다. 그런데 저장 대상을 `done`
+ * 하나로 가려 놓았기 때문에, **그 버튼을 누른 순간 저장된 접수가 지워졌다** — 연락처를 치던 중
+ * 호스트 페이지를 옮기면 iframe 이 통째로 다시 뜨고(DS 7-1), 되살아난 화면에는 접수번호가 없다.
+ * 접수번호는 고객이 그대로 읽고 상담원에게 말하는 유일한 값이다.
+ */
+test('연락처를 더하는 동안에도 접수번호가 남는다 (DS 35-1)', opts, async () => {
+  const m = await loadModule();
+  const msgs = [
+    { key: 1, role: 'bot', text: '안녕하세요', at: 1000 },
+    { key: 2, role: 'user', text: '상담원과 통화하고 싶어요', at: 2000 },
+    { key: 3, role: 'bot', text: '상담원에게 연결해 드릴게요.', at: 3000, escalate: true },
+  ];
+  // 「연락처 없이 접수」로 접수를 끝낸 뒤 「연락처 남기기」를 누른 상태(DS 34-3).
+  const adding = {
+    key: 3, stage: 'form', contact: '010-1', error: '', addingContact: true,
+    ticket: { id: 'ESC-0012', statusLabel: '접수', created: false, contactOnFile: false },
+  };
+
+  // 적는 중(form)·보내는 중(sending)·실패(error) — 어느 단계에서 페이지를 옮겨도 번호는 남아야 한다.
+  for (const stage of ['form', 'sending', 'error']) {
+    await withStorage(fakeStorage(), () => {
+      m.saveThread('eum', 'web_abc', msgs, 4000, {}, { ...adding, stage });
+      const back = m.loadThread('eum', 5000);
+      assert.ok(back?.handoff, `${stage}: 연락처를 더하는 사이에 접수번호가 사라진다`);
+      assert.equal(back.handoff.ticket.id, 'ESC-0012');
+      assert.equal(back.handoff.key, 3, '접수 카드가 어느 말풍선에 붙어 있었는지를 잃는다');
+      // 아직 더하지 못한 연락처는 「있다」고 말하지 않는다 — 되살린 카드가 다시 권해야 한다.
+      assert.equal(back.handoff.ticket.contactOnFile, false, '남기지 못한 연락처를 남겼다고 말한다');
+      // 치던 연락처 원문은 담지 않는다(공용 PC 의 저장소다 — DS 34-1 과 같은 규칙).
+      assert.equal(JSON.stringify(back.handoff).includes('010-1'), false, '연락처 원문을 저장소에 남긴다');
+    });
+  }
+
+  // 접수번호를 아직 받지 못한 **첫 접수**는 그대로 담지 않는다 — 그때의 상황이다(DS 34-1).
+  for (const stage of ['form', 'sending', 'error']) {
+    await withStorage(fakeStorage(), () => {
+      m.saveThread('eum', 'web_abc', msgs, 4000, {}, { key: 3, stage, contact: '', error: '' });
+      assert.equal(m.loadThread('eum', 5000).handoff, undefined, `${stage}: 접수되지 않은 카드를 되살린다`);
+    });
+  }
+
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  // 저장에 넘기는 사본은 **연락처·오류 글을 담지 않는다** — 담으면 한 글자마다 말풍선 40개를
+  // 다시 직렬화한다(DS 27-1 이 초안을 다른 열쇠로 떼어 둔 것과 같은 까닭).
+  const memo = src.slice(src.indexOf('const filedCard = useMemo'), src.indexOf('// 대화가 바뀔 때마다 저장한다'));
+  assert.equal(/contact:/.test(memo), false, '사본에 연락처가 섞여 한 글자마다 대화를 다시 저장한다');
+  assert.equal(/error:/.test(memo), false, '사본에 오류 글이 섞여 한 글자마다 대화를 다시 저장한다');
+  assert.match(src, /\[cardKey, cardStage, cardAdding, cardId, cardStatus, cardOnFile\]/, '사본이 흔들린다');
+  assert.match(src, /saveThread\(threadId, sessionId, msgs, Date\.now\(\), rated, filedCard\)/, '사본을 쓰지 않는다');
+});
+
+/**
+ * ── DS 35-2 — 다른 답변의 「상담원 연결하기」가 접수번호를 지우던 것 ──
+ * 접수한 사실을 알리는 자리(다른 답변의 안내 문구·👎 뒤의 안내)는 카드의 **단계**(`done`)로
+ * 갈려 있었다. 그래서 연락처를 더하는 동안(DS 34-3)에는 다른 답변에 「상담원 연결하기」가 다시
+ * 뜨고, 누르면 `openHandoff` 가 카드를 새로 열어 **접수번호를 들고 있던 상태를 지운다** —
+ * 화면에서도, 저장분에서도(DS 35-1) 번호가 사라지고 처음 보는 접수 폼이 그 자리에 뜬다.
+ */
+test('접수한 뒤에는 다른 답변에서 다시 접수를 권하지 않는다 (DS 35-2)', opts, () => {
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+
+  // 판정은 단계가 아니라 **접수번호를 들고 있는가**다.
+  assert.match(src, /const filedTicket = handoff\?\.ticket \?\? null;/, '접수 여부를 카드 단계로 가른다');
+  // 접수번호를 들고 있는 상태를 지우는 자리는 `openHandoff` 뿐이다 — 그 버튼을 그리지 않는다.
+  for (const guard of [
+    // 1) 엔진이 전환을 제안한 다른 답변
+    src.slice(src.indexOf('{m.escalate && !m.ticketId && handoff?.key !== m.key && ('), src.indexOf('{handoff?.key === m.key && (')),
+    // 2) 👎 를 누른 답변(DS 32-3)
+    src.slice(src.indexOf("{vote?.verdict === 'down' && !m.escalate && ("), src.indexOf('{/* 타이핑 인디케이터')),
+  ]) {
+    assert.match(guard, /filedTicket \?/, '접수번호를 들고 있는데 또 접수를 권한다');
+    assert.match(guard, /접수번호 \{filedTicket\.id\}로 상담원 연결이 접수돼 있어요/, '접수번호를 알려 주지 않는다');
+    assert.equal(/stage === 'done'/.test(guard), false, '접수 여부를 카드 단계로 가른다');
+    // 접수번호를 받기 전에 보내는 중이면 — 또 누르면 그 요청의 답이 먼저 누른 말풍선으로 돌아가
+    // 방금 적던 카드를 덮는다. 그 사이에도 버튼을 그리지 않고 진행 중임을 밝힌다.
+    assert.match(guard, /filing \?/, '보내는 중에 또 누를 수 있다');
+    assert.match(guard, /상담원 연결을 접수하고 있어요/, '보내는 중이라는 사실을 밝히지 않는다');
+  }
+  assert.match(src, /const filing = handoff\?\.stage === 'sending' && !handoff\.ticket;/, '보내는 중 판정이 없다');
 });

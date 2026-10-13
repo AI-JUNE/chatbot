@@ -1228,11 +1228,11 @@ test('위젯이 같은 방문 안에서 대화를 이어간다 (DS 7-1)', () => 
   assert.match(s, /const \[sessionId, setSessionId\] = useState\(newSessionId\)/, '세션을 이어받을 수 없다');
   assert.match(s, /setSessionId\(saved\.id\)/, '복원한 대화가 서버 문맥과 이어지지 않는다');
   assert.match(s, /const saved = loadThread\(threadId\)/, '마운트 후 복원 경로가 없다');
-  // 이미 누른 평가(DS 33-2)와 끝난 접수(DS 34-1)도 같은 자리에 함께 저장한다 —
+  // 이미 누른 평가(DS 33-2)와 접수번호를 받은 카드(DS 34-1·35-1)도 같은 자리에 함께 저장한다 —
   // 되살리지 않으면 페이지를 옮길 때마다 평가를 다시 묻고, 접수번호가 사라진다.
   assert.match(
     s,
-    /saveThread\(threadId, sessionId, msgs, Date\.now\(\), rated, doneHandoff\)/,
+    /saveThread\(threadId, sessionId, msgs, Date\.now\(\), rated, filedCard\)/,
     '대화가 저장되지 않거나, 평가·접수가 함께 저장되지 않는다',
   );
   // 공용 PC 에 다음 사람이 읽을 대화를 남기지 않는다 — 탭을 닫으면 사라지는 저장소여야 한다.
@@ -2600,4 +2600,22 @@ test('정산은 아직 오지 않은 달을 산출하지 않는다 (DS 30-3)', (
   assert.match(page, /max=\{kstMonthNow\(\)\}/, '기준월 고르개에 상한이 없다');
   assert.match(page, /const asked = MONTH_RE\.test\(m\) \? m : settleCond\.current\.month;/, '주소 값 검사가 바뀌었다');
   assert.match(page, /const month = asked > thisMonth \? thisMonth : asked;/, '주소로는 미래 달을 열 수 있다');
+});
+
+/* ══════════ 디자인 스프린트 — 32차 재감사 (DS 35-3) ══════════ */
+
+/**
+ * DS 35-3 — 위젯 카드가 연락처 질문을 끝냈는데 서버는 계속 묻고 있었다.
+ * 「정말 그렇게 되는가」는 `tests/runtime.test.mjs` 가 돌려서 본다 — 여기서는 그 고침이
+ * 접수 API 의 **세션 갱신 한 자리**에 있는지를 고정한다(라우트는 next 의존 때문에 컴파일 대상이
+ * 아니다). 연락처를 남겼든 남기지 않기로 했든 카드가 그 질문을 끝냈으므로, 조건 없이 거둔다.
+ */
+test('접수 API 가 연락처를 묻는 상태를 거둔다 (DS 35-3)', () => {
+  const route = read('src/app/api/escalation/route.ts');
+  const post = route.slice(route.indexOf('export async function POST('), route.indexOf('export async function GET('));
+  assert.match(post, /awaitingContact: false,/, '카드가 끝낸 질문을 대화창이 다시 묻는다');
+  // 연락처를 남긴 경우에만 거두면, 「연락처 없이 접수」를 누른 사람의 다음 질문이 그대로 삼켜진다.
+  assert.equal(/contact\.value \? \{ awaitingContact/.test(post), false, '선택에 따라 거두는 쪽이 갈린다');
+  const upd = post.slice(post.indexOf('updateSession(sessionId.value, {'));
+  assert.match(upd.slice(0, upd.indexOf('});')), /ticketId: ticket\.id/, '세션 갱신이 한자리에 모여 있지 않다');
 });

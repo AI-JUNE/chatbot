@@ -72,7 +72,26 @@ export async function POST(req: NextRequest) {
     contact: contact.value || undefined,
     summary,
   });
-  updateSession(sessionId.value, { ticketId: ticket.id, handoffReason: reasonCode, ...(contact.value ? { slots } : {}) });
+  updateSession(sessionId.value, {
+    ticketId: ticket.id,
+    handoffReason: reasonCode,
+    /**
+     * 연락처를 묻는 상태를 **거둔다** (DS 35-3).
+     *
+     * 규칙 전환(`lib/chat.ts` 의 `escalateWith`)은 접수한 뒤 `awaitingContact` 를 켜고 대화창으로
+     * 연락처를 묻는다. 그런데 그 직전 폴백 답변에는 위젯의 「상담원 연결하기」가 그대로 붙어 있어
+     * (`escalate` 이면서 접수번호가 없는 답변이다), 고객은 그 버튼을 눌러 **카드에서** 연락처를
+     * 남기거나 「연락처 없이 접수」를 고른다. 그러면 물은 것은 이미 답을 받았는데 서버는 계속
+     * 기다리는 상태였다 — 다음에 고객이 하는 **보통 질문**이 연락처 수집 턴으로 먼저 해석된다:
+     *  - 「환불 수수료는 없어요?」 → 건너뛰기로 읽혀 「네, 알겠습니다. 접수는 유지되니…」로 답한다
+     *    (질문은 사라지고, 답처럼 생긴 글이 남는다)
+     *  - 「매장 번호 02-123-4567로 전화했는데 안 받아요」 → 그 번호가 **고객의 연락처로 저장된다**
+     *    (상담원은 고객이 주지 않은 번호로 전화한다 — §13 이 금지한 「없는 사실」이 접수에 들어간다)
+     * 남겼든 남기지 않기로 했든 카드가 그 질문을 끝냈으므로, 대화창은 다시 묻지 않는다.
+     */
+    awaitingContact: false,
+    ...(contact.value ? { slots } : {}),
+  });
 
   const q = queuePosition(ticket.id);
   rl.end({

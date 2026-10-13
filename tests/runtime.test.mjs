@@ -2348,3 +2348,69 @@ test('답변 평가는 재시작을 넘겨 남고, 어긋난 스냅샷은 건너
   assert.equal(F.importFeedback({ version: 1 }).ok, false);
   F.resetFeedback();
 });
+
+/* ══════════ 디자인 스프린트 — 32차 재감사 (DS 35-3) ══════════ */
+
+/**
+ * DS 35-3 — 위젯 카드가 연락처 질문을 끝냈는데 **서버는 계속 묻고 있던** 자리.
+ *
+ * 규칙 전환(`escalateWith`)은 접수한 뒤 `awaitingContact` 를 켜고 대화창으로 연락처를 묻는다.
+ * 그런데 그 직전 폴백 답변에는 위젯의 「상담원 연결하기」가 그대로 붙어 있어(escalate 이면서
+ * 접수번호가 없는 답변이다), 고객은 **카드에서** 연락처를 남기거나 「연락처 없이 접수」를 고른다.
+ * 그러면 물은 것은 이미 답을 받았는데 서버는 계속 기다리는 상태였다 — 다음에 고객이 하는
+ * **보통 질문**이 연락처 수집 턴으로 먼저 해석된다. 「정말 그렇게 되는가」는 돌려 봐야 안다.
+ */
+test('위젯 카드로 접수한 뒤의 질문이 연락처로 읽히지 않는다 (DS 35-3)', opts, async () => {
+  const SESSION_GROUP = ['chat', 'session', 'handoff', 'intents', 'rules', 'escalation', 'adminStore', 'knowledge', 'normalize', 'storage', 'slots', 'tenantKB', 'tenants', 'llm'];
+  const pick = (name) => importLib(name, SESSION_GROUP.filter((n) => n !== name));
+  const { replyTo } = await pick('chat');
+  const { updateSession, getSession, resetSessions } = await pick('session');
+  const esc = await pick('escalation');
+
+  /**
+   * 규칙 전환 → 위젯 카드로 접수까지. `clears` 가 참이면 `/api/escalation` 이 연락처를 묻는
+   * 상태를 거두는 쪽(이번 고침)이고, 거짓이면 종전 동작이다.
+   */
+  const setup = (sid, clears) => {
+    resetSessions();
+    esc.resetTickets();
+    const first = replyTo('상담원 연결해 주세요', sid);
+    assert.equal(first.escalate, true, '상담원 전환이 일어나야 이 검증이 의미가 있다');
+    assert.equal(getSession(sid).awaitingContact, true, '서버가 연락처를 묻지 않는다 — 전제가 깨졌다');
+    // 카드가 보내는 것 = `/api/escalation` POST(열린 접수는 세션당 재사용된다).
+    const { ticket } = esc.createTicket({
+      sessionId: sid,
+      reason: 'user_request',
+      message: '상담원 연결해 주세요',
+      contact: '010-1234-5678',
+    });
+    updateSession(sid, { ticketId: ticket.id, handoffReason: 'customer_request', ...(clears ? { awaitingContact: false } : {}) });
+    assert.equal(ticket.contact, '010-1234-5678', '카드가 보낸 연락처가 접수에 붙지 않았다');
+    assert.equal(Boolean(getSession(sid).awaitingContact), !clears, '연락처를 묻는 상태가 기대와 다르다');
+    return ticket;
+  };
+
+  // ① 보통 질문이 「건너뛰기」로 읽혀 **질문이 사라진다**.
+  setup('rt-ds35-skip-old', false);
+  const skipOld = replyTo('환불 수수료는 없어요?', 'rt-ds35-skip-old');
+  assert.equal(skipOld.intent, 'contact_skipped', '이 결함이 재현되지 않으면 이 검증은 아무것도 지키지 않는다');
+
+  setup('rt-ds35-skip-new', true);
+  const skipNew = replyTo('환불 수수료는 없어요?', 'rt-ds35-skip-new');
+  assert.notEqual(skipNew.intent, 'contact_skipped', '카드가 끝낸 질문을 대화창이 다시 묻는다');
+  assert.equal(skipNew.reply.includes('접수는 유지되니'), false, '질문은 사라지고 접수 안내만 남는다');
+
+  // ② 질문에 섞인 **남의 번호**가 고객의 연락처로 저장된다(상담원은 그 번호로 전화한다).
+  const old = setup('rt-ds35-num-old', false);
+  const numOld = replyTo('매장 번호 02-123-4567로 전화했는데 안 받아요', 'rt-ds35-num-old');
+  assert.equal(numOld.intent, 'contact_captured', '이 결함이 재현되지 않으면 이 검증은 아무것도 지키지 않는다');
+  assert.equal(esc.getTicket(old.id).contact, '02-123-4567', '덮어쓰기가 재현되지 않는다');
+
+  const fixed = setup('rt-ds35-num-new', true);
+  const numNew = replyTo('매장 번호 02-123-4567로 전화했는데 안 받아요', 'rt-ds35-num-new');
+  assert.notEqual(numNew.intent, 'contact_captured', '고객이 주지 않은 번호를 연락처로 받아 적는다');
+  assert.equal(esc.getTicket(fixed.id).contact, '010-1234-5678', '고객이 남긴 연락처가 남의 번호로 덮인다');
+
+  resetSessions();
+  esc.resetTickets();
+});
