@@ -7,7 +7,7 @@
 // 이관 시 규칙 기반 대화 요약(src/lib/handoff)을 티켓에 붙인다 — 사유 코드는 AICC-Core 어휘를 따른다.
 import { matchKnowledge, searchKnowledge, buildCitation, type Citation, type KBEntry } from '@/lib/knowledge';
 import { resolveTenant } from '@/lib/tenantKB';
-import { resolveCTA, type TenantPreset } from '@/lib/tenants';
+import { resolveCTA, tenantLabel, type TenantPreset } from '@/lib/tenants';
 import { RULES, type Rule } from '@/lib/rules';
 import { prepare } from '@/lib/normalize';
 import { listKB, getRuleOverride, listCustomRules, matchCustomRule } from '@/lib/adminStore';
@@ -178,6 +178,32 @@ function parsePick(text: string, max: number): number | null {
   return n >= 1 && n <= max ? n : null;
 }
 
+/**
+ * 이 대화가 어느 고객사(테넌트)의 위젯에서 왔는가 — 세션이 들고 있다(DS 36-2).
+ * 엔진 안에서 접수를 만드는 자리가 다섯 곳이라, 그 값을 읽는 곳도 한 곳으로 모은다.
+ */
+function tenantOf(sessionId: string): string | null {
+  return getSession(sessionId).tenantId ?? null;
+}
+
+/**
+ * 「이 대화는 어느 고객사의 위젯에서 왔다」를 세션에 적어 둔다 (DS 36-1·36-2).
+ *
+ * 접수·요약을 만드는 자리는 테넌트를 인자로 받지 않는다(채널과 같다 — 엔진 안쪽은 모른 채 돈다).
+ * 그래서 **답을 만들기 전에** 세션에 적는다 — 이 턴에서 바로 접수가 생길 수 있기 때문이다.
+ * 등록된 프리셋으로 해석된 값만 적는다. 알 수 없는 값이면 엔진은 기본 자료로 답하므로,
+ * 그 턴을 그 고객사의 것이라고 적으면 **기록이 답한 근거와 어긋난다**.
+ *
+ * 기본 구성으로 답한 턴에서는 **적어 둔 값을 거둔다.** 실제 위젯 한 대의 세션은 고객사가 바뀌지
+ * 않지만, 관리 콘솔 「응답 테스트」는 같은 세션으로 기준을 바꿔 가며 시험한다(DS 36-3) — 거두지
+ * 않으면 기본 구성으로 시험해 생긴 접수가 앞서 고른 고객사의 것으로 기록된다.
+ */
+function rememberTenant(sessionId: string, tenant: TenantContext | null): void {
+  const next = tenant ? tenant.preset.id : undefined;
+  if (getSession(sessionId).tenantId === next) return;
+  updateSession(sessionId, { tenantId: next });
+}
+
 /** 세션 문맥 + 현재 티켓 상태로 규칙 기반 이관 요약을 만든다(마스킹 완료 평문). */
 function summaryFor(
   sessionId: string,
@@ -190,6 +216,8 @@ function summaryFor(
     sessionId,
     // 어디로 회신해야 하는지는 세션이 알고 있다 — 엔진은 채널을 모른 채 같은 함수로 돈다.
     channel: ctx.channel ?? 'web',
+    // 어느 회사 손님인가 — 요약은 상담원이 전화를 걸기 전에 읽는 평문이다(DS 36-2).
+    ...(ctx.tenantId ? { tenantLabel: tenantLabel(ctx.tenantId) } : {}),
     reason,
     turns: ctx.turns ?? [],
     slots: ctx.slots ?? {},
@@ -266,6 +294,7 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
         const pending = form.slots.filter((sl) => !(sl.key in res.state.values)).map((sl) => sl.key);
         const { ticket } = createTicket({
           sessionId,
+          tenant: tenantOf(sessionId),
           reason: 'max_retry',
           reasonCode: 'max_retry',
           message: text,
@@ -315,6 +344,7 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
       const pending = form.slots.filter((sl) => !(sl.key in values)).map((sl) => sl.key);
       const { ticket, created } = createTicket({
         sessionId,
+        tenant: tenantOf(sessionId),
         reason: `form:${form.id}`,
         reasonCode: form.handoffReason,
         message: text,
@@ -355,7 +385,7 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
       // 열린 티켓에 연락처 첨부(세션당 열린 티켓 재사용) — 영구 저장은 [승인 필요]
       setSlot(sessionId, 'contact', contact);
       const reasonCode = ctx.handoffReason ?? 'customer_request';
-      const { ticket } = createTicket({ sessionId, contact, summary: summaryFor(sessionId, reasonCode) });
+      const { ticket } = createTicket({ sessionId, tenant: tenantOf(sessionId), contact, summary: summaryFor(sessionId, reasonCode) });
       updateSession(sessionId, { awaitingContact: false, ticketId: ticket.id });
       const q = queuePosition(ticket.id);
       return {
@@ -406,6 +436,7 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
     const reason = intentName.startsWith('rule:') ? intentName : `rule:${intentName}`;
     const { ticket, created } = createTicket({
       sessionId,
+      tenant: tenantOf(sessionId),
       reason,
       message: text,
       summary: summaryFor(sessionId, reasonCode),
@@ -575,6 +606,7 @@ export function replyTo(message: string, sessionId = 'anon', tenantId?: string |
   const text = (message || '').trim();
   if (text) appendTurn(sessionId, { at: new Date().toISOString(), speaker: 'customer', text });
   const tenant = tenantContext(tenantId);
+  rememberTenant(sessionId, tenant);
   return finalize(text, sessionId, computeReply(message, sessionId, tenant), tenant);
 }
 
@@ -591,6 +623,7 @@ export async function replyToAsync(
   if (text) appendTurn(sessionId, { at: new Date().toISOString(), speaker: 'customer', text });
 
   const tenant = tenantContext(opts.tenantId);
+  rememberTenant(sessionId, tenant);
   let result = computeReply(message, sessionId, tenant);
   if (result.source === 'llm') result = await augmentWithLLM(text, sessionId, result, opts, tenant);
   return finalize(text, sessionId, result, tenant);
@@ -643,6 +676,7 @@ function maybeAutoEscalate(text: string, sessionId: string, result: ChatReply): 
   // 임계 미만이 연속으로 한도에 도달 — 접수하고 연락처를 요청한다.
   const { ticket, created } = createTicket({
     sessionId,
+    tenant: tenantOf(sessionId),
     reason: 'low_confidence',
     message: text,
     summary: summaryFor(sessionId, 'low_confidence'),

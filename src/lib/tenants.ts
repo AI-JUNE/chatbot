@@ -107,6 +107,36 @@ export function getTenantPreset(id: unknown): TenantPreset | null {
   return TENANTS[id] ?? null;
 }
 
+/**
+ * 기록에 남길 테넌트 식별자 — **엔진이 실제로 쓴 구성**만 돌려준다(DS 36-1).
+ *
+ * 임베드가 보내는 값은 고객사 사이트의 스크립트 속성(`data-tenant`)이라 등록되지 않은 값이
+ * 들어올 수 있다. 그때 대화 엔진은 `getTenantPreset` 이 null 이므로 **기본(고원) 자료로** 답하는데,
+ * 요청에 실려 온 문자열을 그대로 기록하면 운영 화면이 「그 고객사 자료로 답했다」고 말하게 된다.
+ * 기록은 답한 근거와 어긋나지 않아야 한다 — 등록되지 않은 값은 기본 구성(null)으로 적는다.
+ */
+export function resolvedTenantId(id: unknown): string | null {
+  return getTenantPreset(id)?.id ?? null;
+}
+
+/** 테넌트 없이 뜬 위젯(= 고원 자체 안내 자료로 답하는 기본 구성)의 표시명. */
+export const DEFAULT_TENANT_LABEL = '고원 (기본)';
+
+/**
+ * 저장분에만 남아 있는 테넌트(프리셋을 내린 뒤 복원한 백업 등)의 표시명.
+ * 내부 식별자(`eum` 같은 코드)를 운영자 화면에 그대로 내보내지 않는다 — DS 22-x 와 같은 규칙.
+ */
+export const UNKNOWN_TENANT_LABEL = '등록되지 않은 고객사';
+
+/**
+ * 운영자 화면·내려받기 파일에 쓰는 고객사 표시명의 **단일 출처**.
+ * 이름을 붙이는 쪽은 어휘를 아는 서버 한 곳이고, 화면은 받은 이름만 그린다(`intentLabel` 과 같은 규칙).
+ */
+export function tenantLabel(id: string | null | undefined): string {
+  if (!id) return DEFAULT_TENANT_LABEL;
+  return TENANTS[id]?.name ?? UNKNOWN_TENANT_LABEL;
+}
+
 /** http(s) 절대 URL만 허용한다(javascript: 등 차단). */
 export function safeHttpUrl(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;

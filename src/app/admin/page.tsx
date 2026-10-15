@@ -127,6 +127,12 @@ const HANDOFF_REASON_LABELS: Record<string, string> = {
 interface TicketView {
   id: string;
   sessionId: string;
+  /**
+   * 어느 고객사(테넌트)의 위젯에서 온 접수인가 — 이름은 서버가 붙여 보낸다(`tenantLabel`).
+   * 옛 응답에는 없으므로 optional 이고, 없으면 화면이 기본 구성이라 말한다(DS 36-2).
+   */
+  tenant?: string | null;
+  tenantLabel?: string;
   reason: string;
   reasonCode?: string;
   summary?: string;
@@ -156,6 +162,11 @@ interface OpsStats {
     byChannel: Record<string, number>;
     /** `label` 은 서버가 붙인 주제 표시명이다(`@/lib/intents`) — 화면은 코드를 그리지 않는다. */
     topIntents: { intent: string; count: number; label?: string }[];
+    /**
+     * 고객사(테넌트)별 집계(DS 36-1). `label` 은 서버가 붙인 이름이다.
+     * 옛 응답 대비 optional — 없으면 고객사 카드를 그리지 않는다(없는 수를 지어내지 않는다).
+     */
+    byTenant?: { tenant: string | null; turns: number; sessions: number; escalated: number; label?: string }[];
     autoHandled: number;
     autoRate: number;
     escalatedTurns: number;
@@ -183,7 +194,8 @@ interface OpsStats {
 
 /** 자료에 없어 기본 안내로 끝난 질문 묶음(DS 32-2). 서버 `unansweredQuestions()` 와 같은 모양. */
 interface UnansweredView {
-  items: { key: string; question: string; count: number; lastAt: string }[];
+  /** `tenantLabel` 은 서버가 붙인 고객사 이름 — 묶음도 고객사별로 갈라져 있다(DS 36-1). */
+  items: { key: string; question: string; count: number; lastAt: string; tenant?: string | null; tenantLabel?: string }[];
   /** 자르기 전의 전체 묶음 수 — 보여 준 수를 찾은 수라고 말하지 않는다(DS 31-3). */
   groups: number;
   /** 그 질문들이 받은 총 횟수. */
@@ -494,6 +506,8 @@ function ConversationDrawer({
   const [bodyRef, bodyScrolls] = useScrollableY<HTMLDivElement>(turns.length);
   const escalated = turns.some((t) => t.escalate);
   const channel = turns[0]?.channel ?? '';
+  // 한 대화(세션)는 한 고객사의 위젯에서만 들어온다 — 첫 턴이 말하는 대로 적는다(DS 36-1).
+  const tenantName = turns[0]?.tenantLabel || UNNAMED_TENANT;
   const first = turns[0]?.at;
   const last = turns[turns.length - 1]?.at;
 
@@ -525,7 +539,7 @@ function ConversationDrawer({
           <div style={{ minWidth: 0 }}>
             <h2 id="ac-drawer-title" style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-.01em' }}>대화 상세</h2>
             <p style={{ fontSize: 12, color: 'var(--mut)', marginTop: 2 }}>
-              대화 {shortSession(sessionId)} · {CHANNEL_LABELS[channel] || channel || '채널 미상'}
+              대화 {shortSession(sessionId)} · {tenantName} · {CHANNEL_LABELS[channel] || channel || '채널 미상'}
               {first && last ? ` · ${timeLabel(first)}${first !== last ? ` ~ ${timeLabel(last)}` : ''}` : ''}
             </p>
           </div>
@@ -618,6 +632,10 @@ function TicketDrawer({
             </h2>
             <p style={{ fontSize: 12, color: 'var(--mut)', marginTop: 2 }}>
               접수 {timeLabel(t.createdAt)} · 마지막 변경 {timeLabel(t.updatedAt)} · 대화 {shortSession(t.sessionId)}
+            </p>
+            {/* 전화를 걸기 전에 가장 먼저 알아야 하는 값 — 어느 회사 손님인가(DS 36-2). */}
+            <p style={{ fontSize: 12, color: 'var(--sub)', marginTop: 2, fontWeight: 700 }}>
+              고객사 · {t.tenantLabel || UNNAMED_TENANT}
             </p>
           </div>
           <button ref={closeRef} type="button" className="ac-iconbtn" onClick={onClose} aria-label="상세 닫기">
@@ -1114,6 +1132,8 @@ interface TurnView {
   intent: string;
   /** 주제 표시명(서버가 `@/lib/intents` 로 붙인다). 화면은 코드가 아니라 이 값을 쓴다. */
   intentLabel?: string;
+  /** 고객사 표시명(서버가 `@/lib/tenants` 로 붙인다 — DS 36-1). */
+  tenantLabel?: string;
   source: string;
   escalate: boolean;
   at: string;
@@ -1148,6 +1168,21 @@ const CHANNEL_LABELS: Record<string, string> = {
  * 이름을 붙이는 쪽은 어휘를 아는 서버 한 곳이고, 화면은 받은 이름만 그린다.
  */
 const UNNAMED_TOPIC = '기타';
+
+/**
+ * 고객사 이름도 **서버가 붙여 보낸다**(`src/lib/tenants.ts` → `tenantLabel` 필드 · DS 36-1).
+ * 옛 응답에는 그 필드가 없다 — 그때는 「기본」이라고 단정하지 않는다(그 대화가 어느 고객사에서
+ * 왔는지 알 수 없는 것과 기본 구성으로 답한 것은 다른 사실이다).
+ */
+const UNNAMED_TENANT = '고객사 미상';
+
+/**
+ * 테넌트 없이 뜬 위젯(= 고원 자체 안내 자료로 답하는 기본 구성)의 표시명.
+ * 서버 `src/lib/tenants.ts` 의 `DEFAULT_TENANT_LABEL` 과 **같은 문자열이어야 한다** — 콘솔은 lib 을
+ * 불러오지 않으므로 옮겨 적고 테스트가 두 쪽을 대조한다(`NO_CITATION_LABEL` 과 같은 방식).
+ * 「응답 테스트」의 기준 선택처럼 서버가 이름을 붙여 줄 수 없는 자리에서만 쓴다.
+ */
+const DEFAULT_TENANT_VIEW_LABEL = '고원 (기본)';
 
 const TICKET_STATUS_LABELS: Record<TicketView['status'], string> = {
   open: '접수',
@@ -1190,6 +1225,15 @@ interface TenantFAQView {
   question: string;
   answer: string;
   keywords: string[];
+}
+
+/** 선택 상자에 쓰는 고객사 1건 — `/api/admin/tenants` 목록 응답(`tenantStatus()`)과 같은 모양. */
+interface TenantOptionView {
+  id: string;
+  name: string;
+  /** 미리보기 헤더에 쓰는 공개 설정값. 옛 응답에는 없으므로 optional. */
+  brandColor?: string;
+  badge?: string;
 }
 
 interface TenantDetailView {
@@ -2708,10 +2752,29 @@ export default function AdminPage() {
   // ---- 테넌트 지식(읽기 전용) ----
   // 편집 화면이 아니다. "지금 배포본이 무엇을 근거로 답하는가"를 확인하는 창구다.
   const [tenantId, setTenantId] = useState('eum');
-  const [tenantIdList, setTenantIdList] = useState<string[]>([]);
+  /**
+   * 등록된 고객사 목록 — 식별자만이 아니라 **이름까지** 들고 있는다(DS 36-3).
+   * 종전에는 id 만 받아 선택 상자에 `eum` 이라는 코드가 그대로 떴다(운영자 화면의 내부 문구).
+   * 「응답 테스트」의 기준 선택도 같은 목록을 쓴다.
+   */
+  const [tenantList, setTenantList] = useState<TenantOptionView[]>([]);
   const [tenantView, setTenantView] = useState<TenantDetailView | null>(null);
   const [tenantErr, setTenantErr] = useState('');
   const [tenantBusy, setTenantBusy] = useState(false);
+  /** 목록만 가져온다 — 「응답 테스트」는 상세(FAQ 전문)가 필요 없다. */
+  const loadTenantList = useCallback(async () => {
+    if (!claim('tenantlist')) return;
+    try {
+      const res = await afetch('/api/admin/tenants', { headers: authHeaders(), cache: 'no-store' });
+      if (on401(res)) return;
+      const data = await res.json();
+      if (data.ok) setTenantList((data.tenants || []) as TenantOptionView[]);
+    } catch {
+      /* 기준 선택이 비어 있으면 기본 구성으로만 시험한다 — 화면을 막지 않는다 */
+    } finally {
+      release('tenantlist');
+    }
+  }, [claim, release]);
   const loadTenant = useCallback(async (id: string) => {
     if (!claim('tenant')) return;
     setTenantBusy(true);
@@ -2720,7 +2783,7 @@ export default function AdminPage() {
       const list = await afetch('/api/admin/tenants', { headers: authHeaders(), cache: 'no-store' });
       if (on401(list)) return;
       const listData = await list.json();
-      if (listData.ok) setTenantIdList(listData.ids || []);
+      if (listData.ok) setTenantList((listData.tenants || []) as TenantOptionView[]);
 
       const res = await afetch(`/api/admin/tenants?id=${encodeURIComponent(id)}`, { headers: authHeaders(), cache: 'no-store' });
       if (on401(res)) return;
@@ -2789,7 +2852,9 @@ export default function AdminPage() {
     }
     // 테넌트 지식도 탭을 열었을 때만 불러온다.
     if (tab === 'tenant' && !tenantView && !tenantBusy && !tenantErr) loadTenant(tenantId);
-  }, [tab, partnerLoaded, partnerBusy, loadPartners, partnerFilter, settleView, settleBusy, settleErr, loadSettlement, settleMonth, settlePartner, tenantView, tenantBusy, tenantErr, loadTenant, tenantId]);
+    // 「응답 테스트」는 기준(고객사) 선택에 목록만 필요하다 — 상세(FAQ 전문)는 받지 않는다(DS 36-3).
+    if (tab === 'test' && tenantList.length === 0) loadTenantList();
+  }, [tab, partnerLoaded, partnerBusy, loadPartners, partnerFilter, settleView, settleBusy, settleErr, loadSettlement, settleMonth, settlePartner, tenantView, tenantBusy, tenantErr, loadTenant, tenantId, tenantList.length, loadTenantList]);
 
   /**
    * 알림을 띄우는 **한 문** (DS 29-2).
@@ -3306,12 +3371,22 @@ export default function AdminPage() {
 
   // ---- Test ----
   const [testInput, setTestInput] = useState('');
+  /**
+   * 어느 고객사 기준으로 시험하는가 — 빈 값이면 기본 구성(고원 안내 자료)이다 (DS 36-3).
+   *
+   * 종전에는 「응답 테스트」가 고객사를 실어 보내지 않아 **언제나 기본 구성으로** 답했다.
+   * 운영자는 최근 대화에서 이음 손님이 못 받은 답을 보고 같은 말을 그대로 쳐 보는데, 돌아온
+   * 답은 고원 자료로 만든 **다른 답**이었고 화면은 그것을 「실제 상담창과 같은 답변」이라 말했다.
+   */
+  const [testTenant, setTestTenant] = useState('');
   const [testLog, setTestLog] = useState<
     {
       q: string;
       reply: string;
       /** 주제 표시명 — 서버가 붙여 준다(`@/lib/intents`). 코드(`kb:환불`)를 화면에 쓰지 않는다. */
       intentLabel: string;
+      /** 보낼 때 고른 기준(고객사 표시명). 뒤에 기준을 바꿔도 지난 항목의 기준은 바뀌지 않는다. */
+      basis: string;
       source: string;
       confidence?: number;
       citation?: { source: string; snippet: string };
@@ -3326,9 +3401,17 @@ export default function AdminPage() {
   // 미리보기 대화도 말풍선뿐인 스크롤 상자다 — 넘치면 목록 자체가 초점을 받는다(DS 26-2).
   const [previewRef, previewScrolls] = useScrollableY<HTMLDivElement>(testLog.length);
 
+  /** 지금 고른 기준의 표시명 — 선택 상자·미리보기 헤더·기록이 같은 이름을 쓴다. */
+  const testTenantName = testTenant
+    ? (tenantList.find((t) => t.id === testTenant)?.name || testTenant)
+    : DEFAULT_TENANT_VIEW_LABEL;
+
   const runTest = async () => {
     const q = testInput.trim();
     if (!q || testBusy) return;
+    // 보낼 때 고른 기준을 그 자리에서 붙들어 둔다 — 답을 기다리는 사이에 바꿀 수 있다(DS 33-x 와 같은 규칙).
+    const basis = testTenantName;
+    const tenantAtSend = testTenant;
     setTestInput('');
     setTestBusy(true);
     let data: Record<string, unknown> = {};
@@ -3341,7 +3424,8 @@ export default function AdminPage() {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: q }),
+          // 고객사를 실어 보낸다 — 위젯이 보내는 것과 같은 값이다(DS 36-3).
+          body: JSON.stringify({ message: q, ...(tenantAtSend ? { tenant: tenantAtSend } : {}) }),
         },
         CHAT_TEST_TIMEOUT_MS,
       );
@@ -3362,6 +3446,7 @@ export default function AdminPage() {
           q,
           reply: typeof data.reply === 'string' ? data.reply : '답변을 받지 못했습니다. 다시 시도해 주세요.',
           intentLabel: typeof data.intentLabel === 'string' && data.intentLabel ? data.intentLabel : UNNAMED_TOPIC,
+          basis,
           source: typeof data.source === 'string' ? data.source : '-',
           confidence: typeof data.confidence === 'number' ? data.confidence : undefined,
           citation: cite,
@@ -3771,6 +3856,42 @@ export default function AdminPage() {
             </section>
           )}
 
+          {/* ── 고객사별 현황 ──
+              고객사가 둘 이상일 때만 그린다 — 한 곳뿐이면 위의 KPI 와 같은 수라 보탤 사실이 없다.
+              종전에는 모든 고객사를 하나로 합쳐 세어, 이음에 리포트로 줄 수 있는 수치가 한 줄도
+              없었다(DS 36-1). */}
+          {stats && (stats.conversation.byTenant?.length ?? 0) > 1 && (
+            <section style={S.card}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12 }}>
+                <h2 style={S.h2}>고객사별 현황</h2>
+                <span style={S.tag}>보관 중인 기록 기준 · 대화 많은 곳부터</span>
+              </div>
+              <ScrollX label="고객사별 현황">
+                <table className="ac-table">
+                  <caption className="ac-srhide">고객사별 현황</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">고객사</th>
+                      <th scope="col">대화</th>
+                      <th scope="col">사람 수(대화 단위)</th>
+                      <th scope="col">상담원 제안</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(stats.conversation.byTenant ?? []).map((t) => (
+                      <tr key={t.tenant ?? ''}>
+                        <th scope="row" style={{ fontWeight: 700 }}>{t.label || UNNAMED_TENANT}</th>
+                        <td style={{ fontVariantNumeric: 'tabular-nums' }}>{t.turns.toLocaleString('ko-KR')}건</td>
+                        <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--sub)' }}>{t.sessions.toLocaleString('ko-KR')}</td>
+                        <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--sub)' }}>{t.escalated.toLocaleString('ko-KR')}건</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </ScrollX>
+            </section>
+          )}
+
           {/* ── 무엇을 많이 묻는가 ── */}
           {stats && (
             <section style={S.card}>
@@ -3825,28 +3946,59 @@ export default function AdminPage() {
               </div>
               <p style={{ fontSize: 13, color: 'var(--sub)', marginBottom: 12 }}>
                 등록된 자료·규칙에서 답을 찾지 못해 기본 안내로 끝난 질문입니다. 자주 온 질문이 위에 있습니다.
+                고객사마다 답변 근거로 쓰는 자료가 달라 묶음도 고객사별로 나뉩니다.
               </p>
               <ul className="ac-rows" aria-label="답하지 못한 질문 목록">
-                {unanswered.items.map((u) => (
-                  <li key={u.key}>
-                    <div className="ac-row" data-static="">
-                      <span className="ac-row-main">
-                        <span className="ac-row-msg" title={u.question}>{clip(u.question, 90)}</span>
-                        <span className="ac-row-reply">마지막 {timeLabel(u.lastAt)}</span>
-                      </span>
-                      <span className="ac-row-side">
-                        <span className="ac-pill" style={TONE.warn}>{u.count}번</span>
-                        <button
-                          type="button"
-                          className="ac-viewbtn"
-                          onClick={() => draftKbFromQuestion(u.question)}
-                        >
-                          이 질문으로 자료 만들기
-                        </button>
-                      </span>
-                    </div>
-                  </li>
-                ))}
+                {unanswered.items.map((u) => {
+                  /**
+                   * 고객사 자료(테넌트 FAQ)는 파일이 원본이라 콘솔에서 고칠 수 없다 — 「자료 만들기」가
+                   * 데려가는 「안내 자료」는 **기본 구성**이 쓰는 자료다(DS 36-1).
+                   * 종전에는 두 고객사의 질문이 한 묶음에 섞인 채 모두 그 버튼을 달고 있어, 운영자가
+                   * 이음 손님이 못 받은 답을 고원 자료에 적어 넣고도 이음 위젯은 그대로였다.
+                   */
+                  const ownKb = !u.tenant;
+                  return (
+                    <li key={u.key}>
+                      <div className="ac-row" data-static="">
+                        <span className="ac-row-main">
+                          <span className="ac-row-msg" title={u.question}>{clip(u.question, 90)}</span>
+                          <span className="ac-row-reply">
+                            마지막 {timeLabel(u.lastAt)}
+                            {!ownKb && ` · ${u.tenantLabel || UNNAMED_TENANT} 안내 자료(파일)에 없는 질문입니다`}
+                          </span>
+                        </span>
+                        <span className="ac-row-side">
+                          <span className="ac-pill">{u.tenantLabel || UNNAMED_TENANT}</span>
+                          <span className="ac-pill" style={TONE.warn}>{u.count}번</span>
+                          {ownKb ? (
+                            <button
+                              type="button"
+                              className="ac-viewbtn"
+                              onClick={() => draftKbFromQuestion(u.question)}
+                            >
+                              이 질문으로 자료 만들기
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="ac-viewbtn"
+                              aria-label={`${u.tenantLabel || UNNAMED_TENANT} 자료 확인하기`}
+                              onClick={() => {
+                                goTab('tenant');
+                                if (!u.tenant) return;
+                                setTenantId(u.tenant);
+                                setTenantView(null);
+                                loadTenant(u.tenant);
+                              }}
+                            >
+                              고객사 자료 확인
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           )}
@@ -3950,6 +4102,8 @@ export default function AdminPage() {
                     </span>
                     <span className="ac-row-side">
                       <span style={{ fontSize: 11.5, color: 'var(--mut)', whiteSpace: 'nowrap' }}>{timeLabel(t.at)}</span>
+                      {/* 어느 고객사 손님의 말인가 — 주제·근거보다 먼저 거르는 값이다(DS 36-1). */}
+                      <span className="ac-pill">{t.tenantLabel || UNNAMED_TENANT}</span>
                       <span className="ac-pill">{t.intentLabel || UNNAMED_TOPIC}</span>
                       <span className="ac-pill">{SOURCE_VIEW_LABELS[t.source] || t.source}</span>
                       {t.escalate && <span className="ac-pill" style={TONE.warn}>상담원 제안</span>}
@@ -4514,7 +4668,8 @@ export default function AdminPage() {
         const q = escQuery.trim().toLowerCase();
         const filtered = tickets
           .filter((t) => escFilter === 'all' || t.status === escFilter)
-          .filter((t) => !q || [t.message, t.reason, t.id, HANDOFF_REASON_LABELS[t.reasonCode ?? ''] ?? ''].some((v) => (v ?? '').toLowerCase().includes(q)))
+          // 고객사 이름으로도 걸러진다 — 「이음 건만 보기」가 운영자가 가장 먼저 하는 일이다(DS 36-2).
+          .filter((t) => !q || [t.message, t.reason, t.id, t.tenantLabel ?? '', HANDOFF_REASON_LABELS[t.reasonCode ?? ''] ?? ''].some((v) => (v ?? '').toLowerCase().includes(q)))
           .slice()
           .sort((x, y) => new Date(y.createdAt).getTime() - new Date(x.createdAt).getTime());
         // 상태는 글자 순(대기·상담 중·완료·취소)이 아니라 **처리 순서**로 센다 — 운영자가 상태로
@@ -4523,6 +4678,7 @@ export default function AdminPage() {
         const escView = tableView('esc', filtered, {
           id: (t: TicketView) => t.id,
           status: (t: TicketView) => statusRank[t.status],
+          tenant: (t: TicketView) => t.tenantLabel || '',
           msg: (t: TicketView) => t.message || '',
           reason: (t: TicketView) => (t.reasonCode ? HANDOFF_REASON_LABELS[t.reasonCode] ?? t.reasonCode : t.reason),
           at: (t: TicketView) => t.createdAt,
@@ -4570,8 +4726,8 @@ export default function AdminPage() {
                 <input
                   className="ac-search"
                   type="search"
-                  aria-label="요청 검색(고객 말·사유·접수번호)"
-                  placeholder="고객 말·사유·접수번호 검색"
+                  aria-label="요청 검색(고객 말·고객사·사유·접수번호)"
+                  placeholder="고객 말·고객사·사유·접수번호 검색"
                   value={escQuery}
                   onChange={(e) => setEscQuery(e.target.value)}
                   style={{ marginLeft: 'auto' }}
@@ -4602,6 +4758,8 @@ export default function AdminPage() {
                       <tr>
                         <SortTh label="접수" col="id" sort={tableSort.esc} onSort={toggleSort('esc')} />
                         <SortTh label="상태" col="status" sort={tableSort.esc} onSort={toggleSort('esc')} />
+                        {/* 좁은 화면에서는 접히는 열이다 — 서랍에는 언제나 적힌다(DS 36-2). */}
+                        <SortTh label="고객사" col="tenant" className="ac-col-wide" sort={tableSort.esc} onSort={toggleSort('esc')} />
                         <SortTh label="고객이 마지막으로 한 말" col="msg" sort={tableSort.esc} onSort={toggleSort('esc')} />
                         <SortTh label="사유" col="reason" className="ac-col-wide" sort={tableSort.esc} onSort={toggleSort('esc')} />
                         <SortTh label="접수 시각" col="at" className="ac-col-wide" sort={tableSort.esc} onSort={toggleSort('esc')} />
@@ -4625,6 +4783,7 @@ export default function AdminPage() {
                               </button>
                             </td>
                             <td><span className="ac-pill" style={TICKET_STATUS_TONE[t.status]}>{TICKET_STATUS_LABELS[t.status]}</span></td>
+                            <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{t.tenantLabel || UNNAMED_TENANT}</td>
                             <td style={{ minWidth: 160 }}>
                               <span className="ac-clamp" style={{ color: t.message ? 'var(--ink)' : 'var(--mut)' }}>{t.message || '남긴 메시지 없음'}</span>
                               {t.contact
@@ -5212,8 +5371,8 @@ export default function AdminPage() {
                     loadTenant(e.target.value);
                   }}
                 >
-                  {(tenantIdList.length ? tenantIdList : [tenantId]).map((id) => (
-                    <option key={id} value={id}>{id}</option>
+                  {(tenantList.length ? tenantList : [{ id: tenantId, name: tenantId }]).map((t) => (
+                    <option key={t.id} value={t.id}>{t.name || t.id}</option>
                   ))}
                 </select>
                 <button type="button" {...busyBtn(tenantBusy, tenantBusy)} onClick={() => loadTenant(tenantId)}>
@@ -5480,6 +5639,30 @@ export default function AdminPage() {
             <section style={S.card} aria-labelledby="ac-test-in">
               <h2 id="ac-test-in" style={{ ...S.h2, marginBottom: 4 }}>고객이 보낼 말</h2>
               <p style={{ ...S.tag, marginBottom: 10 }}>여기서 보낸 대화도 기록에 남습니다. 실제 고객 정보는 넣지 마세요.</p>
+              {/* ── 어느 고객사 기준으로 시험하는가 (DS 36-3) ──
+                  고객사마다 답변 근거로 쓰는 자료·문구·버튼이 다르다. 기준을 고르지 않으면 기본
+                  구성으로만 시험하게 되어, 고객사 위젯에서 실제로 돌아온 답을 여기서 재현할 수 없다. */}
+              {tenantList.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                  <label htmlFor="ac-test-tenant" style={{ ...S.tag, fontWeight: 700 }}>기준</label>
+                  <select
+                    id="ac-test-tenant"
+                    className="ac-select"
+                    value={testTenant}
+                    onChange={(e) => setTestTenant(e.target.value)}
+                  >
+                    <option value="">{DEFAULT_TENANT_VIEW_LABEL}</option>
+                    {tenantList.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name || t.id}</option>
+                    ))}
+                  </select>
+                  <span style={S.tag}>
+                    {testTenant
+                      ? '고객사 전용 안내 자료·문구로 답합니다(「테넌트 지식」의 자료).'
+                      : '「지식베이스」에 등록한 안내 자료로 답합니다.'}
+                  </span>
+                </div>
+              )}
               <label htmlFor="ac-test-msg" className="ac-srhide">고객 메시지</label>
               <textarea
                 id="ac-test-msg"
@@ -5517,6 +5700,8 @@ export default function AdminPage() {
                   <div key={i} className="ac-why" data-latest={i === 0 ? 'true' : undefined}>
                     <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--ink)', marginBottom: 6 }}>“{t.q}”</div>
                     <dl className="ac-dl">
+                      {/* 보낼 때 고른 기준 — 지금 고른 것이 아니라 그때 보낸 것이다(DS 36-3). */}
+                      <dt>기준</dt><dd>{t.basis || DEFAULT_TENANT_VIEW_LABEL}</dd>
                       <dt>주제</dt><dd>{t.intentLabel || UNNAMED_TOPIC}</dd>
                       <dt>근거</dt><dd>{SOURCE_VIEW_LABELS[t.source] || t.source}{t.citation ? ` · ${t.citation.source}` : ''}</dd>
                       {t.citation && (<><dt>인용</dt><dd style={{ color: 'var(--sub)' }}>“{t.citation.snippet}”</dd></>)}
@@ -5530,12 +5715,22 @@ export default function AdminPage() {
 
           {/* ── 우: 고객에게 보이는 화면 미리보기 ── */}
           <div style={{ minWidth: 0 }}>
-            <section className="ac-sticky ac-preview" aria-label="상담창 미리보기">
+            {/* 고른 기준의 상담창 모습으로 보여준다 — 브랜드색·헤더 한 글자는 위젯이 받는 공개
+                설정값 그대로다(DS 36-3). 종전에는 이음 기준으로 시험해도 헤더가 고원이었고,
+                그 화면이 자기를 「실제 상담창과 같은 답변」이라 말했다. */}
+            {(() => {
+              const sel = testTenant ? tenantList.find((t) => t.id === testTenant) : undefined;
+              return (
+            <section
+              className="ac-sticky ac-preview"
+              aria-label="상담창 미리보기"
+              style={sel?.brandColor ? ({ '--brand': sel.brandColor } as CSSProperties) : undefined}
+            >
               <div className="ac-preview-head">
-                <span className="ac-preview-avatar" aria-hidden="true">G</span>
+                <span className="ac-preview-avatar" aria-hidden="true">{sel?.badge || 'G'}</span>
                 <span style={{ minWidth: 0, flex: 1 }}>
-                  <span style={{ display: 'block', fontSize: 14, fontWeight: 800 }}>GOWON Chat</span>
-                  <span style={{ display: 'block', fontSize: 10.5, opacity: .88 }}>미리보기 · 실제 상담창과 같은 답변</span>
+                  <span style={{ display: 'block', fontSize: 14, fontWeight: 800 }}>{sel ? `${sel.name} 안내 챗봇` : 'GOWON Chat'}</span>
+                  <span style={{ display: 'block', fontSize: 10.5, opacity: .88 }}>미리보기 · {testTenantName} 기준</span>
                 </span>
                 <span className="ac-preview-ai"><span aria-hidden="true">●</span> AI가 응대합니다</span>
               </div>
@@ -5557,8 +5752,14 @@ export default function AdminPage() {
                 )}
                 <div ref={testEndRef} />
               </div>
-              <div className="ac-preview-foot">고객에게는 이렇게 보입니다. 문구를 바꾸려면 「지식베이스」나 「시나리오 룰」에서 수정하세요.</div>
+              <div className="ac-preview-foot">
+                {sel
+                  ? `${sel.name} 고객에게는 이렇게 보입니다. 이 고객사의 안내 자료는 파일이 원본이라 콘솔에서 고칠 수 없습니다(「테넌트 지식」에서 확인).`
+                  : '고객에게는 이렇게 보입니다. 문구를 바꾸려면 「지식베이스」나 「시나리오 룰」에서 수정하세요.'}
+              </div>
             </section>
+              );
+            })()}
           </div>
         </div>
       )}

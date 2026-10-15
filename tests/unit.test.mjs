@@ -2619,3 +2619,53 @@ test('접수 API 가 연락처를 묻는 상태를 거둔다 (DS 35-3)', () => {
   const upd = post.slice(post.indexOf('updateSession(sessionId.value, {'));
   assert.match(upd.slice(0, upd.indexOf('});')), /ticketId: ticket\.id/, '세션 갱신이 한자리에 모여 있지 않다');
 });
+
+/* ══════════ 디자인 스프린트 — 33차 재감사 (DS 36-1·36-2·36-3) ══════════ */
+
+/**
+ * DS 36-1·36-2 — 「어느 고객사의 손님인가」를 **적고 지나가는 자리가 하나도 빠지지 않는가.**
+ *
+ * 대화를 적는 곳이 둘(웹·카카오), 접수를 만드는 곳이 여섯이다. 한 곳이라도 비워 두면 그 경로로
+ * 들어온 손님만 운영 화면에서 「기본 구성」으로 보인다 — 같은 종류의 누락이 DS 22-x(사전에
+ * 없는 코드)와 DS 29-3(검증만 하고 화면에 전하지 않기)에서 이미 두 번 일어났다.
+ * 타입으로 막아 두고(필수 필드), 그 필수성이 선택으로 풀리지 않는지를 여기서 고정한다.
+ */
+test('대화·접수를 적는 모든 자리가 고객사를 함께 적는다 (DS 36-1·36-2)', () => {
+  // ① 타입이 비워 두는 것을 막는다 — 선택 항목이 되면 새로 생긴 경로가 조용히 빠진다.
+  assert.match(read('src/lib/convlog.ts'), /\n  tenant: string \| null;/, '대화 기록의 고객사가 필수가 아니다');
+  assert.match(read('src/lib/escalation.ts'), /\n  tenant: string \| null;/, '접수 입력의 고객사가 필수가 아니다');
+
+  // ② 실제 호출 자리가 모두 적고 지나간다(엔진 5곳 + 접수 API 1곳 · 대화 기록 2곳).
+  const withTenant = (file, fn) => {
+    const s = read(file);
+    const calls = [...s.matchAll(new RegExp(`${fn}\\(\\{`, 'g'))];
+    for (const m of calls) {
+      const body = s.slice(m.index, m.index + 700);
+      const upTo = body.slice(0, body.indexOf('});') >= 0 ? body.indexOf('});') : body.length);
+      assert.match(upTo, /tenant[:,]/, `${file} 의 ${fn} 한 자리가 고객사를 적지 않는다`);
+    }
+    return calls.length;
+  };
+  assert.equal(withTenant('src/lib/chat.ts', 'createTicket'), 5, '엔진의 접수 자리 수가 바뀌었다 — 새 자리를 확인하라');
+  // 한 줄로 쓴 자리(연락처 첨부)는 글자까지 고정한다 — 거기서 빠지면 세 경로 중 하나만 어긋난다.
+  assert.match(read('src/lib/chat.ts'), /createTicket\(\{ sessionId, tenant: tenantOf\(sessionId\), contact/, '연락처 첨부 접수가 고객사를 적지 않는다');
+  assert.equal(withTenant('src/app/api/escalation/route.ts', 'createTicket'), 1);
+  assert.equal(withTenant('src/app/api/chat/route.ts', 'logTurn'), 1);
+  assert.equal(withTenant('src/app/api/kakao/webhook/route.ts', 'logTurn'), 1);
+
+  // ③ 요청에 실려 온 문자열을 그대로 적지 않는다 — 등록되지 않은 값이면 엔진은 기본 자료로
+  //    답하므로, 그대로 적으면 기록이 답한 근거와 어긋난다.
+  assert.match(read('src/app/api/chat/route.ts'), /tenant: resolvedTenantId\(tenantId\)/, '해석하지 않은 값을 기록한다');
+  assert.equal(/tenant: tenantId[,\n]/.test(read('src/app/api/chat/route.ts')), false, '요청 값을 그대로 적는 자리가 남았다');
+
+  // ④ 접수 API 는 고객사를 **세션에서** 읽는다(고객이 보낸 값을 믿지 않는다 — 운영자 화면과
+  //    이관 요약에 그대로 그려지는 값이다). 위젯 계약은 늘리지 않는다.
+  const esc = read('src/app/api/escalation/route.ts');
+  assert.match(esc, /const tenant = ctx\.tenantId \?\? null;/, '접수가 고객사를 세션에서 읽지 않는다');
+  assert.equal(/parsed\.data\.tenant/.test(esc), false, '접수 API 가 고객이 보낸 고객사 값을 받는다');
+
+  // ⑤ 이관 요약은 **이름**을 받는다 — 요약 모듈은 테넌트 어휘를 모른다(`intentLabels` 와 같은 규칙).
+  const handoff = read('src/lib/handoff.ts');
+  assert.match(handoff, /if \(s\.tenantLabelKo\) L\.push\(`고객사: \$\{s\.tenantLabelKo\}`\)/, '요약 평문에 고객사 줄이 없다');
+  assert.equal(/@\/lib\/tenants/.test(handoff), false, '요약 모듈이 테넌트 어휘를 직접 알게 됐다');
+});

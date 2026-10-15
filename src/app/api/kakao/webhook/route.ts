@@ -113,6 +113,8 @@ export async function POST(req: NextRequest) {
     logTurn({
       sessionId,
       channel: 'kakao',
+      // 카카오 채널에는 테넌트 임베드 옵션이 없다 — 기본 구성(고원 자료)으로 답한다(DS 36-1).
+      tenant: null,
       message: parsed.utterance,
       reply: result.reply,
       intent: result.intent,

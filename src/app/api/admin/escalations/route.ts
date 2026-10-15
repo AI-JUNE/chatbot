@@ -5,6 +5,7 @@ import { listTickets, updateTicket, getTicket, escalationStats, ESCALATION_STATU
 import { convStats, listTurns, unansweredQuestions } from '@/lib/convlog';
 import { feedbackSummary } from '@/lib/feedback';
 import { intentLabel, intentLabelMap } from '@/lib/intents';
+import { tenantLabel } from '@/lib/tenants';
 import { listCustomRules } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, reqStr, optStr, requireAdmin, isAdminAuthed } from '@/lib/http';
@@ -22,13 +23,16 @@ export async function GET(req: NextRequest) {
   const labels = intentLabelMap(listCustomRules());
   const conversation = convStats();
   return ok({
-    tickets: listTickets(),
+    // 고객사 이름도 같은 규칙으로 서버가 붙인다(`@/lib/tenants` → `tenantLabel` 필드) — 콘솔이
+    // 사전을 따로 들고 있으면 테넌트가 늘 때마다 어긋나 운영자 화면에 `eum` 같은 코드가 뜬다(DS 36-2).
+    tickets: listTickets().map((t) => ({ ...t, tenantLabel: tenantLabel(t.tenant ?? null) })),
     stats: {
       escalation: escalationStats(),
       // 대시보드 「주제별 분포」 막대도 같은 이름을 쓴다(집계값 `intent` 는 그대로 둔다 — 기계가 보는 쪽이다).
       conversation: {
         ...conversation,
         topIntents: conversation.topIntents.map((t) => ({ ...t, label: intentLabel(t.intent, labels) })),
+        byTenant: conversation.byTenant.map((t) => ({ ...t, label: tenantLabel(t.tenant) })),
       },
       // 고객이 누른 평가(👍/👎). 종전에는 받아 두고도 이 집계를 부르는 곳이 없어
       // 운영자가 볼 화면이 하나도 없었다(DS 32-1).
@@ -36,9 +40,17 @@ export async function GET(req: NextRequest) {
     },
     ...(withLogs
       ? {
-          recentTurns: listTurns(30).map((t) => ({ ...t, intentLabel: intentLabel(t.intent, labels) })),
+          recentTurns: listTurns(30).map((t) => ({
+            ...t,
+            intentLabel: intentLabel(t.intent, labels),
+            tenantLabel: tenantLabel(t.tenant ?? null),
+          })),
           // 「기본 안내 n건」이라는 수를 **무엇을 더 써야 하는지**로 바꾸는 목록(DS 32-2).
-          unanswered: unansweredQuestions(8),
+          // 고객사별로 갈라 센다(DS 36-1) — 고칠 자료가 있는 곳이 고객사마다 다르다.
+          unanswered: (() => {
+            const u = unansweredQuestions(8);
+            return { ...u, items: u.items.map((i) => ({ ...i, tenantLabel: tenantLabel(i.tenant) })) };
+          })(),
         }
       : {}),
   });

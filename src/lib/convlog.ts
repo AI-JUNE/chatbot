@@ -11,6 +11,14 @@ export interface ChatTurnLog {
   id: string;
   sessionId: string;
   channel: 'web' | 'kakao' | 'call'; // 멀티채널 대비(현재 web만 사용)
+  /**
+   * 어느 고객사(테넌트)의 위젯에서 들어온 턴인가. null 이면 기본 구성(고원 자료)이다 (DS 36-1).
+   *
+   * **필수 필드로 둔다** — 턴을 적는 곳이 늘어날 때 타입 검사에서 막히게 하기 위해서다.
+   * 종전에는 이 값이 요청 로그에만 남아, 최근 대화·내려받기·「답하지 못한 질문」·대시보드가
+   * 이음 손님의 말과 고원 홈페이지 손님의 말을 구분 없이 한 줄에 섞었다.
+   */
+  tenant: string | null;
   message: string;
   reply: string;
   intent: string;
@@ -40,6 +48,7 @@ export function logTurn(input: Omit<ChatTurnLog, 'id' | 'at'>): ChatTurnLog {
   seq += 1;
   const entry: ChatTurnLog = {
     ...input,
+    tenant: input.tenant || null,
     message: input.message.slice(0, 500),
     reply: input.reply.slice(0, 500),
     latencyMs: sanitizeLatency(input.latencyMs),
@@ -81,6 +90,8 @@ export function importTurns(input: unknown): { ok: true; count: number } | { ok:
     if (!CHANNELS.has(t.channel)) continue;
     restored.push({
       ...t,
+      // 옛 스냅샷에는 고객사가 없다 — 없는 값을 지어내지 않고 기본 구성(null)으로 둔다.
+      tenant: typeof t.tenant === 'string' && t.tenant ? t.tenant : null,
       message: String(t.message ?? '').slice(0, 500),
       reply: String(t.reply ?? '').slice(0, 500),
       intent: String(t.intent ?? ''),
@@ -109,10 +120,16 @@ export function listAllTurns(): ChatTurnLog[] {
 
 /** 등록 자료·규칙에서 답을 찾지 못해 기본 안내로 끝난 질문(DS 32-2). */
 export interface UnansweredQuestion {
-  /** 같은 질문을 묶는 열쇠(공백·대소문자 무시). 목록의 식별자로도 쓴다. */
+  /** 같은 질문을 묶는 열쇠(고객사 + 공백·대소문자 무시한 질문). 목록의 식별자로도 쓴다. */
   key: string;
   /** 화면에 보일 질문 — 같은 묶음 중 **가장 최근에 받은** 표기를 쓴다. */
   question: string;
+  /**
+   * 이 질문이 들어온 고객사(테넌트). null 이면 기본 구성(고원 자료)이다 (DS 36-1).
+   * 고칠 자료가 있는 곳이 고객사마다 다르므로 **묶음을 고객사별로 가른다** — 섞어 세면
+   * 운영자가 이음 손님이 못 받은 답을 고원 안내 자료에 적어 넣고도 고쳐지지 않는다.
+   */
+  tenant: string | null;
   /** 같은 질문이 몇 번 왔는가. */
   count: number;
   /** 마지막으로 받은 시각(ISO). */
@@ -122,6 +139,11 @@ export interface UnansweredQuestion {
 /** 묶음 열쇠 — 「환불 되나요?」와 「환불되나요?」는 운영자에게 같은 질문이다. */
 function questionKey(message: string): string {
   return message.trim().toLowerCase().replace(/\s+/g, '');
+}
+
+/** 고객사가 다르면 **고칠 자료가 다른 곳에 있다** — 같은 문장이어도 다른 묶음이다. */
+function groupKey(tenant: string | null, message: string): string {
+  return `${tenant ?? ''}\u0000${questionKey(message)}`;
 }
 
 /**
@@ -140,10 +162,11 @@ export function unansweredQuestions(limit = 8): { items: UnansweredQuestion[]; g
     const message = (l.message || '').trim();
     if (!message) continue;
     turns += 1;
-    const key = questionKey(message);
+    const tenant = l.tenant ?? null;
+    const key = groupKey(tenant, message);
     const prev = byKey.get(key);
     if (!prev) {
-      byKey.set(key, { key, question: message, count: 1, lastAt: l.at });
+      byKey.set(key, { key, question: message, tenant, count: 1, lastAt: l.at });
       continue;
     }
     prev.count += 1;
@@ -163,6 +186,11 @@ export interface ConvStats {
   sessions: number;
   bySource: Record<string, number>;
   byChannel: Record<string, number>;
+  /**
+   * 고객사(테넌트)별 집계 — 대화 많은 쪽이 앞이다 (DS 36-1).
+   * 종전에는 모든 고객사를 하나로 합쳐 세어, 이음에 줄 수 있는 수치가 한 줄도 없었다.
+   */
+  byTenant: TenantBucket[];
   topIntents: { intent: string; count: number }[]; // 상위 10개
   autoHandled: number; // rule/kb로 즉시 응답한 턴
   autoRate: number; // 자동처리율(0~1, 소수 3자리)
@@ -178,6 +206,14 @@ export interface ConvStats {
   avgLatencyMs: number | null;
   /** 평균에 들어간 턴 수(표본 크기). */
   latencySamples: number;
+}
+
+export interface TenantBucket {
+  /** 고객사 식별자. null 이면 기본 구성(고원 자료)이다. */
+  tenant: string | null;
+  turns: number;
+  sessions: number;
+  escalated: number;
 }
 
 export interface DailyBucket {
@@ -211,6 +247,8 @@ export function convStats(): ConvStats {
   const byChannel: Record<string, number> = {};
   const byIntent: Record<string, number> = {};
   const sessions = new Set<string>();
+  // 고객사별 집계 — 세션은 고객사 안에서 센다(한 세션이 두 고객사에 걸치는 일은 없다).
+  const byTenantMap = new Map<string, { tenant: string | null; turns: number; sessions: Set<string>; escalated: number }>();
   let autoHandled = 0;
   let escalatedTurns = 0;
   let latencySum = 0;
@@ -224,6 +262,16 @@ export function convStats(): ConvStats {
     byChannel[l.channel] = (byChannel[l.channel] || 0) + 1;
     byIntent[l.intent] = (byIntent[l.intent] || 0) + 1;
     sessions.add(l.sessionId);
+    const tenant = l.tenant ?? null;
+    const tk = tenant ?? '';
+    let bucket = byTenantMap.get(tk);
+    if (!bucket) {
+      bucket = { tenant, turns: 0, sessions: new Set<string>(), escalated: 0 };
+      byTenantMap.set(tk, bucket);
+    }
+    bucket.turns += 1;
+    bucket.sessions.add(l.sessionId);
+    if (l.escalate) bucket.escalated += 1;
     if (l.source === 'rule' || l.source === 'kb') autoHandled += 1;
     if (l.escalate) escalatedTurns += 1;
   }
@@ -258,6 +306,10 @@ export function convStats(): ConvStats {
     sessions: sessions.size,
     bySource,
     byChannel,
+    byTenant: [...byTenantMap.values()]
+      .map((b) => ({ tenant: b.tenant, turns: b.turns, sessions: b.sessions.size, escalated: b.escalated }))
+      // 대화 많은 쪽이 앞. 같으면 기본 구성을 먼저 둔다(순서가 실행마다 흔들리지 않게).
+      .sort((a, b) => b.turns - a.turns || (a.tenant ?? '').localeCompare(b.tenant ?? '')),
     topIntents,
     autoHandled,
     autoRate: totalTurns ? Math.round((autoHandled / totalTurns) * 1000) / 1000 : 0,

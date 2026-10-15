@@ -2414,3 +2414,129 @@ test('위젯 카드로 접수한 뒤의 질문이 연락처로 읽히지 않는�
   resetSessions();
   esc.resetTickets();
 });
+
+/* ══════════ 디자인 스프린트 — 33차 재감사 (DS 36-1·36-2) ══════════ */
+
+/**
+ * DS 36-1 — 「어느 고객사의 손님인가」가 대화 기록에 없던 자리.
+ *
+ * 임베드는 고객사마다 `data-tenant` 로 뜨고, 고객사 위젯은 **그 고객사 자료만** 근거로 답한다
+ * (`entriesFor` 는 테넌트가 있으면 `tenant.kb` 만 본다). 그런데 테넌트는 요청 로그에만 남아
+ * 대화 기록에는 한 글자도 들어가지 않았다 — 최근 대화·내려받기·대시보드가 이음 손님의 말과
+ * 고원 홈페이지 손님의 말을 한 줄에 섞었고, 「답하지 못한 질문」은 **고칠 자료가 다른 곳에 있는**
+ * 두 묶음을 하나로 세어 운영자를 엉뚱한 자료로 데려갔다. 묶음이 실제로 갈라지는지는 돌려 봐야 안다.
+ */
+test('대화 기록이 어느 고객사에서 왔는지 말하고, 못 답한 질문을 고객사별로 가른다 (DS 36-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const { logTurn, convStats, unansweredQuestions, resetLogs, importTurns, exportTurns } = await importLib('convlog', CONVLOG_DEPS);
+  resetLogs();
+
+  const turn = (sessionId, tenant, message, source = 'fallback') =>
+    logTurn({ sessionId, channel: 'web', tenant, message, reply: '답', intent: 'fallback', source, escalate: false });
+
+  // ① 적은 그대로 남는다. 기본 구성은 null 이고, 빈 문자열도 null 로 모은다(두 가지 「없음」을 만들지 않는다).
+  assert.equal(turn('s-eum', 'eum', '활동확인서 언제 나와요').tenant, 'eum');
+  assert.equal(turn('s-base', null, '요금 알려주세요').tenant, null);
+  assert.equal(
+    logTurn({ sessionId: 's-x', channel: 'web', tenant: '', message: 'a', reply: 'b', intent: 'i', source: 'kb', escalate: false }).tenant,
+    null,
+  );
+
+  // ② **같은 문장**이어도 고객사가 다르면 다른 묶음이다 — 고칠 자료가 다른 곳에 있다.
+  resetLogs();
+  turn('s1', 'eum', '환불 되나요?');
+  turn('s2', 'eum', '환불되나요?');
+  turn('s3', null, '환불 되나요?');
+  const u = unansweredQuestions();
+  assert.equal(u.groups, 2, '고객사가 다른 질문이 한 묶음으로 섞였다');
+  assert.equal(u.turns, 3, '묶기 전의 총 횟수는 그대로여야 한다');
+  const eumItem = u.items.find((i) => i.tenant === 'eum');
+  const baseItem = u.items.find((i) => i.tenant === null);
+  assert.equal(eumItem.count, 2, '같은 고객사 안에서는 띄어쓰기가 달라도 한 묶음이다');
+  assert.equal(baseItem.count, 1);
+  // 어느 고객사 묶음인지 항목이 스스로 말한다 — 화면은 이 값으로 「자료 만들기」를 줄지 말지 가린다.
+  assert.equal(u.items.every((i) => 'tenant' in i), true, '항목이 고객사를 들고 있지 않다');
+
+  // ③ 대시보드에 고객사별 수치가 생긴다(종전에는 전부 합친 한 줄뿐이었다).
+  resetLogs();
+  turn('s1', 'eum', 'a');
+  turn('s1', 'eum', 'b');
+  turn('s2', 'eum', 'c');
+  turn('s9', null, 'd');
+  const stats = convStats();
+  assert.equal(stats.byTenant.length, 2);
+  assert.deepEqual(stats.byTenant[0], { tenant: 'eum', turns: 3, sessions: 2, escalated: 0 }, '대화 많은 고객사가 앞이어야 한다');
+  assert.deepEqual(stats.byTenant[1], { tenant: null, turns: 1, sessions: 1, escalated: 0 });
+  // 합계는 종전과 같다 — 가르는 것이지 수를 바꾸는 것이 아니다.
+  assert.equal(stats.byTenant.reduce((s, b) => s + b.turns, 0), stats.totalTurns);
+
+  // ④ 옛 백업에는 고객사가 없다 — 지어내지 않고 기본 구성(null)으로 둔다.
+  const snap = exportTurns();
+  for (const t of snap.turns) delete t.tenant;
+  assert.equal(importTurns(snap).ok, true);
+  assert.equal(convStats().byTenant.length, 1, '없는 고객사를 지어냈다');
+  assert.equal(convStats().byTenant[0].tenant, null);
+
+  resetLogs();
+});
+
+/**
+ * DS 36-2 — 접수가 **어느 회사 손님인지** 말하지 않던 자리.
+ *
+ * 이음 위젯은 답을 못 찾으면 「담당 코디네이터에게 연결해 드릴게요」라고 약속하고 끝난다.
+ * 그 접수가 고원 콘솔의 한 큐에 다른 고객사 접수와 섞여 들어오는데 티켓에는 고객사가 없었고,
+ * 상담원이 그대로 읽는 이관 요약에도 없었다 — 전화를 걸기 전에 가장 먼저 알아야 하는 값이다.
+ */
+test('접수와 이관 요약이 어느 고객사의 손님인지 말한다 (DS 36-2)', opts, async () => {
+  const GROUP = ['chat', 'session', 'handoff', 'intents', 'rules', 'escalation', 'adminStore', 'knowledge', 'normalize', 'storage', 'slots', 'tenantKB', 'tenants', 'llm'];
+  const pick = (name) => importLib(name, GROUP.filter((n) => n !== name));
+  const { replyTo } = await pick('chat');
+  const { getSession, resetSessions } = await pick('session');
+  const esc = await pick('escalation');
+  const { tenantLabel, resolvedTenantId, DEFAULT_TENANT_LABEL, UNKNOWN_TENANT_LABEL } = await pick('tenants');
+
+  resetSessions();
+  esc.resetTickets();
+
+  // ① 이음 위젯에서 상담원을 부르면 접수가 이음 것으로 남는다 — 위젯이 따로 보내 주지 않아도 된다
+  //    (답을 만든 자리에서 세션에 적히고, 접수는 세션이 말하는 대로 적는다).
+  const r = replyTo('담당자 연결해 주세요', 'rt-ds36-eum', 'eum');
+  assert.equal(r.escalate, true, '상담원 전환이 일어나야 이 검증이 의미가 있다');
+  assert.equal(getSession('rt-ds36-eum').tenantId, 'eum', '세션이 고객사를 기억하지 않는다');
+  const t = esc.getTicket(r.ticketId);
+  assert.equal(t.tenant, 'eum', '접수에 고객사가 없다 — 상담원이 어느 회사 이름으로 인사할지 모른다');
+  // 상담원이 그대로 읽는 평문에도 있어야 한다. 코드(`eum`)가 아니라 이름이다.
+  assert.match(t.summary, /고객사: 이음/, '이관 요약이 고객사를 말하지 않는다');
+  assert.equal(t.summary.includes('eum'), false, '요약에 내부 식별자가 그대로 들어갔다');
+
+  // ② 기본 구성의 접수에는 그 줄을 세우지 않는다 — 보탤 사실이 없는 줄을 모든 요약에 넣지 않는다.
+  const base = replyTo('상담원 연결해 주세요', 'rt-ds36-base');
+  const bt = esc.getTicket(base.ticketId);
+  assert.equal(bt.tenant, undefined, '기본 구성인데 고객사가 적혔다');
+  assert.equal(bt.summary.includes('고객사:'), false);
+
+  // ③ 등록되지 않은 `data-tenant` 로 들어오면 엔진은 기본 자료로 답한다 — 기록도 그렇게 적어야
+  //    기록이 답한 근거와 어긋나지 않는다(요청에 실려 온 문자열을 그대로 믿지 않는다).
+  assert.equal(resolvedTenantId('acme'), null);
+  assert.equal(resolvedTenantId('eum'), 'eum');
+  assert.equal(resolvedTenantId('../eum'), null, '형식이 어긋난 값을 받아들였다');
+  const unknown = replyTo('상담원 연결해 주세요', 'rt-ds36-unknown', 'acme');
+  assert.equal(esc.getTicket(unknown.ticketId).tenant, undefined, '등록되지 않은 고객사 이름으로 기록됐다');
+
+  // ④ 이름을 붙이는 쪽은 한 곳이다 — 모르는 값도 코드로 내보내지 않는다(DS 22-x 와 같은 규칙).
+  assert.equal(tenantLabel(null), DEFAULT_TENANT_LABEL);
+  assert.equal(tenantLabel(undefined), DEFAULT_TENANT_LABEL);
+  assert.equal(tenantLabel('eum'), '이음');
+  assert.equal(tenantLabel('acme'), UNKNOWN_TENANT_LABEL);
+  assert.equal(/[A-Za-z]/.test(UNKNOWN_TENANT_LABEL), false, '표시명에 영문 코드가 남았다');
+
+  // ⑤ 「응답 테스트」는 같은 세션으로 기준을 바꿔 가며 시험한다 — 기본 구성으로 돌아가면
+  //    적어 둔 고객사를 거둔다(거두지 않으면 기본 구성 시험의 접수가 이음 것으로 기록된다).
+  replyTo('안녕하세요', 'rt-ds36-switch', 'eum');
+  assert.equal(getSession('rt-ds36-switch').tenantId, 'eum');
+  replyTo('안녕하세요', 'rt-ds36-switch');
+  assert.equal(getSession('rt-ds36-switch').tenantId, undefined, '기준을 바꿨는데 앞서 고른 고객사가 남았다');
+
+  resetSessions();
+  esc.resetTickets();
+});

@@ -4,6 +4,7 @@ import { replyToAsync } from '@/lib/chat';
 import { logTurn } from '@/lib/convlog';
 import { intentLabel, intentLabelMap } from '@/lib/intents';
 import { listCustomRules } from '@/lib/adminStore';
+import { resolvedTenantId } from '@/lib/tenants';
 import { rateGuard } from '@/lib/ratelimit';
 import { ok, readJson, optStr, withRequestId } from '@/lib/http';
 import { captureError } from '@/lib/monitoring';
@@ -96,6 +97,13 @@ export async function POST(req: NextRequest) {
       escalate: result.escalate,
       confidence: result.confidence,
       latencyMs: Date.now() - startedAt,
+      /**
+       * 어느 고객사(테넌트)의 위젯에서 온 턴인가 (DS 36-1).
+       * **등록된 테넌트로 해석된 값만** 적는다 — 요청에 실려 온 문자열을 그대로 적으면,
+       * 등록되지 않은 `data-tenant` 로 들어와 기본(고원) 자료로 답한 턴을 운영 화면이
+       * 「그 고객사 자료로 답했다」고 말한다(기록이 답한 근거와 어긋난다).
+       */
+      tenant: resolvedTenantId(tenantId),
     });
   }
 

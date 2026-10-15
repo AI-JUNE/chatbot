@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server';
 import { createTicket, getTicket, queuePosition, toReasonCode, STATUS_LABELS } from '@/lib/escalation';
 import { buildHandoffSummary } from '@/lib/handoff';
 import { intentLabelMap } from '@/lib/intents';
+import { tenantLabel } from '@/lib/tenants';
 import { listCustomRules } from '@/lib/adminStore';
 import { getSession, updateSession } from '@/lib/session';
 import { rateGuard } from '@/lib/ratelimit';
@@ -52,9 +53,19 @@ export async function POST(req: NextRequest) {
   // 이관 요약은 세션 문맥(최근 대화·수집 슬롯)에서 규칙 기반으로 생성한다. 본문은 마스킹을 통과한다.
   const reasonCode = toReasonCode(reason.value);
   const ctx = getSession(sessionId.value);
+  /**
+   * 어느 고객사의 접수인가 — **세션이 말하는 대로** 적는다 (DS 36-2).
+   *
+   * 위젯은 테넌트를 이 API 에 보내지 않는다(계약을 늘리지 않는다). 보낼 필요도 없다 —
+   * 접수 카드는 챗봇이 답한 말풍선 아래에만 뜨므로 이 세션은 이미 `/api/chat` 을 지났고,
+   * 그 자리에서 세션에 고객사가 적혔다. 고객이 보낸 값을 그대로 믿지 않는 쪽이기도 하다
+   * (운영자 화면과 이관 요약에 그대로 그려지는 값이다).
+   */
+  const tenant = ctx.tenantId ?? null;
   const slots = { ...(ctx.slots ?? {}), ...(contact.value ? { contact: contact.value } : {}) };
   const summary = buildHandoffSummary({
     sessionId: sessionId.value,
+    ...(tenant ? { tenantLabel: tenantLabel(tenant) } : {}),
     // 이 API 는 웹 위젯 전용이지만 채널은 세션이 말하는 대로 적는다(요약이 회신 창구를 지어내지 않게).
     channel: ctx.channel ?? 'web',
     reason: reasonCode,
@@ -67,6 +78,7 @@ export async function POST(req: NextRequest) {
 
   const { ticket, created } = createTicket({
     sessionId: sessionId.value,
+    tenant,
     reason: reason.value,
     message: message.value,
     contact: contact.value || undefined,

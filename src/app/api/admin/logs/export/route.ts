@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { listAllTurns } from '@/lib/convlog';
 import { CHANNEL_LABELS, SOURCE_LABELS, intentLabel, intentLabelMap } from '@/lib/intents';
 import { listCustomRules } from '@/lib/adminStore';
+import { tenantLabel } from '@/lib/tenants';
 import { requireAdmin } from '@/lib/http';
 import { csvRow } from '@/lib/csv';
 import { kstStamp } from '@/lib/kst';
@@ -19,12 +20,14 @@ export async function GET(req: NextRequest) {
   // (`kb:환불`·`fallback`)가 아니라 화면과 **같은 이름**으로, 코드는 따로 한 열에 남긴다
   // (다른 시스템으로 옮겨 담을 때 쓰는 값이다).
   const labels = intentLabelMap(listCustomRules());
-  const header = ['번호', '시각', '채널', '대화', '주제', '근거', '상담원 제안', '고객 메시지', '챗봇 답변', '주제코드'];
+  // 「고객사」는 채널 바로 옆에 둔다 — 받는 사람이 가장 먼저 거르는 열이다(DS 36-1).
+  const header = ['번호', '시각', '채널', '고객사', '대화', '주제', '근거', '상담원 제안', '고객 메시지', '챗봇 답변', '주제코드'];
   const rows = listAllTurns().map((l) =>
     csvRow([
       l.id,
       l.at,
       CHANNEL_LABELS[l.channel] ?? l.channel,
+      tenantLabel(l.tenant ?? null),
       l.sessionId,
       intentLabel(l.intent, labels),
       SOURCE_LABELS[l.source] ?? l.source,

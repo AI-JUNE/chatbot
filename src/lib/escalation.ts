@@ -22,6 +22,14 @@ export const STATUS_LABELS: Record<EscalationStatus, string> = {
 export interface EscalationTicket {
   id: string;
   sessionId: string;
+  /**
+   * 어느 고객사(테넌트)의 위젯에서 들어온 접수인가. 없으면 기본 구성(고원)이다 (DS 36-2).
+   *
+   * 상담원이 전화를 걸기 전에 가장 먼저 알아야 하는 값이다 — 이음 위젯은 「담당 코디네이터에게
+   * 연결해 드릴게요」라고 약속하고 끝나므로, 이 값이 없으면 상담원은 어느 회사 이름으로 인사할지
+   * 모른 채 전화를 건다. 종전에는 테넌트가 요청 로그에만 남아 큐·상세·이관 요약 어디에도 없었다.
+   */
+  tenant?: string;
   reason: string; // user_request | rule:agent | rule:complaint | fallback 등(원인 상세)
   /** AICC-Core Handoff 사유 코드. 채널·저장소가 달라도 같은 어휘로 집계된다. */
   reasonCode: HandoffReason;
@@ -97,6 +105,8 @@ export function importTickets(input: unknown): { ok: true; count: number } | { o
     restored.push({
       ...c,
       ...(purgedAt ? { contact: undefined, contactPurgedAt: purgedAt } : {}),
+      // 옛 스냅샷에는 고객사가 없다 — 지어내지 않고 비워 둔다(화면이 「기본」이라 말한다).
+      ...(typeof c.tenant === 'string' && c.tenant ? { tenant: c.tenant } : { tenant: undefined }),
       reason: typeof c.reason === 'string' && c.reason ? c.reason : 'user_request',
       reasonCode: isHandoffReason(c.reasonCode) ? c.reasonCode : toReasonCode(c.reason),
       message: String(c.message ?? '').slice(0, 300),
@@ -116,6 +126,12 @@ export function importTickets(input: unknown): { ok: true; count: number } | { o
 /** 세션당 열린 티켓(open/in_progress)이 있으면 재사용해 중복 접수를 막는다. */
 export function createTicket(input: {
   sessionId?: string;
+  /**
+   * 어느 고객사의 접수인가(등록된 테넌트 id, 기본 구성이면 null) — **필수로 둔다** (DS 36-2).
+   * 접수를 만드는 자리가 여섯 곳이라, 선택 항목으로 두면 새로 생긴 경로가 조용히 비워 둔다.
+   * 타입 검사에서 막아 모든 자리가 「어느 회사 손님인가」를 적고 지나가게 한다.
+   */
+  tenant: string | null;
   reason?: string;
   /** 호출자가 사유 코드를 이미 알고 있을 때 지정(예: 슬롯 수집 폼). 없으면 reason 문자열로 추론한다. */
   reasonCode?: HandoffReason;
@@ -137,6 +153,8 @@ export function createTicket(input: {
     }
     // 요약은 항상 최신 대화 기준으로 갱신한다(상담원이 오래된 요약을 보면 이관이 무의미해진다).
     if (input.summary) existing.summary = String(input.summary).slice(0, 4000);
+    // 재사용하는 접수에도 고객사를 채운다 — 세션이 먼저 적지 못한 채 접수가 생겼을 수 있다.
+    if (input.tenant && !existing.tenant) existing.tenant = input.tenant;
     persist();
     return { ticket: { ...existing }, created: false };
   }
@@ -145,6 +163,7 @@ export function createTicket(input: {
   const ticket: EscalationTicket = {
     id: `ESC-${String(seq).padStart(4, '0')}`,
     sessionId,
+    ...(input.tenant ? { tenant: input.tenant } : {}),
     reason,
     reasonCode: input.reasonCode ?? toReasonCode(reason),
     message: String(input.message || '').trim().slice(0, 300),

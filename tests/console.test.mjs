@@ -399,7 +399,8 @@ test('상담원 요청이 요약 KPI·상태 필터·표·상세 서랍으로 �
   // 필터·검색·표
   assert.match(t, /role="group" aria-label="처리 상태로 거르기"/, '상태 필터 그룹 이름');
   assert.match(t, /aria-pressed=\{escFilter === f\.key\}/, '필터 칩은 눌림 상태를 알린다');
-  assert.match(t, /aria-label="요청 검색\(고객 말·사유·접수번호\)"/, '검색 입력 라벨');
+  // 고객사도 검색 대상이다(DS 36-2) — 「이음 건만 보기」가 운영자가 가장 먼저 하는 일이다.
+  assert.match(t, /aria-label="요청 검색\(고객 말·고객사·사유·접수번호\)"/, '검색 입력 라벨');
   assert.match(t, /<table className="ac-table">/, '표');
   assert.match(t, /<th scope="col">/, '표 헤더 scope');
   assert.match(t, /aria-haspopup="dialog"/, '접수번호 버튼은 서랍을 연다');
@@ -1495,9 +1496,12 @@ test('데이터 표의 머리칸이 정렬되는 머리칸이다 — 방향은 �
   assert.match(comp, /title=\{`\$\{label\} 기준으로 정렬`\}/, '무엇을 하는 머리칸인지 알려준다');
   assert.equal(/\{label\}<span/.test(comp), false, '머리칸 이름에 설명을 덧붙이면 셀마다 그 문장이 따라 읽힌다');
 
-  // ② 데이터 표 8장 전부가 정렬되는 머리칸을 가진다(설치 「선택 옵션」 표는 고정 안내라 제외).
+  // ② 데이터 표 8장 전부가 정렬되는 머리칸을 가진다.
+  //    제외: 설치 「선택 옵션」 표는 고정 안내다. 「고객사별 현황」(DS 36-1)은 행이 등록된 고객사
+  //    수만큼(현재 둘)이고 서버가 이미 대화 많은 곳부터 내려보낸다 — DS 31-1 이 고친 문제
+  //    (「행이 많아지면 원하는 값을 찾기 어렵다」)가 생기지 않는 표다.
   const lines = src.split('\n');
-  const skip = new Set(['설치 선택 옵션']);
+  const skip = new Set(['설치 선택 옵션', '고객사별 현황']);
   let checked = 0;
   lines.forEach((ln, i) => {
     if (!ln.includes('<table className="ac-table">')) return;
@@ -1686,7 +1690,7 @@ test('답하지 못한 질문 목록이 뜨고 그 질문으로 자료를 만들
   const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
   const route = readFileSync(new URL('../src/app/api/admin/escalations/route.ts', import.meta.url), 'utf8');
 
-  assert.match(route, /unanswered: unansweredQuestions\(8\)/, '서버가 답하지 못한 질문을 내려보내지 않는다');
+  assert.match(route, /unansweredQuestions\(8\)/, '서버가 답하지 못한 질문을 내려보내지 않는다');
 
   const dash = src.slice(src.indexOf("{tab === 'dash' && ("), src.indexOf('{/* ── 답변 평가'));
   assert.ok(dash.includes('<h2 style={S.h2}>자료에 없어 답하지 못한 질문</h2>'), '답하지 못한 질문 카드가 없다');
@@ -1709,4 +1713,103 @@ test('답하지 못한 질문 목록이 뜨고 그 질문으로 자료를 만들
 
   const html = await render();
   assert.equal(html.includes('자료에 없어 답하지 못한 질문'), false, '목록이 오기 전에 카드를 단정한다');
+});
+
+/**
+ * ── DS 36-1·36-2 — 어느 고객사의 손님인가 ──
+ * 이 제품은 고객사마다 `data-tenant` 로 임베드되고, 고객사 위젯은 **그 고객사 자료만** 근거로
+ * 답한다. 그런데 운영 화면은 모든 고객사를 한 줄에 섞어 놓고 있었다 — 최근 대화·접수 큐·내려받기
+ * ·대시보드·보완 목록 어디에도 「어느 회사 손님인가」가 없었다. 이름은 어휘를 아는 서버가 붙인다.
+ */
+test('대화·접수·내려받기가 어느 고객사에서 왔는지 말한다 (DS 36-1·36-2)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const route = readFileSync(new URL('../src/app/api/admin/escalations/route.ts', import.meta.url), 'utf8');
+  const csv = readFileSync(new URL('../src/app/api/admin/logs/export/route.ts', import.meta.url), 'utf8');
+
+  // ① 이름은 서버가 붙여 보낸다(`intentLabel`·`actionLabel` 과 같은 규칙) — 콘솔이 사전을 따로
+  //    들고 있으면 고객사가 늘 때마다 어긋나 운영자 화면에 `eum` 같은 코드가 뜬다.
+  assert.match(route, /import \{ tenantLabel \} from '@\/lib\/tenants'/, '이름을 붙이는 쪽을 불러오지 않는다');
+  assert.match(route, /tickets: listTickets\(\)\.map\(\(t\) => \(\{ \.\.\.t, tenantLabel: tenantLabel\(t\.tenant \?\? null\) \}\)\)/, '접수에 고객사 이름이 붙지 않는다');
+  assert.match(route, /tenantLabel: tenantLabel\(t\.tenant \?\? null\),/, '최근 대화에 고객사 이름이 붙지 않는다');
+  assert.match(route, /byTenant: conversation\.byTenant\.map/, '고객사별 집계에 이름이 붙지 않는다');
+  assert.match(route, /items: u\.items\.map\(\(i\) => \(\{ \.\.\.i, tenantLabel: tenantLabel\(i\.tenant\) \}\)\)/, '못 답한 질문에 고객사 이름이 붙지 않는다');
+
+  // ② 내려받기 파일에도 열이 있다 — 받는 사람이 가장 먼저 거르는 값이다.
+  assert.match(csv, /'번호', '시각', '채널', '고객사', '대화'/, 'CSV 에 고객사 열이 없다');
+  assert.match(csv, /tenantLabel\(l\.tenant \?\? null\)/, 'CSV 가 고객사를 이름으로 적지 않는다');
+
+  // ③ 최근 대화 한 줄과 상세 서랍이 모두 말한다 — 표에만 있으면 서랍에서는 다시 알 수 없다.
+  const dash = src.slice(src.indexOf("{tab === 'dash' && ("), src.indexOf("{tab === 'kb' &&"));
+  assert.match(dash, /<span className="ac-pill">\{t\.tenantLabel \|\| UNNAMED_TENANT\}<\/span>/, '최근 대화 줄에 고객사가 없다');
+  const drawer = src.slice(src.indexOf('function ConversationDrawer('), src.indexOf('function TicketDrawer('));
+  assert.match(drawer, /const tenantName = turns\[0\]\?\.tenantLabel \|\| UNNAMED_TENANT/, '대화 상세가 고객사를 읽지 않는다');
+  assert.match(drawer, /\{tenantName\} · \{CHANNEL_LABELS\[channel\]/, '대화 상세 제목에 고객사가 없다');
+
+  // ④ 접수 큐(열) + 접수 상세(줄) + 검색·정렬.
+  const esc = src.slice(src.indexOf("{tab === 'esc' &&"), src.indexOf("{tab === 'partner' &&"));
+  assert.match(esc, /<SortTh label="고객사" col="tenant" className="ac-col-wide"/, '접수 표에 고객사 열이 없다');
+  assert.match(esc, /\{t\.tenantLabel \|\| UNNAMED_TENANT\}<\/td>/, '접수 표가 고객사를 그리지 않는다');
+  assert.match(esc, /tenant: \(t: TicketView\) => t\.tenantLabel \|\| ''/, '고객사 열로 정렬할 수 없다');
+  assert.match(esc, /t\.tenantLabel \?\? '',/, '고객사 이름으로 검색되지 않는다');
+  const ticket = src.slice(src.indexOf('function TicketDrawer('), src.indexOf('/** 고객사 상세 서랍'));
+  assert.match(ticket, /고객사 · \{t\.tenantLabel \|\| UNNAMED_TENANT\}/, '접수 상세에 고객사가 없다');
+
+  // ⑤ 「못 답한 질문」은 고칠 자료가 있는 곳으로만 데려간다 — 고객사 자료는 파일이 원본이라
+  //    콘솔에서 고칠 수 없다. 섞어 두면 운영자가 엉뚱한 자료에 적어 넣고도 그 위젯은 그대로다.
+  assert.match(dash, /const ownKb = !u\.tenant;/, '고칠 자료가 어디 있는지 가리지 않는다');
+  assert.match(dash, /ownKb \? \(/, '모든 질문에 「자료 만들기」를 준다');
+  assert.ok(dash.includes('고객사 자료 확인'), '고객사 자료를 확인할 길이 없다');
+  assert.match(dash, /goTab\('tenant'\);/, '고객사 자료 화면으로 데려가지 않는다');
+
+  // ⑥ 고객사별 현황은 **둘 이상일 때만** 그린다(한 곳뿐이면 위의 KPI 와 같은 수다).
+  assert.match(dash, /\(stats\.conversation\.byTenant\?\.length \?\? 0\) > 1 && \(/, '고객사가 한 곳인데도 카드를 세운다');
+  assert.ok(dash.includes('<h2 style={S.h2}>고객사별 현황</h2>'), '고객사별 수치가 어디에도 없다');
+
+  // ⑦ 선택 상자에 내부 식별자(`eum`)를 그대로 쓰지 않는다 — 이름을 받아 쓴다.
+  assert.match(src, /<option key=\{t\.id\} value=\{t\.id\}>\{t\.name \|\| t\.id\}<\/option>/, '고객사 선택에 코드가 뜬다');
+  assert.equal(/<option key=\{id\} value=\{id\}>\{id\}<\/option>/.test(src), false, '식별자를 그대로 보여주는 선택 상자가 남았다');
+
+  // ⑧ 첫 렌더(집계 도착 전)에는 고객사별 현황을 단정하지 않는다.
+  const html = await render();
+  assert.equal(html.includes('고객사별 현황'), false, '수치가 오기 전에 카드를 세운다');
+});
+
+/**
+ * ── DS 36-3 — 「응답 테스트」가 고객사 기준으로 물을 수 있는가 ──
+ * 종전에는 테스트가 고객사를 실어 보내지 않아 **언제나 기본 구성으로** 답했다. 운영자는 최근
+ * 대화에서 이음 손님이 못 받은 답을 보고 같은 말을 그대로 쳐 보는데, 돌아온 답은 고원 자료로
+ * 만든 다른 답이었고 미리보기는 그것을 「실제 상담창과 같은 답변」이라 말했다.
+ */
+test('응답 테스트가 어느 고객사 기준인지 고르고 그 기준으로 묻는다 (DS 36-3)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const tenants = readFileSync(new URL('../src/lib/tenants.ts', import.meta.url), 'utf8');
+  const tenantKB = readFileSync(new URL('../src/lib/tenantKB.ts', import.meta.url), 'utf8');
+
+  // ① 기준을 고를 수 있고, 고른 값이 요청에 실린다(위젯이 보내는 것과 같은 값).
+  assert.match(src, /const \[testTenant, setTestTenant\] = useState\(''\)/, '기준을 고르는 상태가 없다');
+  assert.match(src, /JSON\.stringify\(\{ message: q, \.\.\.\(tenantAtSend \? \{ tenant: tenantAtSend \} : \{\}\) \}\)/, '고른 기준을 보내지 않는다');
+  assert.match(src, /<select\n\s*id="ac-test-tenant"/, '기준 선택 상자가 없다');
+  assert.match(src, /<label htmlFor="ac-test-tenant"/, '선택 상자에 라벨이 없다');
+
+  // ② 보낼 때 고른 기준을 그 자리에서 붙들어 둔다 — 답을 기다리는 사이에 바꿀 수 있다(DS 33-x).
+  assert.match(src, /const basis = testTenantName;/, '보낸 기준을 기록에 남기지 않는다');
+  assert.match(src, /const tenantAtSend = testTenant;/, '보내는 값이 지금 고른 값으로 흔들린다');
+  assert.match(src, /<dt>기준<\/dt><dd>\{t\.basis \|\| DEFAULT_TENANT_VIEW_LABEL\}<\/dd>/, '「왜 이렇게 답했나」가 기준을 말하지 않는다');
+
+  // ③ 미리보기가 고른 고객사의 모습이다 — 이음 기준으로 물었는데 헤더가 고원이면 그 화면이 거짓말을 한다.
+  assert.match(src, /const sel = testTenant \? tenantList\.find\(\(t\) => t\.id === testTenant\) : undefined;/, '미리보기가 고른 고객사를 모른다');
+  assert.match(src, /\{sel\?\.badge \|\| 'G'\}/, '미리보기 아바타가 고정이다');
+  assert.match(src, /sel\?\.brandColor \? \(\{ '--brand': sel\.brandColor \}/, '미리보기가 고객사 색을 쓰지 않는다');
+  assert.match(src, /미리보기 · \{testTenantName\} 기준/, '무엇을 기준으로 보여 주는지 밝히지 않는다');
+  // 공개 설정값(색·한 글자)을 서버가 실제로 내려보낸다 — 화면이 지어내면 실제 위젯과 달라진다.
+  assert.match(tenantKB, /brandColor: preset\.brandColor,\n\s*badge: preset\.badge,/, '목록 응답에 공개 설정값이 없다');
+
+  // ④ 목록은 「응답 테스트」를 열 때 가져온다 — 테넌트 지식 탭을 먼저 열어야 쓸 수 있으면 안 된다.
+  assert.match(src, /if \(tab === 'test' && tenantList\.length === 0\) loadTenantList\(\);/, '기준 목록을 가져오지 않는다');
+
+  // ⑤ 기본 구성의 표시명은 서버 사전과 **같은 글자**여야 한다 — 어긋나면 같은 것이 두 이름으로 뜬다
+  //    (`NO_CITATION_LABEL` 과 같은 방식: 콘솔은 lib 을 불러오지 않으므로 테스트가 두 쪽을 대조한다).
+  const viewLabel = (src.match(/const DEFAULT_TENANT_VIEW_LABEL = '([^']+)'/) || [])[1];
+  assert.ok(viewLabel, 'DEFAULT_TENANT_VIEW_LABEL 이 없다');
+  assert.ok(tenants.includes(`export const DEFAULT_TENANT_LABEL = '${viewLabel}'`), `서버의 기본 구성 표시명과 어긋난다: ${viewLabel}`);
 });

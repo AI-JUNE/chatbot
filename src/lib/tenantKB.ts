@@ -83,6 +83,13 @@ export function tenantLoadWarnings(): string[] {
 export interface TenantLoadStatus {
   id: string;
   name: string;
+  /**
+   * 위젯 브랜드색·헤더 한 글자 — 공개 설정값이다(`publicTenant` 와 같은 값).
+   * 「응답 테스트」가 고른 고객사의 상담창을 **그 고객사 모습으로** 미리 보여주기 위해 함께 내려보낸다
+   * (DS 36-3 — 종전에는 미리보기가 언제나 고원 헤더였다).
+   */
+  brandColor: string;
+  badge: string;
   /** 대화 엔진 KB로 실제 들어간 FAQ 건수. 0이면 답변 근거가 없다는 뜻이라 degraded로 본다. */
   entries: number;
   /** 형식 오류로 건너뛴 항목 수(사유는 서버 경고 목록에만 남긴다). */
@@ -110,6 +117,8 @@ export function tenantStatus(env: Record<string, string | undefined> = process.e
     list.push({
       id: preset.id,
       name: preset.name,
+      brandColor: preset.brandColor,
+      badge: preset.badge,
       entries,
       skipped,
       ctaUrl: cta.url,

@@ -132,6 +132,11 @@ export interface HandoffSummary {
   generatedAt: string;
   generator: 'rule'; // [승인 필요] 'llm' 추상 요약
   channel: 'web' | 'kakao';
+  /**
+   * 어느 고객사의 손님인가 — 표시명 그대로 받는다(DS 36-2). 기본 구성이면 비어 있다.
+   * 이 파일은 테넌트 어휘를 모른다(`intentLabels` 와 같은 규칙) — 이름은 아는 쪽이 붙여 넘긴다.
+   */
+  tenantLabelKo?: string;
   reason: HandoffReason;
   reasonLabelKo: string;
   turnCount: number;
@@ -153,6 +158,8 @@ export interface SummaryInput {
   sessionId: string;
   ticketId?: string;
   channel: 'web' | 'kakao';
+  /** 고객사 표시명(등록된 테넌트에서 온 접수일 때만). 비면 요약에 그 줄을 넣지 않는다. */
+  tenantLabel?: string;
   reason: HandoffReason;
   turns: { at: string; speaker: Speaker; text: string; intent?: string }[];
   /** 수집한 슬롯(연락처 등). 값은 요약 생성 시 마스킹된다. */
@@ -225,6 +232,7 @@ export function buildHandoffSummary(input: SummaryInput): HandoffSummary {
     piiKinds: [...kinds].sort(),
     text: '',
     ...(input.ticketId ? { ticketId: input.ticketId } : {}),
+    ...(input.tenantLabel ? { tenantLabelKo: input.tenantLabel } : {}),
     ...(lastIntent ? { lastIntent, lastIntentLabelKo: intentLabel(lastIntent, input.intentLabels) } : {}),
   };
   summary.text = renderSummaryText(summary);
@@ -243,6 +251,9 @@ export function renderSummaryText(s: HandoffSummary): string {
   const L: string[] = [];
   const who = s.ticketId ? `접수번호 ${shortId(s.ticketId, 8)}` : `대화 ${shortId(s.sessionId, 6)}`;
   L.push(`[상담원 이관 요약] ${who} · ${CHANNEL_LABELS[s.channel] ?? '상담창'} 접수`);
+  // 어느 회사 손님인가 — 전화를 걸기 전에 가장 먼저 알아야 하는 값이다(DS 36-2).
+  // 기본 구성(고원)에는 넣지 않는다 — 덧붙일 사실이 없는 줄을 모든 요약에 세우지 않는다.
+  if (s.tenantLabelKo) L.push(`고객사: ${s.tenantLabelKo}`);
   L.push(`이관 사유: ${s.reasonLabelKo}`);
   L.push(`주고받은 메시지: ${s.turnCount}개`);
   if (s.lastIntentLabelKo) L.push(`직전 주제: ${s.lastIntentLabelKo}`);
