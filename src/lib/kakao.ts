@@ -43,24 +43,115 @@ export interface KakaoSkillResponse {
   };
 }
 
+/** simpleText 말풍선 하나의 글자 상한(오픈빌더 규격). */
+export const KAKAO_TEXT_LIMIT = 1000;
+/** 한 응답에 담을 수 있는 말풍선 수(오픈빌더 규격). */
+export const KAKAO_OUTPUT_LIMIT = 3;
+
+/** 상한을 넘겨 잘렸을 때 붙이는 고지 — 잘렸다는 사실을 삼키지 않는다(QUALITY_BAR §3). */
+const CUT_NOTICE = '\n…(답변이 길어 여기까지만 보내드렸어요. 나머지는 "상담원"이라고 입력해 주시면 상담원이 안내드릴게요.)';
+
+/**
+ * 끊을 자리를 찾는다 — 문단(빈 줄) → 줄바꿈 → 문장 끝 → 공백 순. 모두 너무 앞(절반 미만)이면
+ * 쓰지 않고 상한에서 자른다(한 말풍선만 짧게 남는 모양을 만들지 않기 위해서다).
+ * 한국어는 공백 없이 이어지는 문장이 길어 공백만 보면 거의 항상 실패한다 — 문장 끝을 먼저 본다.
+ */
+function breakAt(text: string, room: number): number {
+  const win = text.slice(0, room);
+  const floor = Math.floor(room / 2);
+  const para = win.lastIndexOf('\n\n');
+  if (para >= floor) return para + 2;
+  const line = win.lastIndexOf('\n');
+  if (line >= floor) return line + 1;
+  for (let i = win.length - 1; i >= floor; i -= 1) {
+    const c = win[i];
+    if (c === '.' || c === '!' || c === '?') return i + 1;
+  }
+  const space = win.lastIndexOf(' ');
+  if (space >= floor) return space + 1;
+  return room;
+}
+
+/**
+ * 긴 답변을 말풍선 단위로 나눈다 (DS 37-3).
+ *
+ * 종전에는 본문을 1000자에서 `slice` 로 자르고 끝이었다 — 상한이 넘는 답변(문서 인제스트로 만든 자료
+ * 항목은 문단 하나가 그대로 답이 되므로 길이 제한이 없다)은 **말 중간에서 잘리고** 고객은
+ * 잘린 줄도 모른다. 카카오는 한 응답에 말풍선 3개까지 담을 수 있으므로 먼저 나눠 담고,
+ * 그래도 넘치면 **잘랐다고 말한다**.
+ */
+export function splitKakaoText(
+  text: string,
+  limit = KAKAO_TEXT_LIMIT,
+  maxParts = KAKAO_OUTPUT_LIMIT,
+): { parts: string[]; cut: boolean } {
+  let rest = String(text ?? '').trim();
+  const cap = Math.max(1, maxParts);
+  const parts: string[] = [];
+  while (rest && parts.length < cap) {
+    if (rest.length <= limit) {
+      parts.push(rest);
+      rest = '';
+      break;
+    }
+    const last = parts.length === cap - 1;
+    // 마지막 말풍선에는 잘림 고지가 들어갈 자리를 미리 비워 둔다.
+    const room = last ? Math.max(1, limit - CUT_NOTICE.length) : limit;
+    const at = breakAt(rest, room);
+    parts.push(rest.slice(0, at).trimEnd());
+    rest = rest.slice(at).trimStart();
+  }
+  if (!parts.length) return { parts: [], cut: false };
+  if (rest) parts[parts.length - 1] += CUT_NOTICE;
+  return { parts, cut: Boolean(rest) };
+}
+
+export interface KakaoRenderOptions {
+  /**
+   * 이 대화에 **이미 확정된 접수번호**(`getSession(sessionId).ticketId`) (DS 37-2).
+   * 이번 턴에 생긴 접수가 아니라 「이 사람은 이미 접수했는가」다 — 카카오에는 버튼을 숨기는
+   * 위젯 화면이 없으므로, 이 값이 있으면 접수를 다시 권하지 않고 접수번호를 글자로 알린다.
+   */
+  filedTicket?: string | null;
+}
+
 /** 대화엔진 결과를 오픈빌더 v2 simpleText 응답으로 변환.
  *  연관 FAQ 제안(suggestions)은 quickReplies로, escalate 시 상담원 연결 quickReply 추가(최대 10개).
  *  KB 답변이면 출처(근거) 한 줄을 덧붙인다 — 카카오는 말풍선 서식이 없어 텍스트로만 표기. */
-export function toKakaoResponse(result: ChatReply): KakaoSkillResponse {
+export function toKakaoResponse(result: ChatReply, opts: KakaoRenderOptions = {}): KakaoSkillResponse {
+  const filed = (opts.filedTicket ?? '') || '';
+  /**
+   * 접수한 뒤에는 접수를 다시 권하지 않는다 (DS 37-2 — 위젯이 DS 35-2 로 고친 것과 같은 판정).
+   * 열린 접수는 세션당 재사용되므로 중복 접수가 생기지는 않지만, 버튼을 그대로 두면 고객은
+   * 자기 접수가 접수된 줄 모른 채 같은 요청을 되풀이하고 서버는 연락처를 다시 묻는다.
+   * 이번 턴에 접수된 경우(`result.ticketId`)는 답변 본문이 이미 접수번호를 말한다.
+   */
+  const already = Boolean(filed) && result.escalate && !result.ticketId;
+  const notice = already ? `\n\n이미 접수번호 ${filed}로 접수돼 있어요. 다시 접수하지 않으셔도 상담원이 순서대로 연락드릴게요.` : '';
   const cite = result.citation ? `\n\n근거: ${result.citation.source}` : '';
-  const body = `${result.reply}${cite}`;
-  const res: KakaoSkillResponse = {
-    version: '2.0',
-    template: { outputs: [{ simpleText: { text: body.slice(0, 1000) } }] },
-  };
+  const body = `${result.reply}${notice}`;
+
+  // 한 말풍선에 들어가면 종전 모습 그대로(본문 + 근거 한 줄). 넘칠 때만 나눠 담는다.
+  const outputs: Array<{ simpleText: { text: string } }> = [];
+  if (`${body}${cite}`.length <= KAKAO_TEXT_LIMIT) {
+    outputs.push({ simpleText: { text: `${body}${cite}` } });
+  } else {
+    // 근거는 **마지막 한 칸을 비워 두고** 따로 보낸다 — 본문 끝에 붙여 한 번에 자르면 가장 먼저
+    // 사라지는 것이 「무엇을 근거로 답했는가」다(§13 — 근거 없는 답을 내보내지 않는다).
+    const { parts } = splitKakaoText(body, KAKAO_TEXT_LIMIT, KAKAO_OUTPUT_LIMIT - (cite ? 1 : 0));
+    for (const p of parts) outputs.push({ simpleText: { text: p } });
+    if (cite) outputs.push({ simpleText: { text: cite.trim().slice(0, KAKAO_TEXT_LIMIT) } });
+  }
+
+  const res: KakaoSkillResponse = { version: '2.0', template: { outputs } };
   const quickReplies: KakaoQuickReply[] = [];
   for (const s of result.suggestions ?? []) {
     // 카카오 quickReply label은 14자 이하 권장 — 초과 시 말줄임표 처리
     const label = s.question.length > 14 ? `${s.question.slice(0, 13)}…` : s.question;
     quickReplies.push({ label, action: 'message', messageText: s.question });
   }
-  // 이미 이번 턴에서 접수(ticketId 존재)된 경우 중복 접수 유도 방지
-  if (result.escalate && !result.ticketId) {
+  // 이번 턴에서 접수됐거나(ticketId) 이미 접수해 둔 대화면(filed) 중복 접수 유도 방지
+  if (result.escalate && !result.ticketId && !filed) {
     quickReplies.push({ label: '상담원 연결', action: 'message', messageText: '상담원' });
   }
   if (quickReplies.length) res.template.quickReplies = quickReplies.slice(0, 10);

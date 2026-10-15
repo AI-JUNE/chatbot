@@ -2625,7 +2625,7 @@ test('접수 API 가 연락처를 묻는 상태를 거둔다 (DS 35-3)', () => {
 /**
  * DS 36-1·36-2 — 「어느 고객사의 손님인가」를 **적고 지나가는 자리가 하나도 빠지지 않는가.**
  *
- * 대화를 적는 곳이 둘(웹·카카오), 접수를 만드는 곳이 여섯이다. 한 곳이라도 비워 두면 그 경로로
+ * 대화를 적는 곳이 둘(웹·카카오), 접수를 만드는 곳이 일곱이다. 한 곳이라도 비워 두면 그 경로로
  * 들어온 손님만 운영 화면에서 「기본 구성」으로 보인다 — 같은 종류의 누락이 DS 22-x(사전에
  * 없는 코드)와 DS 29-3(검증만 하고 화면에 전하지 않기)에서 이미 두 번 일어났다.
  * 타입으로 막아 두고(필수 필드), 그 필수성이 선택으로 풀리지 않는지를 여기서 고정한다.
@@ -2635,7 +2635,7 @@ test('대화·접수를 적는 모든 자리가 고객사를 함께 적는다 (D
   assert.match(read('src/lib/convlog.ts'), /\n  tenant: string \| null;/, '대화 기록의 고객사가 필수가 아니다');
   assert.match(read('src/lib/escalation.ts'), /\n  tenant: string \| null;/, '접수 입력의 고객사가 필수가 아니다');
 
-  // ② 실제 호출 자리가 모두 적고 지나간다(엔진 5곳 + 접수 API 1곳 · 대화 기록 2곳).
+  // ② 실제 호출 자리가 모두 적고 지나간다(엔진 6곳 + 접수 API 1곳 · 대화 기록 2곳).
   const withTenant = (file, fn) => {
     const s = read(file);
     const calls = [...s.matchAll(new RegExp(`${fn}\\(\\{`, 'g'))];
@@ -2646,7 +2646,8 @@ test('대화·접수를 적는 모든 자리가 고객사를 함께 적는다 (D
     }
     return calls.length;
   };
-  assert.equal(withTenant('src/lib/chat.ts', 'createTicket'), 5, '엔진의 접수 자리 수가 바뀌었다 — 새 자리를 확인하라');
+  // 엔진의 접수 자리는 여섯이다(DS 37-1 이 「접수 뒤 연락처만 보낸 경우」를 더했다).
+  assert.equal(withTenant('src/lib/chat.ts', 'createTicket'), 6, '엔진의 접수 자리 수가 바뀌었다 — 새 자리를 확인하라');
   // 한 줄로 쓴 자리(연락처 첨부)는 글자까지 고정한다 — 거기서 빠지면 세 경로 중 하나만 어긋난다.
   assert.match(read('src/lib/chat.ts'), /createTicket\(\{ sessionId, tenant: tenantOf\(sessionId\), contact/, '연락처 첨부 접수가 고객사를 적지 않는다');
   assert.equal(withTenant('src/app/api/escalation/route.ts', 'createTicket'), 1);
@@ -2668,4 +2669,48 @@ test('대화·접수를 적는 모든 자리가 고객사를 함께 적는다 (D
   const handoff = read('src/lib/handoff.ts');
   assert.match(handoff, /if \(s\.tenantLabelKo\) L\.push\(`고객사: \$\{s\.tenantLabelKo\}`\)/, '요약 평문에 고객사 줄이 없다');
   assert.equal(/@\/lib\/tenants/.test(handoff), false, '요약 모듈이 테넌트 어휘를 직접 알게 됐다');
+});
+
+/* ══════════ 디자인 스프린트 — 34차 재감사 (DS 37-1·37-2·37-3) ══════════ */
+
+/**
+ * DS 37-1 — 연락처를 **다시 물을지**는 「이 접수에 회신할 곳이 남아 있는가」로 가른다.
+ * 「정말 그렇게 동작하는가」는 `tests/runtime.test.mjs` 가 돌려서 본다 — 여기서는 접수 안내를
+ * 하는 **두 자리 모두**가 그 판정을 거치는지, 조건 없이 켜는 자리가 남지 않았는지를 고정한다.
+ */
+test('접수 안내가 조건 없이 연락처를 묻지 않는다 (DS 37-1)', () => {
+  const s = read('src/lib/chat.ts');
+  const asks = [...s.matchAll(/awaitingContact: !ticket\.contact,/g)];
+  assert.equal(asks.length, 2, '규칙 전환·자동 전환 두 자리가 같은 판정을 쓰지 않는다');
+  assert.equal(/awaitingContact: true,/.test(s), false, '조건 없이 연락처를 묻는 자리가 남았다');
+  // 판정값은 세션 슬롯이 아니라 **접수에 붙어 있는 값**이다(완료 후 파기된 접수는 다시 물어야 한다).
+  assert.match(s, /function contactTail\(ticket: \{ contact\?: string \}, ask: string\)/, '연락처 문구의 단일 출처가 없다');
+  assert.match(s, /maskPii\(ticket\.contact\)\.text/, '연락처 원문을 그대로 되돌려 적는다');
+  // 묻지 않는 대신 열어 둔 길 — **보낸 것이 연락처뿐일 때만** 받는다(문장에 섞인 번호는 DS 35-3).
+  assert.match(s, /export function isOnlyContact/, '연락처만 보낸 경우를 가르는 함수가 없다');
+  assert.match(s, /if \(ctx\.ticketId && isOnlyContact\(text\)\) \{/, '접수 뒤 연락처 변경 경로가 없다');
+  // 새 인텐트에도 이름이 있어야 운영자 화면에 코드가 뜨지 않는다(DS 22-x).
+  assert.match(read('src/lib/intents.ts'), /contact_updated: '연락처 변경'/, '새 인텐트에 이름이 없다');
+});
+
+/**
+ * DS 37-2·37-3 — 카카오는 **어댑터 한 함수가 화면 전체**다.
+ * 접수한 사실은 세션이 알고 있으므로 라우트가 그 값을 어댑터에 전해야 하고(37-2),
+ * 말풍선 상한은 「잘라서 숨기기」가 아니라 「나눠 담고, 그래도 넘치면 말하기」로 다룬다(37-3).
+ */
+test('카카오 어댑터가 접수 사실을 받고 상한을 규격대로 다룬다 (DS 37-2·37-3)', () => {
+  const route = read('src/app/api/kakao/webhook/route.ts');
+  assert.match(
+    route,
+    /toKakaoResponse\(result, \{ filedTicket: getSession\(sessionId\)\.ticketId \?\? null \}\)/,
+    '라우트가 접수한 사실을 어댑터에 전하지 않는다',
+  );
+
+  const s = read('src/lib/kakao.ts');
+  assert.equal(/body\.slice\(0, 1000\)/.test(s), false, '답변을 말 중간에서 자르는 자리가 남았다');
+  assert.match(s, /export const KAKAO_TEXT_LIMIT = 1000;/, '규격값을 이름 없이 흩어 적었다');
+  assert.match(s, /export const KAKAO_OUTPUT_LIMIT = 3;/, '말풍선 수 규격이 없다');
+  assert.match(s, /result\.escalate && !result\.ticketId && !filed/, '접수한 사람에게 접수를 다시 권한다');
+  // 근거는 마지막 한 칸을 비워 두고 따로 보낸다 — 한 번에 자르면 가장 먼저 사라진다(§13).
+  assert.match(s, /KAKAO_OUTPUT_LIMIT - \(cite \? 1 : 0\)/, '근거 자리를 비워 두지 않는다');
 });

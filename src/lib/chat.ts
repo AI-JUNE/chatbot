@@ -15,7 +15,7 @@ import { intentLabelMap } from '@/lib/intents';
 import { josa } from '@/lib/refusal';
 import { appendTurn, getSession, setSlot, updateSession } from '@/lib/session';
 import { createTicket, queuePosition } from '@/lib/escalation';
-import { buildHandoffSummary, type HandoffReason } from '@/lib/handoff';
+import { buildHandoffSummary, maskPii, type HandoffReason } from '@/lib/handoff';
 import { generateGroundedAnswer, type CompleteOptions, type GroundingDoc, type LLMFailureReason, type LLMMessage } from '@/lib/llm';
 import {
   AGENT_REQUEST_RE,
@@ -170,6 +170,44 @@ export function extractContact(text: string): string | null {
   return email ?? null;
 }
 
+/**
+ * 이 메시지가 **연락처 하나뿐**인가 (DS 37-1).
+ *
+ * 서버가 먼저 묻지 않았는데 연락처를 받아 적는 자리는 여기 하나다. 그래서 「문장에 번호가
+ * 섞여 있다」가 아니라 **「보낸 것이 번호뿐이다」**를 조건으로 둔다 — 「매장 번호 02-123-4567로
+ * 전화했는데 안 받아요」가 고객의 연락처로 저장되던 자리(DS 35-3)를 다시 열지 않기 위해서다.
+ * 조금이라도 다른 글자가 섞이면 받지 않는다: 틀리게 받아 적는 것보다 못 알아듣는 쪽이 낫다
+ * (못 알아들으면 고객이 다시 말하지만, 틀리게 적으면 아무도 모른 채 다른 사람에게 전화한다).
+ */
+export function isOnlyContact(text: string): boolean {
+  const t = (text || '').trim();
+  if (!t) return false;
+  const c = extractContact(t);
+  if (!c) return false;
+  return t.replace(/\s+/g, '') === c.replace(/\s+/g, '');
+}
+
+/**
+ * 접수 안내 뒤에 붙는 연락처 문구 — **이 접수에 회신할 곳이 남아 있는가**로 가른다 (DS 37-1).
+ *
+ * 종전에는 접수 안내를 할 때마다 조건 없이 연락처를 물었다(`awaitingContact: true`). 그런데
+ * 세션당 열린 접수는 재사용되므로(`createTicket`), 이미 연락처를 남긴 사람이 뒤에 다시
+ * 「상담원」이라고 말하면 **서버가 아는 번호를 서버가 다시 묻는** 자리가 됐다. 그 물음은 한 턴을
+ * 삼킨다 — 다음에 하는 보통 질문이 연락처 수집 턴으로 먼저 해석되어, 「…없어요?」는 건너뛰기로
+ * 읽히고 문장에 섞인 남의 번호는 **고객이 남긴 번호를 덮어쓴다**(DS 35-3 과 같은 종류의 해).
+ *
+ * 판정값은 티켓의 연락처다 — 위젯 접수 완료 카드가 쓰는 `contactOnFile`(DS 34-2)과 같은 사실이고,
+ * 세션 슬롯이 아니라 **접수에 실제로 붙어 있는 값**이다(완료 후 파기된 접수는 다시 물어야 한다).
+ * 번호 자체는 마스킹해서 보여 준다 — 같은 문장이 대화 기록·운영자 화면에 그대로 남는다.
+ */
+function contactTail(ticket: { contact?: string }, ask: string): string {
+  if (!ticket.contact) return ask;
+  return (
+    ` 남겨 주신 연락처(${maskPii(ticket.contact).text})로 순서대로 연락드릴게요.` +
+    ' 다른 연락처로 받으시려면 전화번호나 이메일만 보내 주세요.'
+  );
+}
+
 /** 폴백 제안 번호 선택("1", "2번", "3.") 파싱. 범위 밖이면 null. */
 function parsePick(text: string, max: number): number | null {
   const m = text.match(/^([1-9])\s*(번|\.)?$/);
@@ -300,7 +338,8 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
           message: text,
           summary: summaryFor(sessionId, 'max_retry', { pendingSlots: pending, slotLabels: labelsOf(form) }),
         });
-        const hasContact = Boolean(res.state.values.contact || getSession(sessionId).slots?.contact);
+        // 접수에 이미 붙어 있는 연락처도 함께 본다 (DS 37-1) — 열린 접수는 세션당 재사용된다.
+        const hasContact = Boolean(ticket.contact || res.state.values.contact || getSession(sessionId).slots?.contact);
         updateSession(sessionId, {
           form: undefined,
           ticketId: ticket.id,
@@ -314,7 +353,7 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
             `제가 ${josa(res.slot.label, '을', '를')} 계속 알아듣지 못해서 상담원에게 연결해 드릴게요. 접수번호는 ${ticket.id}입니다.` +
             (q ? ` 현재 접수 순번은 ${q.position}번입니다.` : '') +
             ' 지금까지 입력하신 내용은 상담원에게 함께 전달됩니다.' +
-            (hasContact ? '' : ' 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기")'),
+            contactTail(ticket, hasContact ? '' : ' 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기")'),
           intent: `form:${form.id}:max_retry`,
           escalate: true,
           source: 'context',
@@ -416,6 +455,30 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
     updateSession(sessionId, { awaitingContact: false });
   }
 
+  // 0-a2) 접수한 뒤에 **연락처만** 보내면 그 접수의 연락처로 받는다 (DS 37-1).
+  //       서버는 이미 받은 연락처를 다시 캐묻지 않는다(위 contactTail) — 그래서 마음이 바뀐
+  //       사람이 번호만 보내는 길을 대신 열어 둔다. 조건은 「보낸 것이 연락처뿐」이다.
+  if (ctx.ticketId && isOnlyContact(text)) {
+    const contact = extractContact(text) as string;
+    const before = ctx.slots?.contact;
+    setSlot(sessionId, 'contact', contact);
+    const reasonCode = ctx.handoffReason ?? 'customer_request';
+    const { ticket } = createTicket({ sessionId, tenant: tenantOf(sessionId), contact, summary: summaryFor(sessionId, reasonCode) });
+    updateSession(sessionId, { awaitingContact: false, ticketId: ticket.id });
+    const masked = maskPii(contact).text;
+    return {
+      reply:
+        before && before !== contact
+          ? `연락처를 ${masked}로 바꿨어요. 접수번호 ${ticket.id} 그대로 상담원이 순서대로 연락드릴게요.`
+          : `연락처 ${masked}가 접수번호 ${ticket.id}에 등록됐어요. 상담원이 순서대로 연락드릴게요.`,
+      intent: before && before !== contact ? 'contact_updated' : 'contact_captured',
+      escalate: false,
+      source: 'context',
+      ticketId: ticket.id,
+      confidence: SOURCE_CONFIDENCE.context,
+    };
+  }
+
   // 0-b) 직전 폴백 제안의 번호 선택("1", "2번") 처리
   const pending = ctx.pendingSuggestions ?? [];
   if (pending.length) {
@@ -442,7 +505,8 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
       summary: summaryFor(sessionId, reasonCode),
     });
     updateSession(sessionId, {
-      awaitingContact: true,
+      // 이미 회신할 곳이 붙어 있는 접수에는 다시 묻지 않는다 (DS 37-1) — 그 물음이 다음 턴을 삼킨다.
+      awaitingContact: !ticket.contact,
       ticketId: ticket.id,
       pendingSuggestions: undefined,
       handoffReason: reasonCode,
@@ -451,8 +515,8 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
     const q = queuePosition(ticket.id);
     const wait = q ? ` 현재 접수 순번은 ${q.position}번입니다.` : '';
     const tail = created
-      ? `\n접수번호는 ${ticket.id}입니다.${wait} 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기"라고 입력해 주세요)`
-      : `\n이미 접수된 요청(${ticket.id})이 있어 이어서 도와드릴게요.${wait} 연락처를 남겨주시면 더 빠르게 연락드릴 수 있어요. (건너뛰려면 "건너뛰기")`;
+      ? `\n접수번호는 ${ticket.id}입니다.${wait}${contactTail(ticket, ' 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기"라고 입력해 주세요)')}`
+      : `\n이미 접수된 요청(${ticket.id})이 있어 이어서 도와드릴게요.${wait}${contactTail(ticket, ' 연락처를 남겨주시면 더 빠르게 연락드릴 수 있어요. (건너뛰려면 "건너뛰기")')}`;
     return {
       reply: baseReply + tail,
       intent: intentName,
@@ -682,7 +746,8 @@ function maybeAutoEscalate(text: string, sessionId: string, result: ChatReply): 
     summary: summaryFor(sessionId, 'low_confidence'),
   });
   updateSession(sessionId, {
-    awaitingContact: true,
+    // 접수에 회신할 곳이 이미 있으면 다시 묻지 않는다 (DS 37-1 — escalateWith 와 같은 규칙).
+    awaitingContact: !ticket.contact,
     ticketId: ticket.id,
     handoffReason: 'low_confidence',
     lowConfidenceStreak: 0,
@@ -694,7 +759,9 @@ function maybeAutoEscalate(text: string, sessionId: string, result: ChatReply): 
     : `이미 접수된 요청(${ticket.id})으로 상담원이 이어서 도와드릴게요.${wait}`;
   return {
     ...result,
-    reply: `${result.reply}\n\n${lead} 지금까지 나눈 대화는 상담원에게 함께 전달됩니다. 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기")`,
+    reply:
+      `${result.reply}\n\n${lead} 지금까지 나눈 대화는 상담원에게 함께 전달됩니다.` +
+      contactTail(ticket, ' 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기")'),
     escalate: true,
     ticketId: ticket.id,
     handoffReason: 'low_confidence',

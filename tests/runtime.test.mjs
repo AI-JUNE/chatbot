@@ -2540,3 +2540,151 @@ test('접수와 이관 요약이 어느 고객사의 손님인지 말한다 (DS 
   resetSessions();
   esc.resetTickets();
 });
+
+/* ══════════ 디자인 스프린트 — 34차 재감사 (DS 37-1·37-2·37-3) ══════════ */
+
+/**
+ * DS 37-1 — 서버가 **이미 받은 연락처를 다시 묻던** 자리.
+ *
+ * 열린 접수는 세션당 재사용된다(`createTicket`). 그런데 접수 안내를 하는 두 자리
+ * (`escalateWith`·`maybeAutoEscalate`)는 조건 없이 `awaitingContact` 를 켰다 — 이미 연락처를
+ * 남긴 사람이 다시 「상담원」이라고 말하면 서버가 아는 번호를 서버가 다시 묻는다. 그 물음은
+ * **다음 한 턴을 삼킨다**: 보통 질문이 연락처 수집 턴으로 먼저 해석되어 「…없어요?」는 건너뛰기로
+ * 읽히고, 문장에 섞인 남의 번호는 고객이 남긴 번호를 **덮어쓴다**(DS 35-3 이 카드 쪽에서 고친
+ * 해가 대화창 쪽 문으로 그대로 돌아온다). 「정말 그렇게 되는가」는 돌려 봐야 안다.
+ */
+test('이미 받은 연락처를 서버가 다시 묻지 않는다 (DS 37-1)', opts, async () => {
+  const GROUP = ['chat', 'session', 'handoff', 'intents', 'rules', 'escalation', 'adminStore', 'knowledge', 'normalize', 'storage', 'slots', 'tenantKB', 'tenants', 'llm'];
+  const pick = (name) => importLib(name, GROUP.filter((n) => n !== name));
+  const { replyTo } = await pick('chat');
+  const { getSession, updateSession, resetSessions } = await pick('session');
+  const esc = await pick('escalation');
+
+  const sid = 'rt-ds37-again';
+  resetSessions();
+  esc.resetTickets();
+
+  // 전제 — 접수하고 연락처까지 남긴 사람(서버가 묻고 고객이 답한 길).
+  const first = replyTo('상담원 연결해 주세요', sid);
+  assert.equal(getSession(sid).awaitingContact, true, '첫 접수에는 연락처를 물어야 한다 — 전제가 깨졌다');
+  assert.equal(replyTo('010-1234-5678', sid).intent, 'contact_captured');
+  assert.equal(esc.getTicket(first.ticketId).contact, '010-1234-5678');
+
+  // ① 같은 대화에서 다시 상담원을 부르면 — 받은 것을 다시 달라고 하지 않고 **어디로 연락할지**를 말한다.
+  const again = replyTo('상담원 연결해 주세요', sid);
+  assert.equal(again.ticketId, first.ticketId, '열린 접수가 재사용되지 않았다 — 전제가 깨졌다');
+  assert.equal(Boolean(getSession(sid).awaitingContact), false, '서버가 이미 아는 연락처를 다시 묻는다');
+  assert.match(again.reply, /010-\*\*\*\*-5678/, '어디로 연락하는지 말하지 않는다');
+  assert.equal(again.reply.includes('010-1234-5678'), false, '연락처 원문이 대화 기록·운영자 화면에 그대로 남는다');
+  assert.equal(/남겨주시면|남겨주시|남기시면/.test(again.reply), false, '받은 것을 다시 달라고 한다');
+
+  // ② 그 물음이 삼키던 다음 턴 — 보통 질문이 「건너뛰기」로 읽히지 않는다.
+  assert.notEqual(replyTo('환불 수수료는 없어요?', sid).intent, 'contact_skipped', '질문이 사라지고 접수 안내만 남는다');
+
+  // ③ 문장에 섞인 **남의 번호**가 고객 연락처를 덮지 않는다.
+  replyTo('상담원 연결해 주세요', sid);
+  const other = replyTo('매장 번호 02-123-4567로 전화했는데 안 받아요', sid);
+  assert.notEqual(other.intent, 'contact_captured', '고객이 주지 않은 번호를 연락처로 받아 적는다');
+  assert.equal(esc.getTicket(first.ticketId).contact, '010-1234-5678', '고객이 남긴 연락처가 남의 번호로 덮였다');
+
+  // ④ 종전 동작(조건 없이 묻기)에서는 ②③이 실제로 일어난다 — 재현되지 않으면 ②③은 아무것도 지키지 않는다.
+  updateSession(sid, { awaitingContact: true });
+  assert.equal(replyTo('환불 수수료는 없어요?', sid).intent, 'contact_skipped', '이 결함이 재현되지 않는다');
+  updateSession(sid, { awaitingContact: true });
+  assert.equal(replyTo('매장 번호 02-123-4567로 전화했는데 안 받아요', sid).intent, 'contact_captured', '이 결함이 재현되지 않는다');
+  assert.equal(esc.getTicket(first.ticketId).contact, '02-123-4567', '덮어쓰기가 재현되지 않는다');
+
+  // ⑤ 묻지 않는 대신 **번호만** 보내면 바꿔 준다(마음이 바뀐 사람의 길 — 문장에 섞인 번호는 ③처럼 받지 않는다).
+  const changed = replyTo('010-9999-8888', sid);
+  assert.equal(changed.intent, 'contact_updated');
+  assert.equal(esc.getTicket(first.ticketId).contact, '010-9999-8888', '번호만 보냈는데 바뀌지 않았다');
+  assert.match(changed.reply, /010-\*\*\*\*-8888/);
+  assert.equal(changed.reply.includes('010-9999-8888'), false, '바뀐 번호 원문이 대화 기록에 남는다');
+
+  // ⑥ 자동 전환(신뢰도 미달 연속)도 같은 규칙을 따른다 — 접수에 연락처가 있으면 묻지 않는다.
+  const sid2 = 'rt-ds37-auto';
+  const t2 = replyTo('상담원 연결해 주세요', sid2);
+  replyTo('hong@example.com', sid2);
+  assert.equal(esc.getTicket(t2.ticketId).contact, 'hong@example.com', '전제가 깨졌다');
+  replyTo('zzzz qqqq', sid2);
+  const auto = replyTo('xxxx yyyy', sid2);
+  assert.equal(auto.ticketId, t2.ticketId, '자동 전환이 일어나지 않았다 — 전제가 깨졌다');
+  assert.equal(Boolean(getSession(sid2).awaitingContact), false, '자동 전환이 아는 연락처를 다시 묻는다');
+  assert.match(auto.reply, /ho\*\*\*@example\.com/, '어디로 연락하는지 말하지 않는다');
+
+  resetSessions();
+  esc.resetTickets();
+});
+
+/**
+ * DS 37-2·37-3 — **버튼이 없는 창구**(카카오)의 화면 전체가 이 어댑터 한 함수다.
+ *
+ * 37-2: 「상담원 연결」 quickReply 판정이 **이번 턴**(`result.ticketId`)만 봤다. 이미 접수한
+ *        사람에게도 버튼이 계속 떠, 누르면 서버가 접수를 재사용하면서 연락처를 다시 묻는다
+ *        (위젯은 DS 35-2 에서 「접수번호를 들고 있는가」로 바꿔 고친 자리다).
+ * 37-3: `body.slice(0, 1000)` — 1000자가 넘는 답은 **말 중간에서 잘리고**, 뒤에 붙인 근거가
+ *        가장 먼저 사라졌다. 고객은 잘린 줄도 모른다(자료 항목은 길이 제한이 없다 — 문서
+ *        인제스트는 문단 하나를 그대로 답으로 만든다).
+ */
+test('카카오 응답이 접수한 사실을 알고, 긴 답을 말 중간에서 자르지 않는다 (DS 37-2·37-3)', opts, async () => {
+  const { toKakaoResponse, splitKakaoText, KAKAO_TEXT_LIMIT, KAKAO_OUTPUT_LIMIT } = await importLib('kakao', ['webhookAuth']);
+  const base = { reply: '네, 도와드릴게요.', intent: 'fallback', source: 'fallback', escalate: true, confidence: 0.15 };
+  const texts = (res) => res.template.outputs.map((o) => o.simpleText.text);
+
+  // ① 접수 전에는 종전대로 상담원 연결을 권한다.
+  assert.deepEqual(toKakaoResponse(base).template.quickReplies, [{ label: '상담원 연결', action: 'message', messageText: '상담원' }]);
+
+  // ② 접수한 뒤에는 권하지 않고 **접수번호를 글자로** 알린다(버튼을 숨길 화면이 없는 창구다).
+  const after = toKakaoResponse(base, { filedTicket: 'ESC-0007' });
+  assert.equal(after.template.quickReplies, undefined, '접수한 사람에게 접수를 다시 권한다');
+  assert.match(texts(after)[0], /이미 접수번호 ESC-0007/, '접수한 사실을 알리지 않는다');
+
+  // ③ 이번 턴에 접수된 답변은 본문이 이미 접수번호를 말한다 — 같은 말을 두 번 하지 않는다.
+  const now = toKakaoResponse({ ...base, ticketId: 'ESC-0007', reply: '접수번호는 ESC-0007입니다.' }, { filedTicket: 'ESC-0007' });
+  assert.equal(texts(now)[0].includes('이미 접수번호'), false, '방금 한 말을 한 번 더 한다');
+  assert.equal(now.template.quickReplies, undefined);
+
+  // ④ 짧은 답은 종전 모습 그대로 — 한 말풍선에 본문 + 근거 한 줄.
+  const cited = toKakaoResponse({ ...base, escalate: false, citation: { source: '요금 안내' } });
+  assert.equal(texts(cited).length, 1);
+  assert.match(texts(cited)[0], /근거: 요금 안내/);
+
+  // ⑤ 1000자가 넘는 답 — 종전 식에서는 근거가 **가장 먼저** 사라지고 말 중간에서 끊겼다.
+  const para = (n) => (`${n}번째 문단입니다. ` + '안내 문구가 이어집니다. '.repeat(14)).trim();
+  const paras = [1, 2, 3, 4, 5, 6, 7, 8].map(para);
+  const long = paras.join('\n\n');
+  assert.ok(long.length > KAKAO_TEXT_LIMIT && long.length <= KAKAO_TEXT_LIMIT * 2, `검증 전제가 깨졌다(${long.length}자)`);
+  const oldWay = `${long}\n\n근거: 요금 안내`.slice(0, 1000);
+  assert.equal(oldWay.includes('근거:'), false, '종전 결함이 재현되지 않는다 — 이 검증은 아무것도 지키지 않는다');
+  assert.equal(paras.some((p) => oldWay.endsWith(p)), false, '종전 식이 말 중간에서 끊지 않는다');
+
+  const res = toKakaoResponse({ ...base, escalate: false, reply: long, citation: { source: '요금 안내' } });
+  const out = texts(res);
+  assert.ok(out.length > 1 && out.length <= KAKAO_OUTPUT_LIMIT, `말풍선 수가 규격을 벗어났다(${out.length})`);
+  for (const t of out) assert.ok(t.length <= KAKAO_TEXT_LIMIT, `말풍선이 상한을 넘었다(${t.length}자)`);
+  assert.equal(out[out.length - 1], '근거: 요금 안내', '근거가 제 말풍선으로 남지 않았다');
+  // 끊은 자리는 문단 경계다 — 글자 중간에서 끊지 않는다.
+  for (const t of out.slice(0, -1)) for (const p of t.split('\n\n')) assert.ok(paras.includes(p), '문단 중간에서 끊겼다');
+  assert.equal(out.slice(0, -1).join('\n\n'), long, '본문 일부가 조용히 사라졌다');
+
+  // ⑥ 세 말풍선에도 담기지 않으면 **잘랐다고 말한다**(삼키지 않는다 — §3).
+  const huge = Array.from({ length: 40 }, (_, i) => para(i + 1)).join('\n\n');
+  const big = texts(toKakaoResponse({ ...base, escalate: false, reply: huge, citation: { source: '요금 안내' } }));
+  assert.equal(big.length, KAKAO_OUTPUT_LIMIT);
+  for (const t of big) assert.ok(t.length <= KAKAO_TEXT_LIMIT, `말풍선이 상한을 넘었다(${t.length}자)`);
+  assert.match(big[big.length - 2], /답변이 길어/, '잘렸는데 아무 말도 하지 않는다');
+  assert.match(big[big.length - 2], /상담원/, '이 창구에는 「더 보기」가 없다 — 다음 길을 주어야 한다');
+  assert.equal(big[big.length - 1], '근거: 요금 안내', '잘릴 때 근거부터 버린다');
+
+  // ⑦ 나누는 규칙 자체 — 끊을 자리가 없어도 상한을 넘기지 않고, 짧은 글은 그대로 한 칸이다.
+  const noBreak = splitKakaoText('ㄱ'.repeat(2500), 100, 2);
+  assert.equal(noBreak.cut, true);
+  assert.equal(noBreak.parts.length, 2);
+  for (const p of noBreak.parts) assert.ok(p.length <= 100, `끊을 자리가 없을 때 상한을 넘겼다(${p.length}자)`);
+  assert.deepEqual(splitKakaoText('짧은 답.', 100, 3), { parts: ['짧은 답.'], cut: false });
+  assert.deepEqual(splitKakaoText('   ', 100, 3), { parts: [], cut: false });
+  // 줄바꿈이 있으면 그 자리에서 끊는다(문장 중간보다 낫다).
+  const lines = splitKakaoText(`${'가'.repeat(60)}\n${'나'.repeat(60)}`, 100, 2);
+  assert.equal(lines.parts[0], '가'.repeat(60));
+  assert.equal(lines.parts[1], '나'.repeat(60));
+});

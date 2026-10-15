@@ -17,6 +17,7 @@ const ENGINE_LABELS: Record<string, string> = {
   fallback: '분류 전',
   llm: 'AI 생성 답변',
   contact_captured: '연락처 받음',
+  contact_updated: '연락처 변경',
   contact_skipped: '연락처 없이 진행',
   error: '연결 오류',
 };

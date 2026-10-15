@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { replyToAsync } from '@/lib/chat';
 import { logTurn } from '@/lib/convlog';
-import { updateSession } from '@/lib/session';
+import { getSession, updateSession } from '@/lib/session';
 import {
   KAKAO_LIVE,
   authenticateKakao,
@@ -125,7 +125,9 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const res = toKakaoResponse(result);
+  // 이 대화가 **이미 접수해 둔 상태인가** — 카카오에는 버튼을 숨기는 위젯 화면이 없으므로
+  // 어댑터가 그 사실을 알아야 접수를 다시 권하지 않는다(DS 37-2, 위젯의 DS 35-2 와 같은 판정).
+  const res = toKakaoResponse(result, { filedTicket: getSession(sessionId).ticketId ?? null });
   rememberKakaoResponse(key, res);
   rl.end({
     status: 200,
