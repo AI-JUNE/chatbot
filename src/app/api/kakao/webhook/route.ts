@@ -16,6 +16,7 @@ import { logTurn } from '@/lib/convlog';
 import { getSession, updateSession } from '@/lib/session';
 import {
   KAKAO_LIVE,
+  KAKAO_TOO_LONG_TEXT,
   authenticateKakao,
   kakaoDedupe,
   kakaoErrorResponse,
@@ -71,9 +72,12 @@ export async function POST(req: NextRequest) {
   }
 
   const parsed = parseKakaoPayload(parsedBody.data);
-  if (!parsed) {
-    rl.end({ status: 200, code: 'invalid_input', channel: 'kakao' });
-    return NextResponse.json(kakaoErrorResponse('발화를 확인하지 못했어요.'));
+  if (!parsed.ok) {
+    // 너무 긴 발화는 「확인하지 못했어요」가 아니다 — 상한을 말하고 다음 길을 준다(DS 38-1).
+    // 잘라서 반쪽 질문에 답하지 않는다: 고객은 자기 말이 줄어든 줄 모른 채 다른 답을 받는다.
+    const tooLong = parsed.reason === 'too_long';
+    rl.end({ status: 200, code: tooLong ? 'utterance_too_long' : 'invalid_input', channel: 'kakao' });
+    return NextResponse.json(kakaoErrorResponse(tooLong ? KAKAO_TOO_LONG_TEXT : '발화를 확인하지 못했어요.'));
   }
 
   const sessionId = `kakao:${parsed.userId}`;

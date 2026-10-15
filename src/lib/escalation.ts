@@ -5,6 +5,7 @@
 // [승인 필요] 실제 상담원 알림(SMS/슬랙 등) 연동.
 // 이관 사유 코드(reasonCode)와 요약(summary)은 AICC-Core `src/core/handoffSummary.ts` 어휘를 따른다.
 import { isHandoffReason, type HandoffReason } from '@/lib/handoff';
+import { SUMMARY_TEXT_LEN, TICKET_MESSAGE_LEN, TICKET_NOTE_LEN, clip } from '@/lib/limits';
 import { loadJson, scheduleSave } from '@/lib/storage';
 import { BAD_STATUS_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE } from '@/lib/refusal';
 
@@ -109,7 +110,7 @@ export function importTickets(input: unknown): { ok: true; count: number } | { o
       ...(typeof c.tenant === 'string' && c.tenant ? { tenant: c.tenant } : { tenant: undefined }),
       reason: typeof c.reason === 'string' && c.reason ? c.reason : 'user_request',
       reasonCode: isHandoffReason(c.reasonCode) ? c.reasonCode : toReasonCode(c.reason),
-      message: String(c.message ?? '').slice(0, 300),
+      message: clip(c.message, TICKET_MESSAGE_LEN),
       createdAt: typeof c.createdAt === 'string' ? c.createdAt : now(),
       updatedAt: typeof c.updatedAt === 'string' ? c.updatedAt : now(),
     });
@@ -152,7 +153,9 @@ export function createTicket(input: {
       delete existing.contactPurgedAt;
     }
     // 요약은 항상 최신 대화 기준으로 갱신한다(상담원이 오래된 요약을 보면 이관이 무의미해진다).
-    if (input.summary) existing.summary = String(input.summary).slice(0, 4000);
+    // 상한은 **요약을 만드는 쪽이** 지킨다(`renderSummaryText` — 마스킹 줄을 남기고 직전 대화를
+    // 줄인다). 여기는 마지막 보호막이고, 걸리면 그 사실을 표시로 남긴다(DS 38-2).
+    if (input.summary) existing.summary = clip(input.summary, SUMMARY_TEXT_LEN);
     // 재사용하는 접수에도 고객사를 채운다 — 세션이 먼저 적지 못한 채 접수가 생겼을 수 있다.
     if (input.tenant && !existing.tenant) existing.tenant = input.tenant;
     persist();
@@ -166,8 +169,8 @@ export function createTicket(input: {
     ...(input.tenant ? { tenant: input.tenant } : {}),
     reason,
     reasonCode: input.reasonCode ?? toReasonCode(reason),
-    message: String(input.message || '').trim().slice(0, 300),
-    summary: input.summary ? String(input.summary).slice(0, 4000) : undefined,
+    message: clip(String(input.message || '').trim(), TICKET_MESSAGE_LEN),
+    summary: input.summary ? clip(input.summary, SUMMARY_TEXT_LEN) : undefined,
     contact: input.contact ? String(input.contact).trim().slice(0, 100) : undefined,
     status: 'open',
     createdAt: now(),
@@ -197,7 +200,7 @@ export function updateTicket(id: string, patch: { status?: EscalationStatus; not
     if (!ESCALATION_STATUSES.includes(patch.status)) return { ok: false, error: BAD_STATUS_MESSAGE };
     t.status = patch.status;
   }
-  if (patch.note !== undefined) t.note = String(patch.note).trim().slice(0, 500) || undefined;
+  if (patch.note !== undefined) t.note = clip(String(patch.note).trim(), TICKET_NOTE_LEN) || undefined;
   // 상담이 끝났으면(완료·취소) 연락처를 그 자리에서 파기한다 — 방침 4조가 약속한 「지체 없이」다.
   // 되돌릴 수 없다: 다시 열어도 연락처는 돌아오지 않는다(고객이 새로 남기면 그때 다시 채워진다).
   // 이관 근거(사유·요약·대화)는 그대로 둔다 — 파기 대상은 개인정보인 연락처뿐이다.

@@ -6,14 +6,16 @@ import { intentLabel, intentLabelMap } from '@/lib/intents';
 import { listCustomRules } from '@/lib/adminStore';
 import { resolvedTenantId } from '@/lib/tenants';
 import { rateGuard } from '@/lib/ratelimit';
+import { MAX_MESSAGE_LEN } from '@/lib/limits';
 import { ok, readJson, optStr, withRequestId } from '@/lib/http';
 import { captureError } from '@/lib/monitoring';
 import { startRequest, hashId } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
-// Next.js route 파일은 HTTP 메서드 외 export를 허용하지 않는다(빌드 실패 원인). 모듈 내부 상수로 유지.
-const MAX_MESSAGE_LEN = 2000;
+// Next.js route 파일은 HTTP 메서드 외 export를 허용하지 않는다(빌드 실패 원인) — 그래서 발화 상한은
+// 여기 적지 않고 `@/lib/limits` 에서 가져온다. 라우트에 적혀 있던 동안 카카오 창구는 그 값을
+// 가져다 쓸 수 없었고, 같은 말을 상한 없이 받았다(DS 38-1).
 // 테넌트 식별자 최대 길이(형식 검증은 lib/tenants 가 담당한다).
 const MAX_TENANT_LEN = 32;
 

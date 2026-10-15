@@ -190,8 +190,11 @@ export const EMBED_SIZE = { open: { w: 400, h: 660 }, closed: { w: 104, h: 104 }
 const MOBILE_MAX = 480;
 
 /**
- * 한 번에 보낼 수 있는 글자 수 — 서버(`api/chat` MAX_MESSAGE_LEN)와 같은 값.
+ * 한 번에 보낼 수 있는 글자 수 — 단일 출처는 `@/lib/limits` 의 `MAX_MESSAGE_LEN` 이다(DS 38-1).
  * 보내고 나서 413 으로 거절하면 사용자는 이유도 모르고 쓴 글도 잃는다 → 보내기 전에 알린다.
+ *
+ * 여기만 값을 **적어 둔다** — 이 파일은 `@/lib` 을 하나도 import 하지 않아야 위젯 렌더 테스트가
+ * 파일 하나만 떼어 컴파일할 수 있다(`tests/widget.test.mjs`). 두 값이 어긋나면 정적 테스트가 막는다.
  */
 export const MAX_INPUT_LEN = 2000;
 /** 남은 글자 수를 보여주기 시작하는 지점(평소에는 숨겨 입력창을 어지럽히지 않는다). */

@@ -1003,8 +1003,10 @@ test('위젯이 연결 끊김을 보내기 전에 알린다 (DS 5-5)', () => {
 test('위젯이 보내기 전에 글자 수 한계를 알린다 (DS 5-5)', () => {
   const s = read('src/components/ChatWidget.tsx');
   const route = read('src/app/api/chat/route.ts');
-  const limit = Number(/MAX_MESSAGE_LEN = (\d+)/.exec(route)?.[1]);
+  // 상한의 단일 출처는 `lib/limits` 다(DS 38-1) — 라우트는 그 값을 가져다 쓴다.
+  const limit = Number(/MAX_MESSAGE_LEN = (\d+)/.exec(read('src/lib/limits.ts'))?.[1]);
   assert.ok(limit > 0, '서버 길이 한계를 읽지 못했다');
+  assert.match(route, /import \{ MAX_MESSAGE_LEN \} from '@\/lib\/limits';/, '라우트가 상한을 따로 적고 있다');
   const widgetLimit = Number(/MAX_INPUT_LEN = (\d+)/.exec(s)?.[1]);
   assert.equal(widgetLimit, limit, '위젯과 서버의 길이 한계가 어긋나면 413 으로 거절된다');
   assert.match(s, /aria-invalid=\{tooLong \|\| undefined\}/, '어느 입력이 틀렸는지 알려야 한다');
@@ -2713,4 +2715,63 @@ test('카카오 어댑터가 접수 사실을 받고 상한을 규격대로 다�
   assert.match(s, /result\.escalate && !result\.ticketId && !filed/, '접수한 사람에게 접수를 다시 권한다');
   // 근거는 마지막 한 칸을 비워 두고 따로 보낸다 — 한 번에 자르면 가장 먼저 사라진다(§13).
   assert.match(s, /KAKAO_OUTPUT_LIMIT - \(cite \? 1 : 0\)/, '근거 자리를 비워 두지 않는다');
+});
+
+/* ══════════ 디자인 스프린트 — 35차 재감사 (DS 38-1·38-2·38-3) ══════════ */
+
+/**
+ * DS 38-1·38-3 — 글자 상한의 **단일 출처**와 「잘랐다」는 표시.
+ * 「정말 그렇게 동작하는가」는 `tests/runtime.test.mjs` 가 돌려서 본다 — 여기서는 숫자를 손으로
+ * 다시 적은 자리가 남지 않았는지, 꼬리를 조용히 버리는 `slice` 가 남지 않았는지를 고정한다.
+ */
+test('받는 말·남기는 말의 상한이 한 곳에서 온다 (DS 38-1·38-3)', () => {
+  const limits = read('src/lib/limits.ts');
+  for (const name of ['MAX_MESSAGE_LEN', 'TURN_TEXT_LEN', 'TICKET_MESSAGE_LEN', 'TICKET_NOTE_LEN', 'SUMMARY_TEXT_LEN', 'SUMMARY_LINE_LEN']) {
+    assert.match(limits, new RegExp(`export const ${name} = \\d+;`), `상한 ${name} 이 단일 출처에 없다`);
+  }
+  assert.match(limits, /export const CLIP_MARK = '…\(이하 생략\)';/, '잘랐다는 표시가 없다');
+  // 표시까지 상한 안에 넣는다 — 저장·내려받기 계약은 「상한 이하」다.
+  assert.match(limits, /v\.slice\(0, limit - CLIP_MARK\.length\)/, '표시를 붙이며 상한을 넘긴다');
+
+  // 기록에 남기는 자리는 전부 `clip` 을 지난다 — 숫자를 손으로 적은 `slice` 가 남으면 안 된다.
+  for (const f of ['src/lib/convlog.ts', 'src/lib/escalation.ts']) {
+    const s = read(f);
+    assert.match(s, /from '@\/lib\/limits'/, `${f} 가 상한을 따로 적고 있다`);
+    assert.equal(/slice\(0, (300|500|4000)\)/.test(s), false, `${f} 에 꼬리를 조용히 버리는 자리가 남았다`);
+  }
+  assert.match(read('src/lib/convlog.ts'), /message: clip\(input\.message, TURN_TEXT_LEN\)/, '대화 기록이 표시 없이 잘린다');
+  assert.match(read('src/lib/escalation.ts'), /clip\(input\.summary, SUMMARY_TEXT_LEN\)/, '이관 요약 보호막이 표시를 남기지 않는다');
+
+  // 카카오 창구의 상한은 웹과 **같은 값**이어야 한다(자기 숫자를 적으면 다시 어긋난다).
+  const kakao = read('src/lib/kakao.ts');
+  assert.match(kakao, /export const KAKAO_UTTERANCE_LIMIT = MAX_MESSAGE_LEN;/, '카카오가 상한을 따로 적고 있다');
+  assert.match(kakao, /utterance\.length > KAKAO_UTTERANCE_LIMIT/, '발화 길이를 재는 자리가 없다');
+  // 받아서 자르지 않는다 — 고객이 쓴 말을 줄이면 묻지 않은 질문에 답하는 것이 된다.
+  assert.equal(/utterance\.slice\(0, KAKAO_UTTERANCE_LIMIT\)/.test(kakao), false, '긴 발화를 잘라서 받는다');
+
+  // 라우트는 「확인하지 못했어요」와 「너무 길어요」를 구분해 말한다.
+  const route = read('src/app/api/kakao/webhook/route.ts');
+  assert.match(route, /if \(!parsed\.ok\) \{/, '실패 사유를 값으로 받지 않는다');
+  assert.match(route, /KAKAO_TOO_LONG_TEXT/, '긴 발화에 상한을 알리지 않는다');
+  assert.match(route, /code: tooLong \? 'utterance_too_long'/, '거절 사유가 서버 로그에 남지 않는다');
+
+  // 위젯은 lib 을 import 하지 않아야 렌더 테스트가 파일 하나만 떼어 컴파일할 수 있다 —
+  // 그래서 값을 적어 두고, 어긋나면 위쪽 DS 5-5 테스트가 막는다.
+  assert.equal(/from '@\/lib\//.test(read('src/components/ChatWidget.tsx')), false, '위젯이 lib 을 import 하면 렌더 테스트가 깨진다');
+});
+
+/**
+ * DS 38-2 — 이관 요약의 **마지막 줄은 언제나 「개인정보 마스킹」**이다.
+ * 길이를 맞추는 몫은 직전 대화가 지고, 줄인 줄 수는 말로 남는다.
+ */
+test('이관 요약이 상한을 꼬리로 갚지 않는다 (DS 38-2)', () => {
+  const s = read('src/lib/handoff.ts');
+  assert.match(s, /export function renderSummaryText\(s: HandoffSummary, limit = SUMMARY_TEXT_LEN\)/, '요약을 만드는 쪽에 상한이 없다');
+  assert.match(s, /fitTurnLines\(convo, limit - head\.length - 1 - mask\.length\)/, '직전 대화가 길이를 맞추지 않는다');
+  assert.match(s, /\[head, \.\.\.fitTurnLines\([^)]*\), mask\]\.join\('\\n'\)/, '마스킹 줄이 마지막이 아니다');
+  assert.match(s, /앞선 대화 \$\{n\}줄은 길어서 요약에서 줄였습니다/, '줄인 사실을 말하지 않는다');
+  // 고지가 들어갈 자리를 **최대 길이로 먼저** 비워 둔다 — 고지까지 잘리면 아무도 줄인 줄 모른다.
+  assert.match(s, /DROPPED_NOTICE\(lines\.length\)\.length \+ 1/, '줄였다는 고지 자리를 비워 두지 않는다');
+  assert.match(s, /clip\(t\.text, SUMMARY_LINE_LEN\)/, '대화 한 줄을 표시 없이 자른다');
+  assert.match(s, /clip\(c\.value, SUMMARY_LINE_LEN\)/, '수집 정보 한 값을 표시 없이 자른다');
 });

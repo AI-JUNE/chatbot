@@ -4,6 +4,7 @@
 // [승인 필요] 외부 DB 저장·분석 파이프라인 전송.
 import type { ReplySource } from '@/lib/chat';
 import { loadJson, scheduleSave } from '@/lib/storage';
+import { TURN_TEXT_LEN, clip } from '@/lib/limits';
 import { kstDate } from '@/lib/kst';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 
@@ -49,8 +50,14 @@ export function logTurn(input: Omit<ChatTurnLog, 'id' | 'at'>): ChatTurnLog {
   const entry: ChatTurnLog = {
     ...input,
     tenant: input.tenant || null,
-    message: input.message.slice(0, 500),
-    reply: input.reply.slice(0, 500),
+    /**
+     * 상한을 넘기면 **줄였다는 표시를 남긴다** (DS 38-3).
+     * 종전에는 `slice` 로 꼬리를 조용히 버려, 운영자는 「환불 수수료가 궁금한데 저번에 주문한」을
+     * 보고 **고객이 거기서 멈춘 것인지 우리가 버린 것인지** 알 수 없었다. 이 글은 「답하지 못한
+     * 질문」 목록·내려받기 CSV 로 그대로 나가 새 안내 자료의 원문이 된다.
+     */
+    message: clip(input.message, TURN_TEXT_LEN),
+    reply: clip(input.reply, TURN_TEXT_LEN),
     latencyMs: sanitizeLatency(input.latencyMs),
     id: `T-${String(seq).padStart(6, '0')}`,
     at: new Date().toISOString(),
@@ -92,8 +99,8 @@ export function importTurns(input: unknown): { ok: true; count: number } | { ok:
       ...t,
       // 옛 스냅샷에는 고객사가 없다 — 없는 값을 지어내지 않고 기본 구성(null)으로 둔다.
       tenant: typeof t.tenant === 'string' && t.tenant ? t.tenant : null,
-      message: String(t.message ?? '').slice(0, 500),
-      reply: String(t.reply ?? '').slice(0, 500),
+      message: clip(t.message, TURN_TEXT_LEN),
+      reply: clip(t.reply, TURN_TEXT_LEN),
       intent: String(t.intent ?? ''),
       escalate: t.escalate === true,
       latencyMs: sanitizeLatency(t.latencyMs),

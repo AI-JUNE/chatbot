@@ -2,6 +2,7 @@
 // [승인 필요] 카카오 비즈니스 채널 등록·오픈빌더 스킬 URL 실연동 — 전까지 KAKAO_CHANNEL_LIVE=false 유지.
 // 시크릿(KAKAO_SKILL_TOKEN)은 Vercel 환경변수로만 관리(코드 하드코딩 금지).
 import type { ChatReply } from '@/lib/chat';
+import { MAX_MESSAGE_LEN } from '@/lib/limits';
 import { dedupeCheck, dedupeRemember, eventKey, safeEqual, verifySignature, type SignatureFailure } from '@/lib/webhookAuth';
 
 export const KAKAO_LIVE = process.env.KAKAO_CHANNEL_LIVE === 'true';
@@ -18,14 +19,42 @@ export interface KakaoSkillPayload {
   };
 }
 
-/** 요청 페이로드에서 발화·사용자 id 추출. 유효하지 않으면 null. */
-export function parseKakaoPayload(body: unknown): { utterance: string; userId: string } | null {
-  if (!body || typeof body !== 'object') return null;
+/**
+ * 받을 수 있는 발화 길이 — **웹과 같은 값**이다(`@/lib/limits`).
+ *
+ * 종전에는 이 창구에만 상한이 없었다(DS 38-1). 웹은 2000자를 넘기면 400 으로 거절하고 위젯이
+ * 보내기 전에 글자 수로 알리는데(DS 5-5), 카카오는 발화를 그대로 받아 세션 턴 버퍼(12턴)·
+ * 이관 요약으로 흘려보냈다 — **같은 말을 창구에 따라 다르게 받는 것** 자체가 어긋남이다.
+ */
+export const KAKAO_UTTERANCE_LIMIT = MAX_MESSAGE_LEN;
+
+/**
+ * 너무 길어 받지 못했을 때의 안내. 잘라서 반쪽 질문에 답하지 않는다 — 고객이 쓴 말을
+ * 우리가 임의로 줄이면 **묻지 않은 질문에 답한 것**이 되고, 고객은 그 사실을 모른다.
+ * 이 창구에는 글자 수 표시가 없으므로 상한을 문장으로 알린다(DS 29-x — 거절은 화면의 일이다).
+ */
+export const KAKAO_TOO_LONG_TEXT =
+  `보내 주신 말씀이 너무 길어 한 번에 받지 못했어요. ${String(KAKAO_UTTERANCE_LIMIT).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}자 이내로 나눠 보내 주시면 바로 답해 드릴게요.`;
+// 천 단위 쉼표를 손으로 넣는다 — `toLocaleString` 은 런타임의 ICU 설치에 따라 「2000」이 되기도 한다.
+
+/**
+ * 요청 페이로드에서 발화·사용자 id 추출.
+ *
+ * 실패 사유를 **값으로** 돌려준다 — null 하나로 뭉개면 「발화를 확인하지 못했어요」와
+ * 「너무 길어요」가 같은 말이 되고, 호출하는 쪽이 둘을 구분할 수단이 없다.
+ */
+export type KakaoParsed =
+  | { ok: true; utterance: string; userId: string }
+  | { ok: false; reason: 'empty' | 'too_long' };
+
+export function parseKakaoPayload(body: unknown): KakaoParsed {
+  if (!body || typeof body !== 'object') return { ok: false, reason: 'empty' };
   const p = body as KakaoSkillPayload;
   const utterance = (p.userRequest?.utterance ?? '').trim();
-  if (!utterance) return null;
+  if (!utterance) return { ok: false, reason: 'empty' };
+  if (utterance.length > KAKAO_UTTERANCE_LIMIT) return { ok: false, reason: 'too_long' };
   const userId = (p.userRequest?.user?.id ?? 'kakao-anon').trim().slice(0, 60) || 'kakao-anon';
-  return { utterance, userId };
+  return { ok: true, utterance, userId };
 }
 
 // ---- 오픈빌더 v2 응답 ----

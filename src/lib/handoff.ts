@@ -7,6 +7,7 @@
 // 규칙 기반 순수 함수다. LLM을 호출하지 않으므로 결정적이고 이관 지연이 모델에 좌우되지 않는다.
 // [승인 필요] LLM 추상 요약, 요약 영구 저장·상담사 시스템(CTI/슬랙) 실전송.
 import { CHANNEL_LABELS, intentLabel } from '@/lib/intents';
+import { SUMMARY_LINE_LEN, SUMMARY_TEXT_LEN, clip } from '@/lib/limits';
 
 /** 이관 사유 — AICC-Core `Handoff['reason']` 어휘와 동일하게 유지한다(교차 저장소 리포트 정합). */
 export type HandoffReason = 'low_confidence' | 'customer_request' | 'policy' | 'error' | 'max_retry';
@@ -239,6 +240,43 @@ export function buildHandoffSummary(input: SummaryInput): HandoffSummary {
   return summary;
 }
 
+/** 직전 대화를 줄였을 때 그 자리에 남기는 한 줄 — 몇 줄이 빠졌는지 수로 말한다. */
+const DROPPED_NOTICE = (n: number) => `  …(앞선 대화 ${n}줄은 길어서 요약에서 줄였습니다)`;
+
+/** 줄 묶음의 길이(줄바꿈 포함). */
+function blockLen(lines: string[]): number {
+  return lines.reduce((n, l) => n + l.length + 1, 0);
+}
+
+/**
+ * 「직전 대화」를 예산 안에 담는다 — **최근 쪽부터** 넣고, 빠진 줄은 수로 말한다 (DS 38-2).
+ *
+ * 종전에는 완성된 요약을 접수 저장 직전에 `slice(0, 4000)` 했다. 그 상한은 꼬리를 버리는데,
+ * 이 평문의 꼬리는 **「개인정보 마스킹」 줄과 가장 최근 대화**다 — 상담원이 읽는 요약이
+ * 말 중간에서 끝나고, 개인정보가 가려졌는지조차 알 수 없었다(웹 2000자 × 6턴이면 넘는다).
+ *
+ * 줄였다는 고지가 들어갈 자리를 **최대 길이로 먼저 비워 둔다** — 고지까지 잘리면 아무도
+ * 줄인 줄 모른다(34차가 카카오 말풍선에서 세운 것과 같은 규칙).
+ */
+function fitTurnLines(lines: string[], budget: number): string[] {
+  if (blockLen(lines) <= budget) return lines;
+  const reserve = DROPPED_NOTICE(lines.length).length + 1;
+  // 호출하는 쪽이 이 자리를 먼저 비워 두므로(아래 `floorText`) 대화가 한 줄이라도 있으면 여기 걸리지
+  // 않는다. 「직전 대화: 없음」 한 줄만 있는 요약의 머리글이 예산을 다 쓴 극단에서만 닿는다.
+  if (reserve > budget) return [];
+  const room = budget - reserve;
+  const kept: string[] = [];
+  let used = 0;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const need = lines[i].length + 1;
+    if (used + need > room) break;
+    used += need;
+    kept.unshift(lines[i]);
+  }
+  const dropped = lines.length - kept.length;
+  return dropped > 0 ? [DROPPED_NOTICE(dropped), ...kept] : kept;
+}
+
 /**
  * 상담원 화면용 평문. 입력이 이미 마스킹된 요약이므로 재마스킹하지 않는다.
  *
@@ -247,7 +285,7 @@ export function buildHandoffSummary(input: SummaryInput): HandoffSummary {
  * 영문명·채널 코드는 구조체 필드(`reason`·`lastIntent`·`piiKinds`·`channel`)에 그대로 남아 있고
  * 기계가 보는 쪽은 그것을 쓴다. 식별자도 서랍 제목과 같은 길이로 줄인다(앞 8자·앞 6자).
  */
-export function renderSummaryText(s: HandoffSummary): string {
+export function renderSummaryText(s: HandoffSummary, limit = SUMMARY_TEXT_LEN): string {
   const L: string[] = [];
   const who = s.ticketId ? `접수번호 ${shortId(s.ticketId, 8)}` : `대화 ${shortId(s.sessionId, 6)}`;
   L.push(`[상담원 이관 요약] ${who} · ${CHANNEL_LABELS[s.channel] ?? '상담창'} 접수`);
@@ -260,7 +298,8 @@ export function renderSummaryText(s: HandoffSummary): string {
 
   L.push('수집 정보');
   if (s.collectedSlots.length === 0) L.push('  - 없음');
-  else for (const c of s.collectedSlots) L.push(`  - ${c.label}: ${c.value}`);
+  // 한 값이 상한을 넘으면 **표시를 남기고** 줄인다 — 폼 답변은 고객이 친 글이라 길이에 제한이 없다.
+  else for (const c of s.collectedSlots) L.push(`  - ${c.label}: ${clip(c.value, SUMMARY_LINE_LEN)}`);
 
   if (s.pendingSlots.length > 0) {
     L.push('미수집 정보');
@@ -268,9 +307,25 @@ export function renderSummaryText(s: HandoffSummary): string {
   }
 
   L.push('직전 대화');
-  if (s.recentTurns.length === 0) L.push('  - 없음');
-  else for (const t of s.recentTurns) L.push(`  [${SPEAKER_LABELS[t.speaker]}] ${t.text}`);
+  const convo =
+    s.recentTurns.length === 0
+      ? ['  - 없음']
+      : s.recentTurns.map((t) => `  [${SPEAKER_LABELS[t.speaker]}] ${clip(t.text, SUMMARY_LINE_LEN)}`);
 
-  L.push(`개인정보 마스킹: ${s.piiMasked ? s.piiKinds.map(maskKindLabel).join(', ') : '해당 없음'}`);
-  return L.join('\n');
+  // 마스킹 줄은 **언제나 마지막에 남는다** — 상담원이 「개인정보가 가려졌는가」를 모르는 요약을
+  // 내보내지 않는다. 길이를 맞추는 몫은 직전 대화가 진다(가장 오래된 쪽부터 빠진다).
+  const mask = `개인정보 마스킹: ${s.piiMasked ? s.piiKinds.map(maskKindLabel).join(', ') : '해당 없음'}`;
+
+  const head = L.join('\n');
+  // 머리글 + 「줄였다」 한 줄 + 마스킹 줄이 들어갈 자리는 무엇보다 먼저 지킨다 — 그래야 직전 대화를
+  // 한 줄도 담지 못하는 경우에도 **담지 못했다는 사실**이 남는다.
+  const floorText = s.recentTurns.length > 0 ? `${DROPPED_NOTICE(convo.length)}\n${mask}` : mask;
+  if (head.length + 1 + floorText.length > limit) {
+    // 극단: 머리글만으로 상한을 넘는다(수집 정보가 아주 많은 접수). 머리글을 표시와 함께 줄이되
+    // 마스킹 줄은 지킨다 — 통째로 자르면 그 줄이 가장 먼저 사라지던 자리다.
+    return limit <= floorText.length
+      ? clip(`${head}\n${floorText}`, limit)
+      : `${clip(head, limit - floorText.length - 1)}\n${floorText}`;
+  }
+  return [head, ...fitTurnLines(convo, limit - head.length - 1 - mask.length), mask].join('\n');
 }

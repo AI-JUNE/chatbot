@@ -2688,3 +2688,176 @@ test('카카오 응답이 접수한 사실을 알고, 긴 답을 말 중간에�
   assert.equal(lines.parts[0], '가'.repeat(60));
   assert.equal(lines.parts[1], '나'.repeat(60));
 });
+
+/* ══════════ 디자인 스프린트 — 35차 재감사 (DS 38-1·38-2·38-3) ══════════ */
+
+/**
+ * DS 38-1 — **같은 말을 창구에 따라 다르게 받던** 자리.
+ *
+ * 웹은 2000자를 넘기면 거절하고 위젯이 보내기 전에 글자 수로 알리는데(DS 5-5), 카카오는
+ * `parseKakaoPayload` 가 발화를 그대로 받았다 — 상한이 0건이었다. 그 발화는 세션 턴 버퍼(12턴)·
+ * 이관 요약으로 흘러간다. 잘라서 받는 것도 답이 아니다: 고객은 자기 말이 줄어든 줄 모른 채
+ * **묻지 않은 질문에 대한 답**을 받는다. 그래서 상한을 한 곳에 세우고, 넘으면 말한다.
+ */
+test('창구가 달라도 같은 말을 같게 받는다 (DS 38-1)', opts, async () => {
+  const GROUP = ['kakao', 'limits', 'webhookAuth'];
+  const pick = (name) => importLib(name, GROUP.filter((n) => n !== name));
+  const { parseKakaoPayload, KAKAO_UTTERANCE_LIMIT, KAKAO_TOO_LONG_TEXT } = await pick('kakao');
+  const { MAX_MESSAGE_LEN, clip, CLIP_MARK } = await pick('limits');
+
+  // 상한의 출처는 하나다 — 웹 라우트가 쓰는 값과 같은 값이어야 한다.
+  assert.equal(KAKAO_UTTERANCE_LIMIT, MAX_MESSAGE_LEN, '창구마다 상한이 다르면 같은 말을 다르게 받는다');
+
+  const say = (u) => parseKakaoPayload({ userRequest: { utterance: u, user: { id: 'kko-1' } } });
+
+  // 상한까지는 그대로 받는다(경계 포함).
+  const okEdge = say('가'.repeat(MAX_MESSAGE_LEN));
+  assert.equal(okEdge.ok, true, '상한과 같은 길이를 거절했다');
+  assert.equal(okEdge.utterance.length, MAX_MESSAGE_LEN, '받은 말을 줄였다');
+  assert.equal(okEdge.userId, 'kko-1');
+
+  // 상한을 넘으면 **거절하고 사유를 값으로 돌려준다** — 「확인하지 못했어요」와 같은 말이 아니다.
+  const over = say('가'.repeat(MAX_MESSAGE_LEN + 1));
+  assert.equal(over.ok, false, '상한을 넘긴 발화를 그대로 받았다');
+  assert.equal(over.reason, 'too_long');
+  assert.equal(say('   ').reason, 'empty', '빈 발화와 긴 발화를 구분하지 못한다');
+  assert.equal(say(null).reason, 'empty');
+
+  // 종전 식(상한 없음)이라면 5000자 발화가 엔진까지 그대로 들어갔다 — 그 사실을 고정한다.
+  assert.equal(say('가'.repeat(5000)).ok, false, '종전처럼 길이를 묻지 않고 받는다');
+
+  // 거절은 화면의 일이다 — 상한을 사람 말로 알리고 다음 길을 준다(코드 어휘·영문 금지).
+  assert.match(KAKAO_TOO_LONG_TEXT, /2,000자/, '상한을 숫자로 알려야 고객이 나눠 보낼 수 있다');
+  assert.match(KAKAO_TOO_LONG_TEXT, /나눠 보내/, '다음 길을 주지 않는다');
+  assert.equal(/utterance|too_long|MAX_/.test(KAKAO_TOO_LONG_TEXT), false, '거절 문장에 코드가 남았다');
+
+  // 자르는 자리의 공통 규칙 — 상한 이하는 그대로, 넘으면 표시를 남기고 길이는 상한을 지킨다.
+  assert.equal(clip('가'.repeat(10), 10), '가'.repeat(10), '상한과 같은 길이에 표시를 붙였다');
+  const cut = clip('가'.repeat(50), 20);
+  assert.equal(cut.length, 20, `자른 결과가 상한을 넘었다(${cut.length}자)`);
+  assert.ok(cut.endsWith(CLIP_MARK), '잘랐는데 표시를 남기지 않았다');
+  assert.equal(clip('가'.repeat(50), 3), '가가가', '상한이 표시보다 짧으면 표시 없이 자른다');
+  assert.equal(clip(null, 10), '');
+});
+
+/**
+ * DS 38-2 — 이관 요약이 **꼬리부터** 잘려 「개인정보 마스킹」 줄과 최근 대화가 사라지던 자리.
+ *
+ * 종전에는 완성된 평문을 접수 저장 직전에 `slice(0, 4000)` 했다. 이 평문의 꼬리는 마스킹 줄과
+ * 가장 최근 대화다 — 상담원이 읽는 요약이 말 중간에서 끝나고, 개인정보가 가려졌는지조차 알 수
+ * 없었다(웹 2000자 × 6턴이면 지금도 넘는다). **종전 결함이 실제로 일어나는지**를 먼저 보고,
+ * 고친 쪽이 상한 안에서 무엇을 지키는지를 본다.
+ */
+test('이관 요약은 꼬리가 아니라 오래된 대화를 줄인다 (DS 38-2)', opts, async () => {
+  const GROUP = ['handoff', 'intents', 'rules', 'limits'];
+  const pick = (name) => importLib(name, GROUP.filter((n) => n !== name));
+  const { buildHandoffSummary, renderSummaryText } = await pick('handoff');
+  const { SUMMARY_TEXT_LEN, SUMMARY_LINE_LEN, CLIP_MARK } = await pick('limits');
+
+  // 웹 상한(2000자)짜리 말 12턴 — 세션 턴 버퍼가 실제로 들고 있을 수 있는 최대치다.
+  const turns = Array.from({ length: 12 }, (_, i) => ({
+    at: `2026-10-15T0${i < 10 ? i : 9}:00:00.000Z`,
+    speaker: i % 2 === 0 ? 'customer' : 'bot',
+    text: `${i + 1}번째 말입니다. ${'환불 규정을 다시 확인하고 싶어요. '.repeat(70)}`,
+    ...(i === 10 ? { intent: 'refund' } : {}),
+  }));
+  const s = buildHandoffSummary({
+    sessionId: 'web_limit_1',
+    ticketId: 'ESC-0042',
+    channel: 'web',
+    reason: 'customer_request',
+    turns,
+    slots: { contact: '010-1234-5678', symptom: `앱이 멈춥니다. ${'같은 화면이 반복됩니다. '.repeat(60)}` },
+    recentTurns: 12,
+  });
+
+  // ① 종전 결함 재현 — 예산을 두지 않고 만든 평문을 4000자에서 자르면 마스킹 줄이 사라진다.
+  const unbudgeted = renderSummaryText(s, Number.MAX_SAFE_INTEGER);
+  assert.ok(unbudgeted.length > SUMMARY_TEXT_LEN, `검증 전제가 깨졌다(${unbudgeted.length}자)`);
+  const oldWay = unbudgeted.slice(0, SUMMARY_TEXT_LEN);
+  assert.equal(oldWay.includes('개인정보 마스킹'), false, '종전 결함이 재현되지 않는다 — 이 검증은 아무것도 지키지 않는다');
+  assert.equal(oldWay.endsWith(unbudgeted.slice(-1)), false, '종전 식이 꼬리를 버리지 않는다');
+
+  // ② 고친 쪽 — 상한을 지키면서 마스킹 줄과 **가장 최근 대화**를 남긴다.
+  assert.ok(s.text.length <= SUMMARY_TEXT_LEN, `요약이 상한을 넘었다(${s.text.length}자)`);
+  assert.match(s.text, /개인정보 마스킹: .*휴대폰 번호/, '마스킹 줄이 사라졌다');
+  assert.ok(s.text.trimEnd().endsWith(s.text.trimEnd().split('\n').pop()), '요약이 말 중간에서 끝났다');
+  assert.equal(s.text.split('\n').pop().startsWith('개인정보 마스킹:'), true, '마스킹 줄이 마지막이 아니다');
+  assert.match(s.text, /12번째 말입니다/, '가장 최근 대화가 빠졌다');
+
+  // ③ 줄인 사실을 수로 말한다 — 「앞선 대화 N줄」(삼키지 않는다).
+  const notice = s.text.split('\n').find((l) => l.includes('앞선 대화'));
+  assert.ok(notice, '오래된 대화를 줄였는데 아무 말도 하지 않는다');
+  const dropped = Number(/앞선 대화 (\d+)줄/.exec(notice)?.[1]);
+  assert.ok(dropped > 0 && dropped < 12, `줄인 줄 수가 이상하다(${dropped})`);
+  const shown = s.text.split('\n').filter((l) => /^ {2}\[(고객|AI|상담원)\]/.test(l));
+  assert.equal(shown.length + dropped, 12, '보여 준 줄과 줄인 줄의 합이 전체와 다르다');
+
+  // ④ 한 줄도 통째로 길면 **표시를 남기고** 줄인다 — 폼 답변·고객의 말은 길이에 제한이 없다.
+  for (const l of shown) assert.ok(l.length <= SUMMARY_LINE_LEN + 12, `대화 한 줄이 너무 길다(${l.length}자)`);
+  assert.ok(shown.some((l) => l.includes(CLIP_MARK)), '긴 말을 줄였는데 표시가 없다');
+  const slotLine = s.text.split('\n').find((l) => l.includes('증상:'));
+  assert.ok(slotLine.includes(CLIP_MARK), '수집 정보의 긴 값을 조용히 버렸다');
+
+  // ⑤ 마스킹 집계는 **줄이기 전 원문 전체**를 본다(화면에서 줄였다고 사실이 줄지는 않는다).
+  assert.deepEqual(s.piiKinds, ['phone']);
+
+  // ⑥ 짧은 요약은 종전 모습 그대로 — 예산이 남으면 아무것도 줄이지 않는다.
+  const small = buildHandoffSummary({
+    sessionId: 'web_limit_2',
+    channel: 'kakao',
+    reason: 'max_retry',
+    turns: [{ at: '2026-10-15T01:00:00.000Z', speaker: 'customer', text: '사람 바꿔 주세요' }],
+    slots: {},
+  });
+  assert.equal(small.text.includes('앞선 대화'), false, '줄일 것이 없는데 줄였다고 말한다');
+  assert.equal(small.text.includes(CLIP_MARK), false, '짧은 말에 표시를 붙였다');
+  assert.match(small.text, /\[고객\] 사람 바꿔 주세요/);
+  assert.match(small.text, /개인정보 마스킹: 해당 없음/);
+});
+
+/**
+ * DS 38-3 — 남기는 말이 **말없이** 잘리던 자리(대화 기록 500자·접수 본문 300자·메모 500자).
+ *
+ * 운영자는 「환불 수수료가 궁금한데 저번에 주문한」에서 고객이 거기서 멈춘 것인지 우리가 버린
+ * 것인지 알 수 없다. 그 글은 「답하지 못한 질문」 목록·내려받기 CSV 로 나가 새 안내 자료의
+ * 원문이 되고, 접수 본문이 되어 상담원이 전화하기 전에 읽는 문장이 된다.
+ */
+test('기록에 남기며 자른 말은 잘랐다고 표시한다 (DS 38-3)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  // 세 모듈을 한 컴파일 묶음으로 가져온다(캐시 키가 같아야 tsc 가 한 번만 돈다).
+  const GROUP = ['convlog', 'escalation', 'limits', ...CONVLOG_DEPS];
+  const pick = (name) => importLib(name, GROUP.filter((n) => n !== name));
+  const { logTurn, resetLogs, listTurns } = await pick('convlog');
+  const { TURN_TEXT_LEN, TICKET_MESSAGE_LEN, TICKET_NOTE_LEN, CLIP_MARK } = await pick('limits');
+  resetLogs();
+
+  const long = (n) => `질문이 있습니다. ${'같은 내용을 길게 적습니다. '.repeat(n)}`;
+  logTurn({ sessionId: 's-38', channel: 'web', tenant: null, message: long(60), reply: long(60), intent: 'fallback', source: 'fallback', escalate: true });
+  const [turn] = listTurns(1);
+  assert.ok(turn.message.length <= TURN_TEXT_LEN, `대화 기록이 상한을 넘었다(${turn.message.length}자)`);
+  assert.ok(turn.message.length > TURN_TEXT_LEN - 20, `표시를 붙이며 지나치게 줄였다(${turn.message.length}자)`);
+  assert.ok(turn.message.endsWith(CLIP_MARK), '고객의 말을 줄이고 아무 표시도 남기지 않았다');
+  assert.ok(turn.reply.endsWith(CLIP_MARK), '답변을 줄이고 아무 표시도 남기지 않았다');
+
+  // 상한 이하는 **종전 그대로** — 짧은 말에 표시가 붙으면 그것도 거짓이다.
+  logTurn({ sessionId: 's-38', channel: 'web', tenant: null, message: '환불 되나요?', reply: '네, 됩니다.', intent: 'refund', source: 'kb', escalate: false });
+  const [short] = listTurns(1);
+  assert.equal(short.message, '환불 되나요?');
+  assert.equal(short.reply.includes(CLIP_MARK), false);
+  resetLogs();
+
+  const esc = await pick('escalation');
+  esc.resetTickets();
+  const { ticket } = esc.createTicket({ sessionId: 's-38', tenant: null, reason: 'user_request', message: long(60) });
+  assert.ok(ticket.message.length <= TICKET_MESSAGE_LEN, `접수 본문이 상한을 넘었다(${ticket.message.length}자)`);
+  assert.ok(ticket.message.length > TICKET_MESSAGE_LEN - 20, `표시를 붙이며 지나치게 줄였다(${ticket.message.length}자)`);
+  assert.ok(ticket.message.endsWith(CLIP_MARK), '접수 본문을 줄이고 아무 표시도 남기지 않았다');
+
+  const noted = esc.updateTicket(ticket.id, { note: long(60) });
+  assert.equal(noted.ok, true);
+  assert.ok(noted.ticket.note.length <= TICKET_NOTE_LEN, `메모가 상한을 넘었다(${noted.ticket.note.length}자)`);
+  assert.ok(noted.ticket.note.length > TICKET_NOTE_LEN - 20, `표시를 붙이며 지나치게 줄였다(${noted.ticket.note.length}자)`);
+  assert.ok(noted.ticket.note.endsWith(CLIP_MARK), '상담원 메모를 줄이고 아무 표시도 남기지 않았다');
+  esc.resetTickets();
+});
