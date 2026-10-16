@@ -19,6 +19,8 @@ const opts = CAN ? {} : { skip: 'typescript/react-dom 미설치 — npm ci 후 �
 
 let cached = null;
 let cachedMod = null;
+/** 컴파일된 위젯 JS 원문 — 내보내지 않은 중첩 함수를 떼어내 실제로 돌리기 위해 들고 있는다(DS 41-1). */
+let cachedJs = '';
 
 /**
  * 임시 폴더에 node_modules 를 잇는다.
@@ -57,6 +59,7 @@ async function loadWidget() {
   );
   execFileSync(process.execPath, [TSC, '-p', 'tsconfig.json'], { cwd: dir, stdio: 'pipe' });
   renameSync(path.join(dir, 'out', 'ChatWidget.js'), path.join(dir, 'out', 'ChatWidget.mjs'));
+  cachedJs = readFileSync(path.join(dir, 'out', 'ChatWidget.mjs'), 'utf8');
   const mod = await import(pathToFileURL(path.join(dir, 'out', 'ChatWidget.mjs')).href);
   cachedMod = mod;
   cached = mod.default;
@@ -1207,4 +1210,62 @@ test('접수한 뒤에는 다른 답변에서 다시 접수를 권하지 않는�
     assert.match(guard, /상담원 연결을 접수하고 있어요/, '보내는 중이라는 사실을 밝히지 않는다');
   }
   assert.match(src, /const filing = handoff\?\.stage === 'sending' && !handoff\.ticket;/, '보내는 중 판정이 없다');
+});
+
+/* ══════════ 41순위 — 백로그 소진 후 38차 재감사 (DS 41-1) ══════════ */
+
+/** 컴파일된 JS 에서 중첩 함수 하나를 **중괄호를 세어** 떼어낸다(최상위가 아니라 `\n}` 로는 못 찾는다). */
+function sliceFn(src, decl) {
+  const i = src.indexOf(decl);
+  assert.ok(i >= 0, `${decl} 를 찾지 못했다`);
+  let depth = 0;
+  for (let j = src.indexOf('{', i); j < src.length; j += 1) {
+    if (src[j] === '{') depth += 1;
+    else if (src[j] === '}' && --depth === 0) return src.slice(i, j + 1);
+  }
+  throw new Error(`${decl} 의 끝을 찾지 못했다`);
+}
+
+/**
+ * ── DS 41-1 — 한글을 치는 중에 누른 Esc 가 상담창을 접었다 ──
+ *
+ * 한국어 입력기에서 Escape 는 **조합 중인 음절을 취소하는 키**다(「환불」을 치다 받침을 잘못
+ * 눌렀을 때 누르는 그 키). 그 keydown 도 그대로 올라오는데 패널은 키 이름만 보고 창을 접었다 —
+ * 고객은 글자 하나를 지우려다 상담창이 사라지고 초점이 런처로 돌아간 화면 앞에 남는다.
+ * 소스 검사로는 「정말 접히는가」를 볼 수 없다 — 떼어내 돌려 본다.
+ */
+test('조합 중에 누른 Esc 는 상담창을 접지 않는다 (DS 41-1)', opts, async () => {
+  const mod = await loadModule();
+
+  // ① 판정 자체 — React 합성 이벤트와 네이티브 KeyboardEvent 두 모양을 모두 본다.
+  assert.equal(mod.composingKey({ nativeEvent: { isComposing: true } }), true, '합성 이벤트의 조합 상태를 못 본다');
+  assert.equal(mod.composingKey({ nativeEvent: { isComposing: false } }), false, '조합이 끝난 키를 조합 중이라 한다');
+  assert.equal(mod.composingKey({ isComposing: true }), true, '네이티브 이벤트의 조합 상태를 못 본다');
+  assert.equal(mod.composingKey({}), false, '조합 상태를 모르면 조합 중이라 단정한다');
+
+  const src = sliceFn(cachedJs, 'function onPanelKeyDown(');
+  const make = (text) => new Function('composingKey', 'closePanel', 'open', 'mobile', 'panelRef', `return ${text};`);
+  const ev = (composing) => {
+    const seen = { stopped: false };
+    return [{ key: 'Escape', nativeEvent: { isComposing: composing }, stopPropagation() { seen.stopped = true; } }, seen];
+  };
+
+  // ② 고친 뒤 — 조합 중에는 아무 일도 하지 않고, 조합이 끝난 Esc 는 그대로 접는다.
+  const closed = [];
+  const handler = make(src)(mod.composingKey, (reset) => closed.push(reset), true, false, { current: null });
+  const [composing, cSeen] = ev(true);
+  handler(composing);
+  assert.deepEqual(closed, [], '조합 중인데 상담창을 접는다');
+  assert.equal(cSeen.stopped, false, '조합 중인 키를 가로채 호스트 페이지에서도 지운다');
+  const [done, dSeen] = ev(false);
+  handler(done);
+  assert.deepEqual(closed, [false], '조합이 끝난 Esc 로는 접히지 않는다(대화를 지우지 않는 접기여야 한다)');
+  assert.equal(dSeen.stopped, true, 'Esc 가 호스트 페이지로 새어 나간다');
+
+  // ③ 종전 식 재현 — 조합 확인이 없으면 같은 키 입력에 실제로 접힌다(이것이 결함의 크기다).
+  const old = src.replace(/if \(composingKey\(e\)\)\s*return;/, '');
+  assert.notEqual(old, src, '조합 확인 한 줄을 찾지 못했다 — 재현이 아무것도 지키지 않는다');
+  const oldClosed = [];
+  make(old)(mod.composingKey, (reset) => oldClosed.push(reset), true, false, { current: null })(ev(true)[0]);
+  assert.deepEqual(oldClosed, [false], '종전 식에서도 접히지 않는다 — 결함이 재현되지 않는다');
 });

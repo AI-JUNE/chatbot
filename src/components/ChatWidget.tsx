@@ -200,6 +200,24 @@ export const MAX_INPUT_LEN = 2000;
 /** 남은 글자 수를 보여주기 시작하는 지점(평소에는 숨겨 입력창을 어지럽히지 않는다). */
 const COUNT_FROM = MAX_INPUT_LEN - 200;
 
+/**
+ * 지금 누른 키가 **한글을 조합하는 중**인가 (DS 41-1).
+ *
+ * 한국어 입력기(IME)에서 `Enter`·`Escape` 는 글자를 만드는 키다 — Enter 는 조합 중인 음절을
+ * 확정하고 Escape 는 그 음절을 취소한다. 이때도 keydown 은 그대로 올라오므로, 키 **이름만** 보고
+ * 화면을 조작하면 고객이 「환불」을 치는 중에 상담창이 접히고 운영자가 검색어를 치는 중에
+ * 다른 탭으로 뛴다. 글자를 만드는 키에는 화면이 반응하지 않아야 한다.
+ *
+ * 두 모양을 모두 받는다 — React 합성 이벤트는 `nativeEvent.isComposing`, `window` 리스너가 받는
+ * 네이티브 `KeyboardEvent` 는 `isComposing` 이다(한쪽만 보면 나머지 자리에서 조용히 무효가 된다).
+ *
+ * 콘솔(`src/app/admin/page.tsx`)에 **같은 사본**이 있다 — 위젯과 콘솔은 서로를 불러오지 않으므로
+ * (`MAX_INPUT_LEN`·`lockPageScroll` 과 같은 기존 규약) 테스트가 두 쪽을 글자까지 대조한다.
+ */
+export function composingKey(e: { isComposing?: boolean; nativeEvent?: { isComposing?: boolean } }): boolean {
+  return Boolean(e.nativeEvent ? e.nativeEvent.isComposing : e.isComposing);
+}
+
 // 보조 동작 칩(빠른 답장·접수 진행 이전/건너뛰기/취소·평가) 공통 모양.
 const chipStyle: CSSProperties = {
   fontSize: 12, fontWeight: 600, color: 'var(--brand-600)', background: '#fff',
@@ -1067,6 +1085,8 @@ export default function ChatWidget({
   // ESC로 닫고, Tab은 위젯 안에서 순환시킨다(뒤 페이지로 초점이 새지 않게).
   function onPanelKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
     if (e.key === 'Escape') {
+      // 조합 중의 Esc 는 「방금 치던 음절을 지워라」다 — 「상담창을 닫아라」가 아니다(DS 41-1).
+      if (composingKey(e)) return;
       e.stopPropagation();
       closePanel(false);
       return;
@@ -1581,7 +1601,7 @@ export default function ChatWidget({
                               onChange={(e) => setHandoff({ ...handoff, contact: e.target.value, error: '' })}
                               onKeyDown={(e) => {
                                 // 형식이 틀려도 Enter 를 삼키지 않는다 — 눌러야 이유를 알려줄 수 있다.
-                                if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitHandoff(handoff.contact);
+                                if (e.key === 'Enter' && !composingKey(e)) submitHandoff(handoff.contact);
                               }}
                               // 보내는 중에는 `disabled` 가 아니라 `readOnly` — 비활성이 되면 초점이 위젯 밖으로 떨어진다.
                               readOnly={handoff.stage === 'sending'}
@@ -1821,7 +1841,7 @@ export default function ChatWidget({
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) send(); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !composingKey(e)) send(); }}
               placeholder="메시지를 입력하세요"
               aria-label="메시지 입력"
               aria-invalid={tooLong || undefined}

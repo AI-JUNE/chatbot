@@ -1844,3 +1844,125 @@ test('가린 개인정보를 화면이 말한다 (DS 39-1·39-2)', opts, async (
   assert.match(src, /\/\*\* 이 턴에서 가린 개인정보의 표시명\(서버가 `@\/lib\/pii` 로 붙인다 — DS 39-1\)\. \*\/\n\s*piiLabels\?: string\[\];/, '대화 뷰에 가린 종류 칸이 없다');
   assert.match(src, /piiLabels\?: string\[\];\n\s*contact\?: string;/, '접수 뷰에 가린 종류 칸이 없다');
 });
+
+/* ══════════ 41순위 — 백로그 소진 후 38차 재감사 (DS 41-2·41-3) ══════════ */
+
+/** 컴파일된 JS 에서 중첩 함수 하나를 **중괄호를 세어** 떼어낸다(최상위가 아니라 `\n}` 로는 못 찾는다). */
+function sliceFn(src, decl) {
+  const i = src.indexOf(decl);
+  assert.ok(i >= 0, `${decl} 를 찾지 못했다`);
+  let depth = 0;
+  for (let j = src.indexOf('{', i); j < src.length; j += 1) {
+    if (src[j] === '{') depth += 1;
+    else if (src[j] === '}' && --depth === 0) return src.slice(i, j + 1);
+  }
+  throw new Error(`${decl} 의 끝을 찾지 못했다`);
+}
+
+/** 전역 검색 컴포넌트 안쪽만 떼어낸다 — 같은 이름의 핸들러가 콘솔에 여럿 있다. */
+async function globalSearchRegion() {
+  await loadConsole();
+  const i = cachedJs.indexOf('function GlobalSearch(');
+  assert.ok(i >= 0, 'GlobalSearch 선언을 찾지 못했다');
+  const end = cachedJs.indexOf('\n}', i); // 최상위 함수라 닫는 중괄호는 1열에 있다
+  assert.ok(end > i, 'GlobalSearch 의 끝을 찾지 못했다');
+  return cachedJs.slice(i, end + 2);
+}
+
+/**
+ * DS 41-2 — 한글을 치는 중에 누른 Enter 가 **첫 결과로 뛰었다**.
+ *
+ * 한국어 입력기에서 Enter 는 조합 중인 음절을 확정하는 키다. 「환불」을 치려면 마지막 음절을
+ * 확정해야 하는데, 검색칸은 키 이름만 보고 `hits[0]` 을 골라 `run()` 을 돌렸다 — 탭이 바뀌고
+ * 서랍이 열리며 적던 검색어는 지워진다(`setQ('')`). Esc 도 음절 취소가 아니라 검색어 지우기였다.
+ * 「정말 뛰는가」는 소스를 읽어서는 알 수 없다 — 떼어내 돌려 본다.
+ */
+test('조합 중에 누른 Enter·Esc 는 검색을 움직이지 않는다 (DS 41-2)', opts, async () => {
+  const { composingKey } = await loadConsoleFns(['composingKey']);
+  assert.equal(composingKey({ nativeEvent: { isComposing: true } }), true, '합성 이벤트의 조합 상태를 못 본다');
+  assert.equal(composingKey({ nativeEvent: { isComposing: false } }), false, '조합이 끝난 키를 조합 중이라 한다');
+  assert.equal(composingKey({ isComposing: true }), true, '네이티브 이벤트의 조합 상태를 못 본다');
+  assert.equal(composingKey({}), false, '조합 상태를 모르면 조합 중이라 단정한다');
+
+  const src = sliceFn(await globalSearchRegion(), 'const onKeyDown = (e)');
+  const hits = [{ key: 'a' }, { key: 'b' }];
+  const make = (text) => {
+    const log = { picked: [], q: '환불', cleared: false, active: 0 };
+    const fn = new Function(
+      'composingKey', 'hits', 'activeIdx', 'pick', 'setOpen', 'setActive', 'q', 'setQ',
+      `${text}\nreturn onKeyDown;`,
+    )(
+      composingKey, hits, 0,
+      (h) => log.picked.push(h.key),
+      () => {},
+      (f) => { log.active = typeof f === 'function' ? f(log.active) : f; },
+      log.q,
+      (v) => { log.cleared = v === ''; },
+    );
+    return [fn, log];
+  };
+  const ev = (key, composing) => ({ key, nativeEvent: { isComposing: composing }, preventDefault() {}, stopPropagation() {} });
+
+  // ① 조합 중에는 결과를 고르지도, 적던 검색어를 지우지도 않는다.
+  const [fn, log] = make(src);
+  fn(ev('Enter', true));
+  assert.deepEqual(log.picked, [], '조합을 확정하는 Enter 에 첫 결과로 뛴다');
+  fn(ev('Escape', true));
+  assert.equal(log.cleared, false, '음절을 취소하는 Esc 에 적던 검색어를 지운다');
+  fn(ev('ArrowDown', true));
+  assert.equal(log.active, 0, '조합 중에 고른 항목이 움직인다');
+
+  // ② 조합이 끝난 뒤에는 종전과 똑같이 동작한다(화살표로 고르고 Enter 로 이동).
+  fn(ev('Enter', false));
+  assert.deepEqual(log.picked, ['a'], '조합이 끝난 Enter 로는 이동하지 않는다');
+  fn(ev('Escape', false));
+  assert.equal(log.cleared, true, '조합이 끝난 Esc 로는 검색어가 지워지지 않는다');
+  fn(ev('ArrowDown', false));
+  assert.equal(log.active, 1, '화살표로 다음 항목으로 내려가지 않는다');
+
+  // ③ 종전 식 재현 — 조합 확인이 없으면 같은 키 입력에 실제로 뛴다(이것이 결함의 크기다).
+  const old = src.replace(/if \(composingKey\(e\)\)\s*return;/, '');
+  assert.notEqual(old, src, '조합 확인 한 줄을 찾지 못했다 — 재현이 아무것도 지키지 않는다');
+  const [oldFn, oldLog] = make(old);
+  oldFn(ev('Enter', true));
+  assert.deepEqual(oldLog.picked, ['a'], '종전 식에서도 뛰지 않는다 — 결함이 재현되지 않는다');
+});
+
+/**
+ * DS 41-3 — 덮개가 열려 있는데 단축키가 초점을 **덮개 밖으로** 끌어냈다.
+ *
+ * `Ctrl+K`·`/` 는 창 전체(window)에서 듣는다. 서랍·확인 대화상자는 `aria-modal="true"` 로
+ * 「여기 말고는 쓸 수 없다」고 알려 둔 화면인데, 그 위에서 단축키가 들으면 초점이 헤더 검색칸으로
+ * 나간다 — 덮개의 Esc·Tab 가둠은 모두 **제 패널의 `onKeyDown`** 에 걸려 있으므로 그 뒤로는
+ * Esc 로 덮개를 닫는 길이 막히고, 확인 대화상자는 약속이 풀리지 않아 그 작업이 멈춘 채 남는다.
+ */
+test('덮개가 열려 있으면 검색 단축키가 초점을 빼내지 않는다 (DS 41-3)', opts, async () => {
+  const { composingKey } = await loadConsoleFns(['composingKey']);
+  const src = sliceFn(await globalSearchRegion(), 'const onKey = (e)');
+
+  const run = (text, modal, ev) => {
+    const log = { focused: 0, selected: 0 };
+    const doc = { querySelector: (sel) => (modal && sel === '[aria-modal="true"]' ? { tagName: 'DIV' } : null) };
+    new Function('composingKey', 'document', 'inputRef', `${text}\nreturn onKey;`)(
+      composingKey,
+      doc,
+      { current: { focus: () => { log.focused += 1; }, select: () => { log.selected += 1; } } },
+    )(ev);
+    return log;
+  };
+  const key = (k, extra = {}) => ({ key: k, target: { tagName: 'BODY' }, preventDefault() {}, ...extra });
+
+  // ① 덮개가 없으면 종전대로 검색칸으로 데려간다.
+  assert.equal(run(src, false, key('/')).focused, 1, '「/」로 검색칸에 가지 못한다');
+  assert.equal(run(src, false, key('k', { ctrlKey: true })).focused, 1, 'Ctrl+K 로 검색칸에 가지 못한다');
+  // ② 덮개가 열려 있으면 듣지 않는다 — 초점은 덮개 안에 남는다.
+  assert.equal(run(src, true, key('/')).focused, 0, '덮개 위에서도 「/」가 초점을 빼낸다');
+  assert.equal(run(src, true, key('k', { ctrlKey: true })).focused, 0, '덮개 위에서도 Ctrl+K 가 초점을 빼낸다');
+  // ③ 조합 중인 키도 단축키가 아니다(글자를 만드는 키다).
+  assert.equal(run(src, false, key('k', { ctrlKey: true, nativeEvent: { isComposing: true } })).focused, 0, '조합 중인 키에 초점을 옮긴다');
+
+  // ④ 종전 식 재현 — 덮개 확인이 없으면 같은 키 입력에 실제로 초점이 빠져나간다.
+  const old = src.replace(/ \|\| document\.querySelector\('\[aria-modal="true"\]'\)/, '');
+  assert.notEqual(old, src, '덮개 확인을 찾지 못했다 — 재현이 아무것도 지키지 않는다');
+  assert.equal(run(old, true, key('/')).focused, 1, '종전 식에서도 빠져나가지 않는다 — 결함이 재현되지 않는다');
+});

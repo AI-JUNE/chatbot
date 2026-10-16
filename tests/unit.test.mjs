@@ -1340,8 +1340,8 @@ test('접수 연락처는 잠그지 않고 무엇이 틀렸는지 알려준다 (
   assert.match(s, /export function contactError\(v: string\): string/, '왜 못 보내는지 알려줄 함수가 없다');
   // 버튼을 형식 때문에 잠그면 「왜 안 눌리지」로 끝난다 — QUALITY_BAR §1.
   assert.equal(/aria-disabled=\{[^}]*validContact/.test(s), false, '형식 때문에 버튼을 잠그면 이유를 말할 기회가 없다');
-  // Enter 도 삼키지 않는다(눌러야 이유를 알려줄 수 있다).
-  assert.match(s, /if \(e\.key === 'Enter' && !e\.nativeEvent\.isComposing\) submitHandoff\(handoff\.contact\);/, 'Enter 를 조용히 삼킨다');
+  // Enter 도 삼키지 않는다(눌러야 이유를 알려줄 수 있다). 조합 확인은 한 함수가 한다(DS 41-1).
+  assert.match(s, /if \(e\.key === 'Enter' && !composingKey\(e\)\) submitHandoff\(handoff\.contact\);/, 'Enter 를 조용히 삼킨다');
   // 오류는 stage 와 무관하게(형식 오류는 stage=form 이다) 인라인으로 뜨고 입력과 묶인다.
   assert.match(s, /\{handoff\.error && \(/, '형식 오류가 화면에 뜨지 않는다');
   assert.match(s, /id="gw-handoff-err" role="alert"/, '오류가 보조기술에 전달되지 않는다');
@@ -2912,4 +2912,75 @@ test('쿼리 토큰으로 여는 내려받기는 모두 변경 이력에 남는�
   for (const k of ['backup.export', 'conversation.export']) {
     assert.ok(audit.includes(`'${k}': '`), `${k} 의 표시명이 없다`);
   }
+});
+
+/* ══════════ 41순위 — 백로그 소진 후 38차 재감사 (DS 41-x) ══════════ */
+
+/**
+ * DS 41-1·41-2 — 「조합 중인가」를 묻는 자리는 **한 함수**다.
+ *
+ * 종전에는 `!e.nativeEvent.isComposing` 을 키 분기마다 손으로 적었고, 그래서 적은 자리(위젯
+ * 입력칸·접수 연락처·응답 테스트)만 지켜졌다. 같은 글자를 손으로 적게 하면 **새로 생긴 키 분기**가
+ * 조용히 빠진다 — 실제로 상담창의 Esc 와 콘솔 전역 검색의 Enter·Esc 가 빠져 있었다.
+ * 위젯과 콘솔은 서로를 불러오지 않으므로(`MAX_INPUT_LEN`·`lockPageScroll` 과 같은 기존 규약)
+ * 사본 두 벌을 글자까지 대조한다. 동작 자체는 두 화면 테스트가 떼어내 실제로 돌려 본다.
+ */
+test('조합 중인 키를 가리는 판정이 위젯·콘솔에서 같은 사본이다 (DS 41-1·41-2)', () => {
+  const widget = read('src/components/ChatWidget.tsx');
+  const console_ = read('src/app/admin/page.tsx');
+  assert.equal(topFn(widget, 'function composingKey('), topFn(console_, 'function composingKey('), '사본이 갈라졌다');
+  // 두 모양을 모두 본다 — React 합성 이벤트는 `nativeEvent.isComposing`, window 리스너가 받는
+  // 네이티브 KeyboardEvent 는 `isComposing` 이다(한쪽만 보면 나머지 자리에서 조용히 무효가 된다).
+  assert.match(
+    topFn(widget, 'function composingKey('),
+    /e\.nativeEvent \? e\.nativeEvent\.isComposing : e\.isComposing/,
+    '조합 확인이 한쪽 모양만 본다',
+  );
+
+  for (const [name, s] of [['위젯', widget], ['콘솔', console_]]) {
+    // 손으로 적은 조합 확인(`!e.nativeEvent.isComposing`)이 남아 있으면 규칙이 다시 갈라진다.
+    assert.equal(/!e\.nativeEvent\.isComposing/.test(s), false, `${name}: 조합 확인을 손으로 적은 자리가 남아 있다`);
+    // 날 것의 `isComposing` 을 보는 자리는 그 한 함수뿐이다.
+    assert.equal((s.match(/e\.isComposing/g) || []).length, 1, `${name}: 조합 상태를 그 함수 밖에서도 읽는다`);
+    assert.ok((s.match(/composingKey\(e\)/g) || []).length >= 3, `${name}: 조합 확인을 거치는 키 분기가 너무 적다`);
+  }
+
+  // 위젯 — 패널의 Esc 는 음절 취소일 수 있다(그 키로 상담창을 접지 않는다).
+  const panel = widget.slice(widget.indexOf('function onPanelKeyDown('), widget.indexOf('function pushBot('));
+  const esc = panel.slice(panel.indexOf("if (e.key === 'Escape') {"), panel.indexOf('closePanel(false);'));
+  assert.match(esc, /if \(composingKey\(e\)\) return;/, '위젯: 조합 중인 Esc 에도 상담창을 접는다');
+  // 글자를 보내는 두 자리(입력칸·접수 연락처)는 종전부터 지켜졌다 — 같은 한 함수로 옮겼을 뿐이다.
+  assert.equal((widget.match(/e\.key === 'Enter' && !composingKey\(e\)/g) || []).length, 2, '위젯: Enter 분기가 조합 확인을 거치지 않는다');
+
+  // 콘솔 — 전역 검색은 **어떤 키든** 조합 중이면 손대지 않는다(Enter·Esc·화살표가 모두 글자 쪽이다).
+  const search = console_.slice(console_.indexOf('function GlobalSearch('), console_.indexOf('function tokenStore('));
+  assert.ok(search.length > 0, 'GlobalSearch 영역을 찾지 못했다');
+  assert.match(
+    search,
+    /const onKeyDown = \(e: ReactKeyboardEvent<HTMLInputElement>\) => \{\n(?:\s*\/\/[^\n]*\n)*\s*if \(composingKey\(e\)\) return;/,
+    '콘솔: 전역 검색이 조합 중인 키로도 움직인다',
+  );
+  assert.match(console_, /e\.key === 'Enter' && !e\.shiftKey && !composingKey\(e\)/, '콘솔: 응답 테스트 Enter 가 조합 확인을 거치지 않는다');
+});
+
+/**
+ * DS 41-3 — 덮개(`aria-modal="true"`)가 열려 있는 동안 창 전체에서 듣는 단축키.
+ *
+ * `Ctrl+K`·`/` 가 들으면 초점이 덮개 밖 헤더 검색칸으로 나간다. 덮개의 Esc·Tab 가둠은 모두
+ * 제 패널의 `onKeyDown` 에 걸려 있으므로 그 뒤로는 Esc 로 덮개를 닫는 길이 막히고, 확인
+ * 대화상자는 약속(`resolve`)이 풀리지 않아 그 작업이 멈춘 채 남는다.
+ */
+test('창 전체에서 듣는 단축키가 덮개를 건너뛰지 않는다 (DS 41-3)', () => {
+  const s = read('src/app/admin/page.tsx');
+  const search = s.slice(s.indexOf('function GlobalSearch('), s.indexOf('function tokenStore('));
+  assert.match(
+    search,
+    /if \(composingKey\(e\) \|\| document\.querySelector\('\[aria-modal="true"\]'\)\) return;/,
+    '단축키가 덮개·조합 상태를 보지 않는다',
+  );
+  // 덮개 넷이 모두 그 표시를 달고 있어야 이 한 줄이 넷 모두를 지킨다(서랍 3 + 확인 대화상자 1).
+  // 세는 것은 화면에 그려지는 속성뿐이다 — 위의 선택자 문자열(`[aria-modal="true"]`)은 제외한다.
+  assert.equal((s.match(/aria-modal="true"(?=[\s>])/g) || []).length, 4, '덮개 수가 바뀌었다 — 단축키 차단 범위를 다시 확인해야 한다');
+  // 창 전체에서 키를 듣는 자리는 이 단축키와 덮개의 Esc 뿐이다(새로 생기면 같은 판단이 필요하다).
+  assert.equal((s.match(/addEventListener\('keydown'/g) || []).length, 4, '창 전체에서 키를 듣는 자리가 늘었다');
 });

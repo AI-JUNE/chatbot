@@ -359,6 +359,24 @@ function useScrollLock() {
   }, []);
 }
 
+/**
+ * 지금 누른 키가 **한글을 조합하는 중**인가 (DS 41-2).
+ *
+ * 한국어 입력기(IME)에서 `Enter`·`Escape` 는 글자를 만드는 키다 — Enter 는 조합 중인 음절을
+ * 확정하고 Escape 는 그 음절을 취소한다. 이때도 keydown 은 그대로 올라오므로, 키 **이름만** 보고
+ * 화면을 조작하면 운영자가 「환불」을 치는 중에 검색 결과로 뛰고 적던 검색어가 지워진다.
+ * 글자를 만드는 키에는 화면이 반응하지 않아야 한다.
+ *
+ * 두 모양을 모두 받는다 — React 합성 이벤트는 `nativeEvent.isComposing`, `window` 리스너가 받는
+ * 네이티브 `KeyboardEvent` 는 `isComposing` 이다(한쪽만 보면 나머지 자리에서 조용히 무효가 된다).
+ *
+ * 위젯(`src/components/ChatWidget.tsx`)의 **같은 사본**이다 — 콘솔은 lib·위젯을 불러오지 않으므로
+ * (`kstMonthNow`·`lockPageScroll` 과 같은 기존 규약) 테스트가 두 쪽을 글자까지 대조한다.
+ */
+function composingKey(e: { isComposing?: boolean; nativeEvent?: { isComposing?: boolean } }): boolean {
+  return Boolean(e.nativeEvent ? e.nativeEvent.isComposing : e.isComposing);
+}
+
 /** 세로로 넘치는가 — 넘치는 상자에만 초점을 준다(DS 26-2). */
 function overflowsY(el: { scrollHeight: number; clientHeight: number }) {
   return el.scrollHeight - el.clientHeight > 1;
@@ -1624,6 +1642,11 @@ function GlobalSearch({ search, onFirstOpen }: { search: (term: string, raw: str
   // Ctrl/⌘+K 또는 입력 중이 아닐 때 "/" 로 검색칸에 초점
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // 덮개(서랍·확인 대화상자)가 열려 있는 동안에는 단축키가 듣지 않는다 (DS 41-3).
+      // 들으면 초점이 `aria-modal` 밖의 헤더 검색칸으로 끌려 나간다 — 덮개의 Esc·Tab 가둠은
+      // 모두 **제 패널의 `onKeyDown`** 에 걸려 있어, 초점이 나간 뒤에는 **Esc 로 닫는 길이
+      // 막힌다**(확인 대화상자는 그때까지 약속이 풀리지 않아 그 작업이 멈춘 채 남는다).
+      if (composingKey(e) || document.querySelector('[aria-modal="true"]')) return;
       const isK = (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k';
       const target = e.target as HTMLElement | null;
       const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
@@ -1662,6 +1685,9 @@ function GlobalSearch({ search, onFirstOpen }: { search: (term: string, raw: str
     }
   };
   const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    // 조합 중인 키는 **글자를 만드는 키**다 — 「환불」을 치다 Enter 로 음절을 확정하면 첫 결과로
+    // 뛰어 탭이 바뀌고 적던 검색어가 지워졌다. Esc 도 음절 취소이지 검색어 지우기가 아니다(DS 41-2).
+    if (composingKey(e)) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setOpen(true);
@@ -5703,7 +5729,7 @@ export default function AdminPage() {
                 value={testInput}
                 onChange={(e) => setTestInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  if (e.key === 'Enter' && !e.shiftKey && !composingKey(e)) {
                     e.preventDefault();
                     runTest();
                   }
