@@ -201,8 +201,14 @@ test('모니터링은 DSN 미설정 시 no-op 이다', () => {
 test('모니터링 전송 전 PII를 마스킹한다', () => {
   const s = read('src/lib/monitoring.ts');
   assert.match(s, /export function scrub/);
-  for (const k of ['주민등록번호', '카드', '휴대전화', '이메일', '계좌']) {
-    assert.match(s, new RegExp(k), `${k} 마스킹 규칙이 있어야 한다`);
+  // 규칙은 `@/lib/pii` 하나에만 있다 (DS 39-3) — 이 파일이 자기 규칙을 들고 있던 동안에는
+  // 이관 요약 쪽보다 느슨해서(계좌에 하이픈을 필수로 둠) 안에서는 가리고 밖으로는 내보냈다.
+  assert.match(s, /import \{ maskPii \} from '@\/lib\/pii'/, '마스킹 단일 출처를 불러오지 않는다');
+  assert.match(s, /maskPii\(String\(input\), 'opaque'\)\.text/, '울타리 밖으로 나가는 자리가 opaque 가 아니다');
+  assert.equal(/\.replace\(\/\\b\(\\d\{6\}\)/.test(s), false, '마스킹 규칙을 따로 들고 있다');
+  const pii = read('src/lib/pii.ts');
+  for (const k of ['주민등록번호', '카드', '휴대폰 번호', '이메일', '계좌']) {
+    assert.match(pii, new RegExp(k), `${k} 마스킹 규칙이 있어야 한다`);
   }
 });
 
@@ -263,11 +269,17 @@ test('이관 요약은 규칙 기반이며 LLM을 부르지 않는다', () => {
 });
 
 test('요약 본문이 개인정보 마스킹을 통과한다', () => {
-  const s = read('src/lib/handoff.ts');
-  assert.match(s, /export function maskPii/);
+  // 규칙은 `@/lib/pii` 하나(DS 39-3). 요약은 그 함수를 **불러서** 쓴다 — 종전에는 이 파일이
+  // 규칙을 들고 있어서, 외부로 나가는 쪽(`monitoring.scrub`)과 어긋나도 아무도 몰랐다.
+  const pii = read('src/lib/pii.ts');
+  assert.match(pii, /export function maskPii/);
   for (const kind of ['rrn', 'card', 'phone', 'email', 'account']) {
-    assert.match(s, new RegExp(`name: '${kind}'`), `${kind} 마스킹 규칙이 있어야 한다`);
+    assert.match(pii, new RegExp(`name: '${kind}'`), `${kind} 마스킹 규칙이 있어야 한다`);
   }
+  const s = read('src/lib/handoff.ts');
+  assert.match(s, /from '@\/lib\/pii'/, '요약이 마스킹 단일 출처를 불러오지 않는다');
+  assert.equal(/const MASK_RULES/.test(s), false, '요약이 마스킹 규칙을 따로 들고 있다');
+  assert.match(s, /const m = maskPii\(String\(value\)\)/, '수집 정보가 마스킹을 지나지 않는다');
   assert.match(read('src/lib/escalation.ts'), /summary\?: string/, '티켓이 요약을 보관해야 한다');
 });
 
@@ -2739,7 +2751,8 @@ test('받는 말·남기는 말의 상한이 한 곳에서 온다 (DS 38-1·38-3
     assert.match(s, /from '@\/lib\/limits'/, `${f} 가 상한을 따로 적고 있다`);
     assert.equal(/slice\(0, (300|500|4000)\)/.test(s), false, `${f} 에 꼬리를 조용히 버리는 자리가 남았다`);
   }
-  assert.match(read('src/lib/convlog.ts'), /message: clip\(input\.message, TURN_TEXT_LEN\)/, '대화 기록이 표시 없이 잘린다');
+  // 가린 뒤에 자른다 (DS 39-1) — 먼저 자르면 경계에 걸친 번호가 쪼개져 규칙에 걸리지 않는다.
+  assert.match(read('src/lib/convlog.ts'), /message: clip\(m\.text, TURN_TEXT_LEN\)/, '대화 기록이 표시 없이 잘린다');
   assert.match(read('src/lib/escalation.ts'), /clip\(input\.summary, SUMMARY_TEXT_LEN\)/, '이관 요약 보호막이 표시를 남기지 않는다');
 
   // 카카오 창구의 상한은 웹과 **같은 값**이어야 한다(자기 숫자를 적으면 다시 어긋난다).
@@ -2774,4 +2787,56 @@ test('이관 요약이 상한을 꼬리로 갚지 않는다 (DS 38-2)', () => {
   assert.match(s, /DROPPED_NOTICE\(lines\.length\)\.length \+ 1/, '줄였다는 고지 자리를 비워 두지 않는다');
   assert.match(s, /clip\(t\.text, SUMMARY_LINE_LEN\)/, '대화 한 줄을 표시 없이 자른다');
   assert.match(s, /clip\(c\.value, SUMMARY_LINE_LEN\)/, '수집 정보 한 값을 표시 없이 자른다');
+});
+
+/* ══════════ 디자인 스프린트 — 36차 재감사 (DS 39-1·39-2·39-3) ══════════ */
+
+/**
+ * DS 39-3 — 마스킹 규칙의 **단일 출처**.
+ * 「정말 그렇게 동작하는가」는 `tests/runtime.test.mjs` 가 돌려서 본다 — 여기서는 규칙을 손으로
+ * 다시 적은 자리가 남지 않았는지, 가리는 자리가 전부 그 한 곳을 지나는지를 고정한다.
+ */
+test('개인정보를 가리는 규칙이 한 곳에서 온다 (DS 39-3)', () => {
+  const pii = read('src/lib/pii.ts');
+  assert.match(pii, /export type MaskStrength = 'readable' \| 'opaque';/, '세기 구분이 없다');
+  assert.match(pii, /export function maskPii\(input: string, strength: MaskStrength = 'readable'\)/, '기본 세기가 readable 이 아니다');
+  // 이 파일은 아무것도 import 하지 않는다 — 로깅·모니터링이 여기를 보므로 거꾸로 의존하면 순환이다.
+  assert.equal(/^import /m.test(pii), false, 'pii 가 다른 모듈에 의존하면 순환이 생긴다');
+
+  // 규칙 표는 한 벌뿐이다. 다른 파일에 정규식을 다시 적으면 또 어긋난다.
+  for (const f of ['src/lib/handoff.ts', 'src/lib/monitoring.ts']) {
+    const s = read(f);
+    assert.match(s, /from '@\/lib\/pii'/, `${f} 가 마스킹 단일 출처를 쓰지 않는다`);
+    assert.equal(/01\[0-9\]\[-\\s\]\?/.test(s), false, `${f} 에 마스킹 규칙이 따로 남았다`);
+  }
+  // 외부 LLM 전송은 `scrub`(= opaque)을 그대로 쓴다 — 이 경로가 가장 멀리 나간다.
+  assert.match(read('src/lib/llm.ts'), /scrub\(m\.content\)/, '외부로 나가는 본문이 마스킹을 거치지 않는다');
+
+  // 우리가 만든 식별자는 사용자 글이 아니다 — 계좌 규칙에 걸려 로그 추적이 끊기지 않게 한다.
+  assert.match(read('src/lib/logger.ts'), /if \(k === 'sessionHash'\)/, '세션 해시가 마스킹에 걸린다');
+});
+
+/**
+ * DS 39-1·39-2 — 기록에 남기는 글은 **가린 뒤에** 자른다.
+ * 순서가 뒤집히면 상한 경계에 걸친 번호가 쪼개져 규칙에 걸리지 않고 앞자리가 그대로 남는다.
+ */
+test('대화 기록·접수 본문이 저장 전에 개인정보를 가린다 (DS 39-1·39-2)', () => {
+  const conv = read('src/lib/convlog.ts');
+  assert.match(conv, /import \{ maskPii, mergeKinds \} from '@\/lib\/pii'/, '대화 기록이 마스킹을 불러오지 않는다');
+  assert.match(conv, /const m = maskPii\(input\.message \|\| ''\);/, '고객의 말이 마스킹을 지나지 않는다');
+  assert.match(conv, /const r = maskPii\(input\.reply \|\| ''\);/, '답변이 마스킹을 지나지 않는다');
+  assert.match(conv, /piiKinds\?: string\[\];/, '무엇을 가렸는지 남기지 않는다');
+  // 복원 경로도 같은 관문을 지난다(마스킹 이전에 뜬 스냅샷에는 원문이 들어 있다).
+  assert.match(conv, /const mm = maskPii\(String\(t\.message \?\? ''\)\);/, '복원 경로가 마스킹을 건너뛴다');
+
+  const esc = read('src/lib/escalation.ts');
+  assert.match(esc, /const body = maskPii\(String\(input\.message \|\| ''\)\.trim\(\)\);/, '접수 본문이 마스킹을 지나지 않는다');
+  assert.match(esc, /message: clip\(body\.text, TICKET_MESSAGE_LEN\)/, '가리기 전에 자른다');
+  // 회신할 연락처는 **가리지 않는다** — 상담원이 전화를 걸 대상이다(화면·파기·되읽기로 다룬다).
+  assert.equal(/maskPii\([^)]*contact/.test(esc), false, '회신할 연락처를 저장 단계에서 가려 버렸다');
+
+  // 이름은 서버가 붙여 보낸다(`intentLabel`·`tenantLabel` 과 같은 규칙) — 콘솔은 사전을 안 든다.
+  const route = read('src/app/api/admin/escalations/route.ts');
+  assert.match(route, /import \{ piiKindLabels \} from '@\/lib\/pii'/, '가린 종류의 이름을 붙이지 않는다');
+  assert.match(route, /piiLabels: piiKindLabels\(t\.piiKinds\),/, '접수·대화에 가린 종류가 실리지 않는다');
 });

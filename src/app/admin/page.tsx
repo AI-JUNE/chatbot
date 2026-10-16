@@ -137,6 +137,11 @@ interface TicketView {
   reasonCode?: string;
   summary?: string;
   message: string;
+  /**
+   * 접수 본문에서 가린 개인정보의 표시명(서버가 `@/lib/pii` 로 붙인다 — DS 39-2).
+   * 옛 응답에는 없다 — 없을 때는 「가린 것이 없다」가 아니라 **모른다**이므로 아무 말도 하지 않는다.
+   */
+  piiLabels?: string[];
   contact?: string;
   /** 연락처를 파기한 시각(완료·취소 처리 시 서버가 지운다). 「처음부터 없음」과 구분해 보여준다. */
   contactPurgedAt?: string;
@@ -238,6 +243,21 @@ function maskContact(raw: string): string {
   const digits = v.replace(/\D/g, '');
   if (digits.length >= 7) return `${digits.slice(0, 3)}-****-${digits.slice(-4)}`;
   return v.length > 2 ? `${v.slice(0, 2)}${'*'.repeat(v.length - 2)}` : '**';
+}
+
+/**
+ * 「무엇을 가렸는가」 한 줄 (DS 39-1·39-2).
+ *
+ * 왜 필요한가: 대화 기록·접수 본문은 저장될 때 개인정보가 가려진다. 그 사실을 말하지 않으면
+ * 운영자는 `***-****-****` 를 보고 **고객이 그렇게 쓴 것인지 우리가 가린 것인지** 모른다
+ * (DS 38-x 의 「잘랐으면 잘랐다고 말한다」와 같은 규칙).
+ *
+ * 종류 이름은 서버가 붙여 보낸다(`piiLabels` ← `@/lib/pii`) — 화면은 사전을 들고 있지 않다.
+ * 빈 배열이면 빈 문자열을 돌려준다(부르는 쪽이 아무것도 그리지 않는다).
+ */
+function piiNotice(labels: string[] | undefined): string {
+  const list = (labels ?? []).filter((v) => typeof v === 'string' && v.trim());
+  return list.length ? `개인정보 가림 · ${list.join(', ')}` : '';
 }
 
 /** 상태 톤 — 「배경 틴트 + 본문색」 짝. 콘솔의 모든 상태 pill·배너가 여기만 참조한다.
@@ -505,6 +525,8 @@ function ConversationDrawer({
   // 말풍선뿐인 본문이라 넘치는 동안에는 목록 자체가 초점을 받아야 한다(DS 26-2).
   const [bodyRef, bodyScrolls] = useScrollableY<HTMLDivElement>(turns.length);
   const escalated = turns.some((t) => t.escalate);
+  // 이 대화에서 가린 개인정보의 종류(중복 없이) — 서버가 붙여 보낸 이름을 모은다 (DS 39-1).
+  const piiLabels = Array.from(new Set(turns.flatMap((t) => t.piiLabels ?? [])));
   const channel = turns[0]?.channel ?? '';
   // 한 대화(세션)는 한 고객사의 위젯에서만 들어온다 — 첫 턴이 말하는 대로 적는다(DS 36-1).
   const tenantName = turns[0]?.tenantLabel || UNNAMED_TENANT;
@@ -554,6 +576,8 @@ function ConversationDrawer({
             {escalated ? '상담원 제안됨' : '자동 응대로 완료'}
           </span>
           {ticket && <span className="ac-pill">접수 {TICKET_STATUS_LABELS[ticket.status]}</span>}
+          {/* 가린 것이 있으면 그 사실을 말한다 — 말풍선의 `***` 가 고객이 쓴 글자가 아니다(DS 39-1). */}
+          {piiLabels.length > 0 && <span className="ac-pill" style={TONE.brand}>{piiNotice(piiLabels)}</span>}
         </div>
 
         <div ref={bodyRef} className="ac-drawer-body" role="log" aria-label="대화 내용" {...scrollFocusProps(bodyScrolls)}>
@@ -657,6 +681,12 @@ function TicketDrawer({
             <div className="ac-bubble ac-bubble-user" style={{ marginBottom: 16 }}>
               <span className="ac-bubble-who">고객</span>
               <p>{t.message}</p>
+              {/* 본문은 저장될 때 가려진다 — 그 사실을 말하지 않으면 `***` 를 고객이 쓴 줄 안다(DS 39-2). */}
+              {piiNotice(t.piiLabels) && (
+                <p style={{ fontSize: 11.5, color: 'var(--mut)', marginTop: 6 }}>
+                  {piiNotice(t.piiLabels)} · 연락처는 아래 칸에서 확인하세요.
+                </p>
+              )}
             </div>
           ) : (
             <p style={{ fontSize: 13, color: 'var(--mut)', marginBottom: 16 }}>남긴 메시지가 없습니다.</p>
@@ -1129,6 +1159,8 @@ interface TurnView {
   channel: string;
   message: string;
   reply: string;
+  /** 이 턴에서 가린 개인정보의 표시명(서버가 `@/lib/pii` 로 붙인다 — DS 39-1). */
+  piiLabels?: string[];
   intent: string;
   /** 주제 표시명(서버가 `@/lib/intents` 로 붙인다). 화면은 코드가 아니라 이 값을 쓴다. */
   intentLabel?: string;

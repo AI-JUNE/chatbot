@@ -1729,7 +1729,7 @@ test('대화·접수·내려받기가 어느 고객사에서 왔는지 말한다
   // ① 이름은 서버가 붙여 보낸다(`intentLabel`·`actionLabel` 과 같은 규칙) — 콘솔이 사전을 따로
   //    들고 있으면 고객사가 늘 때마다 어긋나 운영자 화면에 `eum` 같은 코드가 뜬다.
   assert.match(route, /import \{ tenantLabel \} from '@\/lib\/tenants'/, '이름을 붙이는 쪽을 불러오지 않는다');
-  assert.match(route, /tickets: listTickets\(\)\.map\(\(t\) => \(\{ \.\.\.t, tenantLabel: tenantLabel\(t\.tenant \?\? null\) \}\)\)/, '접수에 고객사 이름이 붙지 않는다');
+  assert.match(route, /tickets: listTickets\(\)\.map\(\(t\) => \(\{[\s\S]{0,200}?tenantLabel: tenantLabel\(t\.tenant \?\? null\),/, '접수에 고객사 이름이 붙지 않는다');
   assert.match(route, /tenantLabel: tenantLabel\(t\.tenant \?\? null\),/, '최근 대화에 고객사 이름이 붙지 않는다');
   assert.match(route, /byTenant: conversation\.byTenant\.map/, '고객사별 집계에 이름이 붙지 않는다');
   assert.match(route, /items: u\.items\.map\(\(i\) => \(\{ \.\.\.i, tenantLabel: tenantLabel\(i\.tenant\) \}\)\)/, '못 답한 질문에 고객사 이름이 붙지 않는다');
@@ -1812,4 +1812,34 @@ test('응답 테스트가 어느 고객사 기준인지 고르고 그 기준으�
   const viewLabel = (src.match(/const DEFAULT_TENANT_VIEW_LABEL = '([^']+)'/) || [])[1];
   assert.ok(viewLabel, 'DEFAULT_TENANT_VIEW_LABEL 이 없다');
   assert.ok(tenants.includes(`export const DEFAULT_TENANT_LABEL = '${viewLabel}'`), `서버의 기본 구성 표시명과 어긋난다: ${viewLabel}`);
+});
+
+/**
+ * ── DS 39-1·39-2 — 가렸으면 가렸다고 말한다 ──
+ * 대화 기록·접수 본문은 저장될 때 개인정보가 가려진다. 그 사실을 화면이 말하지 않으면 운영자는
+ * `***-****-****` 를 보고 **고객이 그렇게 쓴 것인지 우리가 가린 것인지** 모른다. 종류 이름은
+ * 서버가 붙여 보내고(`piiLabels`), 화면은 사전을 들고 있지 않다.
+ */
+test('가린 개인정보를 화면이 말한다 (DS 39-1·39-2)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+
+  // ① 한 줄 만드는 자리는 한 곳이고, 가린 것이 없으면 아무것도 그리지 않는다.
+  assert.match(src, /function piiNotice\(labels: string\[\] \| undefined\): string/, '가림 안내를 만드는 자리가 없다');
+  assert.match(src, /return list\.length \? `개인정보 가림 · \$\{list\.join\(', '\)\}` : '';/, '가린 것이 없는데 말한다');
+  // 코드 어휘(`rrn`·`phone`)를 화면이 번역하지 않는다 — 사전을 들면 종류가 늘 때 어긋난다(DS 22-x).
+  assert.equal(/rrn: '주민등록번호'/.test(src), false, '콘솔이 마스킹 사전을 따로 들고 있다');
+
+  // ② 대화 상세 — 말풍선의 `***` 가 고객이 쓴 글자가 아니라는 사실을 서랍 머리에서 말한다.
+  const drawer = src.slice(src.indexOf('function ConversationDrawer('), src.indexOf('function TicketDrawer('));
+  assert.match(drawer, /const piiLabels = Array\.from\(new Set\(turns\.flatMap\(\(t\) => t\.piiLabels \?\? \[\]\)\)\);/, '대화 상세가 가린 종류를 모으지 않는다');
+  assert.match(drawer, /\{piiLabels\.length > 0 && <span className="ac-pill" style=\{TONE\.brand\}>\{piiNotice\(piiLabels\)\}<\/span>\}/, '대화 상세가 가린 사실을 말하지 않는다');
+
+  // ③ 접수 상세 — 「고객이 마지막으로 한 말」 바로 아래. 연락처는 아래 칸에서 따로 다룬다.
+  const ticket = src.slice(src.indexOf('function TicketDrawer('), src.indexOf('/** 고객사 상세 서랍'));
+  assert.match(ticket, /\{piiNotice\(t\.piiLabels\) && \(/, '접수 본문이 가린 사실을 말하지 않는다');
+  assert.match(ticket, /연락처는 아래 칸에서 확인하세요/, '가린 뒤 어디를 보라는 말이 없다');
+
+  // ④ 뷰 타입에 칸이 있어야 서버가 보낸 값이 화면까지 온다(옛 응답에는 없으므로 optional).
+  assert.match(src, /\/\*\* 이 턴에서 가린 개인정보의 표시명\(서버가 `@\/lib\/pii` 로 붙인다 — DS 39-1\)\. \*\/\n\s*piiLabels\?: string\[\];/, '대화 뷰에 가린 종류 칸이 없다');
+  assert.match(src, /piiLabels\?: string\[\];\n\s*contact\?: string;/, '접수 뷰에 가린 종류 칸이 없다');
 });

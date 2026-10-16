@@ -7,6 +7,7 @@
  * - 전송 실패가 애플리케이션에 영향을 주지 않는다(모든 예외 흡수).
  * - 공식 SDK(@sentry/nextjs) 도입 시 이 모듈의 captureError만 교체하면 된다.
  */
+import { maskPii } from '@/lib/pii';
 
 const DSN = process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN || '';
 const ENV = process.env.VERCEL_ENV || process.env.NODE_ENV || 'development';
@@ -27,14 +28,18 @@ function parseDsn(dsn: string): { url: string; key: string } | null {
 const TARGET = DSN ? parseDsn(DSN) : null;
 export const MONITORING_ENABLED = TARGET !== null;
 
-/** 전송 전 PII 마스킹 — 오류 메시지에 개인정보가 섞여도 외부로 나가지 않게 한다. */
+/**
+ * 전송 전 PII 마스킹 — 오류 메시지에 개인정보가 섞여도 외부로 나가지 않게 한다.
+ *
+ * 규칙은 `@/lib/pii` 한 곳에만 있다 (DS 39-3). 종전에는 이 파일이 규칙을 따로 들고 있었고,
+ * 그 규칙이 이관 요약 쪽(`handoff.maskPii`)보다 **느슨했다** — 계좌 패턴에 하이픈을 필수로 둬서
+ * 하이픈 없는 계좌번호(`1002123456789`)가 그대로 외부(오류 리포트·LLM 호출 본문)로 나갔다.
+ * 안에서는 가리고 밖으로는 내보내는 모양이었다.
+ *
+ * 세기는 `opaque` — 받는 쪽이 우리 울타리 밖이므로 끝 네 자리도, 생년월일도 남기지 않는다.
+ */
 export function scrub(input: string): string {
-  return String(input)
-    .replace(/\b(\d{6})[-\s]?[1-4]\d{6}\b/g, '$1-*******')            // 주민등록번호
-    .replace(/\b(?:\d{4}[-\s]?){3}\d{4}\b/g, '****-****-****-****')   // 카드
-    .replace(/\b01[0-9][-\s]?\d{3,4}[-\s]?\d{4}\b/g, '01*-****-****') // 휴대전화
-    .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '***@***')                // 이메일
-    .replace(/\b\d{2,3}-\d{2,6}-\d{2,6}\b/g, '***-****-****');        // 계좌
+  return maskPii(String(input), 'opaque').text;
 }
 
 export interface ErrorContext {

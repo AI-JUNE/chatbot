@@ -3,7 +3,9 @@
  *
  * 설계 원칙
  * - **개인정보를 기록하지 않는다.** 필드는 화이트리스트로만 통과시키고, 통과한 문자열도
- *   모니터링과 동일한 마스킹(scrub)을 거친다. 대화 본문·연락처·세션ID 원문은 화이트리스트에 없다.
+ *   마스킹(scrub → `@/lib/pii`, 세기 `opaque`)을 거친다. 대화 본문·연락처·세션ID 원문은
+ *   화이트리스트에 없다. 예외는 우리가 만든 식별자 둘(`requestId`·`sessionHash`)뿐이며
+ *   그 둘은 마스킹이 아니라 글자 필터를 거친다(아래 주석).
  * - 한 줄 JSON(NDJSON)으로 출력한다. Vercel/CloudWatch 등 어떤 수집기에서도 그대로 파싱된다.
  * - **로깅 실패가 요청을 깨뜨리지 않는다.** 모든 예외를 흡수한다.
  * - LOG_LEVEL(debug|info|warn|error, 기본 info)로 출력량을 조절한다. LOG_SILENT=true면 완전 침묵(테스트용).
@@ -118,6 +120,19 @@ export function buildEntry(
     if (k === 'requestId') {
       const id = String(v ?? '');
       if (id) entry.requestId = id.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64);
+      continue;
+    }
+    /**
+     * 세션 해시는 **우리가 만든 12자 16진수**이고 원문 복원이 불가하다(`hashId`) — 사용자가 쓴
+     * 글이 아니므로 마스킹 대상이 아니다. 글자 필터만 거친다(`requestId` 와 같은 처리).
+     *
+     * 왜 따로 두는가: 마스킹 규칙을 하나로 모으면서(DS 39-3) 계좌 규칙이 하이픈 없는 숫자열까지
+     * 보게 됐다. 해시가 우연히 전부 숫자이면(16진수 12자라 약 0.3%) `***-****-****` 로 뭉개져
+     * **그 세션만 로그에서 추적이 끊긴다** — 아무도 모르는 사이에 관측이 사라지는 자리다.
+     */
+    if (k === 'sessionHash') {
+      const h = String(v ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 32);
+      if (h) entry[k] = h;
       continue;
     }
     if (!ALLOWED.has(k)) {

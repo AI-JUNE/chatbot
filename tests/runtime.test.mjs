@@ -580,7 +580,7 @@ test('입력 상한 — 오래된 턴부터 버리고 마지막 질문은 반드
 // importLib의 캐시 키는 [이름, ...deps] 이므로, 자기 자신을 뺀 같은 집합을 넘겨 키를 일치시킨다.
 const ENGINE = [
   'chat', 'adminStore', 'knowledge', 'rules', 'normalize', 'session',
-  'escalation', 'handoff', 'llm', 'monitoring', 'storage', 'logger', 'convlog', 'slots', 'kst',
+  'escalation', 'handoff', 'llm', 'monitoring', 'storage', 'logger', 'convlog', 'slots', 'kst', 'pii',
 ];
 const eng = (name) => importLib(name, ENGINE.filter((n) => n !== name));
 
@@ -2860,4 +2860,184 @@ test('기록에 남기며 자른 말은 잘랐다고 표시한다 (DS 38-3)', op
   assert.ok(noted.ticket.note.length > TICKET_NOTE_LEN - 20, `표시를 붙이며 지나치게 줄였다(${noted.ticket.note.length}자)`);
   assert.ok(noted.ticket.note.endsWith(CLIP_MARK), '상담원 메모를 줄이고 아무 표시도 남기지 않았다');
   esc.resetTickets();
+});
+
+/* ══════════ 디자인 스프린트 — 36차 재감사 (DS 39-1·39-2·39-3) ══════════ */
+
+// 세 모듈을 한 컴파일 묶음으로 가져온다(캐시 키가 같아야 tsc 가 한 번만 돈다).
+const PII_GROUP = ['convlog', 'escalation', 'limits', 'pii', 'handoff', ...CONVLOG_DEPS];
+const pickPii = (name) => importLib(name, PII_GROUP.filter((n) => n !== name));
+
+/**
+ * DS 39-1 — 대화 기록이 고객이 친 말을 **원문 그대로** 보관하던 자리.
+ *
+ * 이 한 줄(`logTurn`)을 지나면 그 글자는 최근 대화 표·상세 서랍·전역 검색·「답하지 못한 질문」
+ * (대시보드 첫 화면)·내려받기 CSV·백업 스냅샷 여섯 곳으로 퍼진다. 같은 문장이 이관 요약에서는
+ * 가려지는데(`buildHandoffSummary`) 그 옆 화면에서는 원문이었다(QUALITY_BAR §3).
+ */
+test('대화 기록은 개인정보를 가린 뒤 저장하고 가린 종류를 남긴다 (DS 39-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const { logTurn, resetLogs, listTurns, unansweredQuestions, importTurns } = await pickPii('convlog');
+  const { clip, TURN_TEXT_LEN, CLIP_MARK } = await pickPii('limits');
+  resetLogs();
+
+  // 계좌는 **하이픈 없이** 적는다 — 종전 `scrub` 이 놓치던 모양이다(DS 39-3).
+  // 12자리로 둔 이유: 13자리 숫자열은 구분자 없는 주민등록번호와 구별되지 않아 rrn 규칙에
+  // 먼저 걸린다(규칙 순서 = 우선순위). 여기서는 계좌 규칙이 도는지를 본다.
+  const raw = '제 번호 010-1234-5678이고 주민번호는 900101-1234567이에요. hong@example.com 으로도 됩니다. 계좌 110212345678';
+
+  // ① 종전 동작 재현 — 자르기만 지나면 원문이 그대로 남는다(이 재현이 통과해야 검증이 뜻을 가진다).
+  const before = clip(raw, TURN_TEXT_LEN);
+  assert.ok(before.includes('010-1234-5678'), '종전 식에서 휴대폰 번호가 남지 않는다 — 재현 실패');
+  assert.ok(before.includes('900101-1234567'), '종전 식에서 주민등록번호가 남지 않는다 — 재현 실패');
+  assert.ok(before.includes('hong@example.com'), '종전 식에서 이메일이 남지 않는다 — 재현 실패');
+
+  // ② 고친 뒤 — 저장된 글에는 원문이 하나도 없다.
+  logTurn({ sessionId: 's-39', channel: 'web', tenant: null, message: raw, reply: '확인했습니다. ' + raw, intent: 'fallback', source: 'fallback', escalate: true });
+  const [turn] = listTurns(1);
+  for (const leak of ['010-1234-5678', '900101-1234567', 'hong@example.com', '110212345678']) {
+    assert.equal(turn.message.includes(leak), false, '대화 기록에 ' + leak + ' 가 그대로 남았다');
+    assert.equal(turn.reply.includes(leak), false, '답변 기록에 ' + leak + ' 가 그대로 남았다');
+  }
+  // 운영자가 읽는 자리라 끝 네 자리는 남는다(세기 readable) — 「그 번호가 맞는지」 확인에 쓴다.
+  assert.match(turn.message, /010-\*\*\*\*-5678/);
+  assert.match(turn.message, /900101-\*{7}/);
+  assert.match(turn.message, /ho\*\*\*@example\.com/);
+
+  // ③ **가렸다고 말한다** — 가린 글만 남기면 `***` 를 고객이 쓴 줄 안다(DS 38-x 와 같은 규칙).
+  assert.deepEqual(turn.piiKinds, ['rrn', 'phone', 'email', 'account'], '가린 종류가 규칙 순서대로 남지 않았다');
+
+  // ④ 「답하지 못한 질문」 목록도 가려진 글을 쓴다 — 그 글이 새 안내 자료의 원문이 된다(DS 32-2).
+  const un = unansweredQuestions(8);
+  assert.equal(un.items.length, 1);
+  assert.equal(un.items[0].question.includes('010-1234-5678'), false, '대시보드 첫 화면에 고객 번호가 뜬다');
+
+  // ⑤ 개인정보가 없는 말은 **한 글자도 바뀌지 않고** 가렸다는 칸도 생기지 않는다.
+  logTurn({ sessionId: 's-39', channel: 'web', tenant: null, message: '환불 되나요?', reply: '네, 됩니다.', intent: 'refund', source: 'kb', escalate: false });
+  const [plain] = listTurns(1);
+  assert.equal(plain.message, '환불 되나요?');
+  assert.equal(plain.reply, '네, 됩니다.');
+  assert.equal(plain.piiKinds, undefined, '가린 것이 없는데 가렸다고 말한다');
+
+  // ⑥ 가린 **뒤에** 자른다 — 먼저 자르면 상한 경계에 걸친 번호가 쪼개져 규칙에 걸리지 않는다.
+  const edge = '가'.repeat(TURN_TEXT_LEN - 15) + '010-1234-5678 입니다';
+  assert.ok(clip(edge, TURN_TEXT_LEN).includes('010-12'), '경계 재현 실패 — 종전 순서에서 숫자가 남지 않는다');
+  resetLogs();
+  logTurn({ sessionId: 's-39b', channel: 'web', tenant: null, message: edge, reply: '네', intent: 'x', source: 'kb', escalate: false });
+  const [edged] = listTurns(1);
+  assert.equal(edged.message.includes('010-12'), false, '자른 뒤에 가려서 번호 앞자리가 남았다');
+  assert.ok(edged.message.length <= TURN_TEXT_LEN, '가리면서 길이 계약을 깼다');
+  assert.ok(edged.message.endsWith(CLIP_MARK), '줄이고 표시를 남기지 않았다');
+  assert.deepEqual(edged.piiKinds, ['phone']);
+
+  // ⑦ 복원 경로도 같은 관문을 지난다 — 마스킹 이전에 뜬 스냅샷에는 원문이 들어 있다.
+  resetLogs();
+  const restored = importTurns({
+    version: 1,
+    savedAt: new Date().toISOString(),
+    seq: 9,
+    turns: [{ id: 'T-000009', sessionId: 'old', channel: 'web', tenant: null, message: raw, reply: '네', intent: 'x', source: 'kb', escalate: false, at: new Date().toISOString() }],
+  });
+  assert.equal(restored.ok, true);
+  const [old] = listTurns(1);
+  assert.equal(old.message.includes('010-1234-5678'), false, '백업을 되돌리자 가려 둔 번호가 되살아났다');
+  assert.deepEqual(old.piiKinds, ['rrn', 'phone', 'email', 'account']);
+  resetLogs();
+});
+
+/**
+ * DS 39-2 — 접수 본문(`ticket.message`)이 원문이고, 바로 아래 칸의 이관 요약은 가려져 있었다.
+ *
+ * 한 서랍 안에서 같은 문장이 한 번은 가려지고 한 번은 그대로다 — 요약만 `buildHandoffSummary` 를
+ * 지났기 때문이다. 접수를 만드는 자리는 엔진·라우트에 걸쳐 일곱 곳이라, 가리는 몫은 그 자리마다
+ * 적지 않고 `createTicket` 하나가 진다.
+ */
+test('접수 본문은 가리고 회신할 연락처는 가리지 않는다 (DS 39-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const esc = await pickPii('escalation');
+  const { clip, TICKET_MESSAGE_LEN } = await pickPii('limits');
+  esc.resetTickets();
+
+  const raw = '제 번호 010-1234-5678로 연락주세요. 주민번호 900101-1234567';
+  // 종전 동작 재현 — 자르기만 지나면 본문에 원문이 남는다.
+  assert.ok(clip(raw, TICKET_MESSAGE_LEN).includes('010-1234-5678'), '재현 실패');
+
+  const { ticket } = esc.createTicket({ sessionId: 's-39-esc', tenant: null, reason: 'user_request', message: raw, contact: '010-1234-5678' });
+  assert.equal(ticket.message.includes('010-1234-5678'), false, '접수 본문에 고객 번호가 그대로 남았다');
+  assert.equal(ticket.message.includes('900101-1234567'), false, '접수 본문에 주민등록번호가 그대로 남았다');
+  assert.match(ticket.message, /010-\*\*\*\*-5678/);
+  assert.deepEqual(ticket.piiKinds, ['rrn', 'phone']);
+
+  // **연락처 칸은 가리지 않는다** — 상담원이 전화를 걸 대상이고, 가리면 접수가 쓸모를 잃는다.
+  // 그 칸은 화면 마스킹(`maskContact`)·완료 시 파기(`contactPurgedAt`)·고객에게 되읽을 때
+  // 마스킹(`contactTail`) 세 겹으로 다룬다 — 저장할 때 가리는 칸과 다른 규칙이다.
+  assert.equal(ticket.contact, '010-1234-5678', '회신할 연락처를 가려 버려 접수가 쓸모를 잃었다');
+
+  // 개인정보가 없는 본문은 한 글자도 바뀌지 않고 가렸다는 칸도 없다.
+  esc.resetTickets();
+  const plain = esc.createTicket({ sessionId: 's-39-esc2', tenant: null, reason: 'user_request', message: '사람 바꿔 주세요' }).ticket;
+  assert.equal(plain.message, '사람 바꿔 주세요');
+  assert.equal(plain.piiKinds, undefined, '가린 것이 없는데 가렸다고 말한다');
+
+  // 복원 경로도 같은 관문을 지난다(마스킹 이전 스냅샷에는 본문 원문이 있다).
+  esc.resetTickets();
+  const r = esc.importTickets({
+    version: 1,
+    savedAt: new Date().toISOString(),
+    seq: 3,
+    tickets: [{ id: 'ESC-0003', sessionId: 'old', reason: 'user_request', reasonCode: 'customer_request', message: raw, status: 'open', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }],
+  });
+  assert.equal(r.ok, true);
+  const got = esc.getTicket('ESC-0003');
+  assert.equal(got.message.includes('010-1234-5678'), false, '백업을 되돌리자 접수 본문의 번호가 되살아났다');
+  assert.deepEqual(got.piiKinds, ['rrn', 'phone']);
+  esc.resetTickets();
+});
+
+/**
+ * DS 39-3 — 마스킹이 **두 벌**이고, 울타리를 넘는 쪽이 더 느슨했다.
+ *
+ * `handoff.maskPii`(요약·수집 정보)와 `monitoring.scrub`(서버 로그·오류 리포트·외부 LLM 호출
+ * 본문)이 각자 규칙을 들고 있었다. 계좌 규칙이 어긋나 있어서 하이픈 없는 계좌번호는
+ * **안에서는 가려지고 밖으로는 그대로 나갔다**.
+ */
+test('마스킹 규칙은 한 벌이고 울타리를 넘는 쪽이 더 세다 (DS 39-3)', opts, async () => {
+  const { maskPii } = await pickPii('pii');
+  const { scrub } = await pickPii('monitoring');
+  const { buildEntry } = await pickPii('logger');
+
+  // ① 종전 `scrub` 의 계좌 규칙 재현 — 하이픈을 필수로 둬서 하이픈 없는 계좌번호를 놓쳤다.
+  const acct = '계좌 110212345678 로 보냈어요';
+  assert.equal(/\b\d{2,3}-\d{2,6}-\d{2,6}\b/.test(acct), false, '종전 규칙이 이 번호를 잡는다 — 재현 실패');
+  assert.ok(maskPii(acct).hits.includes('account'), '요약 쪽은 가리고 있었어야 한다');
+  // 고친 뒤 — 같은 규칙을 쓰므로 밖으로 나가는 쪽도 가린다.
+  assert.equal(scrub(acct).includes('110212345678'), false, '외부로 나가는 글에 계좌번호가 그대로 실린다');
+
+  // ② 세기는 받는 쪽에 따라 다르다 — 규칙은 하나, 치환은 둘.
+  const pii = '010-1234-5678 / 900101-1234567 / hong@example.com';
+  const readable = maskPii(pii, 'readable').text;
+  const opaque = maskPii(pii, 'opaque').text;
+  assert.deepEqual(maskPii(pii, 'readable').hits, maskPii(pii, 'opaque').hits, '세기가 다르면 집계도 달라졌다');
+  // 안: 끝 네 자리를 남겨 상담원이 「그 번호가 맞는지」 확인한다.
+  assert.match(readable, /010-\*\*\*\*-5678/);
+  assert.match(readable, /900101-\*{7}/);
+  assert.match(readable, /ho\*\*\*@example\.com/);
+  // 밖: 생년월일(주민번호 앞 6자리)도, 이메일 도메인도 남기지 않는다.
+  assert.match(opaque, /01\*-\*\*\*\*-\*\*\*\*/);
+  assert.match(opaque, /\*{6}-\*{7}/);
+  assert.equal(opaque.includes('900101'), false, '생년월일이 울타리 밖으로 나간다');
+  assert.equal(opaque.includes('example.com'), false, '이메일 도메인이 울타리 밖으로 나간다');
+  assert.equal(scrub(pii), opaque, '외부 전송 경로가 opaque 를 쓰지 않는다');
+
+  // ③ 예약 일시 보호도 한 벌이 되면서 양쪽에 걸린다 — 방문 날짜가 계좌로 뭉개지면 상담이 막힌다.
+  assert.ok(scrub('예약 2026-09-04 14:00').includes('2026-09-04'), '예약 일시를 계좌번호로 읽었다');
+
+  // ④ 규칙을 모으면서 계좌 패턴이 **하이픈 없는 숫자열**까지 보게 됐다 — 우리가 만든 세션 해시가
+  //    우연히 전부 숫자이면(16진수 12자라 약 0.3%) 로그에서 그 세션만 추적이 끊긴다.
+  const entry = buildEntry('info', 'request', { sessionHash: '123456789012', route: '/api/chat', status: 200 });
+  assert.equal(entry.sessionHash, '123456789012', '세션 해시가 마스킹에 걸려 로그 추적이 끊긴다');
+  // 대화 본문은 여전히 화이트리스트 밖이다(이름만 남는다).
+  const dropped = buildEntry('info', 'request', { message: '010-1234-5678' });
+  assert.equal(dropped.message, undefined);
+  assert.deepEqual(dropped.dropped, ['message']);
 });

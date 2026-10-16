@@ -4,6 +4,7 @@
 // [승인 필요] 외부 DB 저장·분석 파이프라인 전송.
 import type { ReplySource } from '@/lib/chat';
 import { loadJson, scheduleSave } from '@/lib/storage';
+import { maskPii, mergeKinds } from '@/lib/pii';
 import { TURN_TEXT_LEN, clip } from '@/lib/limits';
 import { kstDate } from '@/lib/kst';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
@@ -20,8 +21,18 @@ export interface ChatTurnLog {
    * 이음 손님의 말과 고원 홈페이지 손님의 말을 구분 없이 한 줄에 섞었다.
    */
   tenant: string | null;
+  /** 고객이 한 말 — **개인정보를 가린 뒤** 저장한다 (DS 39-1). 원문은 어디에도 남지 않는다. */
   message: string;
+  /** 챗봇이 한 말 — 같은 규칙을 지난다(답변이 고객이 남긴 번호를 되읽는 자리가 있다). */
   reply: string;
+  /**
+   * 이 턴에서 가린 개인정보의 종류(`@/lib/pii` 코드). 없으면 비어 있다 (DS 39-1).
+   *
+   * 왜 남기는가: 가린 글만 남기면 운영자는 `***-****-****` 를 보고 **고객이 그렇게 쓴 것인지
+   * 우리가 가린 것인지** 모른다(DS 38-x 의 「잘랐으면 잘랐다고 말한다」와 같은 규칙).
+   * 옛 스냅샷에는 이 값이 없다 — 그때는 「가린 것이 없다」가 아니라 **모른다**이므로 비워 둔다.
+   */
+  piiKinds?: string[];
   intent: string;
   source: ReplySource;
   escalate: boolean;
@@ -47,6 +58,20 @@ let seq = 0;
 
 export function logTurn(input: Omit<ChatTurnLog, 'id' | 'at'>): ChatTurnLog {
   seq += 1;
+  /**
+   * **가린 뒤에 자른다** (DS 39-1).
+   *
+   * 순서가 중요하다 — 먼저 자르면 상한 경계에 걸친 번호가 반으로 쪼개져 규칙에 걸리지 않고,
+   * 꼬리 쪽 개인정보가 통째로 남는다. 가린 뒤에 자르면 길이 계약(DS 38-3)도 그대로 지켜진다.
+   *
+   * 왜 저장 시점에 가리는가: 이 한 줄을 지나면 대화 기록은 최근 대화 표·상세 서랍·전역 검색·
+   * 「답하지 못한 질문」(대시보드 첫 화면)·내려받기 CSV·백업 스냅샷 **여섯 곳**으로 퍼진다.
+   * 종전에는 같은 문장이 이관 요약에서는 가려지고 그 옆 화면에서는 원문 그대로였다
+   * (QUALITY_BAR §3 — 개인정보가 화면·로그에 그대로 노출).
+   */
+  const m = maskPii(input.message || '');
+  const r = maskPii(input.reply || '');
+  const kinds = mergeKinds(m.hits, r.hits);
   const entry: ChatTurnLog = {
     ...input,
     tenant: input.tenant || null,
@@ -56,12 +81,15 @@ export function logTurn(input: Omit<ChatTurnLog, 'id' | 'at'>): ChatTurnLog {
      * 보고 **고객이 거기서 멈춘 것인지 우리가 버린 것인지** 알 수 없었다. 이 글은 「답하지 못한
      * 질문」 목록·내려받기 CSV 로 그대로 나가 새 안내 자료의 원문이 된다.
      */
-    message: clip(input.message, TURN_TEXT_LEN),
-    reply: clip(input.reply, TURN_TEXT_LEN),
+    message: clip(m.text, TURN_TEXT_LEN),
+    reply: clip(r.text, TURN_TEXT_LEN),
     latencyMs: sanitizeLatency(input.latencyMs),
     id: `T-${String(seq).padStart(6, '0')}`,
     at: new Date().toISOString(),
   };
+  // 가린 종류는 **우리가 센 값**이다 — 호출자가 적어 보낸 값은 쓰지 않는다(없으면 칸도 없다).
+  if (kinds.length) entry.piiKinds = kinds;
+  else delete entry.piiKinds;
   logs.push(entry);
   if (logs.length > MAX_LOGS) logs = logs.slice(-MAX_LOGS);
   scheduleSave(CONVLOG_NS, exportTurns);
@@ -95,17 +123,26 @@ export function importTurns(input: unknown): { ok: true; count: number } | { ok:
     if (typeof t.id !== 'string' || !t.id.trim()) continue;
     if (typeof t.sessionId !== 'string' || !t.sessionId) continue;
     if (!CHANNELS.has(t.channel)) continue;
-    restored.push({
+    // 복원 경로도 같은 관문을 지난다 (DS 39-1) — **마스킹 이전에 뜬 스냅샷**에는 원문이 들어
+    // 있어서, 되돌리면 가려 둔 개인정보가 그대로 되살아나던 자리다(DS 38-3 의 복원 경로와 같다).
+    const mm = maskPii(String(t.message ?? ''));
+    const rr = maskPii(String(t.reply ?? ''));
+    // 옛 스냅샷에 적혀 있던 종류도 합친다 — 이미 가려져 있으면 이번 통과에서 걸리지 않는다.
+    const kinds = mergeKinds(Array.isArray(t.piiKinds) ? t.piiKinds : [], mm.hits, rr.hits);
+    const entry: ChatTurnLog = {
       ...t,
       // 옛 스냅샷에는 고객사가 없다 — 없는 값을 지어내지 않고 기본 구성(null)으로 둔다.
       tenant: typeof t.tenant === 'string' && t.tenant ? t.tenant : null,
-      message: clip(t.message, TURN_TEXT_LEN),
-      reply: clip(t.reply, TURN_TEXT_LEN),
+      message: clip(mm.text, TURN_TEXT_LEN),
+      reply: clip(rr.text, TURN_TEXT_LEN),
       intent: String(t.intent ?? ''),
       escalate: t.escalate === true,
       latencyMs: sanitizeLatency(t.latencyMs),
       at: typeof t.at === 'string' && t.at ? t.at : new Date().toISOString(),
-    });
+    };
+    if (kinds.length) entry.piiKinds = kinds;
+    else delete entry.piiKinds;
+    restored.push(entry);
   }
   logs = restored.slice(-MAX_LOGS);
   const maxSeq = logs.reduce((m, l) => {

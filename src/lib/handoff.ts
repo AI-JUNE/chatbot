@@ -8,6 +8,12 @@
 // [승인 필요] LLM 추상 요약, 요약 영구 저장·상담사 시스템(CTI/슬랙) 실전송.
 import { CHANNEL_LABELS, intentLabel } from '@/lib/intents';
 import { SUMMARY_LINE_LEN, SUMMARY_TEXT_LEN, clip } from '@/lib/limits';
+import { maskKindLabel, maskPii, type MaskResult } from '@/lib/pii';
+
+// 마스킹 규칙은 `@/lib/pii` 하나에만 있다 (DS 39-3). 이 파일이 규칙을 들고 있던 동안에는
+// 요약 쪽만 고쳐지고 외부로 나가는 쪽(`monitoring.scrub`)은 그대로였다.
+// 종전 import 경로(`@/lib/handoff`)를 쓰는 곳이 있어 이름은 그대로 내보낸다.
+export { maskPii, type MaskResult };
 
 /** 이관 사유 — AICC-Core `Handoff['reason']` 어휘와 동일하게 유지한다(교차 저장소 리포트 정합). */
 export type HandoffReason = 'low_confidence' | 'customer_request' | 'policy' | 'error' | 'max_retry';
@@ -26,86 +32,11 @@ export function isHandoffReason(v: unknown): v is HandoffReason {
   return typeof v === 'string' && (HANDOFF_REASONS as string[]).includes(v);
 }
 
-// ---- 개인정보 마스킹(AICC-Core policyGuard §10.3 규칙 이식) ----
-// 규칙 순서 = 우선순위. 좁은 패턴(주민·카드·휴대폰)을 먼저, 가장 넓은 계좌 패턴을 마지막에 둔다.
-// 순서를 바꾸면 휴대폰이 계좌로 분류되어 마스킹 종류 통계가 틀어진다.
-
-/**
- * 마스킹 종류의 화면 표시명. `name` 은 저장·집계용 코드이고(교차 저장소 리포트가 이 어휘를 본다),
- * 운영자 화면에 뜨는 것은 이쪽이다 — 요약 평문이 관리 콘솔 서랍에 그대로 그려지므로
- * 「개인정보 마스킹: email, phone」처럼 영문 코드가 보이면 안 된다.
- */
-const MASK_KIND_LABELS: Record<string, string> = {
-  rrn: '주민등록번호',
-  card: '카드번호',
-  phone: '휴대폰 번호',
-  email: '이메일 주소',
-  account: '계좌번호',
-};
-
-const MASK_RULES: { name: string; re: RegExp; mask: (m: string) => string }[] = [
-  { name: 'rrn', re: /\b(\d{6})[-\s]?([1-4]\d{6})\b/g, mask: (m) => `${m.slice(0, 6)}-*******` },
-  { name: 'card', re: /\b(?:\d{4}[-\s]?){3}\d{4}\b/g, mask: (m) => `${m.slice(0, 4)}-****-****-${m.slice(-4)}` },
-  { name: 'phone', re: /\b01[0-9][-\s]?\d{3,4}[-\s]?\d{4}\b/g, mask: (m) => `${m.slice(0, 3)}-****-${m.slice(-4)}` },
-  { name: 'email', re: /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, mask: (m) => `${m.slice(0, 2)}***@${m.split('@')[1] ?? ''}` },
-  { name: 'account', re: /\b\d{2,3}-?\d{2,6}-?\d{2,6}\b/g, mask: () => '***-****-****' },
-];
-
-/** 이미 마스킹된 구간을 뒤 규칙이 다시 잡지 않도록 자리표시자로 보호한다.
- *  숫자를 g~p 문자로 바꾸고 U+0001로 감싸 본문 글자와 겹치지 않게 한다(Core policyGuard와 동일 기법). */
-const PLACEHOLDER = (i: number) => `\u0001${String(i).replace(/\d/g, (d) => String.fromCharCode(103 + Number(d)))}\u0001`;
-
-export interface MaskResult {
-  text: string;
-  masked: boolean;
-  hits: string[];
-}
-
-/**
- * 마스킹 전에 보호할 패턴 — 개인정보가 아닌데 넓은 규칙(계좌)에 걸리는 표기.
- * 예: '2026-09-04'는 계좌번호 패턴(\d{2,3}-?\d{2,6}-?\d{2,6})과 겹친다.
- * 예약 일시가 '***-****-****'로 뭉개지면 상담원이 언제 방문인지 알 수 없다.
- */
-const PROTECT_RULES: RegExp[] = [/\b20\d{2}[-./]\d{1,2}[-./]\d{1,2}\b/g];
-
-export function maskPii(input: string): MaskResult {
-  let out = input || '';
-  const hits: string[] = [];
-  const vault: string[] = [];
-  // 보호 구간을 먼저 자리표시자로 빼둔다(원문 그대로 되돌아온다 — 마스킹 종류에도 집계하지 않는다).
-  for (const re of PROTECT_RULES) {
-    out = out.replace(new RegExp(re.source, 'g'), (m) => {
-      vault.push(m);
-      return PLACEHOLDER(vault.length - 1);
-    });
-  }
-  for (const rule of MASK_RULES) {
-    const re = new RegExp(rule.re.source, 'g');
-    let hit = false;
-    out = out.replace(re, (m) => {
-      hit = true;
-      vault.push(rule.mask(m));
-      return PLACEHOLDER(vault.length - 1);
-    });
-    if (hit) hits.push(rule.name);
-  }
-  out = out.replace(/\u0001([g-p]+)\u0001/g, (_m, k: string) => {
-    const idx = Number(String(k).replace(/[g-p]/g, (c) => String(c.charCodeAt(0) - 103)));
-    return vault[idx] ?? '';
-  });
-  return { text: out, masked: hits.length > 0, hits };
-}
-
 // ---- 요약 ----
 
 export type Speaker = 'customer' | 'bot' | 'agent';
 
 const SPEAKER_LABELS: Record<Speaker, string> = { customer: '고객', bot: 'AI', agent: '상담원' };
-
-/** 마스킹 종류 코드 → 표시명. 모르는 코드는 그대로 두지 않고 「개인정보」로 뭉갠다. */
-function maskKindLabel(kind: string): string {
-  return MASK_KIND_LABELS[kind] ?? '개인정보';
-}
 
 /** 식별자는 앞자리만 — 관리 콘솔 서랍 제목(`shortTicket`·`shortSession`)과 같은 길이다. */
 function shortId(id: string, len: number): string {

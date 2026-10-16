@@ -5,6 +5,7 @@ import { listTickets, updateTicket, getTicket, escalationStats, ESCALATION_STATU
 import { convStats, listTurns, unansweredQuestions } from '@/lib/convlog';
 import { feedbackSummary } from '@/lib/feedback';
 import { intentLabel, intentLabelMap } from '@/lib/intents';
+import { piiKindLabels } from '@/lib/pii';
 import { tenantLabel } from '@/lib/tenants';
 import { listCustomRules } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
@@ -25,7 +26,13 @@ export async function GET(req: NextRequest) {
   return ok({
     // 고객사 이름도 같은 규칙으로 서버가 붙인다(`@/lib/tenants` → `tenantLabel` 필드) — 콘솔이
     // 사전을 따로 들고 있으면 테넌트가 늘 때마다 어긋나 운영자 화면에 `eum` 같은 코드가 뜬다(DS 36-2).
-    tickets: listTickets().map((t) => ({ ...t, tenantLabel: tenantLabel(t.tenant ?? null) })),
+    // 「무엇을 가렸는가」의 이름도 서버가 붙인다(`@/lib/pii` → `piiLabels` · DS 39-2) —
+    // 콘솔이 사전을 들고 있으면 종류가 늘 때 `rrn` 같은 코드가 운영자 화면에 그대로 뜬다.
+    tickets: listTickets().map((t) => ({
+      ...t,
+      tenantLabel: tenantLabel(t.tenant ?? null),
+      piiLabels: piiKindLabels(t.piiKinds),
+    })),
     stats: {
       escalation: escalationStats(),
       // 대시보드 「주제별 분포」 막대도 같은 이름을 쓴다(집계값 `intent` 는 그대로 둔다 — 기계가 보는 쪽이다).
@@ -44,6 +51,9 @@ export async function GET(req: NextRequest) {
             ...t,
             intentLabel: intentLabel(t.intent, labels),
             tenantLabel: tenantLabel(t.tenant ?? null),
+            // 가린 종류의 이름 — 운영자가 `***-****-****` 를 보고 「고객이 그렇게 쓴 것인지
+            // 우리가 가린 것인지」 알 수 있어야 한다 (DS 39-1).
+            piiLabels: piiKindLabels(t.piiKinds),
           })),
           // 「기본 안내 n건」이라는 수를 **무엇을 더 써야 하는지**로 바꾸는 목록(DS 32-2).
           // 고객사별로 갈라 센다(DS 36-1) — 고칠 자료가 있는 곳이 고객사마다 다르다.

@@ -5,6 +5,7 @@
 // [승인 필요] 실제 상담원 알림(SMS/슬랙 등) 연동.
 // 이관 사유 코드(reasonCode)와 요약(summary)은 AICC-Core `src/core/handoffSummary.ts` 어휘를 따른다.
 import { isHandoffReason, type HandoffReason } from '@/lib/handoff';
+import { maskPii, mergeKinds } from '@/lib/pii';
 import { SUMMARY_TEXT_LEN, TICKET_MESSAGE_LEN, TICKET_NOTE_LEN, clip } from '@/lib/limits';
 import { loadJson, scheduleSave } from '@/lib/storage';
 import { BAD_STATUS_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE } from '@/lib/refusal';
@@ -34,8 +35,25 @@ export interface EscalationTicket {
   reason: string; // user_request | rule:agent | rule:complaint | fallback 등(원인 상세)
   /** AICC-Core Handoff 사유 코드. 채널·저장소가 달라도 같은 어휘로 집계된다. */
   reasonCode: HandoffReason;
-  message: string; // 요청 시점 마지막 사용자 메시지(요약용)
-  contact?: string; // 고객이 남긴 연락처(선택) — 개인정보 영구 저장은 [승인 필요]
+  /**
+   * 요청 시점 마지막 사용자 메시지 — **개인정보를 가린 뒤** 저장한다 (DS 39-2).
+   *
+   * 종전에는 원문이었다. 그래서 같은 접수 안에서 **「이관 요약」은 가려지고 바로 위 칸
+   * 「고객이 마지막으로 한 말」은 원문**이라는 모양이 됐다(요약만 `buildHandoffSummary` 를
+   * 지났다). 이 칸은 접수 큐 목록·상세 서랍·백업 스냅샷으로 그대로 나간다.
+   */
+  message: string;
+  /**
+   * 고객이 남긴 연락처(선택) — 개인정보 영구 저장은 [승인 필요].
+   *
+   * **이 칸은 가리지 않는다.** 상담원이 전화를 걸 대상이고, 가리면 접수가 쓸모를 잃는다.
+   * 대신 ① 화면에서 기본 마스킹 + 「보기」(`maskContact`) ② 완료·취소 시 즉시 파기
+   * (`contactPurgedAt`) ③ 고객에게 되읽을 때 마스킹(`chat.contactTail`) 세 겹으로 다룬다.
+   * 「저장할 때 가린다」와 「받아서 쓰되 보여줄 때 가린다」는 다른 칸에 쓰는 다른 규칙이다.
+   */
+  contact?: string;
+  /** 접수 본문에서 가린 개인정보의 종류(`@/lib/pii` 코드). 없으면 칸도 없다 (DS 39-2). */
+  piiKinds?: string[];
   /**
    * 연락처를 파기한 시각(ISO). 개인정보처리방침 4조가 「상담원 연결을 위한 연락처는 상담 완료 후
    * 지체 없이 파기합니다」라고 약속하는데, 종전에는 그 약속을 지킬 경로가 코드에 없었다 —
@@ -103,17 +121,24 @@ export function importTickets(input: unknown): { ok: true; count: number } | { o
     if (!ESCALATION_STATUSES.includes(c.status)) continue;
     // 파기된 연락처는 복원하지 않는다 — 파기 이전에 뜬 백업을 되돌리면 되살아나던 자리다.
     const purgedAt = typeof c.contactPurgedAt === 'string' && c.contactPurgedAt ? c.contactPurgedAt : undefined;
-    restored.push({
+    // 복원 경로도 같은 관문을 지난다 (DS 39-2) — 마스킹 이전에 뜬 스냅샷에는 본문 원문이 있다.
+    const body = maskPii(String(c.message ?? ''));
+    const kinds = mergeKinds(Array.isArray(c.piiKinds) ? c.piiKinds : [], body.hits);
+    const entry: EscalationTicket = {
       ...c,
       ...(purgedAt ? { contact: undefined, contactPurgedAt: purgedAt } : {}),
       // 옛 스냅샷에는 고객사가 없다 — 지어내지 않고 비워 둔다(화면이 「기본」이라 말한다).
       ...(typeof c.tenant === 'string' && c.tenant ? { tenant: c.tenant } : { tenant: undefined }),
       reason: typeof c.reason === 'string' && c.reason ? c.reason : 'user_request',
       reasonCode: isHandoffReason(c.reasonCode) ? c.reasonCode : toReasonCode(c.reason),
-      message: clip(c.message, TICKET_MESSAGE_LEN),
+      message: clip(body.text, TICKET_MESSAGE_LEN),
       createdAt: typeof c.createdAt === 'string' ? c.createdAt : now(),
       updatedAt: typeof c.updatedAt === 'string' ? c.updatedAt : now(),
-    });
+    };
+    // 가린 종류는 우리가 센 값이다 — 옛 스냅샷의 알 수 없는 코드는 그대로 들고 오지 않는다.
+    if (kinds.length) entry.piiKinds = kinds;
+    else delete entry.piiKinds;
+    restored.push(entry);
   }
   tickets = restored;
   const maxSeq = restored.reduce((m, t) => {
@@ -163,13 +188,18 @@ export function createTicket(input: {
   }
   seq += 1;
   const reason = (input.reason || 'user_request').trim() || 'user_request';
+  // **가린 뒤에 자른다** (DS 39-1·39-2) — 먼저 자르면 상한 경계에 걸친 번호가 쪼개져 규칙에
+  // 걸리지 않는다. 접수를 만드는 자리가 엔진·라우트에 걸쳐 일곱 곳이라, 가리는 몫은 그 자리마다
+  // 적지 않고 **이 함수 하나**가 진다(고객사를 필수 인자로 둔 것과 같은 이유).
+  const body = maskPii(String(input.message || '').trim());
   const ticket: EscalationTicket = {
     id: `ESC-${String(seq).padStart(4, '0')}`,
     sessionId,
     ...(input.tenant ? { tenant: input.tenant } : {}),
     reason,
     reasonCode: input.reasonCode ?? toReasonCode(reason),
-    message: clip(String(input.message || '').trim(), TICKET_MESSAGE_LEN),
+    message: clip(body.text, TICKET_MESSAGE_LEN),
+    ...(body.hits.length ? { piiKinds: body.hits } : {}),
     summary: input.summary ? clip(input.summary, SUMMARY_TEXT_LEN) : undefined,
     contact: input.contact ? String(input.contact).trim().slice(0, 100) : undefined,
     status: 'open',
