@@ -1649,7 +1649,7 @@ test('배포 주소·법무 시행일이 단일 출처에서 나온다', () => {
 
 /* CSV 수식 주입 — 단일 출처 고정(실행 검증은 runtime.test.mjs) */
 test('CSV 를 만드는 곳이 전부 공용 이스케이프를 쓴다', () => {
-  const WRITERS = ['src/lib/audit.ts', 'src/lib/settlement.ts', 'src/app/api/admin/logs/export/route.ts'];
+  const WRITERS = ['src/lib/audit.ts', 'src/lib/settlement.ts', 'src/lib/convlog.ts'];
   for (const p of WRITERS) {
     const s = read(p);
     assert.match(s, /from '@\/lib\/csv'/, `${p} 가 공용 이스케이프를 쓰지 않는다`);
@@ -2039,7 +2039,7 @@ test('내려받기 파일 이름의 날짜는 한국 날짜다 (DS 21-3)', () =>
 
 test('대화 집계의 날짜 묶음도 같은 한 곳에서 온다 (DS 21-1)', () => {
   const s = read('src/lib/convlog.ts');
-  assert.match(s, /import \{ kstDate \} from '@\/lib\/kst'/, 'convlog 가 한국 달력 모듈을 쓰지 않는다');
+  assert.match(s, /import \{ KST_CSV_NOTE, kstDate, kstDateTime \} from '@\/lib\/kst'/, 'convlog 가 한국 달력 모듈을 쓰지 않는다');
   // Intl 이 없는 환경에서 UTC 로 떨어지던 폴백을 되살리지 않는다(조용히 하루가 어긋나는 자리).
   assert.equal(/Asia\/Seoul/.test(s), false, '시간대 문자열이 두 곳에 있으면 갈라진다');
 });
@@ -2154,12 +2154,13 @@ test('이관 요약이 회신 창구(채널)를 지어내지 않는다 (DS 22-4)
 test('내려받는 CSV 의 열 이름이 받는 사람의 말이다 (DS 22-3)', () => {
   const audit = read('src/lib/audit.ts');
   assert.equal(/'id,at,action/.test(audit), false, '변경 이력 CSV 열 이름이 영문이다');
-  assert.match(audit, /csvRow\(\['번호', '시각', '작업', '작업코드', '대상', '내용', '인증'\]\)/, '변경 이력 CSV 헤더');
-  assert.match(audit, /auditActionLabel\(e\.action\), e\.action/, '작업은 이름과 코드를 함께 싣는다');
-  const logs = read('src/app/api/admin/logs/export/route.ts');
+  assert.match(audit, /csvRow\(\['번호', '시각', '작업', '작업코드', '대상', '내용', '인증', '시각\(ISO\)'\]\)/, '변경 이력 CSV 헤더');
+  assert.match(audit, /auditActionLabel\(e\.action\),\n\s*e\.action,/, '작업은 이름과 코드를 함께 싣는다');
+  // 표를 만드는 곳은 라우트가 아니라 lib 이다 — 라우트는 돌려 볼 수 없는 자리다(DS 40-1).
+  const logs = read('src/lib/convlog.ts');
   assert.equal(/'intent', 'source'/.test(logs), false, '대화 기록 CSV 열 이름이 영문이다');
   assert.match(logs, /'주제', '근거'/, '대화 기록 CSV 헤더가 한국어가 아니다');
-  assert.match(logs, /intentLabel\(l\.intent, labels\)/, '주제를 이름으로 싣지 않는다');
+  assert.match(logs, /intentLabel\(l\.intent, intentLabels\)/, '주제를 이름으로 싣지 않는다');
   assert.match(logs, /SOURCE_LABELS\[l\.source\]/, '근거를 이름으로 싣지 않는다');
   assert.match(logs, /'주제코드'/, '다른 시스템으로 옮길 코드 열은 남겨 둔다');
 });
@@ -2822,7 +2823,7 @@ test('개인정보를 가리는 규칙이 한 곳에서 온다 (DS 39-3)', () =>
  */
 test('대화 기록·접수 본문이 저장 전에 개인정보를 가린다 (DS 39-1·39-2)', () => {
   const conv = read('src/lib/convlog.ts');
-  assert.match(conv, /import \{ maskPii, mergeKinds \} from '@\/lib\/pii'/, '대화 기록이 마스킹을 불러오지 않는다');
+  assert.match(conv, /import \{ maskPii, mergeKinds, piiKindLabels \} from '@\/lib\/pii'/, '대화 기록이 마스킹을 불러오지 않는다');
   assert.match(conv, /const m = maskPii\(input\.message \|\| ''\);/, '고객의 말이 마스킹을 지나지 않는다');
   assert.match(conv, /const r = maskPii\(input\.reply \|\| ''\);/, '답변이 마스킹을 지나지 않는다');
   assert.match(conv, /piiKinds\?: string\[\];/, '무엇을 가렸는지 남기지 않는다');
@@ -2839,4 +2840,76 @@ test('대화 기록·접수 본문이 저장 전에 개인정보를 가린다 (D
   const route = read('src/app/api/admin/escalations/route.ts');
   assert.match(route, /import \{ piiKindLabels \} from '@\/lib\/pii'/, '가린 종류의 이름을 붙이지 않는다');
   assert.match(route, /piiLabels: piiKindLabels\(t\.piiKinds\),/, '접수·대화에 가린 종류가 실리지 않는다');
+});
+
+/* ══════════ 37차 재감사 — 내려받은 파일이 화면과 다른 말을 하던 자리 (DS 40-x) ══════════ */
+
+/**
+ * DS 40-1 — 내려받는 표를 만드는 코드가 **돌려 볼 수 없는 자리**(`route.ts`)에 있었다.
+ * 라우트는 HTTP 메서드·설정 외 export 가 금지되어(★ 안전 원칙) 런타임 테스트가 0건이었고,
+ * 그래서 열 이름만 소스 텍스트로 대조한 채 **값은 아무도 보지 않았다**(시각이 UTC 로 나갔다).
+ * 38차가 웹 발화 상한에서 본 것과 같은 자리다.
+ */
+test('내려받는 표를 만드는 곳은 돌려 볼 수 있는 자리다 (DS 40-1)', () => {
+  const route = read('src/app/api/admin/logs/export/route.ts');
+  // 라우트는 부르기만 한다 — 표를 만드는 식(`csvRow`)이 남아 있으면 다시 돌려 볼 수 없다.
+  assert.match(route, /import \{ turnCount, turnsToCsv \} from '@\/lib\/convlog'/, '라우트가 표를 직접 만든다');
+  assert.equal(/csvRow|csvCell/.test(route), false, '라우트에 표를 만드는 식이 남아 있다');
+  // 라우트에는 HTTP 메서드·설정 외 export 가 없다(★ 안전 원칙 — 이 규칙이 결함의 원인이었다).
+  const exports = [...route.matchAll(/^export\s+(?:async\s+)?(?:function|const)\s+(\w+)/gm)].map((m) => m[1]);
+  assert.deepEqual(exports.sort(), ['GET', 'dynamic'], `라우트에 허용되지 않은 export 가 있다: ${exports}`);
+
+  // 사람이 읽는 시각은 한국 시간, 기계가 보는 원문은 따로 — `주제`·`주제코드` 와 같은 규칙.
+  for (const p of ['src/lib/convlog.ts', 'src/lib/audit.ts']) {
+    const s = read(p);
+    assert.match(s, /from '@\/lib\/kst'/, `${p}: 한국 시간 모듈을 쓰지 않는다`);
+    assert.match(s, /kstDateTime\(\w+\.at\)/, `${p}: 시각을 ISO 원문으로 싣는다`);
+    assert.match(s, /'시각\(ISO\)'/, `${p}: 기계가 보는 원문 열이 없다`);
+    assert.match(s, /KST_CSV_NOTE/, `${p}: 파일이 제 시각 기준을 말하지 않는다`);
+  }
+  // 시간대 문자열이 두 곳에 있으면 갈라진다 — 계산은 `@/lib/kst` 하나가 한다(DS 21-1 과 같은 규칙).
+  assert.equal(/\+ 9 \* 60|32400000|Asia\/Seoul/.test(read('src/lib/convlog.ts')), false, '오프셋을 손으로 적었다');
+});
+
+/** DS 40-2 — 화면은 「가렸다」·「최근 분량만」이라 말하는데 파일은 말하지 않았다. */
+test('내려받는 대화 기록이 가림·보관 범위를 열과 주석으로 말한다 (DS 40-2)', () => {
+  const s = read('src/lib/convlog.ts');
+  assert.match(s, /'개인정보 가림'/, 'CSV 에 가림 표시 열이 없다');
+  assert.match(s, /piiKindLabels\(l\.piiKinds\)\.join\(', '\)/, '가린 종류를 이름으로 싣지 않는다');
+  // 이름 사전은 서버(`@/lib/pii`)가 들고 있다 — 파일이 사전을 따로 들면 종류가 늘 때 어긋난다.
+  assert.equal(/'휴대폰 번호'|'주민등록번호'/.test(s), false, 'convlog 가 가림 종류 사전을 따로 들고 있다');
+  // 보관 한도는 한 곳에서 온다(화면 문구와 파일 주석이 다른 수를 말하지 않게).
+  assert.match(s, /export const TURN_RETENTION = MAX_LOGS;/, '보관 한도에 이름이 없다');
+  assert.match(s, /보관 한도 \$\{TURN_RETENTION\}건/, '파일이 보관 한도를 말하지 않는다');
+  assert.match(s, /\$\{CLIP_MARK\}/, '줄임 표시를 손으로 적었다');
+});
+
+/**
+ * DS 40-3 — 개인정보가 담긴 내려받기가 **흔적을 남기지 않았다**.
+ * 정산 리포트(금액)만 남고, 상담 내용 보존분 전체·배포를 다시 세울 수 있는 백업은 0건이었다.
+ */
+test('쿼리 토큰으로 여는 내려받기는 모두 변경 이력에 남는다 (DS 40-3)', () => {
+  // 쿼리 토큰을 허용하는 관리 라우트 = 브라우저가 직접 여는 내려받기다.
+  const DOWNLOADS = [
+    ['src/app/api/admin/logs/export/route.ts', 'conversation.export'],
+    ['src/app/api/admin/backup/route.ts', 'backup.export'],
+    ['src/app/api/admin/settlement/route.ts', 'settlement.export'],
+  ];
+  for (const [p, action] of DOWNLOADS) {
+    const s = read(p);
+    assert.match(s, /allowQueryToken/, `${p}: 브라우저 내려받기 경로가 아니다(목록을 고쳐야 한다)`);
+    assert.match(s, /from '@\/lib\/audit'/, `${p}: 감사 로그를 불러오지 않는다`);
+    assert.match(s, new RegExp(`action: '${action.replace('.', '\\.')}'`), `${p}: ${action} 을 남기지 않는다`);
+  }
+  // 변경 이력 CSV 내려받기 자신은 남기지 않는다 — 그 파일이 흔적이고, 재귀 기록은 잡음이다.
+  assert.equal(/logAudit/.test(read('src/app/api/admin/audit/route.ts')), false, '변경 이력 조회가 자기를 기록한다');
+
+  // 작업 코드 목록은 **한 벌**이다 — 손으로 적은 사본에 빠진 코드는 복원에서 조용히 버려졌다.
+  const audit = read('src/lib/audit.ts');
+  assert.match(audit, /const ACTIONS = new Set<string>\(Object\.keys\(AUDIT_ACTION_LABELS\)\)/, '받아들이는 코드 목록이 두 벌이다');
+  assert.equal(/new Set<string>\(\[\s*'kb\.upsert'/.test(audit), false, '손으로 적은 사본이 남아 있다');
+  // 새 작업 종류에도 사람 말 이름이 있다(화면·CSV 가 그대로 그리는 값이다).
+  for (const k of ['backup.export', 'conversation.export']) {
+    assert.ok(audit.includes(`'${k}': '`), `${k} 의 표시명이 없다`);
+  }
 });

@@ -4,7 +4,8 @@
 // [승인 필요] 외부 SIEM 전송.
 // 토큰 값 등 시크릿은 절대 기록하지 않는다(인증 사용 여부만 boolean으로 기록).
 import { loadJson, scheduleSave } from '@/lib/storage';
-import { csvRow } from '@/lib/csv';
+import { csvCell, csvRow } from '@/lib/csv';
+import { KST_CSV_NOTE, kstDateTime } from '@/lib/kst';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 
 export type AuditAction =
@@ -17,6 +18,8 @@ export type AuditAction =
   | 'rule.custom.delete'
   | 'escalation.update'
   | 'backup.restore'
+  | 'backup.export'
+  | 'conversation.export'
   | 'partner.upsert'
   | 'partner.delete'
   | 'account.upsert'
@@ -41,6 +44,8 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   'rule.custom.delete': '내가 만든 규칙 삭제',
   'escalation.update': '상담원 요청 처리',
   'backup.restore': '백업 복원',
+  'backup.export': '백업 내려받기',
+  'conversation.export': '대화 기록 내려받기',
   'partner.upsert': '파트너 등록·수정',
   'partner.delete': '파트너 삭제',
   'account.upsert': '고객사 등록·수정',
@@ -90,13 +95,27 @@ export function listAudit(limit = 100): AuditEvent[] {
  * 전체 보존분 CSV(시간순) — 엑셀 호환 UTF-8 BOM은 라우트에서 붙인다.
  * 열 이름은 받는 사람(한국의 운영자)이 읽는 말로 적고, 작업은 이름과 코드를 함께 싣는다
  * — 사람은 이름을 읽고, 다른 시스템에 옮겨 담을 때는 코드를 쓴다.
+ *
+ * 「시각」은 **한국 시간**이다 (DS 40-1). 종전에는 `at` 원문(ISO·UTC)을 그대로 실었다 —
+ * 화면은 브라우저 시간대로 그리고 파일 이름도 한국 날짜인데 행만 UTC 여서, 한국 자정~오전 9시의
+ * 작업은 엑셀에서 **전날**로 분류됐다. 기계가 보는 원문은 「시각(ISO)」 열에 그대로 남긴다.
  */
 export function auditToCsv(): string {
-  const header = csvRow(['번호', '시각', '작업', '작업코드', '대상', '내용', '인증']);
+  const header = csvRow(['번호', '시각', '작업', '작업코드', '대상', '내용', '인증', '시각(ISO)']);
   const rows = events.map((e) =>
-    csvRow([e.id, e.at, auditActionLabel(e.action), e.action, e.target, e.detail, e.authed ? '로그인됨' : '인증 없이 수행']),
+    csvRow([
+      e.id,
+      kstDateTime(e.at),
+      auditActionLabel(e.action),
+      e.action,
+      e.target,
+      e.detail,
+      e.authed ? '로그인됨' : '인증 없이 수행',
+      e.at,
+    ]),
   );
-  return [header, ...rows].join('\r\n');
+  // 파일이 제 시각 기준을 말하지 않으면 받는 사람은 9시간 어긋난 줄 모른 채 그 열로 거른다.
+  return [header, ...rows, '', csvCell(`# ${KST_CSV_NOTE}`)].join('\r\n');
 }
 
 export function resetAudit(): void {
@@ -118,12 +137,15 @@ export function exportAudit(): AuditSnapshot {
   return { version: 1, savedAt: new Date().toISOString(), seq, events: events.map((e) => ({ ...e })) };
 }
 
-const ACTIONS = new Set<string>([
-  'kb.upsert', 'kb.delete', 'kb.reset', 'kb.import',
-  'rule.override', 'rule.custom.upsert', 'rule.custom.delete',
-  'escalation.update', 'backup.restore',
-  'partner.upsert', 'partner.delete', 'account.upsert', 'settlement.export',
-]);
+/**
+ * 복원이 받아들이는 작업 코드 — **표시명 사전에서 끌어온다** (DS 40-3).
+ *
+ * 종전에는 같은 목록을 손으로 한 번 더 적어 두었다(두 벌). 작업 종류를 하나 더 만들면 타입
+ * 검사는 `AUDIT_ACTION_LABELS` 만 보므로 통과하는데, 이 사본에 빠진 코드는 복원 때 **조용히
+ * 버려졌다** — 백업을 되돌린 운영자는 그 작업을 누가 언제 했는지 영원히 알 수 없다.
+ * 「규칙은 한 곳에」는 마스킹(DS 39-3)·상한(DS 38-x)에서 세운 것과 같은 규칙이다.
+ */
+const ACTIONS = new Set<string>(Object.keys(AUDIT_ACTION_LABELS));
 
 /** 스냅샷 복원. 알 수 없는 action·형식 위반 항목은 건너뛴다. */
 export function importAudit(input: unknown): { ok: true; count: number } | { ok: false; error: string } {

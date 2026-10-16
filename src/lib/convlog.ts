@@ -4,9 +4,12 @@
 // [승인 필요] 외부 DB 저장·분석 파이프라인 전송.
 import type { ReplySource } from '@/lib/chat';
 import { loadJson, scheduleSave } from '@/lib/storage';
-import { maskPii, mergeKinds } from '@/lib/pii';
-import { TURN_TEXT_LEN, clip } from '@/lib/limits';
-import { kstDate } from '@/lib/kst';
+import { maskPii, mergeKinds, piiKindLabels } from '@/lib/pii';
+import { TURN_TEXT_LEN, CLIP_MARK, clip } from '@/lib/limits';
+import { KST_CSV_NOTE, kstDate, kstDateTime } from '@/lib/kst';
+import { CHANNEL_LABELS, SOURCE_LABELS, intentLabel } from '@/lib/intents';
+import { tenantLabel } from '@/lib/tenants';
+import { csvCell, csvRow } from '@/lib/csv';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 
 export interface ChatTurnLog {
@@ -160,6 +163,69 @@ export function listTurns(limit = 50): ChatTurnLog[] {
 /** 전체 로그(시간순, 메모리 보존분 최대 500건) — CSV 내보내기용. */
 export function listAllTurns(): ChatTurnLog[] {
   return logs.map((l) => ({ ...l }));
+}
+
+/** 보관 한도 — 화면·내려받기 파일이 「무엇까지 담겼는가」를 말할 때 쓰는 수다. */
+export const TURN_RETENTION = MAX_LOGS;
+
+/** 보관 중인 턴 수. 「몇 건을 꺼내 갔는가」를 감사 로그에 적는 자리가 쓴다(DS 40-3). */
+export function turnCount(): number {
+  return logs.length;
+}
+
+/**
+ * 내려받는 대화 기록 CSV — **단일 출처** (DS 40-1·40-2).
+ *
+ * 왜 라우트가 아니라 여기인가: 종전에는 이 표를 만드는 코드가 `route.ts` 안에 있었다.
+ * 라우트는 HTTP 메서드·설정 외 export 가 금지되어(★ 안전 원칙) **돌려 볼 수 없는 자리**이고,
+ * 실제로 런타임 테스트가 0건이었다 — 열 이름만 소스 텍스트로 대조하고 **값은 아무도 보지 않았다**.
+ * 38차가 웹 발화 상한에서 본 것과 같은 자리다(「라우트에 적혀 있던 동안에는 가져다 쓸 수 없었다」).
+ *
+ * 받는 사람은 한국의 운영자이고 여는 곳은 엑셀이다. 그래서
+ *  - 「시각」은 **한국 시간**으로 적는다(`kstDateTime`) — 화면·파일 이름과 같은 날짜가 되도록.
+ *    기계가 보는 원문은 「시각(ISO)」 열에 그대로 남긴다(`주제`·`주제코드` 와 같은 규칙).
+ *  - 「개인정보 가림」 열을 둔다 — 본문은 저장될 때 가려지는데(DS 39-1) 파일에는 그 사실이
+ *    없어서, 받는 사람은 `***-****-5678` 을 보고 **고객이 그렇게 쓴 줄** 알았다.
+ *  - 꼬리에 **이 파일이 무엇인지**를 적는다(정산 CSV 가 이미 그렇게 한다) — 화면은 「최근 분량만
+ *    보관합니다」라고 말하는데 파일은 말하지 않아, 받는 사람은 전체 이력으로 읽었다.
+ *
+ * @param intentLabels 운영자가 만든 규칙(`cr_*`)의 이름 — 런타임에만 알 수 있어 부르는 쪽이 넘긴다.
+ */
+export function turnsToCsv(intentLabels?: Record<string, string>): string {
+  // 「고객사」는 채널 바로 옆에 둔다 — 받는 사람이 가장 먼저 거르는 열이다(DS 36-1).
+  // 「개인정보 가림」은 그 열이 설명하는 본문 **앞**에 둔다. 기계가 쓰는 코드·원문은 뒤로 모은다.
+  const header = [
+    '번호', '시각', '채널', '고객사', '대화', '주제', '근거', '상담원 제안',
+    '개인정보 가림', '고객 메시지', '챗봇 답변', '주제코드', '시각(ISO)',
+  ];
+  const turns = listAllTurns();
+  const rows = turns.map((l) =>
+    csvRow([
+      l.id,
+      kstDateTime(l.at),
+      CHANNEL_LABELS[l.channel] ?? l.channel,
+      tenantLabel(l.tenant ?? null),
+      l.sessionId,
+      intentLabel(l.intent, intentLabels),
+      SOURCE_LABELS[l.source] ?? l.source,
+      l.escalate ? '예' : '아니오',
+      // 가린 것이 없으면 **빈 칸**이다 — 옛 기록에는 이 값이 없고, 그때는 「없다」가 아니라
+      // 「모른다」이므로 아무 말도 하지 않는다(화면이 그 줄을 그리지 않는 것과 같다 · DS 39-1).
+      piiKindLabels(l.piiKinds).join(', '),
+      l.message,
+      l.reply,
+      l.intent,
+      l.at,
+    ]),
+  );
+  // 꼬리 주석 — 정산 CSV 와 같은 모양(`# …`). 빈 줄로 표와 떼어 둔다.
+  const notes = [
+    KST_CSV_NOTE,
+    `보관 중인 대화 ${turns.length}건을 담았습니다(보관 한도 ${TURN_RETENTION}건). 그보다 오래된 대화는 이 파일에도 없습니다.`,
+    '「고객 메시지」·「챗봇 답변」은 저장할 때 개인정보를 가린 글입니다. 가린 종류는 「개인정보 가림」 열에 적습니다.',
+    `길어서 줄인 글의 끝에는 「${CLIP_MARK}」 표시가 붙어 있습니다.`,
+  ];
+  return [csvRow(header), ...rows, '', ...notes.map((n) => csvCell(`# ${n}`))].join('\r\n');
 }
 
 /** 등록 자료·규칙에서 답을 찾지 못해 기본 안내로 끝난 질문(DS 32-2). */

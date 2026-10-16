@@ -1,13 +1,16 @@
 // 대화 로그 CSV 내보내기(관리 콘솔 다운로드용).
 // 인메모리 로그(최근 500건)만 포함 — 영구 저장·전체 이력은 [승인 필요].
 // 인증: x-admin-token 헤더 또는 ?token= 쿼리(브라우저 다운로드 링크 지원).
+//
+// 표를 만드는 일은 `@/lib/convlog` 의 `turnsToCsv` 가 한다 (DS 40-1·40-2) — 라우트는 HTTP
+// 메서드·설정 외 export 가 금지되어 **돌려 볼 수 없는 자리**이고, 종전에는 그래서 열 이름만
+// 소스 텍스트로 대조하고 값은 아무도 보지 않았다(시각이 UTC 로 나가던 것을 테스트가 못 잡았다).
 import { NextRequest, NextResponse } from 'next/server';
-import { listAllTurns } from '@/lib/convlog';
-import { CHANNEL_LABELS, SOURCE_LABELS, intentLabel, intentLabelMap } from '@/lib/intents';
+import { turnCount, turnsToCsv } from '@/lib/convlog';
+import { intentLabelMap } from '@/lib/intents';
 import { listCustomRules } from '@/lib/adminStore';
-import { tenantLabel } from '@/lib/tenants';
-import { requireAdmin } from '@/lib/http';
-import { csvRow } from '@/lib/csv';
+import { logAudit } from '@/lib/audit';
+import { requireAdmin, isAdminAuthed } from '@/lib/http';
 import { kstStamp } from '@/lib/kst';
 
 export const dynamic = 'force-dynamic';
@@ -16,33 +19,26 @@ export async function GET(req: NextRequest) {
   const denied = requireAdmin(req, { allowQueryToken: true });
   if (denied) return denied;
 
-  // 열 이름과 값은 받는 사람(한국의 운영자)이 읽는 말로 적는다 — 「주제」·「근거」는 엔진 코드
-  // (`kb:환불`·`fallback`)가 아니라 화면과 **같은 이름**으로, 코드는 따로 한 열에 남긴다
-  // (다른 시스템으로 옮겨 담을 때 쓰는 값이다).
-  const labels = intentLabelMap(listCustomRules());
-  // 「고객사」는 채널 바로 옆에 둔다 — 받는 사람이 가장 먼저 거르는 열이다(DS 36-1).
-  const header = ['번호', '시각', '채널', '고객사', '대화', '주제', '근거', '상담원 제안', '고객 메시지', '챗봇 답변', '주제코드'];
-  const rows = listAllTurns().map((l) =>
-    csvRow([
-      l.id,
-      l.at,
-      CHANNEL_LABELS[l.channel] ?? l.channel,
-      tenantLabel(l.tenant ?? null),
-      l.sessionId,
-      intentLabel(l.intent, labels),
-      SOURCE_LABELS[l.source] ?? l.source,
-      l.escalate ? '예' : '아니오',
-      l.message,
-      l.reply,
-      l.intent,
-    ])
-  );
-  // UTF-8 BOM: 엑셀에서 한글 깨짐 방지
-  const csv = '\uFEFF' + [csvRow(header), ...rows].join('\r\n') + '\r\n';
+  // 주제 이름은 어휘를 아는 쪽이 붙인다 — 운영자가 만든 규칙(`cr_*`)의 이름은 런타임에만 안다.
+  const csv = turnsToCsv(intentLabelMap(listCustomRules()));
   // 파일 이름의 날짜는 받는 사람(한국의 운영자)이 읽는 날짜다 — 서버 시간대가 아니라 KST.
   const date = kstStamp();
 
-  return new NextResponse(csv, {
+  /**
+   * 꺼내 간 사실을 남긴다 (DS 40-3).
+   *
+   * 이 파일에는 상담 내용 보존분 전체가 들어 있다(개인정보를 가린 글이지만 고객이 친 말이다).
+   * 종전에는 **정산 리포트 내려받기만** 감사 로그에 남았다 — 금액 표는 흔적이 남고 상담 내용은
+   * 남지 않았다. 두 창구가 같은 이유로 쿼리 토큰까지 열어 두고 있었는데(브라우저 다운로드),
+   * 흔적이 더 필요한 쪽이 비어 있었다. 연락처·대화 본문은 싣지 않는다 — 건수만 남긴다(§10.3).
+   */
+  logAudit({
+    action: 'conversation.export',
+    detail: `대화 ${turnCount()}건(보관분 전체)`,
+    authed: isAdminAuthed(req, true),
+  });
+
+  return new NextResponse('﻿' + csv + '\r\n', {
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="chat-logs-${date}.csv"`,

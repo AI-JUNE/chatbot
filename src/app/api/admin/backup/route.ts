@@ -18,7 +18,16 @@ export async function GET(req: NextRequest) {
   // 파일 이름의 날짜는 받는 사람(한국의 운영자)이 읽는 날짜다 — 서버 시간대가 아니라 KST.
   // 운영자는 이 파일들을 이름순으로 정리한다(백업은 날짜가 곧 식별자다).
   const date = kstStamp();
-  return new NextResponse(JSON.stringify({ ...exportSnapshot(), partners: exportPartners() }, null, 2), {
+  const snapshot = exportSnapshot();
+  const partners = exportPartners();
+  // 되돌린 일(`backup.restore`)만 남기고 **꺼내 간 일**은 남기지 않았다 (DS 40-3) — 이 파일
+  // 하나로 배포 전체를 다른 곳에 세울 수 있다(안내 자료·규칙·파트너·고객사 계약 귀속).
+  logAudit({
+    action: 'backup.export',
+    detail: `스냅샷 내려받기(안내 자료 ${snapshot.kb.length}건 · 파트너 ${partners.partners.length} · 고객사 ${partners.accounts.length})`,
+    authed: isAdminAuthed(req, true),
+  });
+  return new NextResponse(JSON.stringify({ ...snapshot, partners }, null, 2), {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       'Content-Disposition': `attachment; filename="chatbot-admin-backup-${date}.json"`,

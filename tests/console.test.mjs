@@ -1724,7 +1724,8 @@ test('답하지 못한 질문 목록이 뜨고 그 질문으로 자료를 만들
 test('대화·접수·내려받기가 어느 고객사에서 왔는지 말한다 (DS 36-1·36-2)', opts, async () => {
   const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
   const route = readFileSync(new URL('../src/app/api/admin/escalations/route.ts', import.meta.url), 'utf8');
-  const csv = readFileSync(new URL('../src/app/api/admin/logs/export/route.ts', import.meta.url), 'utf8');
+  // 내려받는 표를 만드는 곳은 라우트가 아니라 `@/lib/convlog` 다(DS 40-1 에서 옮겼다).
+  const csv = readFileSync(new URL('../src/lib/convlog.ts', import.meta.url), 'utf8');
 
   // ① 이름은 서버가 붙여 보낸다(`intentLabel`·`actionLabel` 과 같은 규칙) — 콘솔이 사전을 따로
   //    들고 있으면 고객사가 늘 때마다 어긋나 운영자 화면에 `eum` 같은 코드가 뜬다.

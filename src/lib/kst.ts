@@ -10,7 +10,8 @@
 //
 // 구현: 한국은 1988년 이후 일광절약시간(DST)이 없다. 고정 오프셋 +09:00 으로 옮긴 뒤
 // UTC 게터로 읽으면 Intl 없이도 정확하다(브라우저·서버·테스트가 같은 값을 낸다).
-// 저장하는 **시각**은 그대로 ISO(UTC)를 쓴다 — 이 모듈은 "달력 날짜"만 다룬다.
+// 저장하는 **시각**은 그대로 ISO(UTC)를 쓴다 — 바꾸는 것은 **사람에게 보여 줄 때**뿐이다
+// (`kstDateTime` · DS 40-1).
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
@@ -82,3 +83,34 @@ export function kstStamp(at: Date = new Date()): string {
   const v = kstYmd(at);
   return `${v.y}${pad2(v.m)}${pad2(v.d)}`;
 }
+
+/**
+ * **사람이 읽는 시각** 'YYYY-MM-DD HH:MM:SS'(한국 시간) — 내려받는 파일의 시각 칸 (DS 40-1).
+ *
+ * 왜 필요한가: 기록의 `at` 은 ISO(UTC)다. 운영 화면은 브라우저 시간대로 옮겨 그리고
+ * 파일 **이름**도 `kstStamp` 로 한국 날짜를 붙이는데, 정작 파일 **안의 행**만 UTC 원문이었다.
+ * 한국 자정~오전 9시의 대화는 엑셀에서 **전날**로 분류되어, 같은 데이터가 화면과 파일에서
+ * 다른 날에 속했다(대시보드 「오늘 대화」는 `kstDate` 로 센다).
+ *
+ * 시간대 표기(`+09:00`)를 붙이지 않는 것은 엑셀이 그 형태를 날짜로 읽지 못하기 때문이다 —
+ * 대신 기준이 한국 시간이라는 사실을 파일 꼬리 주석이 말하고, 기계가 보는 원문은
+ * 「시각(ISO)」 열에 그대로 남긴다(`주제`·`주제코드` 와 같은 규칙).
+ *
+ * 읽을 수 없는 값(빈 문자열·깨진 ISO)에는 **지금 시각을 지어내지 않고** 빈 문자열을 돌려준다.
+ */
+export function kstDateTime(at: Date | string | number): string {
+  const d = at instanceof Date ? at : new Date(at);
+  if (Number.isNaN(d.getTime())) return '';
+  const v = new Date(d.getTime() + KST_OFFSET_MS);
+  return (
+    `${v.getUTCFullYear()}-${pad2(v.getUTCMonth() + 1)}-${pad2(v.getUTCDate())}` +
+    ` ${pad2(v.getUTCHours())}:${pad2(v.getUTCMinutes())}:${pad2(v.getUTCSeconds())}`
+  );
+}
+
+/**
+ * 내려받는 파일의 꼬리에 적는 시각 기준 안내 — 대화 기록·변경 이력이 같은 문장을 쓴다.
+ * 파일이 제 시각 기준을 말하지 않으면 받는 사람은 9시간 어긋난 줄 모른 채 그 열로 거른다.
+ */
+export const KST_CSV_NOTE =
+  '시각은 한국 시간(KST, UTC+9) 기준입니다. 「시각(ISO)」 열은 시간대를 포함한 원문(UTC)입니다.';
