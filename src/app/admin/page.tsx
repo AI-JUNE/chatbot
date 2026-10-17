@@ -186,9 +186,14 @@ interface OpsStats {
     autoHandled: number;
     autoRate: number;
     escalatedTurns: number;
-    /** 최근 7일 일자별 집계(서버 @/lib/convlog convStats()와 같은 모양). 구버전 응답 대비 optional. */
-    daily?: { date: string; turns: number; escalated: number }[];
-    today?: { turns: number; sessions: number; escalated: number };
+    /**
+     * 최근 7일 일자별 집계(서버 @/lib/convlog convStats()와 같은 모양). 구버전 응답 대비 optional.
+     * `coverage` 는 그 수가 그 날 전부인가를 말한다(DS 43-1) — 없으면(옛 응답) **모른다**로 둔다.
+     */
+    daily?: { date: string; turns: number; escalated: number; coverage?: DayCoverage }[];
+    today?: { turns: number; sessions: number; escalated: number; coverage?: DayCoverage };
+    /** 「언제부터의 기록인가」 — 수의 모수(DS 43-1). 옛 응답에는 없다. */
+    retention?: { limit: number; kept: number; knownFrom: string; dropped: boolean };
     /** 평균 서버 처리 시간(ms). 기록된 턴이 없으면 null. 구버전 응답 대비 optional. */
     avgLatencyMs?: number | null;
     latencySamples?: number;
@@ -203,10 +208,32 @@ interface OpsStats {
     down: number;
     /** 도움됨 비율(%). 평가 0건이면 null. */
     helpfulRate: number | null;
-    /** 👎가 많은 근거(=보완 대상) 순 상위 목록. */
-    topDown: { citation: string; down: number }[];
+    /**
+     * 👎가 많은 근거(=보완 대상) 순 상위 목록.
+     * `key` 는 서버가 만든 묶음 열쇠(자료 id 기준 · DS 43-2), `citation` 은 **지금 그 자료의 이름**,
+     * `missing` 은 지워진 자료다 — 지워진 자료는 데려갈 곳이 없으므로 버튼으로 만들지 않는다.
+     * 옛 응답에는 `key`·`kbId`·`missing` 이 없다(그때는 라벨이 열쇠였다).
+     */
+    topDown: { key?: string; citation: string; kbId?: string; missing?: boolean; down: number }[];
   };
 }
+
+/**
+ * 접수 목록을 한 번에 얼마나 불러오는가 (DS 43-3) — 서버 기본값(`TICKET_PAGE_DEFAULT`)과 같은 수다.
+ * 「더 불러오기」는 이만큼씩 늘리고, 서버 상한(`TICKET_PAGE_MAX`)에서 멈춘다.
+ * (콘솔은 lib 을 불러오지 않으므로 옮겨 적고 테스트가 두 쪽을 대조한다.)
+ */
+const TICKET_PAGE_STEP = 200;
+const TICKET_PAGE_MAX = 1000;
+
+/** 서버가 말하는 접수 목록의 모수 — `@/lib/escalation` 의 `TicketPage` 와 같은 모양. */
+interface TicketPageView { total: number; shown: number; limit: number; truncated: boolean }
+
+/**
+ * 그 날의 수를 얼마나 믿을 수 있는가 — 서버 `@/lib/convlog` 의 `DayCoverage` 와 같은 어휘다 (DS 43-1).
+ * (콘솔은 lib 을 불러오지 않으므로 옮겨 적고 테스트가 두 쪽을 대조한다 — `NO_CITATION_LABEL` 과 같은 방식.)
+ */
+type DayCoverage = 'full' | 'partial' | 'none';
 
 /** 자료에 없어 기본 안내로 끝난 질문 묶음(DS 32-2). 서버 `unansweredQuestions()` 와 같은 모양. */
 interface UnansweredView {
@@ -1129,10 +1156,31 @@ function SyncStatus({ at, onRefresh }: { at: number; onRefresh: () => void }) {
   );
 }
 
+interface DayView { date: string; turns: number; escalated: number; coverage?: DayCoverage }
+
+/**
+ * 하루 한 칸을 **어떻게 읽어 줄 것인가** (DS 43-1).
+ *
+ * 종전에는 모든 칸이 「10월 11일 0건」이었다. 그런데 이 저장소는 최근 500건만 들고 있고
+ * 재기동하면 비므로, 어제 칸이 비어 있는 흔한 이유는 **대화가 없었던 것이 아니라 기록이 밀려난 것**이다.
+ * 스크린리더 사용자에게는 이 문장이 그래프의 전부이고, 눈으로 보는 사람에게도 빈 칸은 0으로 읽힌다 —
+ * 그 수로 운영자는 「요즘 문의가 줄었다」를 읽는다(§13 · QUALITY_BAR §3).
+ *
+ * 그래서 `coverage` 가 `none` 인 날은 수를 말하지 않고 **기록이 없다**고 말한다.
+ * 옛 응답(coverage 없음)에는 종전처럼 건수만 말한다 — 모르는 것을 단정하지 않는다.
+ */
+function dayRead(d: DayView): string {
+  const day = `${d.date.slice(5).replace('-', '월 ')}일`;
+  if (d.coverage === 'none') return `${day} 기록 없음`;
+  if (d.coverage === 'partial') return `${day} ${d.turns}건(보관된 범위만)`;
+  return `${day} ${d.turns}건`;
+}
+
 /** 최근 7일 대화량 막대 차트 — 실제 로그에서만 그린다. 기록이 없으면 차트를 만들지 않는다. */
-function TrendChart({ daily }: { daily: { date: string; turns: number; escalated: number }[] }) {
+function TrendChart({ daily }: { daily: DayView[] }) {
   const max = daily.reduce((m, d) => Math.max(m, d.turns), 0);
-  const label = daily.map((d) => `${d.date.slice(5).replace('-', '월 ')}일 ${d.turns}건`).join(', ');
+  const label = daily.map(dayRead).join(', ');
+  const gaps = daily.filter((d) => d.coverage === 'none').length;
   const W = 560;
   const H = 132;
   const pad = { l: 4, r: 4, t: 10, b: 22 };
@@ -1157,26 +1205,55 @@ function TrendChart({ daily }: { daily: { date: string; turns: number; escalated
           const x = pad.l + slot * i + (slot - barW) / 2;
           const y = pad.t + full - h;
           const eh = max > 0 ? Math.round((d.escalated / max) * full) : 0;
+          // 기록이 없는 날은 **빈 칸(=0)으로 두지 않는다** — 바닥에 점선을 긋고 「—」로 적는다.
+          // 색이 아니라 글자·선이라 고대비·흑백 인쇄에서도 남는다(SortTh 의 글리프와 같은 규칙).
+          const gap = d.coverage === 'none';
           return (
             <g key={d.date}>
-              {h > 0 && <rect x={x} y={y} width={barW} height={h} rx="5" fill="var(--brand)" />}
-              {eh > 0 && <rect x={x} y={pad.t + full - eh} width={barW} height={eh} rx="5" fill="var(--warn)" />}
+              {gap ? (
+                <line
+                  x1={x}
+                  x2={x + barW}
+                  y1={pad.t + full}
+                  y2={pad.t + full}
+                  stroke="var(--line-2)"
+                  strokeWidth="2"
+                  strokeDasharray="3 3"
+                />
+              ) : (
+                <>
+                  {h > 0 && <rect x={x} y={y} width={barW} height={h} rx="5" fill="var(--brand)" />}
+                  {eh > 0 && <rect x={x} y={pad.t + full - eh} width={barW} height={eh} rx="5" fill="var(--warn)" />}
+                </>
+              )}
               <text x={x + barW / 2} y={H - 6} textAnchor="middle" fontSize="10.5" fill="var(--mut)">
                 {d.date.slice(8)}
               </text>
-              {d.turns > 0 && (
+              {gap ? (
+                <text x={x + barW / 2} y={pad.t + full - 6} textAnchor="middle" fontSize="10.5" fill="var(--mut)">
+                  —
+                </text>
+              ) : d.turns > 0 ? (
                 <text x={x + barW / 2} y={y - 4} textAnchor="middle" fontSize="10.5" fontWeight="700" fill="var(--sub)">
                   {d.turns}
                 </text>
-              )}
+              ) : null}
             </g>
           );
         })}
       </svg>
-      <figcaption style={{ display: 'flex', gap: 14, fontSize: 11.5, color: 'var(--mut)', marginTop: 6 }}>
-        <span><span aria-hidden="true" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 3, background: 'var(--brand)', marginRight: 5 }} />대화</span>
-        <span><span aria-hidden="true" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 3, background: 'var(--warn)', marginRight: 5 }} />상담원 제안</span>
-        <span style={{ marginLeft: 'auto' }}>일자는 한국 시간 기준</span>
+      <figcaption style={{ fontSize: 11.5, color: 'var(--mut)', marginTop: 6 }}>
+        <span style={{ display: 'flex', gap: 14 }}>
+          <span><span aria-hidden="true" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 3, background: 'var(--brand)', marginRight: 5 }} />대화</span>
+          <span><span aria-hidden="true" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 3, background: 'var(--warn)', marginRight: 5 }} />상담원 제안</span>
+          <span style={{ marginLeft: 'auto' }}>일자는 한국 시간 기준</span>
+        </span>
+        {/* 「—」가 무엇인지 적지 않으면 받는 사람은 그것도 0으로 읽는다 (DS 43-1). */}
+        {gaps > 0 && (
+          <span style={{ display: 'block', marginTop: 4 }}>
+            「—」 표시된 {gaps}일은 보관 한도에 밀려 <strong>기록이 남지 않은 날</strong>입니다. 대화가 0건이었다는 뜻이 아닙니다.
+          </span>
+        )}
       </figcaption>
     </figure>
   );
@@ -2405,6 +2482,17 @@ export default function AdminPage() {
   // ---- 상담원 요청 큐(필터·검색·상세 서랍) ----
   const [escFilter, setEscFilter] = useState<'all' | TicketView['status']>('all');
   const [escQuery, setEscQuery] = useState('');
+  /**
+   * 한 번에 불러오는 접수 수 (DS 43-3). 종전에는 서버가 **전부** 실어 보냈고 이 화면은 그것을
+   * 30초마다 다시 받았다 — 접수는 고객이 만드는 데이터라 상한이 없다.
+   * 값을 ref 로도 들고 있는 이유: 되풀이 확인 타이머가 `loadEsc` 를 의존성으로 걸고 있어
+   * 상태를 그대로 넣으면 더 불러올 때마다 타이머가 다시 걸려 간격이 어긋난다(`escPauseRef` 와 같은 까닭).
+   */
+  const [ticketLimit, setTicketLimit] = useState(TICKET_PAGE_STEP);
+  const ticketLimitRef = useRef(TICKET_PAGE_STEP);
+  ticketLimitRef.current = ticketLimit;
+  /** 서버가 말한 「전체 몇 건 중 몇 건을 보냈는가」. 옛 응답에는 없다(그때는 전부였다). */
+  const [ticketPage, setTicketPage] = useState<TicketPageView | null>(null);
   const [ticketId, setTicketId] = useState<string | null>(null);
   const [ticketBusy, setTicketBusy] = useState(false);
   const ticketReturnRef = useRef<HTMLElement | null>(null);
@@ -2454,13 +2542,14 @@ export default function AdminPage() {
     const seq = ++escSeqRef.current;
     if (!quiet) markPhase('esc', 'loading');
     try {
-      const res = await afetch('/api/admin/escalations?logs=true', { headers: authHeaders() });
+      const res = await afetch(`/api/admin/escalations?logs=true&tickets=${ticketLimitRef.current}`, { headers: authHeaders() });
       if (seq !== escSeqRef.current) return;
       if (on401(res)) return;
       const data = await res.json();
       if (seq !== escSeqRef.current) return;
       if (data.ok) {
         setTickets(data.tickets);
+        setTicketPage(data.ticketPage ?? null);
         setStats(data.stats);
         setRecentTurns(data.recentTurns || []);
         setUnanswered(data.unanswered || null);
@@ -3875,7 +3964,15 @@ export default function AdminPage() {
               <KpiCard
                 label="오늘 대화"
                 value={`${(stats.conversation.today?.turns ?? 0).toLocaleString('ko-KR')}건`}
-                note={`대화 상대 ${(stats.conversation.today?.sessions ?? 0).toLocaleString('ko-KR')}명 · 보관 중 ${stats.conversation.totalTurns.toLocaleString('ko-KR')}건`}
+                /* 이 수의 **모수**를 함께 적는다 (DS 43-1) — 보관 경계가 오늘 안에 있으면 오늘 수도
+                   그날 전부가 아니다(새 인스턴스는 올라온 시각 이후만 안다). 종전에는 그 사실이
+                   어디에도 없어 운영자는 이 수를 그날 전부로 읽었다. */
+                note={
+                  `대화 상대 ${(stats.conversation.today?.sessions ?? 0).toLocaleString('ko-KR')}명 · 보관 중 ${stats.conversation.totalTurns.toLocaleString('ko-KR')}건`
+                  + (stats.conversation.today?.coverage === 'partial' && stats.conversation.retention
+                    ? ` · ${timeLabel(stats.conversation.retention.knownFrom)} 이후만 집계`
+                    : '')
+                }
               />
               <KpiCard
                 label="자동완결률"
@@ -3935,13 +4032,22 @@ export default function AdminPage() {
             <section style={S.card}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12 }}>
                 <h2 style={S.h2}>최근 7일 대화량</h2>
-                <span style={S.tag}>보관 중인 기록 기준</span>
+                {/* 모수를 한 줄로 밝힌다 (DS 43-1) — 「보관 중인 기록 기준」만으로는
+                    어느 날이 빠졌는지 알 수 없다. 옛 응답(retention 없음)에는 종전 문구를 쓴다. */}
+                <span style={S.tag}>
+                  {stats.conversation.retention
+                    ? `${timeLabel(stats.conversation.retention.knownFrom)} 이후 보관된 기록 기준 · 최대 ${stats.conversation.retention.limit.toLocaleString('ko-KR')}건`
+                    : '보관 중인 기록 기준'}
+                </span>
               </div>
               {stats.conversation.daily && stats.conversation.daily.some((d) => d.turns > 0) ? (
                 <TrendChart daily={stats.conversation.daily} />
               ) : (
                 <p style={{ fontSize: 13.5, color: 'var(--mut)' }}>
-                  {MEASURING} — 최근 7일 안에 기록된 대화가 없습니다. 위젯이나 「응답 테스트」에서 대화하면 여기에 쌓입니다.
+                  {/* 기록이 밀려나 비어 있는 것을 「대화가 없었다」고 말하지 않는다 (DS 43-1). */}
+                  {stats.conversation.daily?.some((d) => d.coverage === 'none')
+                    ? `${MEASURING} — 보관된 기록 안에는 대화가 없습니다. 그 앞의 날은 보관 한도에 밀려 기록이 남지 않았습니다(대화 0건이라는 뜻이 아닙니다).`
+                    : `${MEASURING} — 최근 7일 안에 기록된 대화가 없습니다. 위젯이나 「응답 테스트」에서 대화하면 여기에 쌓입니다.`}
                 </p>
               )}
             </section>
@@ -4117,14 +4223,27 @@ export default function AdminPage() {
                       <ul className="ac-rows" aria-label="아쉬워요가 많은 자료">
                         {stats.feedback.topDown.map((d) => {
                           const pill = <span className="ac-pill" style={TONE.warn}>아쉬워요 {d.down}건</span>;
-                          // 근거 없이 답한 답변은 고칠 자료가 없다 — 데려갈 곳이 없으므로 버튼으로 만들지 않는다.
-                          if (d.citation === NO_CITATION_LABEL) {
+                          // 열쇠는 서버가 만든 것을 쓴다(DS 43-2) — 라벨을 열쇠로 쓰면 같은 이름을
+                          // 공유하는 자료 둘이 한 줄로 합쳐지고, 이름을 고치면 줄이 새로 생긴다.
+                          const key = d.key || d.citation;
+                          // 데려갈 곳이 없는 두 가지는 **버튼으로 만들지 않는다**: 근거 없이 답한
+                          // 답변(고칠 자료가 없다)과 지워진 자료(검색해도 0건이다 — 누른 사람을
+                          // 빈 목록 앞에 세우지 않는다).
+                          const dead = d.citation === NO_CITATION_LABEL || d.missing;
+                          if (dead) {
+                            const gone = Boolean(d.missing) && d.citation !== NO_CITATION_LABEL;
                             return (
-                              <li key={d.citation}>
+                              <li key={key}>
                                 <div className="ac-row" data-static="">
                                   <span className="ac-row-main">
-                                    <span className="ac-row-msg">{NO_CITATION_LABEL}</span>
-                                    <span className="ac-row-reply">등록된 자료 없이 답한 답변입니다. 위의 「답하지 못한 질문」부터 채워 주세요.</span>
+                                    <span className="ac-row-msg" title={d.citation}>
+                                      {gone ? clip(d.citation, 90) : NO_CITATION_LABEL}
+                                    </span>
+                                    <span className="ac-row-reply">
+                                      {gone
+                                        ? '지금은 없는 자료입니다(지워졌습니다). 같은 질문이 또 오면 새로 등록해 주세요.'
+                                        : '등록된 자료 없이 답한 답변입니다. 위의 「답하지 못한 질문」부터 채워 주세요.'}
+                                    </span>
                                   </span>
                                   <span className="ac-row-side">{pill}</span>
                                 </div>
@@ -4132,7 +4251,7 @@ export default function AdminPage() {
                             );
                           }
                           return (
-                            <li key={d.citation}>
+                            <li key={key}>
                               <button
                                 type="button"
                                 className="ac-row"
@@ -4753,8 +4872,23 @@ export default function AdminPage() {
       })()}
 
       {tab === 'esc' && (() => {
+        /**
+         * 상태별 수는 **서버가 센 전체**를 쓴다 (DS 43-3). 목록은 상한까지만 내려오므로
+         * 불러온 행을 세면 「완료 1,240건」이 「완료 180건」으로 보인다 — 운영자가 처리한 일의
+         * 수가 화면 상한에 따라 달라지면 그 수는 쓸 수 없다. 옛 응답에는 `ticketPage` 가 없고
+         * 그때는 전부 내려오므로 불러온 행을 센다.
+         */
         const counts = { open: 0, in_progress: 0, resolved: 0, canceled: 0 } as Record<TicketView['status'], number>;
         for (const t of tickets) counts[t.status] += 1;
+        const totals = stats
+          ? {
+            open: stats.escalation.open,
+            in_progress: stats.escalation.inProgress,
+            resolved: stats.escalation.resolved,
+            canceled: stats.escalation.canceled,
+          }
+          : counts;
+        const ticketTotal = ticketPage?.total ?? (stats?.escalation.total ?? tickets.length);
         const q = searchNorm(escQuery);
         const filtered = tickets
           .filter((t) => escFilter === 'all' || t.status === escFilter)
@@ -4776,11 +4910,11 @@ export default function AdminPage() {
         const turnsTotal = stats?.conversation.totalTurns ?? 0;
         const autoRate = stats && turnsTotal > 0 ? `${Math.round(stats.conversation.autoRate * 100)}%` : MEASURING;
         const FILTERS: { key: 'all' | TicketView['status']; label: string; n: number }[] = [
-          { key: 'all', label: '전체', n: tickets.length },
-          { key: 'open', label: '대기', n: counts.open },
-          { key: 'in_progress', label: '상담 중', n: counts.in_progress },
-          { key: 'resolved', label: '완료', n: counts.resolved },
-          { key: 'canceled', label: '취소', n: counts.canceled },
+          { key: 'all', label: '전체', n: ticketTotal },
+          { key: 'open', label: '대기', n: totals.open },
+          { key: 'in_progress', label: '상담 중', n: totals.in_progress },
+          { key: 'resolved', label: '완료', n: totals.resolved },
+          { key: 'canceled', label: '취소', n: totals.canceled },
         ];
         const nextAction = (t: TicketView): { label: string; status: TicketView['status']; primary: boolean } =>
           t.status === 'open' ? { label: '상담 시작', status: 'in_progress', primary: true }
@@ -4790,9 +4924,9 @@ export default function AdminPage() {
         return (
           <>
             <div className="ac-kpi" style={{ marginBottom: 16 }}>
-              <KpiCard label="대기 중" value={String(counts.open)} note="아직 상담을 시작하지 않은 요청" />
-              <KpiCard label="상담 중" value={String(counts.in_progress)} note="상담원이 응대하고 있는 요청" />
-              <KpiCard label="완료" value={String(counts.resolved)} note={`취소 ${counts.canceled}건 별도`} />
+              <KpiCard label="대기 중" value={String(totals.open)} note="아직 상담을 시작하지 않은 요청" />
+              <KpiCard label="상담 중" value={String(totals.in_progress)} note="상담원이 응대하고 있는 요청" />
+              <KpiCard label="완료" value={String(totals.resolved)} note={`취소 ${totals.canceled}건 별도`} />
               <KpiCard label="자동 응대 완료율" value={autoRate} empty={autoRate === MEASURING} note={turnsTotal > 0 ? `전체 ${turnsTotal}쌍 중 ${stats?.conversation.autoHandled ?? 0}쌍은 챗봇이 마무리` : '대화가 쌓이면 계산합니다'} />
             </div>
 
@@ -4822,9 +4956,41 @@ export default function AdminPage() {
                   onChange={(e) => setEscQuery(e.target.value)}
                   style={{ marginLeft: 'auto' }}
                 />
-                <span style={S.tag} aria-live="polite">{filtered.length}/{tickets.length}건</span>
+                {/* 보여 준 수를 전체라고 말하지 않는다 (DS 31-3·43-3) — 거른 수 / 불러온 수 / 전체 수 셋을
+                    따로 적는다. 검색칸도 **불러온 범위**만 뒤진다(추가 요청을 보내지 않는다). */}
+                <span style={S.tag} aria-live="polite">
+                  {filtered.length}/{tickets.length}건
+                  {ticketPage?.truncated ? ` · 전체 ${ticketTotal.toLocaleString('ko-KR')}건 중 최근 ${tickets.length.toLocaleString('ko-KR')}건만 불러왔습니다` : ''}
+                </span>
+                {ticketPage?.truncated && ticketLimit < TICKET_PAGE_MAX && (
+                  <button
+                    type="button"
+                    {...busyBtn(phase.esc === 'loading', phase.esc === 'loading')}
+                    onClick={() => {
+                      if (phase.esc === 'loading') return;
+                      // 다음 요청이 **이번에 늘린 수**로 나가야 한다 — 상태가 반영되기를 기다리면
+                      // 한 번 더 같은 묶음을 받는다(요청은 ref 를 읽는다).
+                      const next = Math.min(ticketLimit + TICKET_PAGE_STEP, TICKET_PAGE_MAX);
+                      ticketLimitRef.current = next;
+                      setTicketLimit(next);
+                      loadEsc();
+                    }}
+                  >
+                    {TICKET_PAGE_STEP}건 더 불러오기
+                  </button>
+                )}
                 <SyncStatus at={escSyncAt} onRefresh={() => loadEsc()} />
               </div>
+              {ticketPage?.truncated && (
+                /* 대기·상담 중 접수는 상한에 밀려 사라지지 않는다(서버가 먼저 담는다) — 그 사실을
+                   적지 않으면 운영자는 「대기 건이 빠졌을 수도 있다」고 의심하며 일한다 (DS 43-3). */
+                <p className="ac-rulehint" style={{ margin: '0 16px 12px' }}>
+                  대기·상담 중 요청은 모두 들어 있고, 완료·취소는 최신 것부터 채웁니다.
+                  {ticketLimit >= TICKET_PAGE_MAX
+                    ? ` 한 번에 불러오는 상한(${TICKET_PAGE_MAX.toLocaleString('ko-KR')}건)에 닿았습니다 — 그보다 오래된 완료·취소 요청은 이 화면에서 볼 수 없습니다.`
+                    : ' 더 오래된 완료·취소 요청은 「더 불러오기」를 눌러 주세요.'}
+                </p>
+              )}
 
               {tickets.length === 0 && phase.esc !== 'done' ? (
                 <LoadState phase={phase.esc} busy="상담원 요청을 불러오는 중입니다" fail="상담원 요청을 불러오지 못했습니다" onRetry={() => loadEsc()} rows={4} />

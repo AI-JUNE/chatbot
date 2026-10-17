@@ -3198,9 +3198,12 @@ test('내려받은 대화 기록이 가린 것과 담긴 범위를 말한다 (DS
     assert.ok(notes.includes(`보관 한도 ${conv.TURN_RETENTION}건`), '보관 한도를 말하지 않는다');
     assert.ok(notes.includes('개인정보를 가린 글'), '가렸다는 사실을 말하지 않는다');
     assert.ok(notes.includes('이하 생략'), '줄인 글의 표시를 설명하지 않는다');
+    // 「언제부터의 기록인가」도 말한다 (DS 43-1) — 날짜로 거르는 사람에게 「0건」과 「기록 없음」은 다른 사실이다.
+    assert.ok(notes.includes('이후의 기록만 담겨 있습니다'), '언제부터의 기록인지 말하지 않는다');
+    assert.ok(notes.includes('「대화 0건」이 아니라 「기록 없음」'), '빈 날을 0건으로 읽게 둔다');
     // 주석은 표와 빈 줄로 떨어져 있고 모두 `#` 로 시작한다(정산 CSV 와 같은 모양).
     assert.ok(csv.includes('\r\n\r\n'), '주석이 표에 붙어 있다');
-    assert.equal(t.notes.length, 4, `주석 수가 다르다: ${t.notes.length}`);
+    assert.equal(t.notes.length, 5, `주석 수가 다르다: ${t.notes.length}`);
     for (const n of t.notes) assert.ok(n.startsWith('# '), `주석 모양이 다르다: ${n}`);
 
     // ⑤ 수식 주입은 여전히 막는다(공용 이스케이프를 지난다).
@@ -3423,4 +3426,197 @@ test('분해형 한글로 붙여 넣은 문서도 그대로 후보가 된다 (DS
   assert.ok(nfd(long).length > ingest.MAX_DOC_CHARS, '재현 조건(분해형이 상한을 넘는다)이 성립하지 않는다');
   const body = (raw) => ingest.chunkDocument(raw).map((c) => c.text).join('');
   assert.equal(body(nfd(long)).length, body(long).length, '분해형 문서가 더 일찍 잘린다');
+});
+
+/* ══════════ 디자인 스프린트 — 40차 재감사 (DS 43-1·43-2·43-3) ══════════ */
+
+/**
+ * DS 43-1 — 「최근 7일 대화량」이 **보관 한도에 밀려 사라진 날**을 0건으로 말했다.
+ *
+ * 이 저장소는 최근 500건만 들고 있고(링버퍼) 개인정보 승인 전에는 디스크에도 쓰지 않는다 —
+ * 그래서 어제 칸이 비는 흔한 이유는 「대화가 없었다」가 아니라 「기록이 밀려났다」다.
+ * 종전에는 두 사실이 모두 `turns: 0` 으로 나와 구분할 수단이 **아예 없었다**(§13).
+ */
+test('보관 경계보다 앞선 날은 「0건」이 아니라 「기록 없음」이다 (DS 43-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const conv = await importLib('convlog', CONVLOG_DEPS);
+  const day = (back) => new Date(Date.now() - back * 86400000).toISOString();
+
+  // ① 한도에 걸려 버리는 경로 — 501건을 넣으면 가장 오래된 것이 밀려난다.
+  conv.resetLogs();
+  for (let i = 0; i < 501; i += 1) {
+    conv.logTurn({
+      sessionId: `s43-${i}`, channel: 'web', tenant: null,
+      message: '질문', reply: '답', intent: 'kb:x', source: 'kb', escalate: false,
+    });
+  }
+  let s = conv.convStats();
+  assert.equal(s.retention.kept, 500, '보관 한도가 다르다');
+  assert.equal(s.retention.dropped, true, '버린 적이 있는데 없다고 한다');
+  assert.equal(s.totalTurns, 500);
+
+  // ② 종전 식 재현 — 지난 6일은 **건수만 보면** 「0건」이다(이것이 결함의 크기다).
+  const past = s.daily.slice(0, 6);
+  assert.equal(past.length, 6);
+  for (const d of past) assert.equal(d.turns, 0, '재현 조건(지난 날이 비어 있다)이 성립하지 않는다');
+
+  // ③ 고친 쪽 — 그 날들은 「모른다」이고, 오늘은 경계에 걸쳐 「일부」다.
+  for (const d of past) assert.equal(d.coverage, 'none', `기록 없는 날을 0건으로 단정한다: ${d.date}`);
+  assert.equal(s.daily[6].coverage, 'partial', '경계에 걸친 날을 전부라고 말한다');
+  assert.equal(s.today.coverage, 'partial', '오늘 수가 그날 전부라고 말한다');
+
+  // ④ 경계 **뒤**의 조용한 날은 그대로 0건이다 — 모르는 것과 없는 것을 뒤집지 않는다.
+  //    사흘 전부터의 기록을 되돌리면 이틀 전·어제는 「정말 대화가 없었다」가 된다.
+  const snap = {
+    version: 1, savedAt: day(0), seq: 3,
+    turns: [
+      { id: 'T-000001', sessionId: 'a', channel: 'web', tenant: null, message: '질문', reply: '답', intent: 'kb:x', source: 'kb', escalate: false, at: day(3) },
+      { id: 'T-000002', sessionId: 'b', channel: 'web', tenant: null, message: '질문', reply: '답', intent: 'kb:x', source: 'kb', escalate: false, at: day(0) },
+    ],
+  };
+  assert.equal(conv.importTurns(snap).ok, true);
+  s = conv.convStats();
+  assert.equal(s.retention.kept, 2);
+  assert.equal(s.daily[3].coverage, 'partial', '스냅샷의 가장 오래된 날이 경계여야 한다');
+  for (const d of s.daily.slice(0, 3)) assert.equal(d.coverage, 'none', '스냅샷보다 앞선 날을 0건으로 단정한다');
+  for (const d of s.daily.slice(4)) assert.equal(d.coverage, 'full', '경계 뒤의 조용한 날을 「모른다」로 미룬다');
+  assert.equal(s.daily[4].turns, 0, '없던 대화를 지어낸다');
+  assert.equal(s.retention.dropped, false, '버린 적이 없는데 버렸다고 한다');
+
+  // ⑤ 초기화하면 경계도 지금으로 돌아온다(그 전의 일은 모른다).
+  conv.resetLogs();
+  s = conv.convStats();
+  assert.equal(s.retention.kept, 0);
+  assert.equal(s.today.coverage, 'partial', '빈 저장소가 오늘 전부를 안다고 말한다');
+  assert.ok(s.retention.knownFrom > snap.turns[0].at, '경계가 갱신되지 않았다');
+});
+
+/**
+ * DS 43-2 — 평가가 「어느 자료에 대한 것인가」를 **바뀌는 이름**으로 들고 있었다.
+ *
+ * 열쇠가 근거 라벨(`source || question`)이라서 ① 문서 하나에서 만든 항목들이 라벨을 공유해
+ * 한 줄로 뭉치고 ② 운영자가 이름을 고치면 두 줄로 갈라지고 ③ 지운 자료의 줄을 누르면
+ * 지식베이스 검색이 0건을 냈다 — 그 줄이 「다음에 고칠 자료」인데 데려갈 곳이 없었다(DS 32-1).
+ */
+test('평가는 자료 id 로 묶이고 이름은 지금 KB 에서 붙인다 (DS 43-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const F = await importLib('feedback', ['storage', 'logger', 'monitoring', 'refusal']);
+  const down = (kbId, citation) => F.recordFeedback({ sessionHash: 'h1', verdict: 'down', citation, kbId });
+
+  // ① 이름을 고친 자료 — 종전 식(라벨 열쇠)에서는 두 줄로 갈라진다.
+  F.resetFeedback();
+  down('kb_refund', '환불 규정');
+  down('kb_refund', '환불 규정');
+  down('kb_refund', '환불·교환 규정'); // 운영자가 대표 질문을 고친 뒤 들어온 평가
+  assert.equal(new Set(['환불 규정', '환불 규정', '환불·교환 규정']).size, 2,
+    '종전 식에서도 한 줄이다 — 재현이 아무것도 지키지 않는다');
+
+  let s = F.feedbackSummary({ kb_refund: '환불·교환 규정 안내' });
+  assert.equal(s.topDown.length, 1, '같은 자료의 평가가 이름 때문에 갈라진다');
+  assert.equal(s.topDown[0].down, 3, '묶은 수가 받은 수와 다르다');
+  assert.equal(s.topDown[0].kbId, 'kb_refund');
+  assert.equal(s.topDown[0].citation, '환불·교환 규정 안내', '지금 이름이 아니라 평가 당시 이름을 보여 준다');
+  assert.equal(s.topDown[0].missing, undefined, '살아 있는 자료를 지워졌다고 한다');
+  assert.equal(s.down, 3);
+
+  // ② 문서 하나에서 만든 두 항목 — 라벨이 같아도 **다른 자료**다(종전 식에서는 한 줄이었다).
+  F.resetFeedback();
+  down('kb_doc_1', '사내 규정 문서');
+  down('kb_doc_2', '사내 규정 문서');
+  s = F.feedbackSummary({ kb_doc_1: '휴가 신청', kb_doc_2: '출장 정산' });
+  assert.equal(s.topDown.length, 2, '서로 다른 자료의 평가가 한 줄로 뭉친다');
+  assert.deepEqual(s.topDown.map((t) => t.citation).sort(), ['출장 정산', '휴가 신청']);
+
+  // ③ 지워진 자료 — 줄은 남기고 「지금은 없다」고 말한다(이름을 지어내지 않는다).
+  F.resetFeedback();
+  down('kb_gone', '없어진 안내문');
+  s = F.feedbackSummary({ kb_other: '다른 자료' });
+  assert.equal(s.topDown[0].missing, true, '지워진 자료를 검색으로 데려간다');
+  assert.equal(s.topDown[0].citation, '없어진 안내문', '평가 당시의 이름조차 잃는다');
+
+  // ④ 사전을 넘기지 않으면 아무것도 단정하지 않는다(이름도 그대로, 「지워졌다」도 아니다).
+  s = F.feedbackSummary();
+  assert.equal(s.topDown[0].citation, '없어진 안내문');
+  assert.equal(s.topDown[0].missing, undefined, '모르는 것을 지워졌다고 말한다');
+
+  // ⑤ 옛 기록(자료 id 없음)은 라벨로 묶인 채 둔다 — 그때는 「어느 자료인지 모른다」다.
+  F.resetFeedback();
+  F.recordFeedback({ sessionHash: 'h', verdict: 'down', citation: '옛 라벨' });
+  F.recordFeedback({ sessionHash: 'h', verdict: 'down', citation: '옛 라벨' });
+  s = F.feedbackSummary({});
+  assert.equal(s.topDown.length, 1);
+  assert.equal(s.topDown[0].down, 2);
+  assert.equal(s.topDown[0].kbId, undefined);
+  assert.equal(s.topDown[0].missing, undefined, 'id 가 없는 기록을 지워진 자료로 센다');
+  assert.equal(s.topDown[0].key, 'label:옛 라벨');
+
+  // ⑥ 근거 없이 답한 평가는 여전히 한 줄로 모인다(고칠 자료가 없는 줄이다).
+  F.recordFeedback({ sessionHash: 'h', verdict: 'down', citation: '' });
+  s = F.feedbackSummary({});
+  assert.ok(s.topDown.some((t) => t.citation === F.NO_CITATION_LABEL), '근거 없음 줄이 사라졌다');
+
+  // ⑦ 스냅샷을 되돌려도 자료 id 가 남는다 — 재기동 뒤에 다시 이름으로 묶이면 안 된다.
+  F.resetFeedback();
+  down('kb_keep', '보관 확인');
+  assert.equal(F.importFeedback(JSON.parse(JSON.stringify(F.exportFeedback()))).ok, true);
+  assert.equal(F.listFeedback()[0].kbId, 'kb_keep', '복원하면서 자료 id 를 잃는다');
+  assert.equal(F.feedbackSummary({ kb_keep: '보관 확인 안내' }).topDown[0].citation, '보관 확인 안내');
+});
+
+/**
+ * DS 43-3 — 접수 목록을 **전부** 실어 보내고, 콘솔은 30초마다 그것을 다시 받았다.
+ *
+ * 접수는 고객이 만드는 데이터라 상한이 없다. 화면은 31차에 15행씩 나눠 그리게 됐지만(DS 31-1)
+ * 나눈 것은 **그리는 방법**뿐이라, 운영 반년 뒤에도 보이는 것은 그대로인데 받는 양만 커진다.
+ */
+test('접수 목록은 한 묶음씩 내려오고 대기 중인 요청은 상한에 밀리지 않는다 (DS 43-3)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const esc = await importLib('escalation', ['handoff', 'storage', 'refusal', 'pii', 'limits', 'logger', 'monitoring', 'normalize']);
+  esc.resetTickets();
+
+  // 대기 5건이 **먼저** 들어오고 완료 25건이 뒤에 들어온다(최신순으로 자르면 대기가 전부 밀려난다).
+  const open = [];
+  for (let i = 0; i < 5; i += 1) {
+    open.push(esc.createTicket({ sessionId: `live-${i}`, tenant: null, message: '대기 중 문의' }).ticket.id);
+  }
+  for (let i = 0; i < 25; i += 1) {
+    const t = esc.createTicket({ sessionId: `done-${i}`, tenant: null, message: '끝난 문의' }).ticket;
+    assert.equal(esc.updateTicket(t.id, { status: 'resolved' }).ok, true);
+  }
+
+  // ① 종전 식 재현 — 조회가 부르던 함수는 **30건 전부**를 돌려준다.
+  assert.equal(esc.listTickets().length, 30, '재현 조건이 성립하지 않는다');
+  assert.equal(esc.listTickets().slice(0, 10).some((t) => t.status === 'open'), false,
+    '최신 10건에 대기 건이 섞여 있다 — 재현이 아무것도 지키지 않는다');
+
+  // ② 상한을 걸면 그만큼만 — 전체 수는 따로 말한다(보여 준 수를 전체라 말하지 않는다).
+  const page = esc.queryTickets(10);
+  assert.equal(page.tickets.length, 10, '상한을 넘겨 보낸다');
+  assert.equal(page.total, 30, '전체 수를 말하지 않는다');
+  assert.equal(page.truncated, true);
+  assert.equal(page.limit, 10);
+
+  // ③ **대기 중 5건은 전부** 들어 있다 — 최신순으로만 잘랐다면 하나도 없었을 자리다.
+  const ids = page.tickets.map((t) => t.id);
+  for (const id of open) assert.ok(ids.includes(id), `대기 중 접수가 상한에 밀려 사라졌다: ${id}`);
+
+  // ④ 순서는 최신순 그대로다(표의 기본 순서가 뜻을 가진 화면이다).
+  const order = esc.listTickets().map((t) => t.id);
+  assert.deepEqual(ids, [...ids].sort((a, b) => order.indexOf(a) - order.indexOf(b)), '고른 뒤 순서가 섞였다');
+
+  // ⑤ 전체가 상한 안이면 자르지 않는다.
+  const all = esc.queryTickets(200);
+  assert.equal(all.tickets.length, 30);
+  assert.equal(all.truncated, false);
+
+  // ⑥ 상한·이상한 값은 서버가 막는다(화면이 보내는 수를 그대로 믿지 않는다).
+  assert.equal(esc.queryTickets(9999).limit, esc.TICKET_PAGE_MAX, '상한이 열려 있다');
+  assert.equal(esc.queryTickets(0).limit, esc.TICKET_PAGE_DEFAULT);
+  assert.equal(esc.queryTickets(Number.NaN).limit, esc.TICKET_PAGE_DEFAULT);
+  assert.equal(esc.queryTickets(-5).limit, esc.TICKET_PAGE_DEFAULT);
+
+  // ⑦ 대기 건이 상한보다 많으면 대기 건으로만 채운다(완료를 끼워 넣지 않는다).
+  const live3 = esc.queryTickets(3);
+  assert.equal(live3.tickets.length, 3);
+  assert.equal(live3.tickets.every((t) => t.status === 'open'), true, '대기 건을 두고 완료 건을 먼저 담는다');
 });

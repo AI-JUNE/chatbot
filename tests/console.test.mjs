@@ -1649,7 +1649,9 @@ test('고객이 누른 평가가 대시보드에 모이고, 0건을 0%로 단정
 
   // 1) 서버가 집계를 실제로 내려보낸다 — 함수만 있고 부르는 곳이 없으면 화면은 영원히 비어 있다.
   assert.match(route, /import \{ feedbackSummary \} from '@\/lib\/feedback'/, '평가 집계를 불러오지 않는다');
-  assert.match(route, /feedback: feedbackSummary\(\)/, '응답에 평가가 실리지 않는다');
+  // 집계를 부르는 곳이 있어야 한다. 이름은 **지금 KB 의 이름**을 붙여 보낸다(DS 43-2 이후) —
+  // 평가가 자료 id 로 묶이면서 라벨 해석이 집계 시점으로 옮겨 갔다.
+  assert.match(route, /feedback: feedbackSummary\(kbLabelMap\(\)\)/, '응답에 평가가 실리지 않는다');
 
   // 2) 평가는 재시작을 넘겨 남는다(저장소 네임스페이스 등록 + 기록할 때마다 예약).
   const storage = readFileSync(new URL('../src/lib/storage.ts', import.meta.url), 'utf8');
@@ -1667,13 +1669,14 @@ test('고객이 누른 평가가 대시보드에 모이고, 0건을 0%로 단정
   // 보완 목록은 그 자료가 있는 곳으로 데려간다 — 건수만 보여 주면 고칠 길이 없다.
   assert.match(dash, /onClick=\{\(\) => \{ goTab\('kb'\); setKbCat\(''\); setKbQuery\(d\.citation\); \}\}/, '자료로 데려가지 않는다');
   // 「근거 없음」은 고칠 자료가 없다 — 데려갈 곳이 없으므로 버튼으로 만들지 않는다.
-  assert.match(dash, /if \(d\.citation === NO_CITATION_LABEL\)/, '근거 없음 행도 자료처럼 누르게 둔다');
+  // DS 43-2 이후에는 **지워진 자료**도 같은 가지로 간다(검색해도 0건이다).
+  assert.match(dash, /const dead = d\.citation === NO_CITATION_LABEL \|\| d\.missing;/, '근거 없음 행도 자료처럼 누르게 둔다');
   assert.match(dash, /<div className="ac-row" data-static="">/, '누를 수 없는 행이 누를 수 있어 보인다');
 
   // 4) 「근거 없음」 표기는 서버 사전과 같아야 한다 — 어긋나면 그 행만 영영 자료로 데려간다.
   const label = (src.match(/const NO_CITATION_LABEL = '([^']+)'/) || [])[1];
   assert.ok(label, 'NO_CITATION_LABEL 이 없다');
-  assert.ok(lib.includes(`e.citation || '${label}'`), `서버의 근거 없음 표기와 어긋난다: ${label}`);
+  assert.ok(lib.includes(`export const NO_CITATION_LABEL = '${label}'`), `서버의 근거 없음 표기와 어긋난다: ${label}`);
 
   // 5) 첫 렌더(집계 도착 전)에는 평가 카드를 그리지 않는다 — 불러오는 중 ≠ 평가 0건.
   const html = await render();
@@ -1731,7 +1734,8 @@ test('대화·접수·내려받기가 어느 고객사에서 왔는지 말한다
   // ① 이름은 서버가 붙여 보낸다(`intentLabel`·`actionLabel` 과 같은 규칙) — 콘솔이 사전을 따로
   //    들고 있으면 고객사가 늘 때마다 어긋나 운영자 화면에 `eum` 같은 코드가 뜬다.
   assert.match(route, /import \{ tenantLabel \} from '@\/lib\/tenants'/, '이름을 붙이는 쪽을 불러오지 않는다');
-  assert.match(route, /tickets: listTickets\(\)\.map\(\(t\) => \(\{[\s\S]{0,200}?tenantLabel: tenantLabel\(t\.tenant \?\? null\),/, '접수에 고객사 이름이 붙지 않는다');
+  // 목록은 DS 43-3 이후 한 묶음(`queryTickets`)으로 내려온다 — 고객사 이름은 그대로 붙는다.
+  assert.match(route, /tickets: page\.tickets\.map\(\(t\) => \(\{[\s\S]{0,200}?tenantLabel: tenantLabel\(t\.tenant \?\? null\),/, '접수에 고객사 이름이 붙지 않는다');
   assert.match(route, /tenantLabel: tenantLabel\(t\.tenant \?\? null\),/, '최근 대화에 고객사 이름이 붙지 않는다');
   assert.match(route, /byTenant: conversation\.byTenant\.map/, '고객사별 집계에 이름이 붙지 않는다');
   assert.match(route, /items: u\.items\.map\(\(i\) => \(\{ \.\.\.i, tenantLabel: tenantLabel\(i\.tenant\) \}\)\)/, '못 답한 질문에 고객사 이름이 붙지 않는다');
@@ -2032,4 +2036,119 @@ test('붙여 넣은 본문의 글자 수를 사람이 보는 글자로 센다 (D
   assert.ok(cachedJs.includes('docLen(imp.text) > MAX_DOC_CHARS'), '거절 판정이 제 수로 센다');
   assert.ok(cachedJs.includes('docLen(imp.text).toLocaleString'), '화면에 적히는 수가 제 수로 센다');
   assert.equal(/imp\.text\.length/.test(cachedJs), false, '본문 길이를 코드 단위로 세는 자리가 남아 있다');
+});
+
+/**
+ * DS 43-1 — 막대 그래프가 **기록이 없는 날**을 0건으로 그렸다.
+ *
+ * 스크린리더 사용자에게는 `aria-label` 의 문장이 그래프의 전부다. 종전에는 그 문장이
+ * 「10월 11일 0건」이었고, 그 날 기록이 보관 한도에 밀려 사라졌다는 사실은 어디에도 없었다.
+ */
+test('기록이 없는 날을 「0건」으로 읽어 주지 않는다 (DS 43-1)', opts, async () => {
+  const { dayRead } = await loadConsoleFns(['dayRead']);
+
+  // 기록이 없는 날 — 수를 말하지 않는다(종전에는 「0건」이었다).
+  const gap = dayRead({ date: '2026-10-11', turns: 0, escalated: 0, coverage: 'none' });
+  assert.equal(gap, '10월 11일 기록 없음');
+  assert.equal(/0건/.test(gap), false, '기록 없는 날을 0건이라 읽는다');
+  // 경계에 걸친 날 — 그 날 전부가 아니라는 사실을 함께 읽는다.
+  assert.equal(dayRead({ date: '2026-10-12', turns: 7, escalated: 0, coverage: 'partial' }), '10월 12일 7건(보관된 범위만)');
+  // 전부 들고 있는 날 — 0건이면 **정말** 대화가 없었던 날이다.
+  assert.equal(dayRead({ date: '2026-10-13', turns: 0, escalated: 0, coverage: 'full' }), '10월 13일 0건');
+  assert.equal(dayRead({ date: '2026-10-14', turns: 12, escalated: 1, coverage: 'full' }), '10월 14일 12건');
+  // 옛 응답(coverage 없음)에는 종전처럼 건수만 — 모르는 것을 단정하지 않는다.
+  assert.equal(dayRead({ date: '2026-10-15', turns: 3, escalated: 0 }), '10월 15일 3건');
+
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const lib = readFileSync(new URL('../src/lib/convlog.ts', import.meta.url), 'utf8');
+  // 어휘는 서버와 같아야 한다 — 콘솔이 모르는 값을 받으면 그 날이 조용히 0건으로 돌아간다.
+  assert.match(lib, /export type DayCoverage = 'full' \| 'partial' \| 'none';/, '서버 어휘가 바뀌었다');
+  assert.match(src, /type DayCoverage = 'full' \| 'partial' \| 'none';/, '콘솔 어휘가 서버와 어긋난다');
+  // 막대 대신 점선을 긋고, 그 표시가 무엇인지 적는다(색이 아니라 글자·선이다).
+  const chart = src.slice(src.indexOf('function TrendChart('), src.indexOf('interface TurnView'));
+  assert.match(chart, /const gap = d\.coverage === 'none';/, '기록 없는 날을 가려내지 않는다');
+  assert.match(chart, /strokeDasharray="3 3"/, '기록 없는 날이 빈 칸(=0)으로 남는다');
+  assert.ok(chart.includes('기록이 남지 않은 날'), '「—」가 무엇인지 적지 않는다');
+  assert.ok(chart.includes('대화가 0건이었다는 뜻이 아닙니다'), '빈 칸을 0으로 읽게 둔다');
+  // 오늘 수와 그래프 머리가 **모수**를 밝힌다.
+  const dash = src.slice(src.indexOf("{tab === 'dash' && ("), src.indexOf('{/* ── 고객사별 현황'));
+  assert.match(dash, /today\?\.coverage === 'partial'/, '오늘 수가 그날 전부인지 말하지 않는다');
+  assert.ok(dash.includes('이후만 집계'), '오늘 수의 모수를 밝히지 않는다');
+  assert.ok(dash.includes('이후 보관된 기록 기준'), '그래프가 언제부터의 기록인지 말하지 않는다');
+  assert.ok(dash.includes('보관된 기록 안에는 대화가 없습니다'), '빈 그래프를 「대화가 없었다」고 단정한다');
+});
+
+/**
+ * DS 43-2 — 평가가 **바뀌는 이름**으로 묶여 있었다(배선 쪽 고정).
+ * 위젯이 자료 id 를 보내지 않으면 서버가 아무리 id 로 묶어도 옛 모양 그대로다.
+ */
+test('평가가 어느 자료에 대한 것인지 id 로 오간다 (DS 43-2)', opts, () => {
+  const widget = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  const route = readFileSync(new URL('../src/app/api/feedback/route.ts', import.meta.url), 'utf8');
+  const lib = readFileSync(new URL('../src/lib/feedback.ts', import.meta.url), 'utf8');
+  const tenantKB = readFileSync(new URL('../src/lib/tenantKB.ts', import.meta.url), 'utf8');
+  const knowledge = readFileSync(new URL('../src/lib/knowledge.ts', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+
+  // ① 위젯이 자료 id 를 함께 보낸다(라벨도 계속 보낸다 — 지워진 자료의 이름이 될 값이다).
+  assert.match(widget, /kbId: m\.citation\?\.kbId \|\| ''/, '위젯이 자료 id 를 보내지 않는다');
+  // ② 라우트가 받아 넘긴다 — 검증을 거치고(길이 상한) 그대로 저장소로 간다.
+  assert.match(route, /optStr\(parsed\.data\.kbId, 'kbId', 60\)/, '라우트가 자료 id 를 검증 없이 받는다');
+  assert.match(route, /kbId: kbId\.value/, '라우트가 자료 id 를 버린다');
+  // ③ 묶음 열쇠가 id 우선이다 — 라벨로만 묶으면 이름을 고칠 때마다 줄이 갈라진다.
+  assert.match(lib, /const key = e\.kbId \? `id:\$\{e\.kbId\}` : `label:/, '평가를 라벨로 묶는다');
+  // ④ 이름 규칙이 근거 라벨과 같다 — 운영자가 답변 아래에서 본 그 이름이 목록에 떠야 한다.
+  assert.match(knowledge, /source: entry\.source\?\.trim\(\) \|\| entry\.question,/, '근거 라벨 규칙이 바뀌었다');
+  assert.match(tenantKB, /const label = \(e\.source \|\| ''\)\.trim\(\) \|\| \(e\.question \|\| ''\)\.trim\(\);/, '목록의 이름 규칙이 근거 라벨과 어긋난다');
+  // 기본 구성과 등록된 고객사 FAQ 를 모두 담는다(평가에는 고객사를 적지 않는다).
+  assert.match(tenantKB, /put\(listKB\(\)\);/, '관리 콘솔 자료의 이름을 찾지 못한다');
+  assert.match(tenantKB, /for \(const id of Object\.keys\(TENANTS\)\) put\(tenantKB\(TENANTS\[id\]\)\);/, '고객사 FAQ 의 이름을 찾지 못한다');
+  // ⑤ 화면은 지워진 자료를 검색으로 데려가지 않는다(0건 화면 앞에 세우지 않는다).
+  const dash = src.slice(src.indexOf('보완이 필요한 자료'), src.indexOf('{/* ── 최근 대화 ── */}'));
+  assert.ok(dash.includes('지금은 없는 자료입니다'), '지워진 자료를 그냥 자료처럼 보여 준다');
+  assert.match(dash, /const key = d\.key \|\| d\.citation;/, '화면이 열쇠를 다시 만든다');
+});
+
+/**
+ * DS 43-3 — 접수 목록을 요청마다 **전부** 받았다(30초마다 되풀이).
+ * 상한을 두면 「보여 준 수를 전체라 말하지 않는다」(DS 31-3)를 함께 지켜야 한다.
+ */
+test('접수 목록을 한 묶음씩 받고 전체 수를 따로 말한다 (DS 43-3)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const route = readFileSync(new URL('../src/app/api/admin/escalations/route.ts', import.meta.url), 'utf8');
+  const lib = readFileSync(new URL('../src/lib/escalation.ts', import.meta.url), 'utf8');
+
+  // ① 서버가 상한을 적용하고 전체 수를 함께 보낸다.
+  assert.match(route, /queryTickets\(intQuery\(req, 'tickets', TICKET_PAGE_DEFAULT, 1, TICKET_PAGE_MAX\)\)/, '라우트가 전부 실어 보낸다');
+  assert.match(route, /ticketPage: \{ total: page\.total, shown: page\.tickets\.length, limit: page\.limit, truncated: page\.truncated \}/, '전체 수를 말하지 않는다');
+  assert.equal(/listTickets\(\)\.map/.test(route), false, '전부 보내는 자리가 남아 있다');
+
+  // ② 상한 값이 서버와 콘솔에서 같다 — 어긋나면 화면이 「더 불러오기」를 못 멈춘다.
+  const def = Number((lib.match(/export const TICKET_PAGE_DEFAULT = (\d+);/) || [])[1]);
+  const max = Number((lib.match(/export const TICKET_PAGE_MAX = (\d+);/) || [])[1]);
+  assert.ok(def > 0 && max >= def, '서버 상한을 읽지 못했다');
+  assert.equal(Number((src.match(/const TICKET_PAGE_STEP = (\d+);/) || [])[1]), def, '콘솔의 묶음 크기가 서버 기본값과 다르다');
+  assert.equal(Number((src.match(/const TICKET_PAGE_MAX = (\d+);/) || [])[1]), max, '콘솔의 상한이 서버와 다르다');
+
+  // ③ 콘솔이 상한을 실어 보내고(되풀이 확인도 같은 수로), 서버가 말한 모수를 들고 있는다.
+  assert.match(src, /\/api\/admin\/escalations\?logs=true&tickets=\$\{ticketLimitRef\.current\}/, '콘솔이 상한 없이 요청한다');
+  assert.match(src, /setTicketPage\(data\.ticketPage \?\? null\)/, '모수를 버린다');
+
+  // ④ 상태별 수는 **서버가 센 전체**를 쓴다 — 불러온 행을 세면 처리한 일의 수가 화면 상한에 따라 달라진다.
+  const esc = src.slice(src.indexOf("{tab === 'esc' && (()"), src.indexOf("{tab === 'partner'"));
+  assert.match(esc, /const totals = stats[\s\S]{0,260}escalation\.resolved,/, '상태별 수를 불러온 행으로 센다');
+  assert.match(esc, /\{ key: 'all', label: '전체', n: ticketTotal \}/, '전체 칩이 불러온 수를 말한다');
+  assert.ok(esc.includes('value={String(totals.open)}'), '대기 중 KPI 가 불러온 행만 센다');
+
+  // ⑤ 잘렸으면 그 사실을 말하고, 더 불러올 길을 준다. 대기 건이 빠지지 않는다는 사실도 적는다.
+  assert.ok(esc.includes('건만 불러왔습니다'), '보여 준 수를 전체라고 말한다');
+  assert.ok(esc.includes('건 더 불러오기'), '더 불러올 길이 없다');
+  assert.ok(esc.includes('대기·상담 중 요청은 모두 들어 있고'), '무엇이 빠졌는지 말하지 않는다');
+  // 상한에 닿으면 「더 불러오기」를 그리지 않고, 그 사실을 사유로 적는다(없는 조작을 보이지 않는다).
+  assert.match(esc, /ticketPage\?\.truncated && ticketLimit < TICKET_PAGE_MAX/, '상한에서도 더 불러오기를 보여 준다');
+  assert.ok(esc.includes('상한('), '상한에 닿은 사실을 적지 않는다');
+
+  // ⑥ 첫 렌더(응답 전)에는 잘렸다고 말하지 않는다 — 불러오는 중 ≠ 잘림.
+  const html = await render();
+  assert.equal(html.includes('건만 불러왔습니다'), false, '응답 전에 잘렸다고 단정한다');
 });

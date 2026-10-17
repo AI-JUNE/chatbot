@@ -220,6 +220,45 @@ export function listTickets(): EscalationTicket[] {
   return [...tickets].reverse().map((t) => ({ ...t }));
 }
 
+/** 한 번에 내려보내는 접수 수의 기본값·상한 (DS 43-3). */
+export const TICKET_PAGE_DEFAULT = 200;
+export const TICKET_PAGE_MAX = 1000;
+
+export interface TicketPage {
+  /** 내려보낼 접수(최신순). */
+  tickets: EscalationTicket[];
+  /** 보관 중인 전체 접수 수 — **보여 준 수를 전체라고 말하지 않는다**(DS 31-3). */
+  total: number;
+  /** 이번에 적용한 상한. */
+  limit: number;
+  /** 전체를 담지 못했는가. */
+  truncated: boolean;
+}
+
+/**
+ * 접수 목록 한 묶음 (DS 43-3).
+ *
+ * 종전에는 조회 라우트가 `listTickets()` 로 **전부** 실어 보냈고, 관리 콘솔은 그것을 30초마다
+ * 다시 받았다(`OPS_POLL_MS`). 접수는 고객이 만드는 데이터라 상한이 없다 — 운영 반년이면 수천 건이
+ * 되고, 그때도 화면은 15행씩 나눠 그리므로(DS 31-1) **보이는 것은 그대로인데 받는 양만** 커진다.
+ *
+ * 자를 때 **먼저 손대야 하는 것은 버리지 않는다**: 대기·상담 중 접수를 먼저 담고 남은 자리에
+ * 최신 완료·취소를 채운다. 최신순으로만 자르면 완료 더미가 상한을 채워 **대기 중인 접수가
+ * 화면에서 사라진다** — 이 화면의 일이 바로 그것을 보여 주는 것이다.
+ */
+export function queryTickets(limit: number = TICKET_PAGE_DEFAULT): TicketPage {
+  const n = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), TICKET_PAGE_MAX) : TICKET_PAGE_DEFAULT;
+  const all = listTickets();
+  if (all.length <= n) return { tickets: all, total: all.length, limit: n, truncated: false };
+  const live = all.filter((t) => t.status === 'open' || t.status === 'in_progress');
+  const rest = all.filter((t) => t.status !== 'open' && t.status !== 'in_progress');
+  const picked = live.length >= n ? live.slice(0, n) : [...live, ...rest.slice(0, n - live.length)];
+  // 고른 뒤 **최신순으로 되돌린다** — 표의 기본 순서(최신순)가 뜻을 가진 화면이다.
+  const order = new Map(all.map((t, i) => [t.id, i]));
+  picked.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+  return { tickets: picked, total: all.length, limit: n, truncated: true };
+}
+
 export type UpdateTicketResult = { ok: true; ticket: EscalationTicket } | { ok: false; error: string };
 
 export function updateTicket(id: string, patch: { status?: EscalationStatus; note?: string }): UpdateTicketResult {

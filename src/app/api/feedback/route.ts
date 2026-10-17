@@ -35,12 +35,21 @@ export async function POST(req: NextRequest) {
     rl.end({ status: 400, code: 'invalid_input' });
     return withRequestId(citation.res, rl.requestId);
   }
+  // **어느 자료에 대한 평가인가** (DS 43-2) — 근거와 함께 내려보낸 자료 id 가 돌아온 것이다.
+  // 라벨은 운영자가 고치면 바뀌므로 묶음 열쇠로 쓸 수 없다. 모르는 id 는 집계에서 「지금은
+  // 없는 자료」로 드러나므로 여기서 KB 를 다시 뒤지지 않는다(평가 접수를 지식 적재에 묶지 않는다).
+  const kbId = optStr(parsed.data.kbId, 'kbId', 60);
+  if (!kbId.ok) {
+    rl.end({ status: 400, code: 'invalid_input' });
+    return withRequestId(kbId.res, rl.requestId);
+  }
 
   const sessionHash = hashId(sid.value || 'anon');
   const res = recordFeedback({
     sessionHash,
     verdict: parsed.data.verdict,
     citation: citation.value,
+    kbId: kbId.value,
     channel: 'web',
   });
   if (!res.ok) {

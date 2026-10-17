@@ -79,6 +79,31 @@ export function tenantLoadWarnings(): string[] {
   return [...loadWarnings];
 }
 
+/**
+ * 자료 id → **지금 그 자료의 이름** (DS 43-2).
+ *
+ * 평가(`@/lib/feedback`)는 「어느 자료에 대한 평가인가」를 id 로 들고 있고, 이름은 집계할 때
+ * 여기서 붙인다 — 이름은 운영자가 고치면 바뀌는 값이라 기록해 두면 같은 자료의 평가가 갈라진다
+ * (「이름은 어휘를 아는 쪽이 붙인다」 — DS 36-2·39-2 와 같은 규칙).
+ *
+ * 이름 규칙은 근거 라벨(`buildCitation` → `entry.source || entry.question`)과 **같아야 한다** —
+ * 운영자가 답변 아래에서 본 그 이름이 목록에 떠야 한다. 기본 구성(관리 콘솔 KB)과 등록된
+ * 모든 고객사 FAQ 를 함께 담는다(평가에는 고객사를 적지 않으므로 어느 쪽 id 든 찾아야 한다).
+ */
+export function kbLabelMap(): Record<string, string> {
+  const map: Record<string, string> = {};
+  const put = (entries: KBEntry[]) => {
+    for (const e of entries) {
+      if (!e || typeof e.id !== 'string' || !e.id) continue;
+      const label = (e.source || '').trim() || (e.question || '').trim();
+      if (label) map[e.id] = label;
+    }
+  };
+  put(listKB());
+  for (const id of Object.keys(TENANTS)) put(tenantKB(TENANTS[id]));
+  return map;
+}
+
 /** 테넌트 1건의 적재 상태 — 비밀값 없음(FAQ 본문도 싣지 않는다). */
 export interface TenantLoadStatus {
   id: string;

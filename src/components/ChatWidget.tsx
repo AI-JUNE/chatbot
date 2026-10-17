@@ -1200,7 +1200,10 @@ export default function ChatWidget({
     try {
       const { r } = await postJson(
         '/api/feedback',
-        { sessionId, verdict, citation: m.citation?.source || '' },
+        // **어느 자료에 대한 평가인가**를 id 로 함께 보낸다 (DS 43-2) — 라벨(`source`)은 운영자가
+        // 대표 질문·문서명을 고치면 바뀌고, 문서 하나에서 만든 항목들은 그 라벨을 공유한다.
+        // 라벨도 계속 보낸다: 지워진 자료의 평가가 목록에서 이름 없는 줄이 되지 않게(옛 기록과 같은 자리).
+        { sessionId, verdict, citation: m.citation?.source || '', kbId: m.citation?.kbId || '' },
         POST_TIMEOUT_MS,
       );
       if (!r.ok) setRated((s) => ({ ...s, [m.key]: { verdict, failed: true } }));

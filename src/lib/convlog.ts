@@ -60,6 +60,24 @@ const MAX_LOGS = 500;
 let logs: ChatTurnLog[] = [];
 let seq = 0;
 
+/**
+ * **언제부터의 기록을 들고 있는가** (DS 43-1).
+ *
+ * 왜 필요한가: 이 저장소는 최근 500건만 들고 있고(링버퍼) 그마저 재기동하면 비는데,
+ * 집계는 「최근 7일」을 축으로 돌려준다. 보관 한도에 밀려 **기록이 없는 날**과 **대화가 없던 날**이
+ * 둘 다 `turns: 0` 으로 나와, 대시보드 첫 화면의 막대 그래프는 어제가 비어 있으면
+ * 「어제는 문의가 0건」이라고 그렸다(스크린리더는 「0건」이라고 읽었다). 운영자는 그 수로
+ * 「요즘 문의가 줄었다」를 읽는다 — 없는 수를 사실처럼 말하지 않는다는 규칙(§13)이 깨지는 자리다.
+ *
+ * 그래서 「이 시각 이후는 빠진 것이 없다」는 경계를 하나 들고 있는다.
+ *  - 기동·초기화 직후: 지금(그 전의 일은 **모른다** — 재기동으로 통째로 비었을 수 있다)
+ *  - 한도에 걸려 버린 순간: 남아 있는 가장 오래된 턴의 시각
+ *  - 스냅샷 복원 직후: 복원된 가장 오래된 턴의 시각(그 앞은 스냅샷에도 없다)
+ */
+let knownFrom = new Date().toISOString();
+/** 한도에 걸려 **버린 적이 있는가**(복원으로 잘린 것도 포함). 화면이 사유를 달리 적는다. */
+let droppedAny = false;
+
 export function logTurn(input: Omit<ChatTurnLog, 'id' | 'at'>): ChatTurnLog {
   seq += 1;
   /**
@@ -95,7 +113,12 @@ export function logTurn(input: Omit<ChatTurnLog, 'id' | 'at'>): ChatTurnLog {
   if (kinds.length) entry.piiKinds = kinds;
   else delete entry.piiKinds;
   logs.push(entry);
-  if (logs.length > MAX_LOGS) logs = logs.slice(-MAX_LOGS);
+  if (logs.length > MAX_LOGS) {
+    logs = logs.slice(-MAX_LOGS);
+    // 버린 순간부터 「그 앞은 모른다」 — 남은 가장 오래된 턴이 경계다 (DS 43-1).
+    knownFrom = logs[0]?.at || knownFrom;
+    droppedAny = true;
+  }
   scheduleSave(CONVLOG_NS, exportTurns);
   return { ...entry };
 }
@@ -149,6 +172,10 @@ export function importTurns(input: unknown): { ok: true; count: number } | { ok:
     restored.push(entry);
   }
   logs = restored.slice(-MAX_LOGS);
+  // 복원된 가장 오래된 턴이 경계다 — 그 앞은 스냅샷에도 없다(빈 스냅샷이면 지금부터) (DS 43-1).
+  knownFrom = logs[0]?.at || new Date().toISOString();
+  // 복원은 보관 중인 것을 통째로 갈아 끼운다 — 「버린 적이 있는가」도 이 스냅샷 기준으로 다시 센다.
+  droppedAny = restored.length > MAX_LOGS;
   const maxSeq = logs.reduce((m, l) => {
     const n = Number(String(l.id).replace(/[^0-9]/g, ''));
     return Number.isFinite(n) && n > m ? n : m;
@@ -172,6 +199,14 @@ export const TURN_RETENTION = MAX_LOGS;
 /** 보관 중인 턴 수. 「몇 건을 꺼내 갔는가」를 감사 로그에 적는 자리가 쓴다(DS 40-3). */
 export function turnCount(): number {
   return logs.length;
+}
+
+/**
+ * 「언제부터의 기록인가」 (DS 43-1) — 화면·파일이 모수를 밝힐 때 쓰는 단일 출처.
+ * 집계(`convStats().retention`)와 같은 값이다.
+ */
+export function turnRetention(): { limit: number; kept: number; knownFrom: string; dropped: boolean } {
+  return { limit: MAX_LOGS, kept: logs.length, knownFrom, dropped: droppedAny };
 }
 
 /**
@@ -223,6 +258,9 @@ export function turnsToCsv(intentLabels?: Record<string, string>): string {
   const notes = [
     KST_CSV_NOTE,
     `보관 중인 대화 ${turns.length}건을 담았습니다(보관 한도 ${TURN_RETENTION}건). 그보다 오래된 대화는 이 파일에도 없습니다.`,
+    // 「몇 건」만으로는 **어디까지 믿을 수 있는지**를 알 수 없다 — 날짜로 거르는 사람에게는
+    // 「그 날이 0건」과 「그 날 기록이 없음」이 전혀 다른 사실이다 (DS 43-1).
+    `${kstDateTime(knownFrom)} 이후의 기록만 담겨 있습니다 — 그보다 앞선 날이 비어 있는 것은 「대화 0건」이 아니라 「기록 없음」입니다.`,
     '「고객 메시지」·「챗봇 답변」은 저장할 때 개인정보를 가린 글입니다. 가린 종류는 「개인정보 가림」 열에 적습니다.',
     `길어서 줄인 글의 끝에는 「${CLIP_MARK}」 표시가 붙어 있습니다.`,
   ];
@@ -321,8 +359,19 @@ export interface ConvStats {
   escalatedTurns: number;
   /** 최근 7일(오늘 포함) 일자별 집계. 보존된 로그 범위 안에서만 센다 — 없는 날은 0이 아니라 '기록 없음'이다. */
   daily: DailyBucket[];
-  /** 오늘(한국 시간) 집계. */
-  today: { turns: number; sessions: number; escalated: number };
+  /** 오늘(한국 시간) 집계. `coverage` 는 이 수가 그날 전부인지를 말한다 (DS 43-1). */
+  today: { turns: number; sessions: number; escalated: number; coverage: DayCoverage };
+  /** 「언제부터 무엇까지 들고 있는가」 — 수의 모수를 밝히는 값 (DS 43-1). */
+  retention: {
+    /** 보관 한도(건). */
+    limit: number;
+    /** 지금 보관 중인 턴 수. */
+    kept: number;
+    /** 이 시각 이후는 빠진 것이 없다(ISO). 그 앞은 「0건」이 아니라 **모른다**. */
+    knownFrom: string;
+    /** 한도에 걸려 이미 버린 기록이 있는가. */
+    dropped: boolean;
+  };
   /**
    * 평균 서버 처리 시간(ms). 지연이 기록된 턴이 하나도 없으면 null — 0 으로 단정하지 않는다.
    * 네트워크 왕복을 뺀 값이므로 화면에서는 「서버 처리 기준」임을 밝힌다.
@@ -340,11 +389,21 @@ export interface TenantBucket {
   escalated: number;
 }
 
+/**
+ * 그 날의 수를 **얼마나 믿을 수 있는가** (DS 43-1).
+ *  - `full`    그 날의 기록을 전부 들고 있다 — 0건이면 정말 대화가 없었다.
+ *  - `partial` 보관 경계에 걸친 날 — 하루의 일부만 남아 있다(그 날 진짜 수는 이보다 많다).
+ *  - `none`    경계보다 앞선 날 — **기록이 없다**. 0건이 아니라 모른다.
+ */
+export type DayCoverage = 'full' | 'partial' | 'none';
+
 export interface DailyBucket {
   /** YYYY-MM-DD (한국 시간 기준) */
   date: string;
   turns: number;
   escalated: number;
+  /** 이 수가 그 날 전부인가 (DS 43-1). 화면은 `none` 을 0건으로 그리지 않는다. */
+  coverage: DayCoverage;
 }
 
 /**
@@ -399,9 +458,13 @@ export function convStats(): ConvStats {
     if (l.source === 'rule' || l.source === 'kb') autoHandled += 1;
     if (l.escalate) escalatedTurns += 1;
   }
-  // 일자별 집계 — 로그의 실제 타임스탬프만 쓴다(없는 날은 0으로 표시하되, 화면에서 '기록 없음'과 구분한다).
+  // 일자별 집계 — 로그의 실제 타임스탬프만 쓴다. 보관 경계보다 앞선 날은 **0건이 아니라 '기록 없음'**이다.
   const axis = recentDays(7);
-  const byDay = new Map<string, DailyBucket>(axis.map((d) => [d, { date: d, turns: 0, escalated: 0 }]));
+  const boundaryDay = dayKey(knownFrom);
+  const coverageOf = (d: string): DayCoverage => (d < boundaryDay ? 'none' : d === boundaryDay ? 'partial' : 'full');
+  const byDay = new Map<string, DailyBucket>(
+    axis.map((d) => [d, { date: d, turns: 0, escalated: 0, coverage: coverageOf(d) }]),
+  );
   const todayKey = axis[axis.length - 1];
   const todaySessions = new Set<string>();
   let todayTurns = 0;
@@ -439,7 +502,13 @@ export function convStats(): ConvStats {
     autoRate: totalTurns ? Math.round((autoHandled / totalTurns) * 1000) / 1000 : 0,
     escalatedTurns,
     daily: axis.map((d) => byDay.get(d) as DailyBucket),
-    today: { turns: todayTurns, sessions: todaySessions.size, escalated: todayEscalated },
+    today: {
+      turns: todayTurns,
+      sessions: todaySessions.size,
+      escalated: todayEscalated,
+      coverage: coverageOf(todayKey),
+    },
+    retention: turnRetention(),
     avgLatencyMs: latencySamples ? Math.round(latencySum / latencySamples) : null,
     latencySamples,
   };
@@ -448,6 +517,8 @@ export function convStats(): ConvStats {
 export function resetLogs(): void {
   logs = [];
   seq = 0;
+  knownFrom = new Date().toISOString();
+  droppedAny = false;
   scheduleSave(CONVLOG_NS, exportTurns);
 }
 
