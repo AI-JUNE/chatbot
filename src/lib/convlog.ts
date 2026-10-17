@@ -8,6 +8,7 @@ import { maskPii, mergeKinds, piiKindLabels } from '@/lib/pii';
 import { TURN_TEXT_LEN, CLIP_MARK, clip } from '@/lib/limits';
 import { KST_CSV_NOTE, kstDate, kstDateTime } from '@/lib/kst';
 import { CHANNEL_LABELS, SOURCE_LABELS, intentLabel } from '@/lib/intents';
+import { compact } from '@/lib/normalize';
 import { tenantLabel } from '@/lib/tenants';
 import { csvCell, csvRow } from '@/lib/csv';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
@@ -246,9 +247,22 @@ export interface UnansweredQuestion {
   lastAt: string;
 }
 
-/** 묶음 열쇠 — 「환불 되나요?」와 「환불되나요?」는 운영자에게 같은 질문이다. */
+/**
+ * 묶음 열쇠 — 「환불 되나요?」와 「환불되나요」는 운영자에게 같은 질문이다.
+ *
+ * **엔진이 쓰는 자를 그대로 쓴다**(`@/lib/normalize` 의 `compact`). 종전에는 여기에
+ * `trim().toLowerCase().replace(/\s+/g,'')` 를 따로 적어 두었는데, 그 자는 엔진보다 약해서
+ * 문장부호(`?`·`!`)와 유니코드 분해형 한글을 **다른 글자**로 봤다. 엔진은 같은 질문으로 보고
+ * 똑같이 답하지 못했는데 목록은 그것을 여러 줄로 세었다 — 대시보드 첫 화면의 상위 8개에
+ * 같은 질문이 몇 줄씩 차지하고, 정작 가장 많이 온 질문은 아래로 밀려 보이지 않았다.
+ * 그 목록이 **새 안내 자료의 원문**이라 순서가 곧 운영자가 다음에 할 일이다(DS 32-2).
+ *
+ * 글자가 모두 지워지는 말(「???」 처럼 기호뿐인 질문)은 빈 열쇠로 한데 묶이므로
+ * 그때만 원문으로 되돌아간다 — 서로 다른 질문을 한 줄로 합치지 않기 위해서다.
+ */
 function questionKey(message: string): string {
-  return message.trim().toLowerCase().replace(/\s+/g, '');
+  const key = compact(message);
+  return key || message.trim().toLowerCase();
 }
 
 /** 고객사가 다르면 **고칠 자료가 다른 곳에 있다** — 같은 문장이어도 다른 묶음이다. */

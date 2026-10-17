@@ -34,6 +34,17 @@ const EMPTY_IMPORT: ImportForm = { title: '', category: '문서', maxChars: '500
 const MAX_DOC_CHARS = 100_000;
 const MIN_CHUNK_CHARS = 120;
 const MAX_CHUNK_CHARS = 2000;
+/**
+ * 붙여 넣은 본문의 **사람이 보는 글자 수**. 서버도 같은 기준으로 잰다(라우트에서 `toNfc` 뒤에 잰다).
+ *
+ * 한글은 완성형(「한」 1자)과 분해형(ㅎ+ㅏ+ㄴ 3자)이 화면에 똑같이 보인다. macOS 파일·PDF 에서
+ * 긁어 온 본문은 분해형인 경우가 많아, 그냥 `length` 로 재면 4만 자 문서가 **12만 자**로 읽혀
+ * 보내 보기도 전에 「10만 자를 넘습니다」로 막힌다 — 운영자는 눈앞의 문서를 세어 보고 납득할
+ * 길이 없다(DS 42-3).
+ */
+function docLen(v: string): number {
+  return (v || '').normalize('NFC').length;
+}
 /** 기본 규칙 답변 덮어쓰기 길이 상한 — 원본은 `src/lib/adminStore.ts`(MAX_RULE_REPLY_LEN). */
 const MAX_RULE_REPLY_LEN = 1000;
 
@@ -1619,10 +1630,25 @@ interface SearchResult {
   found: Partial<Record<SearchKind, number>>;
 }
 
-/** 띄어쓰기·대소문자를 무시하고 포함 여부를 본다(한국어 검색에서 띄어쓰기 차이로 놓치지 않게). */
+/**
+ * **이 콘솔에서 「같은 말인가」를 묻는 단 하나의 자.**
+ *
+ * 유니코드 정규화(NFC) → 소문자 → 3연속 이상 축약 → 공백·문장부호 제거. 서버의
+ * `@/lib/normalize` 의 `compact` 와 **같은 결과**를 내야 한다 — 콘솔은 클라이언트 번들이라
+ * lib 을 불러오지 않으므로(`MAX_DOC_CHARS`·`composingKey` 와 같은 기존 규약) 사본을 두고,
+ * 테스트가 같은 입력으로 두 자의 결과를 대조해 갈라지면 실패시킨다.
+ *
+ * 종전에는 헤더 전역 검색만 이 자(그중에서도 띄어쓰기까지만)를 쓰고, 각 탭의 검색칸은
+ * `toLowerCase()` 만 했다 — 같은 말을 쳐도 헤더에서는 나오고 탭에서는 0건이었다(DS 42-1).
+ */
 function searchNorm(v: string): string {
-  return v.toLowerCase().replace(/\s+/g, '');
+  return (v || '')
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/(.)\1{2,}/gu, '$1$1')
+    .replace(/[\s.,!?~·・…"'"'()[\]{}<>:;/\\|@#$%^&*+=_-]/gu, '');
 }
+/** `q` 는 **이미 `searchNorm` 을 지난 값**이다(한 번만 재서 목록 전체에 쓴다). */
 function searchMatch(q: string, ...hay: (string | undefined)[]): boolean {
   return hay.some((h) => !!h && searchNorm(h).includes(q));
 }
@@ -1996,11 +2022,18 @@ function splitKeywords(raw: string): string[] {
   return out;
 }
 
-/** 조건 시험(화면용 근사치): 띄어쓰기를 무시하고 표현이 포함되는지 본다. 실제 판정은 응답 테스트에서 확인한다. */
+/**
+ * 조건 시험(화면용 근사치): 표현이 문장에 포함되는지 본다. 동의어·오타 보정은 서버만 하므로
+ * 실제 판정은 응답 테스트에서 확인한다 — 다만 **「같은 글자인가」까지 서버와 달라서는 안 된다**.
+ * 그래서 여기도 `searchNorm` 한 자를 쓴다(DS 42-1).
+ */
 function probeKeywords(sentence: string, keywords: string[]): string[] {
-  const compact = sentence.replace(/\s+/g, '').toLowerCase();
-  if (!compact) return [];
-  return keywords.filter((k) => compact.includes(k.replace(/\s+/g, '').toLowerCase()));
+  const hay = searchNorm(sentence);
+  if (!hay) return [];
+  return keywords.filter((k) => {
+    const key = searchNorm(k);
+    return !!key && hay.includes(key);
+  });
 }
 
 /** 내장 룰의 정규식을 사람이 읽을 예시 표현으로 푼다(첫 그룹의 대안만, 최대 6개). */
@@ -2261,7 +2294,7 @@ export default function AdminPage() {
     const errs: typeof impErr = {};
     if (!imp.title.trim()) errs.title = '문서명을 입력해 주세요. 답변에 출처로 표시됩니다.';
     if (!imp.text.trim()) errs.text = '문서 본문을 붙여넣어 주세요.';
-    else if (imp.text.length > MAX_DOC_CHARS) errs.text = `본문이 ${MAX_DOC_CHARS.toLocaleString('ko-KR')}자를 넘습니다. 장을 나눠 올려주세요.`;
+    else if (docLen(imp.text) > MAX_DOC_CHARS) errs.text = `본문이 ${MAX_DOC_CHARS.toLocaleString('ko-KR')}자를 넘습니다. 장을 나눠 올려주세요.`;
     const chunk = Number(imp.maxChars);
     if (imp.maxChars.trim() === '' || !Number.isFinite(chunk) || chunk < MIN_CHUNK_CHARS || chunk > MAX_CHUNK_CHARS) {
       errs.maxChars = `${MIN_CHUNK_CHARS}~${MAX_CHUNK_CHARS} 사이 숫자로 적어주세요.`;
@@ -4179,12 +4212,12 @@ export default function AdminPage() {
       )}
 
       {tab === 'kb' && (() => {
-        const q = kbQuery.trim().toLowerCase();
+        const q = searchNorm(kbQuery);
         const cats = Array.from(new Set(entries.map((e) => e.category).filter(Boolean))).sort();
         const shown = entries.filter((e) => {
           if (kbCat && e.category !== kbCat) return false;
           if (!q) return true;
-          return [e.question, e.answer, e.category, e.id, e.keywords.join(' '), e.source || ''].join(' ').toLowerCase().includes(q);
+          return searchMatch(q, e.question, e.answer, e.category, e.id, e.keywords.join(' '), e.source || '');
         });
         const kbView = tableView('kb', shown, {
           cat: (e: KBEntryView) => e.category || '',
@@ -4335,12 +4368,12 @@ export default function AdminPage() {
               {!candidates && impBusy === '' && (
                 <span style={S.tag}>먼저 「미리보기」로 잘린 결과를 확인하세요.</span>
               )}
-              {/* 본문 길이는 서버 한계(MAX_DOC_CHARS)와 같은 값으로 미리 알린다 — 보낸 뒤 거절당하지 않게. */}
+              {/* 본문 길이는 서버 한계(MAX_DOC_CHARS)와 같은 값·같은 기준(docLen)으로 미리 알린다 — 보낸 뒤 거절당하지 않게. */}
               <span
                 id="kb-imp-count"
-                style={{ ...S.tag, marginLeft: 'auto', ...(imp.text.length > MAX_DOC_CHARS ? { color: 'var(--danger)', fontWeight: 700 } : {}) }}
+                style={{ ...S.tag, marginLeft: 'auto', ...(docLen(imp.text) > MAX_DOC_CHARS ? { color: 'var(--danger)', fontWeight: 700 } : {}) }}
               >
-                {imp.text.length.toLocaleString('ko-KR')} / {MAX_DOC_CHARS.toLocaleString('ko-KR')}자
+                {docLen(imp.text).toLocaleString('ko-KR')} / {MAX_DOC_CHARS.toLocaleString('ko-KR')}자
               </span>
             </div>
             {candidates && (
@@ -4454,10 +4487,9 @@ export default function AdminPage() {
       })()}
 
       {tab === 'rules' && (() => {
-        const q = ruleQuery.trim().toLowerCase();
-        const hit = (s: string) => !q || s.toLowerCase().includes(q);
-        const shownCustom = customRules.filter((r) => hit([r.label, r.keywords.join(' '), r.reply].join(' ')));
-        const shownBuiltin = rules.filter((r) => hit([r.label, r.pattern, r.effectiveReply].join(' ')));
+        const q = searchNorm(ruleQuery);
+        const shownCustom = customRules.filter((r) => !q || searchMatch(q, r.label, r.keywords.join(' '), r.reply));
+        const shownBuiltin = rules.filter((r) => !q || searchMatch(q, r.label, r.pattern, r.effectiveReply));
         const formKeywords = splitKeywords(crForm.keywords);
         const probeHits = probeKeywords(ruleProbe, formKeywords);
         const onEdit = async (r: CustomRuleView) => {
@@ -4723,11 +4755,11 @@ export default function AdminPage() {
       {tab === 'esc' && (() => {
         const counts = { open: 0, in_progress: 0, resolved: 0, canceled: 0 } as Record<TicketView['status'], number>;
         for (const t of tickets) counts[t.status] += 1;
-        const q = escQuery.trim().toLowerCase();
+        const q = searchNorm(escQuery);
         const filtered = tickets
           .filter((t) => escFilter === 'all' || t.status === escFilter)
           // 고객사 이름으로도 걸러진다 — 「이음 건만 보기」가 운영자가 가장 먼저 하는 일이다(DS 36-2).
-          .filter((t) => !q || [t.message, t.reason, t.id, t.tenantLabel ?? '', HANDOFF_REASON_LABELS[t.reasonCode ?? ''] ?? ''].some((v) => (v ?? '').toLowerCase().includes(q)))
+          .filter((t) => !q || searchMatch(q, t.message, t.reason, t.id, t.tenantLabel ?? '', HANDOFF_REASON_LABELS[t.reasonCode ?? ''] ?? ''))
           .slice()
           .sort((x, y) => new Date(y.createdAt).getTime() - new Date(x.createdAt).getTime());
         // 상태는 글자 순(대기·상담 중·완료·취소)이 아니라 **처리 순서**로 센다 — 운영자가 상태로
@@ -4886,9 +4918,9 @@ export default function AdminPage() {
         for (const a of accounts) counts[a.status] += 1;
         const activePartners = partners.filter((p) => p.status === 'active').length;
         const partnerName = (id: string | null) => (id ? partners.find((p) => p.id === id)?.name ?? '이름 없는 파트너' : '직접 계약');
-        const q = accountQuery.trim().toLowerCase();
+        const q = searchNorm(accountQuery);
         const filteredAccounts = accounts
-          .filter((a) => !q || [a.name, partnerName(a.partnerId), a.ownerName ?? '', SOURCE_LABELS[a.source] ?? '', ACCOUNT_STATUS_LABELS[a.status]].some((v) => v.toLowerCase().includes(q)))
+          .filter((a) => !q || searchMatch(q, a.name, partnerName(a.partnerId), a.ownerName ?? '', SOURCE_LABELS[a.source] ?? '', ACCOUNT_STATUS_LABELS[a.status]))
           .slice()
           .sort((x, y) => x.name.localeCompare(y.name, 'ko'));
         const rollupOf = (id: string | null) => rollup.find((r) => (r.partnerId ?? null) === id);

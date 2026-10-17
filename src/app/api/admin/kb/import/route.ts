@@ -5,6 +5,7 @@ import { NextRequest } from 'next/server';
 import { bulkUpsertKB } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { documentToCandidates, MAX_DOC_CHARS, DEFAULT_CHUNK_CHARS } from '@/lib/ingest';
+import { toNfc } from '@/lib/normalize';
 import { ok, fail, readJson, reqStr, optStr, requireAdmin, isAdminAuthed, MAX_IMPORT_BYTES } from '@/lib/http';
 
 export const dynamic = 'force-dynamic';
@@ -25,7 +26,9 @@ export async function POST(req: NextRequest) {
   if (!parsed.ok) return parsed.res;
   const body = parsed.data;
 
-  const text = reqStr(body.text, 'text', MAX_DOC_CHARS);
+  // 길이는 **사람이 보는 글자**로 잰다 — 분해형 한글은 한 음절이 코드 2~3개라, 정규화 전에
+  // 재면 4만 자짜리 한글 문서가 12만 자로 읽혀 「너무 깁니다」로 돌아간다(DS 42-3).
+  const text = reqStr(typeof body.text === 'string' ? toNfc(body.text) : body.text, 'text', MAX_DOC_CHARS);
   if (!text.ok) return text.res;
   const title = reqStr(body.title, 'title', 120);
   if (!title.ok) return title.res;

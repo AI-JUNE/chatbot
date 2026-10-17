@@ -3268,3 +3268,159 @@ test('내려받기도 변경 이력에 남고, 작업 코드 목록은 한 벌�
     audit.resetAudit();
   }
 });
+
+/* ══════════ 42순위 — 백로그 소진 후 39차 재감사 (DS 42-1·42-2·42-3) ══════════ */
+
+/** 분해형(NFD) 한글 — macOS 파일·PDF 에서 긁어온 본문이 이 모습으로 들어온다. */
+const nfd = (s) => s.normalize('NFD');
+
+/**
+ * DS 42-1 — 「같은 말인가」를 묻는 자가 서버 안에서도 두 벌이었다.
+ *
+ * 고객사 이름 검색(`queryAccounts`)이 `toLowerCase().replace(/\s+/g,'')` 를 따로 적어 두어
+ * 문장부호와 분해형 한글을 다른 글자로 봤다 — 「(주)고원」을 「주고원」으로 찾지 못한다.
+ * 엔진이 쓰는 자(`compact`)를 그대로 쓰게 했다.
+ */
+test('이름 검색이 엔진과 같은 자를 쓴다 (DS 42-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const P = await importLib('partners', ['storage', 'logger', 'monitoring']);
+  const N = await importLib('normalize', []);
+  P.resetPartners();
+  try {
+    const p = P.upsertPartner({ name: '제이투모로우원' });
+    assert.equal(p.ok, true, p.error);
+    const a = P.upsertAccount({ name: '(주)고원 커머스', partnerId: p.partner.id, source: 'partner' });
+    assert.equal(a.ok, true, a.error);
+
+    const names = (q) => P.queryAccounts({ q }).map((x) => x.name);
+    // ① 종전 식 재현 — 괄호를 지우지 않으므로 그대로 치면 찾지 못했다.
+    const oldNorm = (v) => v.trim().toLowerCase().replace(/\s+/g, '');
+    assert.equal(oldNorm('(주)고원 커머스').includes(oldNorm('주고원')), false, '종전 식에서도 찾힌다 — 결함이 재현되지 않는다');
+    assert.equal(oldNorm('(주)고원 커머스').includes(oldNorm(nfd('고원커머스'))), false, '종전 식이 분해형도 찾는다 — 재현이 성립하지 않는다');
+    // ② 고친 쪽: 문장부호·띄어쓰기·분해형 표기가 달라도 같은 이름이다.
+    assert.deepEqual(names('주고원'), ['(주)고원 커머스'], '문장부호를 지운 이름으로 찾지 못한다');
+    assert.deepEqual(names('고원커머스'), ['(주)고원 커머스'], '띄어쓰기를 지운 이름으로 찾지 못한다');
+    assert.deepEqual(names(nfd('고원 커머스')), ['(주)고원 커머스'], '분해형으로 친 이름을 다른 글자로 본다');
+    // ③ 없는 이름을 만들어 내지는 않는다.
+    assert.deepEqual(names('존재하지않는회사'), []);
+    // ④ 정규화는 멱등하다 — 두 번 지나도 같은 값이어야 어느 자리에서 부르든 결과가 같다.
+    for (const s of ['(주)고원 커머스', 'ENVIRONMENT 인증서', nfd('환불 되나요?'), '좋아요오오오']) {
+      assert.equal(N.compact(s), N.compact(N.compact(s)), `정규화가 멱등하지 않다: ${s}`);
+      assert.equal(N.compact(s), N.compact(nfd(s)), `분해형을 다른 글자로 본다: ${s}`);
+    }
+
+    // ⑤ 같은 어긋남이 엔진 안에도 있었다 — 연관 질문(`searchKnowledge`)은 질의를 `compact` 로
+    //    재면서 **대표 질문만** 문장부호를 남겨 두어, 가장 가까운 자료가 목록에서 빠졌다.
+    const K = await importLib('knowledge', ['normalize']);
+    const entries = [{ id: 'k42', category: '일반', question: '환불·교환, 가능한가요?', keywords: ['zzzzq'], answer: '네' }];
+    const oldQ = '환불·교환, 가능한가요?'.toLowerCase().replace(/\s+/g, '');
+    assert.equal(oldQ.includes('환불교환가능한가요'), false, '종전 식에서도 맞는다 — 재현이 아무것도 지키지 않는다');
+    assert.deepEqual(K.searchKnowledge('환불교환가능한가요', 3, entries).map((e) => e.id), ['k42'], '가장 가까운 자료가 연관 질문에서 빠진다');
+  } finally {
+    P.resetPartners();
+  }
+});
+
+/**
+ * DS 42-2 — 「답하지 못한 질문」 묶음이 **문장부호·유니코드 표기 차이로 쪼개졌다**.
+ *
+ * 엔진은 `compact` 로 보고 세 질문에 똑같이 답하지 못했는데, 목록은 자기 자를 따로 적어
+ * (`trim().toLowerCase().replace(/\s+/g,'')`) 그것을 여러 줄로 세었다. 그 목록은 대시보드
+ * 첫 화면의 상위 8개이고 **새 안내 자료의 원문**이라, 쪼개지면 가장 많이 온 질문이 밀려난다.
+ */
+test('같은 질문은 문장부호·표기가 달라도 한 묶음이다 (DS 42-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const { logTurn, resetLogs, unansweredQuestions } = await importLib('convlog', CONVLOG_DEPS);
+  resetLogs();
+  let seq = 0;
+  const turn = (message) => logTurn({
+    sessionId: `s42-${(seq += 1)}`, channel: 'web', tenant: null,
+    message, reply: '답', intent: 'fallback', source: 'fallback', escalate: false,
+  });
+  try {
+    const variants = ['환불 되나요?', '환불되나요', '환불 되나요!', nfd('환불되나요?')];
+
+    // ① 종전 식 재현 — 네 표기가 **네 묶음**으로 갈라졌다(이것이 결함의 크기다).
+    const oldKey = (m) => m.trim().toLowerCase().replace(/\s+/g, '');
+    assert.equal(new Set(variants.map(oldKey)).size, 4, '종전 식에서도 묶인다 — 재현이 아무것도 지키지 않는다');
+
+    // ② 고친 쪽 — 한 묶음, 네 번.
+    for (const v of variants) turn(v);
+    let r = unansweredQuestions();
+    assert.equal(r.groups, 1, '같은 질문이 여러 묶음으로 쪼개진다');
+    assert.equal(r.items.length, 1);
+    assert.equal(r.items[0].count, 4, '묶은 횟수가 받은 횟수와 다르다');
+    assert.equal(r.turns, 4);
+    // 보여 주는 표기는 **가장 최근에 받은 것** 그대로다(묶었다고 글자를 바꾸지 않는다).
+    assert.equal(r.items[0].question, nfd('환불되나요?'));
+
+    // ③ 다른 질문까지 합치지는 않는다.
+    turn('주차 되나요?');
+    r = unansweredQuestions();
+    assert.equal(r.groups, 2, '다른 질문이 한 묶음으로 합쳐졌다');
+
+    // ④ 글자가 모두 지워지는 말(기호뿐인 질문)은 서로 합치지 않는다 — 빈 열쇠 하나로 뭉개면
+    //    서로 다른 질문이 한 줄이 되고 운영자는 무엇을 고쳐야 할지 알 수 없다.
+    resetLogs();
+    turn('???');
+    turn('!!!');
+    assert.equal(unansweredQuestions().groups, 2, '기호뿐인 질문이 한 묶음으로 뭉개진다');
+  } finally {
+    resetLogs();
+  }
+});
+
+/**
+ * DS 42-3 — 분해형 한글로 붙여 넣은 문서가 **통째로 버려졌다**.
+ *
+ * 키워드 토큰 경계(`[^0-9a-z가-힣]+`)의 한글 범위는 **완성형 음절만** 가리킨다. 분해형 본문은
+ * 모든 한글이 구분자로 읽혀 토큰이 0개가 되고, 그러면 모든 청크가 걸러져 업로드가
+ * 「본문이 너무 짧거나 키워드가 없습니다」로 끝난다 — 수만 자짜리 한글 문서를 올려 놓고 듣는 말이다.
+ */
+test('분해형 한글로 붙여 넣은 문서도 그대로 후보가 된다 (DS 42-3)', opts, async () => {
+  const ingest = await importLib('ingest', ['knowledge', 'normalize']);
+  const doc = [
+    '# 환불 정책',
+    '',
+    '주문하신 상품은 수령일로부터 7일 이내에 환불을 신청하실 수 있습니다. 환불 신청은 고객센터로 연락해 주세요.',
+    '단순 변심으로 인한 환불은 왕복 배송비가 부과됩니다. 배송비는 주문하신 금액에서 차감됩니다.',
+    '',
+    '제2조 (교환 안내)',
+    '',
+    '교환은 같은 상품의 다른 색상·사이즈에 한해 가능합니다. 교환 배송비는 무료로 처리됩니다.',
+  ].join('\n');
+
+  // ① 종전 식 재현 — 완성형만 보는 토큰 경계는 분해형 본문에서 쓸 토큰을 **하나도** 남기지 않는다
+  //    (한글은 전부 구분자가 되고, 남는 것은 길이 1의 숫자 조각뿐이라 2자 미만 필터에서 사라진다).
+  const oldExtract = (text) => text.toLowerCase().split(/[^0-9a-z가-힣]+/u).filter((t) => t.length >= 2);
+  assert.ok(oldExtract(doc).length > 0, '완성형에서도 종전 식이 빈손이다 — 비교가 성립하지 않는다');
+  assert.deepEqual(oldExtract(nfd(doc)), [], '종전 식에서도 토큰이 나온다 — 재현이 아무것도 지키지 않는다');
+
+  // ② 고친 쪽 — 분해형이든 완성형이든 **같은 키워드**가 나온다.
+  const keys = ingest.extractKeywords(doc, 6);
+  assert.ok(keys.length > 0, '완성형에서도 키워드가 없다');
+  assert.deepEqual(ingest.extractKeywords(nfd(doc), 6), keys, '분해형에서 다른 키워드가 나온다');
+
+  // ③ 청킹·번호 제목 판정(`제2조`)도 같은 결과다 — 그 판정 역시 완성형 글자로 적혀 있다.
+  const chunks = ingest.chunkDocument(doc);
+  assert.deepEqual(ingest.chunkDocument(nfd(doc)), chunks, '분해형에서 청크가 달라진다');
+  assert.ok(chunks.some((c) => c.heading.includes('교환 안내')), '번호 제목을 집어내지 못한다');
+
+  // ④ 업로드가 통째로 비지 않는다 — 「본문이 너무 짧거나 키워드가 없습니다」로 끝나던 자리.
+  const cands = ingest.documentToCandidates(nfd(doc), { title: '환불 안내', category: '문서' });
+  assert.ok(cands.length > 0, '분해형 문서에서 후보가 한 건도 나오지 않는다');
+  assert.deepEqual(cands, ingest.documentToCandidates(doc, { title: '환불 안내', category: '문서' }));
+
+  // ⑤ 저장되는 글은 완성형이다 — 답변·대표 질문·키워드가 뒤섞이면 다음 비교에서 또 갈라진다.
+  for (const c of cands) {
+    assert.equal(c.answer, c.answer.normalize('NFC'), '답변이 분해형 그대로 저장된다');
+    assert.equal(c.question, c.question.normalize('NFC'), '대표 질문이 분해형 그대로 저장된다');
+    for (const k of c.keywords) assert.equal(k, k.normalize('NFC'), '키워드가 분해형 그대로 저장된다');
+  }
+
+  // ⑥ 길이 상한은 **사람이 보는 글자**로 잰다 — 분해형을 먼저 자르면 같은 문서가 1/3 지점에서 잘린다.
+  const long = '환불 안내입니다. '.repeat(10_000); // 완성형 기준 약 9만 자
+  assert.ok(nfd(long).length > ingest.MAX_DOC_CHARS, '재현 조건(분해형이 상한을 넘는다)이 성립하지 않는다');
+  const body = (raw) => ingest.chunkDocument(raw).map((c) => c.text).join('');
+  assert.equal(body(nfd(long)).length, body(long).length, '분해형 문서가 더 일찍 잘린다');
+});

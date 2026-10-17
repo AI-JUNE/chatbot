@@ -2,7 +2,7 @@
 // 벡터 검색·임베딩 없이(비용·의존성 0) 제목 계층 + 문단 경계로 자르고 키워드를 뽑는 방식.
 // [승인 필요] 임베딩 기반 시맨틱 검색·외부 스토리지 업로드 — 전까지 서버 메모리·관리 콘솔 등록만.
 import type { KBEntry } from '@/lib/knowledge';
-import { compact } from '@/lib/normalize';
+import { compact, toNfc } from '@/lib/normalize';
 
 export const MAX_DOC_CHARS = 100_000;
 export const DEFAULT_CHUNK_CHARS = 500;
@@ -48,7 +48,11 @@ function headingPath(stack: string[]): string {
 export function chunkDocument(raw: string, opts: ChunkOptions = {}): DocChunk[] {
   const maxChars = Math.max(120, opts.maxChars ?? DEFAULT_CHUNK_CHARS);
   const minChars = Math.max(10, opts.minChars ?? MIN_CHUNK_CHARS);
-  const text = (raw || '').slice(0, MAX_DOC_CHARS).replace(/\r\n?/g, '\n');
+  // 유니코드 정규화를 **자르기 전에** 한다 — 분해형 한글은 한 글자가 코드 2~3개라,
+  // 먼저 자르면 ① 글자 수 상한이 실제보다 일찍 걸리고 ② 자른 자리가 음절 한가운데가 되어
+  // 마지막 글자가 자모 조각으로 남는다. 제목 판정(`제1조`)·키워드 추출의 한글 범위도
+  // 완성형만 보므로, 이 한 줄이 없으면 아래 전부가 분해형 문서에서 조용히 빈손이 된다(DS 42-3).
+  const text = toNfc(raw).slice(0, MAX_DOC_CHARS).replace(/\r\n?/g, '\n');
 
   const stack: string[] = [];
   const chunks: { heading: string; parts: string[] }[] = [];
@@ -155,9 +159,14 @@ function stripParticles(token: string): string {
 /**
  * 문서 청크에서 검색 키워드를 뽑는다(빈도 + 길이 가중).
  * 형태소 분석 없이 조사 제거 + 불용어 필터로 근사한다 — 운영자가 콘솔에서 보정하는 전제.
+ *
+ * 토큰 경계의 한글 범위(`가-힣`)는 **완성형 음절만** 가리킨다. 분해형(ㅎ+ㅏ+ㄴ)으로 들어온
+ * 본문은 모든 한글이 구분자로 읽혀 토큰이 **0개**가 되고, 그러면 `documentToCandidates` 가
+ * 모든 청크를 버려 업로드가 「본문이 너무 짧거나 키워드가 없습니다」로 끝난다 — 운영자는
+ * 수만 자짜리 한글 문서를 올려 놓고 그 말을 듣는다. 세는 글자를 먼저 맞춘다(DS 42-3).
  */
 export function extractKeywords(text: string, limit = 8): string[] {
-  const tokens = (text || '')
+  const tokens = toNfc(text)
     .toLowerCase()
     .split(/[^0-9a-z가-힣]+/u)
     .map(stripParticles)

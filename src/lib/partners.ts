@@ -16,6 +16,7 @@
 //
 // [승인 필요] 실제 정산·청구, 파트너 계정 로그인(partner_admin 권한), 화이트라벨.
 import { loadJson, scheduleSave } from '@/lib/storage';
+import { compact } from '@/lib/normalize';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 
 export const PARTNERS_NS = 'partners';
@@ -366,19 +367,21 @@ export interface AccountQuery {
   partnerId?: string | 'direct' | null;
   status?: AccountStatus;
   source?: LeadSource;
-  /** 이름 부분 일치(대소문자·공백 무시) */
+  /** 이름 부분 일치(대소문자·공백·문장부호·유니코드 표기 차이 무시 — `@/lib/normalize` 의 `compact`) */
   q?: string;
 }
 
 export function queryAccounts(filter: AccountQuery = {}): Account[] {
-  const q = (filter.q ?? '').trim().toLowerCase().replace(/\s+/g, '');
+  // 「같은 말인가」는 저장소에 자가 하나다(DS 42-1) — 여기에 따로 적어 두었던 자는
+  // 문장부호와 분해형 한글을 다른 글자로 봐서 「(주)고원」을 「주고원」으로 찾지 못했다.
+  const q = compact(filter.q ?? '');
   return accounts
     .filter((a) => {
       if (filter.partnerId === 'direct' && a.partnerId !== null) return false;
       if (filter.partnerId && filter.partnerId !== 'direct' && a.partnerId !== filter.partnerId) return false;
       if (filter.status && a.status !== filter.status) return false;
       if (filter.source && a.source !== filter.source) return false;
-      if (q && !a.name.toLowerCase().replace(/\s+/g, '').includes(q)) return false;
+      if (q && !compact(a.name).includes(q)) return false;
       return true;
     })
     .map(cloneAccount);

@@ -2984,3 +2984,66 @@ test('창 전체에서 듣는 단축키가 덮개를 건너뛰지 않는다 (DS 
   // 창 전체에서 키를 듣는 자리는 이 단축키와 덮개의 Esc 뿐이다(새로 생기면 같은 판단이 필요하다).
   assert.equal((s.match(/addEventListener\('keydown'/g) || []).length, 4, '창 전체에서 키를 듣는 자리가 늘었다');
 });
+
+/* ══════════ 42순위 — 백로그 소진 후 39차 재감사 (DS 42-x) ══════════ */
+
+/**
+ * DS 42-1 — 「같은 말인가」를 묻는 자는 **한 벌**이다.
+ *
+ * 종전에는 엔진(`compact`)·묶음 열쇠·고객사 검색·콘솔의 탭 검색칸이 저마다 규칙을 적어 두었고,
+ * 어느 것도 유니코드 정규화를 하지 않았다. 자리마다 적는 방식이면 새로 생기는 검색칸이 또 빠진다.
+ */
+test('「같은 말인가」를 묻는 자가 한 벌이다 (DS 42-1)', () => {
+  // ① 서버: 비교용 정규화는 `@/lib/normalize` 의 `compact` 하나를 지난다.
+  const conv = read('src/lib/convlog.ts');
+  assert.match(conv, /function questionKey\(message: string\): string \{\n\s*const key = compact\(message\);/, '묶음 열쇠가 제 자를 따로 적고 있다');
+  const partners = read('src/lib/partners.ts');
+  assert.match(partners, /const q = compact\(filter\.q \?\? ''\);/, '고객사 검색이 제 자를 따로 적고 있다');
+  assert.match(partners, /!compact\(a\.name\)\.includes\(q\)/, '검색어와 이름을 다른 자로 재고 있다');
+  const know = read('src/lib/knowledge.ts');
+  assert.match(know, /const base = compact\(keyword\)\.length >= 2/, '키워드 길이를 매칭과 다른 자로 재고 있다');
+
+  // ② lib 에 「소문자 + 공백 제거」를 손으로 적은 자리가 남아 있지 않다(그 자는 엔진보다 약하다).
+  for (const f of ['src/lib/convlog.ts', 'src/lib/partners.ts', 'src/lib/knowledge.ts', 'src/lib/ingest.ts']) {
+    const body = read(f).split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n');
+    assert.equal(/toLowerCase\(\)\s*\.?\s*replace\(\/\\s/.test(body), false, `${f}: 제 자를 따로 적은 검색 정규화가 남아 있다`);
+  }
+
+  // ③ 콘솔: 검색칸이 넷이든 다섯이든 **같은 함수 하나**를 지난다(콘솔은 lib 을 불러올 수 없다).
+  const s = read('src/app/admin/page.tsx');
+  for (const name of ['kbQuery', 'ruleQuery', 'escQuery', 'accountQuery']) {
+    assert.ok(s.includes(`searchNorm(${name})`), `${name} 가 공통 검색 자를 지나지 않는다`);
+  }
+  assert.equal(/Query\.trim\(\)\.toLowerCase\(\)/.test(s), false, '탭 검색칸이 제 자를 따로 적고 있다');
+  // 비교용 정규화를 적는 자리는 그 함수 하나뿐이다(`docLen` 은 길이를 재는 다른 일이다).
+  assert.equal((s.match(/\.toLowerCase\(\)\s*\n?\s*\.replace\(\/\(\.\)/g) || []).length, 1, '콘솔에 비교용 정규화가 두 벌 이상 있다');
+});
+
+/**
+ * DS 42-3 — 유니코드 정규화를 적는 자리는 **`@/lib/normalize` 한 곳**이다.
+ *
+ * 분해형 한글(ㅎ+ㅏ+ㄴ)은 화면에 완성형과 똑같이 보이지만 문자열로는 다른 글자다.
+ * 자리마다 `.normalize('NFC')` 를 적으면 빠뜨린 자리가 조용히 생긴다 — 그 자리가
+ * 문서 업로드의 토큰 경계였고, 한글 문서가 통째로 버려졌다.
+ */
+test('유니코드 정규화는 한 곳에서만 적는다 (DS 42-3)', () => {
+  // lib 쪽에서 NFC 를 직접 적는 파일은 normalize.ts 뿐이다(나머지는 `toNfc` 를 불러 쓴다).
+  for (const f of ['src/lib/ingest.ts', 'src/lib/convlog.ts', 'src/lib/partners.ts', 'src/lib/knowledge.ts', 'src/lib/chat.ts']) {
+    assert.equal(/normalize\('NFC'\)/.test(read(f)), false, `${f}: 유니코드 정규화를 손으로 적고 있다`);
+  }
+  const norm = read('src/lib/normalize.ts');
+  assert.equal((norm.match(/normalize\('NFC'\)/g) || []).length, 1, 'normalize.ts 안에서도 두 벌로 적혀 있다');
+  assert.match(norm, /export function toNfc\(s: string\): string \{/, '정규화 단일 출처(toNfc)가 없다');
+
+  // 문서 업로드: 자르기·토큰 경계·길이 판정이 모두 정규화 **뒤**에 온다.
+  const ing = read('src/lib/ingest.ts');
+  assert.match(ing, /const text = toNfc\(raw\)\.slice\(0, MAX_DOC_CHARS\)/, '정규화 전에 문서를 자른다');
+  assert.match(ing, /const tokens = toNfc\(text\)\n\s*\.toLowerCase\(\)/, '정규화 전에 토큰을 가른다');
+  const route = read('src/app/api/admin/kb/import/route.ts');
+  assert.match(route, /reqStr\(typeof body\.text === 'string' \? toNfc\(body\.text\) : body\.text, 'text', MAX_DOC_CHARS\)/, '길이를 정규화 전에 잰다');
+
+  // 콘솔도 같은 기준으로 센다 — 화면이 통과시킨 글을 서버가 거절하지 않게.
+  const s = read('src/app/admin/page.tsx');
+  assert.match(s, /function docLen\(v: string\): number \{\n\s*return \(v \|\| ''\)\.normalize\('NFC'\)\.length;/, '콘솔이 코드 단위로 글자를 센다');
+  assert.equal(/imp\.text\.length/.test(s), false, '본문 길이를 코드 단위로 세는 자리가 남아 있다');
+});

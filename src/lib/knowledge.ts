@@ -1,7 +1,7 @@
 // 지식베이스(FAQ). 키워드 스코어링 매칭 — LLM 없이 동작(폴백 전 단계).
 // 추후 관리 콘솔에서 편집 가능하도록 순수 데이터 + 순수 함수로 유지.
 // 매칭은 src/lib/normalize 의 동의어 확장·자모 오타 보정을 거친다(정확 일치 가중치가 가장 높다).
-import { MATCH_WEIGHT, keywordHit, prepare, type PreparedText, type MatchKind } from '@/lib/normalize';
+import { MATCH_WEIGHT, compact, keywordHit, prepare, type PreparedText, type MatchKind } from '@/lib/normalize';
 
 export interface KBEntry {
   id: string;
@@ -119,14 +119,14 @@ export interface KBMatch {
   matched: { keyword: string; kind: MatchKind }[];
 }
 
-/** 한글 비교용 정규화 — 소문자화 + 공백 제거(띄어쓰기 차이 흡수). */
-function normalize(s: string): string {
-  return (s || '').toLowerCase().replace(/\s+/g, '');
-}
-
-/** 키워드 1건의 기여 점수. 2자 이상은 2점, 1자는 1점을 매칭 종류 가중치로 감산한다. */
+/**
+ * 키워드 1건의 기여 점수. 2자 이상은 2점, 1자는 1점을 매칭 종류 가중치로 감산한다.
+ *
+ * 길이는 **매칭이 보는 글자 수**로 잰다(`compact`) — 여기에 자기 정규화를 따로 적어 두면
+ * 분해형 한글 「환불」(코드 6개)이 긴 키워드로 둔갑해 점수 기준이 매칭과 어긋난다(DS 42-1).
+ */
 function keywordScore(keyword: string, kind: MatchKind): number {
-  const base = normalize(keyword).length >= 2 ? 2 : 1;
+  const base = compact(keyword).length >= 2 ? 2 : 1;
   return base * MATCH_WEIGHT[kind];
 }
 
@@ -169,7 +169,10 @@ export function searchKnowledge(query: string, limit = 3, entries: KBEntry[] = K
     .map((entry) => {
       const m = scoreEntry(pre, entry, true);
       let score = m.matched.reduce((acc, x) => acc + MATCH_WEIGHT[x.kind], 0);
-      const q = normalize(entry.question);
+      // 질의 쪽은 이미 `compact` 를 지났으므로(`pre.compact`) 대표 질문도 **같은 자**로 재야 한다.
+      // 종전에는 여기만 문장부호를 남겨 두어, 「환불 되나요?」라는 대표 질문이 「환불되나요」로
+      // 친 질의와 끝내 맞지 않았다 — 가장 가까운 자료가 연관 질문 목록에서 빠진다(DS 42-1).
+      const q = compact(entry.question);
       if (q.includes(pre.compact) || pre.compact.includes(q)) score += 2;
       return { entry, score };
     })

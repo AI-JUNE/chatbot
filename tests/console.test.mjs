@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { importLib } from './_compile.mjs';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
 const TSC = path.join(REPO, 'node_modules', 'typescript', 'bin', 'tsc');
@@ -1965,4 +1966,70 @@ test('덮개가 열려 있으면 검색 단축키가 초점을 빼내지 않는�
   const old = src.replace(/ \|\| document\.querySelector\('\[aria-modal="true"\]'\)/, '');
   assert.notEqual(old, src, '덮개 확인을 찾지 못했다 — 재현이 아무것도 지키지 않는다');
   assert.equal(run(old, true, key('/')).focused, 1, '종전 식에서도 빠져나가지 않는다 — 결함이 재현되지 않는다');
+});
+
+/* ══════════ 42순위 — 백로그 소진 후 39차 재감사 (DS 42-1·42-3) ══════════ */
+
+/**
+ * DS 42-1 — 같은 말을 찾는 자가 **화면마다 달랐다**.
+ *
+ * 헤더 전역 검색만 띄어쓰기를 무시하고(`searchNorm`), 각 탭의 검색칸은 `toLowerCase()` 만 했다.
+ * 그래서 「환불정책」을 치면 헤더에서는 「환불 정책 안내」가 나오고 **안내 자료 탭에서는 0건**이었다.
+ * 어느 쪽이 제품의 뜻인지는 분명하다 — 한 자로 모으고, 그 자가 서버의 `compact` 와 같은지 돌려 본다.
+ */
+test('콘솔의 모든 검색칸이 서버와 같은 자를 쓴다 (DS 42-1)', opts, async () => {
+  const { searchNorm, searchMatch, probeKeywords } = await loadConsoleFns(['searchNorm', 'searchMatch', 'probeKeywords']);
+  const { compact } = await importLib('normalize', []);
+
+  // ① 콘솔 사본과 서버 원본이 **같은 입력에 같은 결과**를 낸다(콘솔은 lib 을 불러올 수 없다).
+  const samples = [
+    '환불 정책 안내', '(주)고원 커머스', 'ENVIRONMENT 인증서', '좋아요오오오',
+    '환불되나요?', '  띄어쓰기  섞인   말  ', 'T-2026-0001', '요금·가격 문의', '',
+    '환불 정책 안내'.normalize('NFD'), '(주)고원 커머스'.normalize('NFD'),
+  ];
+  for (const s of samples) {
+    assert.equal(searchNorm(s), compact(s), `콘솔과 서버의 자가 갈라졌다: ${JSON.stringify(s)}`);
+  }
+
+  // ② 종전 식 재현 — 탭 검색칸이 쓰던 자는 같은 말을 찾지 못한다(이것이 결함의 크기다).
+  const oldNorm = (v) => v.trim().toLowerCase();
+  assert.equal('환불 정책 안내'.toLowerCase().includes(oldNorm('환불정책')), false, '종전 식에서도 찾는다 — 재현이 아무것도 지키지 않는다');
+  assert.equal(searchMatch(searchNorm('환불정책'), '환불 정책 안내'), true, '띄어쓰기를 지운 말로 찾지 못한다');
+  assert.equal(searchMatch(searchNorm('주고원'), '(주)고원 커머스'), true, '문장부호를 지운 말로 찾지 못한다');
+  assert.equal(searchMatch(searchNorm('환불정책'.normalize('NFD')), '환불 정책 안내'), true, '분해형으로 친 말을 다른 글자로 본다');
+  assert.equal(searchMatch(searchNorm('없는말'), '환불 정책 안내'), false, '없는 말까지 찾아낸다');
+  assert.equal(searchMatch(searchNorm('환불'), undefined, ''), false, '빈 칸을 뒤져 찾았다고 한다');
+
+  // ③ 조건 시험(규칙 빌더)도 같은 자를 쓴다 — 빈 표현이 모든 문장에 걸리던 자리도 함께 막는다.
+  assert.deepEqual(probeKeywords('환불 정책이 궁금해요', ['환불정책', '배송']), ['환불정책']);
+  assert.deepEqual(probeKeywords('환불 정책이 궁금해요', ['  ', '···']), [], '빈 표현이 모든 문장에 걸린다');
+
+  // ④ 탭 검색칸이 **전부** 그 자를 지난다 — 하나라도 빠지면 그 탭만 다른 제품이 된다.
+  await loadConsole();
+  for (const name of ['kbQuery', 'ruleQuery', 'escQuery', 'accountQuery']) {
+    assert.ok(cachedJs.includes(`searchNorm(${name})`), `${name} 가 공통 검색 자를 지나지 않는다`);
+  }
+  assert.equal(/Query\.trim\(\)\.toLowerCase\(\)/.test(cachedJs), false, '탭 검색칸이 제 자를 따로 적고 있다');
+});
+
+/**
+ * DS 42-3 — 붙여 넣은 본문의 글자 수를 **코드 단위**로 셌다.
+ *
+ * 분해형 한글은 한 음절이 코드 2~3개다. macOS 파일·PDF 에서 긁어온 본문이 그 모습이라,
+ * 4만 자짜리 한글 문서가 12만 자로 읽혀 **보내 보기도 전에** 「10만 자를 넘습니다」로 막혔다.
+ */
+test('붙여 넣은 본문의 글자 수를 사람이 보는 글자로 센다 (DS 42-3)', opts, async () => {
+  const { docLen } = await loadConsoleFns(['docLen']);
+  const text = '환불 안내입니다. '.repeat(1000);
+  assert.equal(docLen(text), text.length, '완성형에서 글자 수가 달라졌다');
+  assert.ok(text.normalize('NFD').length > text.length * 2, '재현 조건(분해형이 더 길다)이 성립하지 않는다');
+  assert.equal(docLen(text.normalize('NFD')), text.length, '분해형을 더 긴 글로 센다');
+  assert.equal(docLen(''), 0);
+  assert.equal(docLen(undefined), 0, '값이 없을 때 세다가 멈춘다');
+
+  // 화면에 적히는 수와 거절 판정이 **같은 함수**를 지난다 — 둘이 갈라지면 「통과인데 거절」이 된다.
+  await loadConsole();
+  assert.ok(cachedJs.includes('docLen(imp.text) > MAX_DOC_CHARS'), '거절 판정이 제 수로 센다');
+  assert.ok(cachedJs.includes('docLen(imp.text).toLocaleString'), '화면에 적히는 수가 제 수로 센다');
+  assert.equal(/imp\.text\.length/.test(cachedJs), false, '본문 길이를 코드 단위로 세는 자리가 남아 있다');
 });
