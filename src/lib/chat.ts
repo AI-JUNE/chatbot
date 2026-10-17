@@ -9,7 +9,7 @@ import { matchKnowledge, searchKnowledge, buildCitation, type Citation, type KBE
 import { resolveTenant } from '@/lib/tenantKB';
 import { resolveCTA, tenantLabel, type TenantPreset } from '@/lib/tenants';
 import { RULES, type Rule } from '@/lib/rules';
-import { prepare } from '@/lib/normalize';
+import { keywordHit, prepare } from '@/lib/normalize';
 import { listKB, getRuleOverride, listCustomRules, matchCustomRule } from '@/lib/adminStore';
 import { intentLabelMap } from '@/lib/intents';
 import { josa } from '@/lib/refusal';
@@ -155,6 +155,57 @@ function kbReply(entry: KBEntry, query: string, matched: { keyword: string; kind
 export function matchRule(rule: Rule, text: string, compactText: string): boolean {
   if (rule.deny && (rule.deny.test(text) || rule.deny.test(compactText))) return false;
   return rule.test.test(text) || rule.test.test(compactText);
+}
+
+/** 「이 표현은 먼저 걸리는 규칙이 있어 쓰이지 않는다」 (DS 44-3). */
+export interface RuleShadow {
+  /** 먼저 답하는 쪽 — 기본 규칙인가, 먼저 만든 내 규칙인가 */
+  kind: 'builtin' | 'custom';
+  intent: string;
+  label: string;
+  /** 가려지는 표현(운영자가 적은 그대로) */
+  keyword: string;
+}
+
+/**
+ * 커스텀 규칙이 **영원히 걸리지 않는** 상태인지 가린다 (DS 44-3).
+ *
+ * 이 엔진의 순서는 「기본 규칙 → 내가 만든 규칙(만든 순서) → 안내 자료」다. 그래서 운영자가
+ * 「배송」·「요금」처럼 기본 규칙이 이미 쓰는 표현으로 규칙을 만들면 그 규칙은 **한 번도
+ * 쓰이지 않는다**. 종전에는 그 사실을 어디서도 말하지 않았다 — 콘솔은 저장에 성공했다고 하고,
+ * 규칙 미리보기는 「이 규칙이 적용됩니다」라고 적었다. 돌려서 확인했다: 「배송」 규칙을 만들어도
+ * 「배송 언제 와요」에는 기본 규칙 「배송 조회」의 문구가 나간다.
+ *
+ * 재는 자는 엔진과 **같은 것**을 쓴다 — 기본 규칙은 `matchRule`(deny·압축형 포함), 내 규칙은
+ * `keywordHit`(동의어·자모 오타 보정). 여기에 따로 비교식을 적으면 경고가 실제와 어긋난다
+ * (DS 42-2 「같은 말을 재는 자는 한 벌」).
+ *
+ * 표현 하나를 **고객이 보낸 문장**처럼 넣어 본다: 기본 규칙 패턴은 부분 일치라 그 표현이 든
+ * 문장은 대개 같은 판정을 받는다.
+ *
+ * @param selfIntent 지금 저장하려는 규칙의 식별자. 목록에서 **자기 자리까지만** 본다 —
+ *   뒤에 있는 규칙은 이 규칙을 가리지 못한다(아직 없는 규칙이면 끝까지 본다).
+ */
+export function shadowOfRule(keywords: readonly string[], selfIntent = ''): RuleShadow | null {
+  for (const raw of keywords) {
+    const text = String(raw ?? '').trim();
+    if (!text) continue;
+    const pre = prepare(text);
+    if (!pre.compact) continue;
+    for (const r of RULES) {
+      const ov = getRuleOverride(r.intent);
+      if (ov && ov.enabled === false) continue; // 끈 기본 규칙은 가리지 않는다 — 그것이 운영자의 길이다
+      if (matchRule(r, text, pre.compact)) return { kind: 'builtin', intent: r.intent, label: r.label, keyword: text };
+    }
+    for (const c of listCustomRules()) {
+      if (c.intent === selfIntent) break;
+      if (!c.enabled) continue;
+      if (c.keywords.some((k) => keywordHit(pre.compact, pre.jamo, k).kind !== 'none')) {
+        return { kind: 'custom', intent: c.intent, label: c.label, keyword: text };
+      }
+    }
+  }
+  return null;
 }
 
 // ---- 연락처 수집(에스컬레이션 후속 턴) ----

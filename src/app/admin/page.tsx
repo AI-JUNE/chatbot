@@ -27,6 +27,25 @@ interface ImportForm {
 
 const EMPTY_IMPORT: ImportForm = { title: '', category: '문서', maxChars: '500', text: '' };
 
+/** 이 문서를 등록하면 지식베이스에서 무엇이 바뀌는가 — 서버가 재서 보낸다(DS 44-1). */
+interface DocOverlapView {
+  overwrite: { id: string; question: string; source?: string }[];
+  stale: { id: string; question: string; source?: string }[];
+  otherTitles: string[];
+}
+
+/**
+ * 미리보기를 만든 **그때의 입력** (DS 44-2).
+ *
+ * 「등록」은 화면의 후보가 아니라 **지금 칸에 있는 값**을 다시 보낸다. 그래서 미리보기를 만든
+ * 뒤 본문을 갈아 넣고 등록을 누르면, 눈에 보이는 후보 목록과 저장되는 자료가 다르다 —
+ * 미리보기(오등록 방지)가 있는데도 보지 않은 것이 등록된다. 이 한 줄로 두 값을 견준다.
+ */
+function impSig(v: ImportForm): string {
+  // 보내는 값 그대로 견준다(빈 카테고리는 서버 기본값과 같은 '문서'다) — 달라진 척하지 않는다.
+  return JSON.stringify([v.title.trim(), v.category.trim() || '문서', Number(v.maxChars), v.text]);
+}
+
 /** 서버와 같은 한계값 — 보내기 전에 이유를 밝히려면 화면도 알고 있어야 한다.
  *  원본은 `src/lib/ingest.ts`(MAX_DOC_CHARS)와 `src/app/api/admin/kb/import/route.ts`(청크 clamp)이며,
  *  콘솔은 lib 을 불러오지 않으므로(클라이언트 번들) 여기에 옮겨 적고 테스트가 두 값을 맞춰 고정한다.
@@ -108,6 +127,14 @@ interface RuleView {
   effectiveReply: string;
 }
 
+/** 먼저 답하는 규칙 — 이 값이 있으면 그 규칙은 **한 번도 쓰이지 않는다**(DS 44-3). */
+interface RuleShadowView {
+  kind: 'builtin' | 'custom';
+  intent: string;
+  label: string;
+  keyword: string;
+}
+
 interface CustomRuleView {
   intent: string;
   label: string;
@@ -116,6 +143,8 @@ interface CustomRuleView {
   escalate: boolean;
   enabled: boolean;
   createdAt: string;
+  /** 옛 응답에는 없다 — 그때는 「모른다」이므로 아무 말도 하지 않는다. */
+  shadowedBy?: RuleShadowView | null;
 }
 
 interface CustomRuleForm {
@@ -2360,6 +2389,11 @@ export default function AdminPage() {
   /** 문서 붙여넣기 폼을 프로그램이 채운다(등록 완료 뒤 비우기) — 기준선도 함께 옮긴다. */
   const loadImpForm = useCallback((next: ImportForm) => { formBase.current.imp = next; setImp(next); }, []);
   const [candidates, setCandidates] = useState<KBCandidateView[] | null>(null);
+  /** 미리보기를 만든 그때의 입력 — 지금 칸과 다르면 그 후보는 **지난 화면**이다(DS 44-2). */
+  const [impSeen, setImpSeen] = useState('');
+  /** 등록하면 무엇이 덮어써지고 무엇이 남는가 — 등록 뒤에도 남겨 둔다(토스트는 사라진다 · DS 44-1). */
+  const [impOverlap, setImpOverlap] = useState<DocOverlapView | null>(null);
+  const [staleBusy, setStaleBusy] = useState(false);
   // 어느 버튼이 도는지 구분해야 「미리보기 하는 중…」·「등록하는 중…」을 제자리에 쓸 수 있다.
   const [impBusy, setImpBusy] = useState<'' | 'preview' | 'commit'>('');
   const [impErr, setImpErr] = useState<{ title?: string; text?: string; maxChars?: string }>({});
@@ -2367,6 +2401,12 @@ export default function AdminPage() {
 
   const runImport = async (commit: boolean) => {
     if (impBusy) return; // 버튼을 비활성화하지 않으므로(초점 유지) 중복 실행은 여기서 막는다
+    // 보지 않은 것을 등록하지 않는다 (DS 44-2) — 미리보기 뒤에 칸이 바뀌었으면 거절하고 데려간다.
+    if (commit && (!candidates || impSig(imp) !== impSeen)) {
+      notify('문서명·본문·항목 길이가 미리보기와 다릅니다. 「미리보기」를 다시 눌러 확인한 뒤 등록해 주세요.', 'fail');
+      focusErrorField('kb-imp-preview');
+      return;
+    }
     // 어느 항목이 왜 틀렸는지 그 칸 아래에서 밝힌다 — 토스트 한 줄은 어느 칸인지 알려주지 못했다.
     const errs: typeof impErr = {};
     if (!imp.title.trim()) errs.title = '문서명을 입력해 주세요. 답변에 출처로 표시됩니다.';
@@ -2401,13 +2441,24 @@ export default function AdminPage() {
         failed('문서를 처리하지 못했습니다', data.message || data.error);
         return;
       }
+      const overlap = (data.overlap as DocOverlapView | undefined) ?? null;
       if (commit) {
         setCandidates(null);
+        setImpSeen('');
+        // 남는 조각은 폼을 비운 뒤에도 화면에 남긴다 — 사라지는 토스트에 맡기면 아무도 못 본다.
+        setImpOverlap(overlap && overlap.stale.length > 0 ? overlap : null);
         loadImpForm(EMPTY_IMPORT);
         await loadKB();
-        flash(`문서 등록 완료: 신규 ${data.created} · 갱신 ${data.updated}${data.errors?.length ? ` · 실패 ${data.errors.length}` : ''}`);
+        const done = `문서 등록 완료: 신규 ${data.created} · 갱신 ${data.updated}${data.errors?.length ? ` · 실패 ${data.errors.length}` : ''}`;
+        if (overlap && overlap.stale.length > 0) {
+          notify(`${done} · 지난 등록분 ${overlap.stale.length}건이 남았습니다 — 아래에서 확인해 주세요.`, 'fail');
+        } else {
+          flash(done);
+        }
       } else {
         setCandidates(data.candidates as KBCandidateView[]);
+        setImpSeen(impSig(imp));
+        setImpOverlap(overlap);
         flash(`미리보기 ${data.count}개 — 확인한 뒤 「등록」을 누르세요.`);
       }
     } catch {
@@ -2417,6 +2468,9 @@ export default function AdminPage() {
       setImpBusy('');
     }
   };
+
+  /** 화면의 후보가 **지금 칸의 내용이 아니다** (DS 44-2). 등록은 지금 칸을 보내므로 그대로 둘 수 없다. */
+  const impChanged = !!candidates && impSig(imp) !== impSeen;
 
   // ---- Rules ----
   const [rules, setRules] = useState<RuleView[]>([]);
@@ -3271,6 +3325,46 @@ export default function AdminPage() {
     }
   };
 
+  /**
+   * 지난 판에서 남은 조각을 지운다 (DS 44-1).
+   *
+   * 문서를 다시 올릴 때 서버는 **지우지 않는다** — 지우는 것은 운영자가 정할 일이고, 이 문서를
+   * 쓰지 않기로 한 것인지 다른 곳에서 쓰는 것인지는 사람만 안다. 그래서 「남았다」고 말해 두고
+   * 지우는 길만 여기 둔다. 한 건이라도 실패하면 거기서 멈추고 몇 건을 지웠는지 말한다
+   * (조용히 반만 지우고 성공이라 하지 않는다).
+   */
+  const removeStaleDoc = async (items: { id: string; question: string }[]) => {
+    if (staleBusy || items.length === 0) return;
+    const ok = await askConfirm({
+      title: `지난 등록분 ${items.length}건을 지울까요?`,
+      target: items.map((x) => x.question).slice(0, 3).join(' · ') + (items.length > 3 ? ` 외 ${items.length - 3}건` : ''),
+      body: '이번에 올린 문서에 없는 항목입니다. 삭제하면 되돌릴 수 없고, 이 항목을 근거로 답하던 질문은 더 이상 답변되지 않습니다.',
+      confirmLabel: `${items.length}건 삭제`,
+    });
+    if (!ok) return;
+    setStaleBusy(true);
+    let done = 0;
+    try {
+      for (const it of items) {
+        const res = await afetch(`/api/admin/kb?id=${encodeURIComponent(it.id)}`, { method: 'DELETE', headers: authHeaders() });
+        if (on401(res)) return;
+        const data = await res.json();
+        if (!data.ok) {
+          failed(`${done}건을 지웠고 나머지는 지우지 못했습니다`, data.message || data.error);
+          return;
+        }
+        done += 1;
+      }
+      setImpOverlap(null);
+      flash(`지난 등록분 ${done}건을 지웠습니다.`);
+    } catch {
+      failed(done > 0 ? `${done}건을 지웠고 나머지는 지우지 못했습니다` : '지우지 못했습니다');
+    } finally {
+      setStaleBusy(false);
+      await loadKB();
+    }
+  };
+
   const resetAll = async () => {
     const ok = await askConfirm({
       title: '기본 자료로 되돌릴까요?',
@@ -3319,6 +3413,17 @@ export default function AdminPage() {
     }
   };
 
+  /**
+   * 가려진 규칙에서 **먼저 답하는 기본 규칙**으로 데려간다 (DS 44-3).
+   * 거기서 할 수 있는 일이 두 가지 있다: 그 규칙의 답변을 고치기, 또는 그 규칙을 끄기(끄면 내 규칙이 산다).
+   * 검색어가 걸려 있으면 그 규칙이 목록에 없을 수 있으므로 먼저 걷고, 그려진 뒤에 초점을 옮긴다.
+   */
+  const goToBuiltinRule = (intent: string) => {
+    setRuleQuery('');
+    if (typeof window === 'undefined') return;
+    window.setTimeout(() => focusErrorField(`ac-rule-reply-${intent}`), 0);
+  };
+
   const submitCustomRule = async () => {
     const errs: { label?: string; keywords?: string; reply?: string } = {};
     if (!crForm.label.trim()) errs.label = '규칙 이름을 입력해 주세요.';
@@ -3353,7 +3458,16 @@ export default function AdminPage() {
       loadRuleForm(EMPTY_CR_FORM);
       setCrEditing(null);
       await loadRules();
-      flash(crEditing ? '규칙을 수정했습니다.' : '규칙을 추가했습니다.');
+      // 저장했다고만 말하고 끝내지 않는다 — 쓰이지 않을 규칙이면 그 사실을 **저장한 자리에서** 알린다(DS 44-3).
+      const shadow = data.shadowedBy as RuleShadowView | null | undefined;
+      if (shadow) {
+        notify(
+          `규칙을 저장했지만 상담창에서는 쓰이지 않습니다 — 「${shadow.keyword}」${shadow.kind === 'builtin' ? '는 기본 규칙' : '는 먼저 만든 규칙'} 「${shadow.label}」이 먼저 답합니다. 목록에서 다음에 할 일을 확인해 주세요.`,
+          'fail',
+        );
+      } else {
+        flash(crEditing ? '규칙을 수정했습니다.' : '규칙을 추가했습니다.');
+      }
     } catch {
       notify('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.', 'fail');
     } finally {
@@ -4475,17 +4589,23 @@ export default function AdminPage() {
               {impErr.text && <p id="kb-imp-text-err" className="ac-err">{impErr.text}</p>}
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <button type="button" {...busyBtn(impBusy === 'preview', impBusy !== '')} onClick={() => runImport(false)}>
-                {impBusy === 'preview' ? '미리보기 만드는 중…' : '미리보기'}
+              <button id="kb-imp-preview" type="button" {...busyBtn(impBusy === 'preview', impBusy !== '')} onClick={() => runImport(false)}>
+                {impBusy === 'preview' ? '미리보기 만드는 중…' : impChanged ? '다시 미리보기' : '미리보기'}
               </button>
-              <button type="button" {...busyBtn(impBusy === 'commit', impBusy !== '' || !candidates, S.btn)} onClick={() => runImport(true)}>
+              {/* 보지 않은 것을 등록하지 않는다 — 칸이 바뀌면 등록은 막히고 사유를 글로 남긴다(DS 44-2). */}
+              <button type="button" {...busyBtn(impBusy === 'commit', impBusy !== '' || !candidates || impChanged, S.btn)} onClick={() => runImport(true)}>
                 {impBusy === 'commit' ? '등록하는 중…' : '등록'}
               </button>
               {candidates && (
-                <button type="button" style={S.btnGhost} onClick={() => setCandidates(null)}>미리보기 지우기</button>
+                <button type="button" style={S.btnGhost} onClick={() => { setCandidates(null); setImpSeen(''); setImpOverlap(null); }}>미리보기 지우기</button>
               )}
               {!candidates && impBusy === '' && (
                 <span style={S.tag}>먼저 「미리보기」로 잘린 결과를 확인하세요.</span>
+              )}
+              {impChanged && impBusy === '' && (
+                <p className="ac-err" role="status" style={{ margin: 0, flexBasis: '100%' }}>
+                  미리보기를 만든 뒤 입력이 바뀌었습니다. 아래 후보는 지난 내용이므로 「다시 미리보기」로 확인한 뒤 등록할 수 있습니다.
+                </p>
               )}
               {/* 본문 길이는 서버 한계(MAX_DOC_CHARS)와 같은 값·같은 기준(docLen)으로 미리 알린다 — 보낸 뒤 거절당하지 않게. */}
               <span
@@ -4495,9 +4615,44 @@ export default function AdminPage() {
                 {docLen(imp.text).toLocaleString('ko-KR')} / {MAX_DOC_CHARS.toLocaleString('ko-KR')}자
               </span>
             </div>
+            {/* 등록하면 지식베이스에서 무엇이 바뀌는가 — 미리보기에도, 등록한 뒤에도 같은 자리에서 말한다(DS 44-1). */}
+            {impOverlap && (impOverlap.overwrite.length > 0 || impOverlap.stale.length > 0) && (
+              <div role="status" style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+                {impOverlap.overwrite.length > 0 && (
+                  <p className="ac-rulehint" style={{ marginTop: 0 }}>
+                    같은 문서명으로 등록된 <strong>{impOverlap.overwrite.length}건</strong>의 내용이 이번 문서로 바뀝니다(수정판 반영).
+                  </p>
+                )}
+                {impOverlap.otherTitles.length > 0 && (
+                  <p className="ac-err">
+                    이 자리에는 다른 문서(「{impOverlap.otherTitles.join('」·「')}」)의 자료가 들어 있습니다 — 문서명이 달라도 띄어쓰기·문장부호를 뺀 이름이 같으면 같은 자리를 씁니다. 등록하면 그 자료를 덮어씁니다.
+                  </p>
+                )}
+                {impOverlap.stale.length > 0 && (
+                  <>
+                    <p className="ac-err">
+                      지난 등록분 {impOverlap.stale.length}건은 이번 문서에 없습니다 — 등록해도 지워지지 않고 남아, 챗봇이 지난 판과 새 판을 함께 근거로 씁니다.
+                    </p>
+                    <ul className="ac-rulehint" style={{ margin: '4px 0 8px 18px' }}>
+                      {impOverlap.stale.slice(0, 5).map((s) => (
+                        <li key={s.id}>{s.question}{s.source ? ` · 출처 ${s.source}` : ''}</li>
+                      ))}
+                      {impOverlap.stale.length > 5 && <li>외 {impOverlap.stale.length - 5}건</li>}
+                    </ul>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button type="button" {...busyBtn(staleBusy, staleBusy)} onClick={() => removeStaleDoc(impOverlap.stale)}>
+                        {staleBusy ? '지우는 중…' : `지난 등록분 ${impOverlap.stale.length}건 지우기`}
+                      </button>
+                      <span style={S.tag}>다른 곳에서 쓰는 항목이면 그대로 두고 목록에서 하나씩 고쳐도 됩니다.</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            {/* 지난 미리보기는 흐리게 하지 않는다(대비가 떨어진다) — 머리말의 **글자**로 말한다. */}
             {candidates && (
               <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
-                <div style={{ ...S.tag, marginBottom: 6 }}>후보 {candidates.length}개</div>
+                <div style={{ ...S.tag, marginBottom: 6 }}>{impChanged ? '지난 미리보기' : '후보'} {candidates.length}개</div>
                 {candidates.map((c) => (
                   <div key={c.id} style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-sm)', padding: 10, marginBottom: 8 }}>
                     <div style={S.tag}>#{c.chunkIndex} · {c.id} · 출처: {c.source}</div>
@@ -4654,6 +4809,7 @@ export default function AdminPage() {
                       <div className="ac-rulehead">
                         <strong className="ac-rulename">{r.label}</strong>
                         {r.escalate && <span className="ac-pill" style={TONE.warn}>상담원 연결</span>}
+                        {r.shadowedBy && <span className="ac-pill" style={TONE.danger}>가려짐</span>}
                         <button
                           type="button"
                           role="switch"
@@ -4665,6 +4821,19 @@ export default function AdminPage() {
                           <span className="ac-switch-knob" aria-hidden="true" />
                         </button>
                       </div>
+                      {/* 저장은 됐지만 **쓰이지 않는** 규칙 — 그 사실과 다음에 할 일을 함께 적는다(DS 44-3). */}
+                      {r.shadowedBy && (
+                        <p className="ac-err" style={{ margin: '0 0 6px' }}>
+                          「{r.shadowedBy.keyword}」{r.shadowedBy.kind === 'builtin' ? '는 기본 규칙' : '는 먼저 만든 규칙'} 「{r.shadowedBy.label}」이 먼저 답합니다 — 이 규칙은 상담창에서 쓰이지 않습니다.{' '}
+                          {r.shadowedBy.kind === 'builtin' ? (
+                            <button type="button" className="ac-linkbtn" onClick={() => goToBuiltinRule(r.shadowedBy!.intent)}>
+                              「{r.shadowedBy.label}」 기본 규칙 열기
+                            </button>
+                          ) : (
+                            '그 규칙의 표현을 좁히거나 이 규칙의 표현을 바꿔 주세요.'
+                          )}
+                        </p>
+                      )}
                       <div className="ac-ruleflow">
                         <div className="ac-rulecond">
                           <span className="ac-rulekey">고객이 이렇게 말하면</span>
@@ -4844,15 +5013,22 @@ export default function AdminPage() {
                   {ruleProbe.trim() && probeHits.length > 0 && crForm.reply.trim() ? (
                     <div className="ac-pv-bot">
                       {crForm.reply.trim()}
-                      <span className="ac-pv-cite">「{probeHits[0]}」 표현으로 이 규칙이 적용됩니다{crForm.escalate ? ' · 이어서 상담원 접수 안내' : ''}</span>
+                      {/* 「적용됩니다」라고 단정하지 않는다 — 먼저 걸리는 규칙이 있으면 이 답은 나가지 않는다(DS 44-3). */}
+                      <span className="ac-pv-cite">이 문장에 「{probeHits[0]}」 표현이 있습니다{crForm.escalate ? ' · 적용되면 이어서 상담원 접수 안내' : ''}</span>
                     </div>
                   ) : ruleProbe.trim() ? (
                     <p className="ac-pv-note">{probeHits.length === 0 ? '이 문장에는 입력한 표현이 없어 규칙이 적용되지 않습니다.' : '답변을 입력하면 말풍선으로 보여 드립니다.'}</p>
                   ) : (
-                    <p className="ac-pv-note">문장을 입력하면 이 규칙이 적용되는지 바로 확인할 수 있습니다.</p>
+                    <p className="ac-pv-note">문장을 입력하면 이 규칙의 표현이 들어 있는지 바로 확인할 수 있습니다.</p>
                   )}
                 </div>
-                <p className="ac-rulehint" style={{ marginTop: 6 }}>여기서는 표현 포함 여부만 봅니다. 기본 규칙·안내 자료까지 합친 최종 답은 「응답 테스트」에서 확인하세요.</p>
+                {/* 가려진 규칙을 고치는 중이면 **그 사실**이 미리보기 옆에 있어야 한다 — 말풍선만 보면 나가는 답이라 믿는다. */}
+                {crEditing && customRules.find((r) => r.intent === crEditing)?.shadowedBy && (
+                  <p className="ac-err" style={{ marginTop: 6 }}>
+                    지금은 기본 규칙·먼저 만든 규칙이 먼저 답해 이 규칙이 쓰이지 않습니다(목록의 「가려짐」 참고).
+                  </p>
+                )}
+                <p className="ac-rulehint" style={{ marginTop: 6 }}>여기서는 표현 포함 여부만 봅니다. 기본 규칙이나 먼저 만든 규칙이 같은 표현을 쓰면 그쪽이 먼저 답하므로, 저장한 뒤 목록의 「가려짐」 표시와 「응답 테스트」에서 확인하세요.</p>
               </div>
 
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>

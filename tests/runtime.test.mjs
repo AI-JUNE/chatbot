@@ -3620,3 +3620,133 @@ test('접수 목록은 한 묶음씩 내려오고 대기 중인 요청은 상한
   assert.equal(live3.tickets.length, 3);
   assert.equal(live3.tickets.every((t) => t.status === 'open'), true, '대기 건을 두고 완료 건을 먼저 담는다');
 });
+
+/* ══════════ 디자인 스프린트 — 41차 재감사 (DS 44-1·44-3) ══════════ */
+
+/**
+ * DS 44-1 — 같은 이름으로 다시 들어온 것이 **앞의 것을 조용히 밀어냈다**.
+ *
+ * ① 문서를 다시 올리면 후보 id 가 그대로 겹친다(`doc_<문서명>_001`). 수정판을 갈아 끼우는 것은
+ *    의도지만, **조각 수가 줄면** 지난 판의 꼬리가 지식베이스에 남아 봇이 두 판본을 함께 근거로
+ *    쓴다 — 화면은 「신규 0 · 갱신 2」라고만 적었다.
+ * ② 문서명이 달라도 띄어쓰기·문장부호를 뺀 이름이 같으면 같은 자리를 쓴다(남의 문서를 덮어쓴다).
+ * ③ 자동 식별자가 `Date.now()` 하나였다 — 같은 밀리초의 둘째는 첫째와 같은 id 를 받아 **덮어썼다**.
+ */
+test('다시 올린 문서가 남기는 것과 덮어쓰는 것을 등록 전에 말한다 (DS 44-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  // 세 모듈이 **한 컴파일 결과를 공유**해야 KB 상태가 통한다(importLib 캐시 키 = [이름, ...deps]).
+  const DEPS = ['adminStore', 'ingest', 'knowledge', 'normalize', 'storage', 'logger', 'monitoring', 'refusal'];
+  const lib = (name) => importLib(name, DEPS.filter((n) => n !== name));
+  const store = await lib('adminStore');
+  const ingest = await lib('ingest');
+  store.resetKB();
+  for (const r of store.listCustomRules()) store.deleteCustomRule(r.intent);
+
+  const doc = (...sections) => ['# 요금 안내', ...sections].join('\n');
+  const SEC = {
+    base: ['## 기본 요금', '월 10만원입니다. 기본 요금은 계약 시작월부터 청구됩니다. 자세한 안내는 담당자에게 문의하세요.', ''],
+    sale: ['## 할인 정책', '연간 결제 시 10% 할인됩니다. 할인은 계약 기간 전체에 적용됩니다.', ''],
+    back: ['## 환불 규정', '환불은 신청일 기준으로 처리됩니다. 환불 규정은 약관에 따릅니다. 상담원에게 문의하세요.', ''],
+  };
+  const commit = (cands) => store.bulkUpsertKB(cands.map(({ chunkIndex, ...e }) => e));
+
+  // ── ③ 같은 밀리초에 잇따라 만들어도 겹치지 않는다(종전 식에서는 둘째가 첫째를 덮어썼다).
+  const made = [1, 2, 3].map((n) => store.upsertCustomRule({ label: `R${n}`, keywords: [`kw${n}`], reply: `답${n}` }));
+  assert.equal(made.every((r) => r.ok && r.created), true, '잇따라 만든 규칙이 「수정」으로 기록된다');
+  assert.equal(new Set(made.map((r) => r.rule.intent)).size, 3, '자동 식별자가 겹친다');
+  assert.equal(store.listCustomRules().length, 3, '만든 규칙이 사라졌다');
+  const kbIds = [1, 2].map((n) => store.upsertKB({ question: `q${n}`, keywords: [`kq${n}`], answer: `a${n}` }));
+  assert.equal(new Set(kbIds.map((r) => r.entry.id)).size, 2, '자료 식별자가 겹친다');
+  assert.equal(kbIds.every((r) => r.created), true, '새로 만든 자료가 기존 자료를 덮어썼다');
+
+  // ── ① 세 조각을 올린 뒤, 한 조각만 남긴 수정판을 다시 올린다.
+  const v1 = ingest.documentToCandidates(doc(...SEC.base, ...SEC.sale, ...SEC.back), { title: '요금 안내', category: '요금' });
+  assert.equal(v1.length, 3, '재현 조건(조각 3개)이 성립하지 않는다');
+  assert.equal(commit(v1).created.length, 3);
+
+  const v2 = ingest.documentToCandidates(doc(...SEC.base), { title: '요금 안내', category: '요금' });
+  assert.equal(v2.length, 1);
+  assert.deepEqual(v2.map((c) => c.id), [v1[0].id], '같은 문서명의 수정판이 다른 자리를 쓴다');
+
+  const prefix = ingest.docIdPrefix('요금 안내');
+  const ov = store.docOverlap(prefix, v2.map((c) => c.id), '요금 안내');
+  assert.deepEqual(ov.overwrite.map((x) => x.id), [v1[0].id], '갈아 끼우는 항목을 가리지 못한다');
+  assert.deepEqual(ov.stale.map((x) => x.id), [v1[1].id, v1[2].id], '남는 지난 조각을 말하지 않는다');
+  assert.deepEqual(ov.otherTitles, [], '같은 문서인데 남의 문서라고 말한다');
+
+  // 종전 식 재현 — 등록해도 남는다(지우는 것은 사람이 정한다). 그 사이 봇은 두 판본을 함께 쓴다.
+  const after = commit(v2);
+  assert.equal(after.created.length, 0);
+  assert.equal(after.updated.length, 1);
+  const left = store.listKB().filter((e) => e.id.startsWith(`${prefix}_`));
+  assert.equal(left.length, 3, '재현 조건(지난 조각이 남는다)이 성립하지 않는다');
+  const knowledge = await lib('knowledge');
+  const hit = knowledge.matchKnowledge('환불 규정이 어떻게 되나요', 2, store.listKB());
+  assert.equal(hit?.entry.id, v1[2].id, '지난 판의 조각이 더 이상 답하지 않는다면 이 결함은 사라진 것이다');
+
+  // 지운 뒤에는 남는 것이 없다고 말한다(화면의 「지난 등록분 지우기」가 이 경로를 쓴다).
+  for (const s of ov.stale) assert.equal(store.deleteKB(s.id), true);
+  assert.deepEqual(store.docOverlap(prefix, v2.map((c) => c.id), '요금 안내').stale, []);
+
+  // ── ② 문장부호만 다른 문서명은 **같은 자리**를 쓴다 — 남의 문서를 덮어쓴다고 말해야 한다.
+  assert.equal(ingest.docIdPrefix('요금 안내!!'), prefix, '재현 조건(슬러그 충돌)이 성립하지 않는다');
+  const other = ingest.documentToCandidates(doc(...SEC.base), { title: '요금 안내!!', category: '요금' });
+  const ov2 = store.docOverlap(ingest.docIdPrefix('요금 안내!!'), other.map((c) => c.id), '요금 안내!!');
+  assert.deepEqual(ov2.otherTitles, ['요금 안내'], '다른 문서를 덮어쓰는데 아무 말이 없다');
+  assert.equal(ov2.overwrite.length, 1, '덮어쓰는 항목을 가리지 못한다');
+
+  // 사전(문서명)을 모르면 아무것도 단정하지 않는다 — 「남의 것」이라고 지어내지 않는다.
+  assert.deepEqual(store.docOverlap(prefix, other.map((c) => c.id), '').otherTitles, []);
+});
+
+/**
+ * DS 44-3 — 운영자가 만든 규칙이 **한 번도 쓰이지 않는데** 아무도 그 말을 하지 않았다.
+ *
+ * 엔진 순서는 「기본 규칙 → 내가 만든 규칙(만든 순서) → 안내 자료」다. 그래서 「배송」·「요금」처럼
+ * 기본 규칙이 이미 쓰는 표현으로 규칙을 만들면 그 규칙은 영원히 걸리지 않는다. 종전 콘솔은
+ * 저장에 성공했다고 하고, 규칙 미리보기는 「이 규칙이 적용됩니다」라고 적었다.
+ */
+test('가려진 규칙을 가려내고, 가린 기본 규칙을 끄면 되살아난다 (DS 44-3)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const chat = await eng('chat');
+  const store = await eng('adminStore');
+  store.resetKB();
+  for (const r of store.listCustomRules()) store.deleteCustomRule(r.intent);
+
+  store.upsertCustomRule({ intent: 'cr_ship', label: '우리 배송 안내', keywords: ['배송', '택배'], reply: '[우리] 2~3일 안에 도착합니다.' });
+  store.upsertCustomRule({ intent: 'cr_sat', label: '토요일 운영', keywords: ['토요일'], reply: '[우리] 토요일은 09~13시입니다.' });
+  store.upsertCustomRule({ intent: 'cr_sat2', label: '토요일 운영(둘째)', keywords: ['토요일 영업'], reply: '[우리] 둘째 규칙입니다.' });
+
+  // ① 종전 식 재현 — 가려진 규칙의 답은 상담창에 **나가지 않는다**(기본 규칙 문구가 나간다).
+  const shipped = chat.replyTo('배송 언제 와요', 'ds44-1');
+  assert.equal(shipped.intent, 'delivery', '재현 조건(기본 규칙이 먼저 답한다)이 성립하지 않는다');
+  assert.equal(shipped.reply.includes('[우리]'), false, '가려진 규칙의 답이 이미 나가고 있다');
+
+  // ② 가린 쪽을 이름으로 말한다 — 기본 규칙인가, 먼저 만든 내 규칙인가.
+  const byBuiltin = chat.shadowOfRule(['배송', '택배'], 'cr_ship');
+  assert.deepEqual(byBuiltin, { kind: 'builtin', intent: 'delivery', label: '배송 조회', keyword: '배송' });
+  const byCustom = chat.shadowOfRule(['토요일 영업'], 'cr_sat2');
+  assert.deepEqual(byCustom, { kind: 'custom', intent: 'cr_sat', label: '토요일 운영', keyword: '토요일 영업' });
+
+  // ③ 가려지지 않은 규칙에는 아무 말도 하지 않는다(멀쩡한 규칙에 경고를 붙이지 않는다).
+  assert.equal(chat.shadowOfRule(['토요일'], 'cr_sat'), null, '먼저 만든 규칙이 뒤의 규칙에 가려졌다고 말한다');
+  assert.equal(chat.replyTo('토요일에도 하나요', 'ds44-2').reply.includes('[우리]'), true, '가려지지 않은 규칙이 쓰이지 않는다');
+
+  // ④ 끈 규칙은 가리지 않는다 — 화면이 「그 기본 규칙을 끄세요」라고 말할 수 있는 근거다.
+  store.setRuleOverride('delivery', { enabled: false });
+  assert.equal(chat.shadowOfRule(['배송'], 'cr_ship'), null, '끈 기본 규칙이 여전히 가린다고 말한다');
+  assert.equal(chat.replyTo('배송 언제 와요', 'ds44-3').reply.includes('[우리]'), true, '끈 뒤에도 내 규칙이 쓰이지 않는다');
+  store.setRuleOverride('delivery', { enabled: true });
+
+  // ⑤ 끈 내 규칙도 남을 가리지 않는다.
+  store.upsertCustomRule({ intent: 'cr_sat', enabled: false });
+  assert.equal(chat.shadowOfRule(['토요일 영업'], 'cr_sat2'), null, '꺼 둔 규칙이 남을 가린다');
+  store.upsertCustomRule({ intent: 'cr_sat', enabled: true });
+
+  // ⑥ 아직 저장하지 않은 규칙(식별자 없음)도 판정할 수 있다 — 저장 응답이 쓰는 경로다.
+  assert.equal(chat.shadowOfRule(['택배']).kind, 'builtin');
+  assert.equal(chat.shadowOfRule(['토요일 영업']).intent, 'cr_sat', '목록 끝에 붙을 규칙을 가리지 못한다');
+  // 빈 표현·공백은 아무것도 가리지 않는다(없는 경고를 만들지 않는다).
+  assert.equal(chat.shadowOfRule(['', '   ']), null);
+  assert.equal(chat.shadowOfRule([]), null);
+});

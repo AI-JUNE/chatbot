@@ -204,6 +204,19 @@ function slugify(s: string): string {
   return base || 'doc';
 }
 
+/**
+ * 문서 하나가 쓰는 **id 앞자리** — `doc_<문서명 슬러그>` (DS 44-1).
+ *
+ * 왜 내보내는가: 같은 문서명으로 다시 올리면 후보 id 가 그대로 겹친다(그래서 수정판이
+ * 덮어써지는 것은 의도다). 문제는 **줄어든 문서**다 — 지난번 10조각 중 4조각만 남긴 수정판을
+ * 올리면 5~10번 조각이 지식베이스에 **그대로 남아** 봇이 두 판본을 섞어 답한다. 그걸 화면이
+ * 말해 주려면 「이 문서가 쓰는 자리」를 등록하는 쪽(`adminStore.docOverlap`)도 같은 식으로
+ * 계산할 수 있어야 한다. 두 벌로 적으면 어긋나는 날 경고가 조용히 사라진다.
+ */
+export function docIdPrefix(title: string): string {
+  return `doc_${slugify((title || '').trim() || '업로드 문서')}`;
+}
+
 /** 청크 첫 문장(또는 제목)을 대표 질문으로 만든다. */
 function toQuestion(chunk: DocChunk, title: string): string {
   const head = chunk.heading.split(' > ').pop()?.trim();
@@ -217,7 +230,7 @@ function toQuestion(chunk: DocChunk, title: string): string {
 export function documentToCandidates(raw: string, opts: IngestOptions): KBCandidate[] {
   const title = (opts.title || '').trim() || '업로드 문서';
   const category = (opts.category || '').trim() || '문서';
-  const prefix = (opts.idPrefix || '').trim() || `doc_${slugify(title)}`;
+  const prefix = (opts.idPrefix || '').trim() || docIdPrefix(title);
   const chunks = chunkDocument(raw, opts);
 
   return chunks.map((chunk) => {

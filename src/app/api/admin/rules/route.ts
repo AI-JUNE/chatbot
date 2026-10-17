@@ -2,7 +2,8 @@
 // 내장 룰: 활성화·응답문만 편집(패턴은 코드 관리). 커스텀 룰: 키워드 기반 추가/수정/삭제(POST/DELETE).
 import { NextRequest } from 'next/server';
 import { RULES } from '@/lib/rules';
-import { getRuleOverride, setRuleOverride, listCustomRules, upsertCustomRule, deleteCustomRule, MAX_RULE_REPLY_LEN, CustomRuleInput } from '@/lib/adminStore';
+import { shadowOfRule } from '@/lib/chat';
+import { getRuleOverride, setRuleOverride, listCustomRules, upsertCustomRule, deleteCustomRule, MAX_RULE_REPLY_LEN, CustomRuleInput, type CustomRule } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, reqQuery, optStr, requireAdmin, isAdminAuthed } from '@/lib/http';
 import { STALE_TARGET_MESSAGE, tooLongMessage } from '@/lib/refusal';
@@ -24,10 +25,18 @@ function ruleView(intent: string) {
   };
 }
 
+/**
+ * 커스텀 룰 한 건 — **지금 이 규칙이 쓰이는가**를 함께 말한다 (DS 44-3).
+ * 판정은 엔진 자신(`shadowOfRule`)이 한다. 화면이 패턴을 다시 해석하면 실제와 어긋난다.
+ */
+function customRuleView(r: CustomRule) {
+  return { ...r, shadowedBy: r.enabled ? shadowOfRule(r.keywords, r.intent) : null };
+}
+
 export async function GET(req: NextRequest) {
   const denied = requireAdmin(req);
   if (denied) return denied;
-  return ok({ rules: RULES.map((r) => ruleView(r.intent)), customRules: listCustomRules() });
+  return ok({ rules: RULES.map((r) => ruleView(r.intent)), customRules: listCustomRules().map(customRuleView) });
 }
 
 // 커스텀 룰 생성/수정(키워드 기반). intent 미지정 시 자동 생성.
@@ -54,7 +63,8 @@ export async function POST(req: NextRequest) {
     detail: `${result.created ? '생성' : '수정'}: ${result.rule.label.slice(0, 60)}`,
     authed: isAdminAuthed(req),
   });
-  return ok({ rule: result.rule, created: result.created });
+  // 저장은 됐지만 **쓰이지 않을** 수 있다 — 그 사실을 저장한 자리에서 바로 말한다(DS 44-3).
+  return ok({ rule: result.rule, created: result.created, shadowedBy: customRuleView(result.rule).shadowedBy });
 }
 
 // 커스텀 룰 삭제: DELETE /api/admin/rules?intent=cr_xxx

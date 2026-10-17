@@ -350,7 +350,9 @@ test('시나리오 룰이 「조건 → 응답」 카드 빌더와 미리보기�
   assert.match(t, /busyBtn\(crBusy, crBusy/, '저장 중 잠금');
   // 미리보기: 시험 문장 → 적용 여부 + 말풍선, 최종 판정은 응답 테스트로 안내
   assert.match(t, /role="log" aria-live="polite"/, '미리보기는 live region');
-  assert.match(t, /표현으로 이 규칙이 적용됩니다/, '적용 근거를 보여준다');
+  // 적용 근거(어느 표현이 걸렸는가)는 그대로 보여 주지만 「적용됩니다」라고 단정하지 않는다 —
+  // 먼저 걸리는 규칙이 있으면 이 답은 나가지 않는다(DS 44-3 이 고친 문장).
+  assert.match(t, /이 문장에 「\{probeHits\[0\]\}」 표현이 있습니다/, '적용 근거를 보여준다');
   assert.match(t, /규칙이 적용되지 않습니다/, '미적용 상태도 알려준다');
   assert.match(t, /「응답 테스트」에서 확인하세요/, '근사치임을 밝힌다');
   // 빈 상태·검색 0건·삭제 확인·토스트
@@ -2151,4 +2153,124 @@ test('접수 목록을 한 묶음씩 받고 전체 수를 따로 말한다 (DS 4
   // ⑥ 첫 렌더(응답 전)에는 잘렸다고 말하지 않는다 — 불러오는 중 ≠ 잘림.
   const html = await render();
   assert.equal(html.includes('건만 불러왔습니다'), false, '응답 전에 잘렸다고 단정한다');
+});
+
+/**
+ * DS 44-1 — 다시 올린 문서가 **지난 판의 조각을 남기는데** 화면은 「신규 0 · 갱신 2」만 말했다.
+ * 등록 전에 무엇이 바뀌고 무엇이 남는지 말하고, 남은 것을 지우는 길까지 같은 자리에 둔다.
+ */
+test('다시 올린 문서가 덮어쓰는 것·남기는 것을 화면이 말한다 (DS 44-1)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const route = readFileSync(new URL('../src/app/api/admin/kb/import/route.ts', import.meta.url), 'utf8');
+  const store = readFileSync(new URL('../src/lib/adminStore.ts', import.meta.url), 'utf8');
+
+  // ① 서버가 **등록 전에** 잰다 — 등록 뒤에 재면 갈아 끼운 것과 남는 것을 구분할 수 없다.
+  assert.match(route, /const overlap = docOverlap\(docIdPrefix\(title\.value\), candidates\.map\(\(c\) => c\.id\), title\.value\);/, '라우트가 바뀌는 자리를 재지 않는다');
+  assert.ok(route.indexOf('const overlap =') < route.indexOf('const result = bulkUpsertKB('), '등록 뒤에 재고 있다');
+  assert.match(route, /return ok\(\{ committed: false, count: candidates\.length, candidates, overlap \}\)/, '미리보기가 바뀌는 자리를 말하지 않는다');
+  assert.match(route, /지난 등록분 \$\{overlap\.stale\.length\}건 남음/, '남은 조각이 변경 이력에 남지 않는다');
+  // id 앞자리는 **한 벌**이다 — 두 벌로 적으면 어긋나는 날 경고가 조용히 사라진다.
+  assert.match(store, /export function docOverlap\(prefix: string, candidateIds: readonly string\[\], title: string\): DocOverlap/, '겹치는 자리를 재는 함수가 없다');
+  assert.equal(/doc_\$\{slugify/.test(src), false, '콘솔이 id 앞자리를 따로 만든다');
+
+  // ② 자동 식별자가 같은 밀리초에 겹치지 않는다(겹치면 둘째가 첫째를 덮어쓴다).
+  assert.match(store, /function autoId\(prefix: string, taken: \(id: string\) => boolean\): string/, '겹치지 않는 식별자 생성기가 없다');
+  // 자동 식별자를 만드는 자리는 둘뿐이다 — 둘 다 그 문을 지난다(주석의 옛 식은 설명이므로 센다는 뜻이 아니다).
+  assert.match(store, /const id = \(input\.id \|\| ''\)\.trim\(\) \|\| autoId\('kb', \(v\) => kbEntries\.some/, '자료 식별자가 밀리초 하나로 만들어진다');
+  assert.match(store, /const intent = \(input\.intent \|\| ''\)\.trim\(\) \|\| autoId\('cr', \(v\) => customRules\.some/, '규칙 식별자가 밀리초 하나로 만들어진다');
+
+  // ③ 화면은 세 가지를 **글로** 말한다: 덮어쓰기 · 다른 문서 · 남는 것.
+  const imp = src.slice(src.indexOf('aria-labelledby="ac-kb-import"'), src.indexOf('{/* ── 우: 편집 폼(스티키) ── */}'));
+  assert.ok(imp.includes('의 내용이 이번 문서로 바뀝니다'), '덮어쓰는 건수를 말하지 않는다');
+  assert.ok(imp.includes('이 자리에는 다른 문서'), '남의 문서를 덮어쓰는 것을 말하지 않는다');
+  assert.ok(imp.includes('등록해도 지워지지 않고 남아'), '남는 조각을 말하지 않는다');
+  assert.ok(imp.includes('지난 등록분'), '남은 것을 지우는 길이 없다');
+  assert.match(imp, /onClick=\{\(\) => removeStaleDoc\(impOverlap\.stale\)\}/, '지우기 버튼이 남은 목록을 받지 않는다');
+  // 등록한 뒤에도 남는다 — 사라지는 토스트에 맡기면 아무도 보지 못한다.
+  assert.match(src, /setImpOverlap\(overlap && overlap\.stale\.length > 0 \? overlap : null\)/, '등록 뒤에 경고를 버린다');
+  assert.match(src, /지난 등록분 \$\{overlap\.stale\.length\}건이 남았습니다/, '등록 결과가 남은 것을 말하지 않는다');
+  // 되돌릴 수 없는 일이라 확인을 거치고, 반만 지우고 성공이라 하지 않는다.
+  assert.match(src, /askConfirm\(\{\s*\n\s*title: `지난 등록분 \$\{items\.length\}건을 지울까요\?`/, '남은 조각을 확인 없이 지운다');
+  assert.ok(src.includes('건을 지웠고 나머지는 지우지 못했습니다'), '중간에 실패한 사실을 숨긴다');
+
+  // ④ 첫 렌더에는 아무 경고도 없다 — 재 보기 전에 단정하지 않는다.
+  const html = await render();
+  assert.equal(html.includes('등록해도 지워지지 않고 남아'), false, '재 보기도 전에 남는다고 말한다');
+});
+
+/**
+ * DS 44-2 — 「등록」은 화면의 후보가 아니라 **지금 칸의 값**을 다시 보낸다.
+ * 미리보기를 만든 뒤 본문을 갈아 넣고 등록하면, 보지 않은 것이 등록됐다(미리보기의 존재 이유가 무너진다).
+ */
+test('미리보기 뒤에 입력이 바뀌면 보지 않은 것을 등록하지 않는다 (DS 44-2)', opts, async () => {
+  const { impSig } = await loadConsoleFns(['impSig']);
+  const form = { title: '요금 안내', category: '문서', maxChars: '500', text: '본문입니다.' };
+
+  // 같은 입력은 같은 값 — 공백·빈 카테고리는 **보내는 값**과 같은 기준으로 다룬다(없는 변경을 만들지 않는다).
+  assert.equal(impSig(form), impSig({ ...form, title: ' 요금 안내 ' }));
+  assert.equal(impSig(form), impSig({ ...form, maxChars: ' 500 ' }));
+  assert.equal(impSig({ ...form, category: '' }), impSig({ ...form, category: '문서' }), '빈 카테고리를 다른 값으로 본다');
+  // 보내는 값이 달라지면 다른 값이다 — 네 칸 전부가 후보를 바꾼다.
+  for (const patch of [{ title: '다른 문서' }, { category: '요금' }, { maxChars: '800' }, { text: '다른 본문입니다.' }]) {
+    assert.notEqual(impSig(form), impSig({ ...form, ...patch }), `이 칸이 바뀌어도 같은 미리보기로 본다: ${Object.keys(patch)[0]}`);
+  }
+
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // ① 등록은 미리보기와 입력이 같을 때만 간다(막는 자리는 보내기 **전**이다).
+  assert.match(src, /if \(commit && \(!candidates \|\| impSig\(imp\) !== impSeen\)\) \{/, '바뀐 입력을 그대로 등록한다');
+  assert.ok(src.includes('미리보기와 다릅니다'), '막은 이유를 말하지 않는다');
+  assert.match(src, /focusErrorField\('kb-imp-preview'\)/, '다시 미리보기 할 자리로 데려가지 않는다');
+  assert.match(src, /id="kb-imp-preview"/, '데려갈 버튼에 이름이 없다');
+  // ② 미리보기를 만든 그때의 입력을 들고 있는다.
+  assert.match(src, /setImpSeen\(impSig\(imp\)\)/, '미리보기 시점의 입력을 기억하지 않는다');
+  assert.match(src, /const impChanged = !!candidates && impSig\(imp\) !== impSeen;/, '바뀜 판정이 없다');
+  // ③ 버튼은 `disabled` 가 아니라 aria 로 알린다(눌러 초점을 잃지 않는다 — DS 8-1).
+  assert.match(src, /busyBtn\(impBusy === 'commit', impBusy !== '' \|\| !candidates \|\| impChanged, S\.btn\)/, '등록 버튼이 바뀜을 모른다');
+  assert.equal(/disabled=\{impChanged/.test(src), false, 'disabled 로 막아 초점을 잃는다');
+  // ④ 화면의 후보가 「지난 것」임을 글자로 말한다(흐리게만 하면 대비가 떨어진다).
+  assert.ok(src.includes('지난 미리보기'), '지난 후보를 그대로 「후보」라 적는다');
+  assert.ok(src.includes('미리보기를 만든 뒤 입력이 바뀌었습니다'), '왜 등록이 막혔는지 그 자리에서 말하지 않는다');
+  assert.match(src, /\{impBusy === 'preview' \? '미리보기 만드는 중…' : impChanged \? '다시 미리보기' : '미리보기'\}/, '다시 미리보기 하라고 말하지 않는다');
+});
+
+/**
+ * DS 44-3 — 가려진 규칙(먼저 걸리는 규칙이 있어 **한 번도 쓰이지 않는** 규칙)을 화면이 말해야 한다.
+ * 판정은 엔진이 한다 — 콘솔이 패턴을 다시 해석하면 경고가 실제와 어긋난다.
+ */
+test('가려져 쓰이지 않는 규칙을 화면이 말하고 다음에 할 일을 준다 (DS 44-3)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const route = readFileSync(new URL('../src/app/api/admin/rules/route.ts', import.meta.url), 'utf8');
+  const chat = readFileSync(new URL('../src/lib/chat.ts', import.meta.url), 'utf8');
+
+  // ① 판정은 엔진과 **같은 자**로 한다 — 기본 규칙은 matchRule(deny·압축형), 내 규칙은 keywordHit.
+  assert.match(chat, /export function shadowOfRule\(keywords: readonly string\[\], selfIntent = ''\): RuleShadow \| null/, '가려짐 판정이 엔진에 없다');
+  assert.match(chat, /if \(matchRule\(r, text, pre\.compact\)\) return \{ kind: 'builtin'/, '기본 규칙을 엔진과 다른 자로 잰다');
+  assert.match(chat, /keywordHit\(pre\.compact, pre\.jamo, k\)\.kind !== 'none'/, '내 규칙을 엔진과 다른 자로 잰다');
+  assert.match(chat, /if \(ov && ov\.enabled === false\) continue;/, '끈 기본 규칙이 여전히 가린다고 말한다');
+  assert.match(chat, /if \(c\.intent === selfIntent\) break;/, '뒤에 있는 규칙이 앞의 규칙을 가린다고 말한다');
+
+  // ② 조회·저장 응답이 그 판정을 싣는다(저장은 됐지만 쓰이지 않는 규칙을 그 자리에서 알린다).
+  assert.match(route, /shadowedBy: r\.enabled \? shadowOfRule\(r\.keywords, r\.intent\) : null/, '목록이 가려짐을 말하지 않는다');
+  assert.match(route, /customRules: listCustomRules\(\)\.map\(customRuleView\)/, '조회가 가려짐을 싣지 않는다');
+  assert.match(route, /shadowedBy: customRuleView\(result\.rule\)\.shadowedBy/, '저장 응답이 가려짐을 말하지 않는다');
+
+  // ③ 목록이 그 사실과 **다음에 할 일**을 함께 적는다 — 기본 규칙이면 그 규칙으로 데려간다.
+  const t = src.slice(src.indexOf("{tab === 'rules' &&"), src.indexOf("{tab === 'esc' &&"));
+  assert.ok(t.includes('가려짐'), '가려진 규칙에 표시가 없다');
+  assert.ok(t.includes('이 먼저 답합니다 — 이 규칙은 상담창에서 쓰이지 않습니다'), '쓰이지 않는다는 사실을 말하지 않는다');
+  assert.ok(t.includes('기본 규칙 열기'), '먼저 답하는 기본 규칙으로 데려가지 않는다');
+  assert.ok(t.includes('그 규칙의 표현을 좁히거나'), '먼저 만든 내 규칙일 때 할 일을 말하지 않는다');
+  assert.match(src, /const goToBuiltinRule = \(intent: string\) => \{\n\s*setRuleQuery\(''\);/, '검색에 가려진 규칙으로 데려가다 길을 잃는다');
+  assert.match(src, /focusErrorField\(`ac-rule-reply-\$\{intent\}`\)/, '데려간 뒤 초점을 옮기지 않는다');
+  // 저장 직후에도 말한다(목록을 내려다보지 않는 사람을 위해).
+  assert.match(src, /규칙을 저장했지만 상담창에서는 쓰이지 않습니다/, '저장 응답의 가려짐을 흘려보낸다');
+  assert.match(src, /const shadow = data\.shadowedBy as RuleShadowView \| null \| undefined;/, '저장 응답을 읽지 않는다');
+
+  // ④ 미리보기는 「적용됩니다」라고 단정하지 않는다 — 먼저 걸리는 규칙이 있으면 그 답은 나가지 않는다.
+  assert.equal(t.includes('표현으로 이 규칙이 적용됩니다'), false, '나가지 않을 답을 적용된다고 말한다');
+  assert.ok(t.includes('기본 규칙이나 먼저 만든 규칙이 같은 표현을 쓰면 그쪽이 먼저 답하므로'), '미리보기가 한계를 밝히지 않는다');
+
+  // ⑤ 옛 응답(가려짐 없음)에는 아무 말도 하지 않는다 — 모르는 것을 단정하지 않는다.
+  const html = await render();
+  assert.equal(html.includes('가려짐'), false, '규칙을 받기도 전에 가려졌다고 말한다');
 });

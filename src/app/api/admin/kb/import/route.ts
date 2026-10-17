@@ -2,9 +2,9 @@
 // 기본은 미리보기(dry-run)이고, commit:true 일 때만 실제 KB에 반영한다(오등록 방지).
 // [승인 필요] 파일 스토리지 업로드·임베딩 색인 — 현재는 텍스트 본문만 받아 인메모리 KB에 등록한다.
 import { NextRequest } from 'next/server';
-import { bulkUpsertKB } from '@/lib/adminStore';
+import { bulkUpsertKB, docOverlap } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
-import { documentToCandidates, MAX_DOC_CHARS, DEFAULT_CHUNK_CHARS } from '@/lib/ingest';
+import { documentToCandidates, docIdPrefix, MAX_DOC_CHARS, DEFAULT_CHUNK_CHARS } from '@/lib/ingest';
 import { toNfc } from '@/lib/normalize';
 import { ok, fail, readJson, reqStr, optStr, requireAdmin, isAdminAuthed, MAX_IMPORT_BYTES } from '@/lib/http';
 
@@ -50,9 +50,14 @@ export async function POST(req: NextRequest) {
     return fail('invalid_input', `문서가 너무 커서 ${MAX_CANDIDATES}개를 넘는 항목이 생깁니다(현재 ${candidates.length}개). 나눠서 올려주세요.`);
   }
 
+  // 이 문서를 등록하면 지식베이스에서 **무엇이 바뀌는가** (DS 44-1).
+  // 미리보기와 등록이 같은 값을 보게 반드시 `bulkUpsertKB` **전에** 잰다 — 등록 뒤에 재면
+  // 갈아 끼운 항목이 「남는 조각」과 구분되지 않는다.
+  const overlap = docOverlap(docIdPrefix(title.value), candidates.map((c) => c.id), title.value);
+
   // 미리보기(기본) — 저장하지 않고 후보만 돌려준다.
   if (body.commit !== true) {
-    return ok({ committed: false, count: candidates.length, candidates });
+    return ok({ committed: false, count: candidates.length, candidates, overlap });
   }
 
   const result = bulkUpsertKB(
@@ -64,7 +69,10 @@ export async function POST(req: NextRequest) {
   logAudit({
     action: 'kb.import',
     target: title.value.slice(0, 60),
-    detail: `문서 등록: 신규 ${result.created.length} · 갱신 ${result.updated.length} · 실패 ${result.errors.length}`,
+    // 남는 조각은 등록 이력에도 남긴다 — 「그때 무엇이 남았는지」를 나중에 감사 로그에서 찾는다.
+    detail:
+      `문서 등록: 신규 ${result.created.length} · 갱신 ${result.updated.length} · 실패 ${result.errors.length}` +
+      (overlap.stale.length ? ` · 지난 등록분 ${overlap.stale.length}건 남음` : ''),
     authed: isAdminAuthed(req),
   });
   return ok({
@@ -72,5 +80,6 @@ export async function POST(req: NextRequest) {
     created: result.created.length,
     updated: result.updated.length,
     errors: result.errors,
+    overlap,
   });
 }

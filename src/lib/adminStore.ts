@@ -10,6 +10,25 @@ function cloneEntry(e: KBEntry): KBEntry {
   return { ...e, keywords: [...e.keywords] };
 }
 
+/**
+ * 자동 식별자 — 같은 밀리초에 둘이 들어와도 **겹치지 않는다** (DS 44-1).
+ *
+ * 종전 식은 `kb_${Date.now().toString(36)}` 하나였다. 밀리초가 유일성의 전부였으므로 같은
+ * 밀리초에 들어온 둘째는 첫째와 **같은 id** 를 받고, `upsertKB` 는 그것을 「이미 있는 항목」으로
+ * 읽어 **덮어썼다**. 돌려서 확인했다: 커스텀 규칙 3건을 잇따라 만들면 목록에는 2건만 남고
+ * 사라진 한 건은 「생성」이 아니라 「수정」으로 기록된다 — 만든 사람은 성공 메시지를 본다.
+ * 사람의 두 번 클릭으로는 좀처럼 닿지 않는 자리지만, 겹치지 않게 만드는 값이 공짜라면
+ * 「좀처럼」에 기대지 않는다(이 저장소의 다른 id 들은 전부 순번을 함께 쓴다).
+ */
+let autoSeq = 0;
+function autoId(prefix: string, taken: (id: string) => boolean): string {
+  for (;;) {
+    autoSeq += 1;
+    const id = `${prefix}_${Date.now().toString(36)}${autoSeq.toString(36)}`;
+    if (!taken(id)) return id;
+  }
+}
+
 let kbEntries: KBEntry[] = KB.map(cloneEntry);
 
 export function listKB(): KBEntry[] {
@@ -34,7 +53,7 @@ function normalizeKeywords(kw: KBUpsertInput['keywords']): string[] {
 export type UpsertResult = { ok: true; entry: KBEntry; created: boolean } | { ok: false; error: string };
 
 export function upsertKB(input: KBUpsertInput): UpsertResult {
-  const id = (input.id || '').trim() || `kb_${Date.now().toString(36)}`;
+  const id = (input.id || '').trim() || autoId('kb', (v) => kbEntries.some((e) => e.id === v));
   const keywords = normalizeKeywords(input.keywords);
   const existing = kbEntries.find((e) => e.id === id);
 
@@ -83,6 +102,62 @@ export function bulkUpsertKB(inputs: KBUpsertInput[]): { created: KBEntry[]; upd
     else updated.push(r.entry);
   }
   return { created, updated, errors };
+}
+
+// ---- 문서 재업로드가 건드리는 자리 (DS 44-1) ----
+
+/** 한 줄로 보여 줄 기존 항목 — 어느 자료인지 사람이 알아볼 만큼만 싣는다(개인정보 없음). */
+export interface KBOverlapItem {
+  id: string;
+  question: string;
+  source?: string;
+}
+
+export interface DocOverlap {
+  /** 새 후보와 id 가 같아 **내용이 갈아 끼워지는** 기존 항목(의도된 수정판 반영). */
+  overwrite: KBOverlapItem[];
+  /**
+   * 같은 문서명으로 지난번에 등록됐지만 **이번 후보에는 없는** 항목.
+   * 등록해도 지워지지 않고 남아, 봇이 지난 판과 새 판을 섞어 답한다.
+   */
+  stale: KBOverlapItem[];
+  /**
+   * 겹치는 자리에 **다른 문서명**으로 들어간 자료가 있다 — 제목이 다른데 id 앞자리가 같은 경우다
+   * (슬러그는 공백·문장부호를 버리고 24자로 자른다: 「요금 안내」와 「요금 안내!!」가 한 자리다).
+   * 이때 등록은 남의 문서를 덮어쓰는 일이므로, 수를 세는 것으로 끝내지 않고 **이름을** 말한다.
+   */
+  otherTitles: string[];
+}
+
+/**
+ * 이 문서를 등록하면 지식베이스에서 무엇이 바뀌는가 — 등록 **전에** 답할 수 있어야 한다 (DS 44-1).
+ *
+ * `documentToCandidates` 의 id 는 `<앞자리>_001` 처럼 문서명과 순번으로만 만들어진다. 그래서
+ * 같은 문서명의 수정판은 기존 항목을 갈아 끼우는데(의도), **조각 수가 줄면 남는 조각이 생긴다**.
+ * 종전에는 그 사실을 아무도 말하지 않았다 — 화면은 「신규 0 · 갱신 2」라고만 적었고, 운영자는
+ * 문서를 고쳤다고 믿은 채 **지운 문단이 그대로 답에 쓰이는** 상태로 운영했다.
+ *
+ * @param prefix `ingest.docIdPrefix(문서명)` — 두 벌로 계산하지 않는다
+ * @param candidateIds 이번에 등록할 후보 id 전부
+ * @param title 문서명 — 겹치는 자리의 주인이 다른 문서인지 가리는 데 쓴다
+ */
+export function docOverlap(prefix: string, candidateIds: readonly string[], title: string): DocOverlap {
+  const head = `${prefix}_`;
+  const keep = new Set(candidateIds);
+  const name = (title || '').trim();
+  const overwrite: KBOverlapItem[] = [];
+  const stale: KBOverlapItem[] = [];
+  const otherTitles: string[] = [];
+  for (const e of kbEntries) {
+    if (!e.id.startsWith(head)) continue;
+    const item: KBOverlapItem = { id: e.id, question: e.question, ...(e.source ? { source: e.source } : {}) };
+    (keep.has(e.id) ? overwrite : stale).push(item);
+    // 출처 라벨은 `문서명` 또는 `문서명 — 소제목` 이다(ingest). 둘 다 아니면 다른 문서가 쓰던 자리다.
+    const src = (e.source || '').trim();
+    const other = src.split(' — ')[0].trim();
+    if (name && other && other !== name && !otherTitles.includes(other)) otherTitles.push(other);
+  }
+  return { overwrite, stale, otherTitles: otherTitles.slice(0, 5) };
 }
 
 export function deleteKB(id: string): boolean {
@@ -164,7 +239,7 @@ export interface CustomRuleInput {
 export type CustomRuleResult = { ok: true; rule: CustomRule; created: boolean } | { ok: false; error: string };
 
 export function upsertCustomRule(input: CustomRuleInput): CustomRuleResult {
-  const intent = (input.intent || '').trim() || `cr_${Date.now().toString(36)}`;
+  const intent = (input.intent || '').trim() || autoId('cr', (v) => customRules.some((r) => r.intent === v));
   const keywords = normalizeKeywords(input.keywords);
   const existing = customRules.find((r) => r.intent === intent);
 
