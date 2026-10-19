@@ -4,7 +4,8 @@
 import { KB, KBEntry } from '@/lib/knowledge';
 import { keywordHit, prepare } from '@/lib/normalize';
 import { flushSaves, loadJson, saveJson, scheduleSave } from '@/lib/storage';
-import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
+import { revOf } from '@/lib/rev';
+import { CHANGED_TARGET_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE } from '@/lib/refusal';
 
 function cloneEntry(e: KBEntry): KBEntry {
   return { ...e, keywords: [...e.keywords] };
@@ -42,6 +43,32 @@ export interface KBUpsertInput {
   keywords?: string[] | string; // 배열 또는 콤마 구분 문자열
   answer?: string;
   source?: string; // 출처 라벨(업로드 문서명 등)
+  /**
+   * 편집을 **시작할 때 본** 모습 (DS 46-1). 보내면 그 사이 바뀐 자료를 덮어쓰지 않는다.
+   * 보내지 않으면 종전과 같이 그대로 갈아 끼운다(문서 일괄 등록·복원처럼 겨룰 상대가 없는 자리).
+   */
+  baseRev?: string;
+}
+
+/**
+ * 자료 한 건의 모습 (DS 46-1) — **목록에 실어 보내는 쪽과 저장 직전에 견주는 쪽이 같은 식**을 쓴다.
+ * 두 벌로 계산하면 영영 어긋나거나(저장이 늘 거절된다) 영영 같아진다(경고가 조용히 사라진다).
+ */
+export function kbRev(e: KBEntry): string {
+  return revOf({ id: e.id, category: e.category, question: e.question, keywords: e.keywords, answer: e.answer, source: e.source });
+}
+
+/** 커스텀 규칙 한 건의 모습 — `kbRev` 와 같은 규칙이다(만든 시각은 바뀌지 않으므로 뺀다). */
+export function customRuleRev(r: CustomRule): string {
+  return revOf({ intent: r.intent, label: r.label, keywords: r.keywords, reply: r.reply, escalate: r.escalate, enabled: r.enabled });
+}
+
+/** 저장 직전 관문 — 내가 보던 것이 그 사이 지워졌거나 바뀌었으면 거절한다 (DS 46-1). */
+function conflictOf<T>(baseRev: string | undefined, existing: T | undefined, revOfItem: (v: T) => string): 'gone' | 'changed' | null {
+  const base = String(baseRev ?? '').trim();
+  if (!base) return null;
+  if (!existing) return 'gone';
+  return revOfItem(existing) === base ? null : 'changed';
 }
 
 function normalizeKeywords(kw: KBUpsertInput['keywords']): string[] {
@@ -50,12 +77,25 @@ function normalizeKeywords(kw: KBUpsertInput['keywords']): string[] {
   return arr.map((s) => String(s).trim().toLowerCase()).filter(Boolean);
 }
 
-export type UpsertResult = { ok: true; entry: KBEntry; created: boolean } | { ok: false; error: string };
+export type UpsertResult =
+  | { ok: true; entry: KBEntry; created: boolean }
+  /**
+   * 거절. `conflict` 가 있으면 **입력이 틀린 것이 아니라** 그 사이 다른 화면에서 바뀐 것이다
+   * (DS 46-1) — 부르는 쪽은 적던 글을 버리지 않고 다음 길을 준다. `current` 는 지금 저장된 값이다.
+   */
+  | { ok: false; error: string; conflict?: 'gone' | 'changed'; current?: KBEntry };
 
 export function upsertKB(input: KBUpsertInput): UpsertResult {
   const id = (input.id || '').trim() || autoId('kb', (v) => kbEntries.some((e) => e.id === v));
   const keywords = normalizeKeywords(input.keywords);
   const existing = kbEntries.find((e) => e.id === id);
+
+  // 내가 보던 모습을 들고 왔으면 **그 모습일 때만** 갈아 끼운다 (DS 46-1).
+  const conflict = conflictOf(input.baseRev, existing, kbRev);
+  if (conflict === 'gone') return { ok: false, error: STALE_TARGET_MESSAGE, conflict };
+  if (conflict === 'changed') {
+    return { ok: false, error: CHANGED_TARGET_MESSAGE, conflict, current: cloneEntry(existing as KBEntry) };
+  }
 
   if (!existing) {
     const question = (input.question || '').trim();
@@ -205,6 +245,25 @@ export function listRuleOverrides(): Record<string, RuleOverride> {
   return Object.fromEntries(ruleOverrides);
 }
 
+/**
+ * 기본 규칙 한 건에서 **운영자가 바꿀 수 있는 것**의 모습 (DS 46-1).
+ * 패턴·기본 응답문은 코드 관리라 바뀌지 않는다 — 켜짐 여부와 덮어쓴 답변만 센다.
+ */
+export function ruleOverrideRev(intent: string): string {
+  const ov = ruleOverrides.get(intent) ?? { enabled: true };
+  return revOf({ intent, enabled: ov.enabled, reply: ov.reply ?? '' });
+}
+
+/**
+ * 답변을 덮어쓰기 **직전** 관문 — 20분 걸려 쓴 남의 답변을 말없이 밀어내지 않는다 (DS 46-1).
+ * 켜기/끄기만 보내는 자리는 들고 오지 않는다(한 칸만 바꾸는 패치라 잃을 글이 없다).
+ */
+export function overrideConflict(intent: string, baseRev?: string): 'changed' | null {
+  const base = String(baseRev ?? '').trim();
+  if (!base) return null;
+  return ruleOverrideRev(intent) === base ? null : 'changed';
+}
+
 // ---- 커스텀 시나리오 룰(키워드 기반) — 관리 콘솔에서 추가/수정/삭제 ----
 // 내장 룰(정규식)과 달리 운영자가 안전하게 키워드로 정의한다. 인메모리 스텁 — [승인 필요] DB 영구 저장.
 export interface CustomRule {
@@ -234,14 +293,25 @@ export interface CustomRuleInput {
   reply?: string;
   escalate?: boolean;
   enabled?: boolean;
+  /** 편집을 시작할 때 본 모습 (DS 46-1). 켜기/끄기처럼 한 칸만 보내는 자리는 들고 오지 않는다. */
+  baseRev?: string;
 }
 
-export type CustomRuleResult = { ok: true; rule: CustomRule; created: boolean } | { ok: false; error: string };
+export type CustomRuleResult =
+  | { ok: true; rule: CustomRule; created: boolean }
+  | { ok: false; error: string; conflict?: 'gone' | 'changed'; current?: CustomRule };
 
 export function upsertCustomRule(input: CustomRuleInput): CustomRuleResult {
   const intent = (input.intent || '').trim() || autoId('cr', (v) => customRules.some((r) => r.intent === v));
   const keywords = normalizeKeywords(input.keywords);
   const existing = customRules.find((r) => r.intent === intent);
+
+  // 자료 쪽과 같은 관문 (DS 46-1) — 같은 일을 두 탭이 다르게 하지 않는다.
+  const conflict = conflictOf(input.baseRev, existing, customRuleRev);
+  if (conflict === 'gone') return { ok: false, error: STALE_TARGET_MESSAGE, conflict };
+  if (conflict === 'changed') {
+    return { ok: false, error: CHANGED_TARGET_MESSAGE, conflict, current: cloneCustomRule(existing as CustomRule) };
+  }
 
   if (!existing) {
     const label = (input.label || '').trim();

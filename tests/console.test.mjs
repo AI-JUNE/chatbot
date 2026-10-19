@@ -1412,15 +1412,16 @@ test('지운 자료를 가리키던 편집 폼을 거둔다 (DS 27-3)', opts, ()
     return src.slice(i, src.indexOf('\n  };', i));
   };
 
+  // 거두는 문에는 그 사이 바뀜을 들고 있던 값도 함께 따라간다(DS 46-1) — 검사의 뜻은 그대로다.
   assert.match(
     body('removeKB'),
-    /if \(editingId === id\) \{ setEditingId\(null\); loadKbForm\(EMPTY_FORM\); setKbErr\(\{\}\); \}/,
+    /if \(editingId === id\) \{ setEditingId\(null\);[^}]*loadKbForm\(EMPTY_FORM\); setKbErr\(\{\}\); \}/,
     '지운 자료를 가리킨 폼이 남아 「수정 저장」이 그 자료를 되살린다',
   );
   // 규칙 쪽은 처음부터 거두고 있었다 — 두 탭이 갈라지면 같은 일을 다르게 하는 콘솔이 된다.
   assert.match(body('removeCustomRule'), /if \(crEditing === intent\) \{/, '규칙 쪽 거두기가 사라졌다');
   // 초기화는 **수정 중일 때만** 거둔다 — 새로 적던 글은 지워진 것과 아무 상관이 없다.
-  assert.match(body('resetAll'), /if \(editingId\) \{ setEditingId\(null\); loadKbForm\(EMPTY_FORM\); setKbErr\(\{\}\); \}/, '초기화가 적던 새 자료까지 버린다');
+  assert.match(body('resetAll'), /if \(editingId\) \{ setEditingId\(null\);[^}]*loadKbForm\(EMPTY_FORM\); setKbErr\(\{\}\); \}/, '초기화가 적던 새 자료까지 버린다');
 });
 
 /* ══════════ 29순위 — 백로그 소진 후 26차 재감사 (DS 29-x) ══════════ */
@@ -2273,4 +2274,221 @@ test('가려져 쓰이지 않는 규칙을 화면이 말하고 다음에 할 일
   // ⑤ 옛 응답(가려짐 없음)에는 아무 말도 하지 않는다 — 모르는 것을 단정하지 않는다.
   const html = await render();
   assert.equal(html.includes('가려짐'), false, '규칙을 받기도 전에 가려졌다고 말한다');
+});
+
+/* ══════════ 디자인 스프린트 — 42차 재감사 (DS 46-1·46-2) ══════════ */
+
+/**
+ * DS 46-1 — 관리 콘솔은 **여러 사람이 같은 토큰으로** 들어오는 화면인데, 모든 쓰기 경로가
+ * 「받은 대로 갈아 끼우기」였다. 편집 폼은 연 순간의 사진이고 저장은 그 사진을 통째로 덮는다:
+ *  ① 그 사이 남이 고친 답변은 **말없이 사라지고**
+ *  ② 그 사이 남이 지운 자료는 「수정 저장」이 **되살린다**(없는 식별자를 새로 만든다 —
+ *     DS 27-3 이 같은 탭에서 닫았던 자리가 두 사람 사이에서는 그대로 열려 있었다).
+ */
+test('그 사이 남이 고친 것을 말없이 덮어쓰지 않는다 (DS 46-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const DEPS = ['knowledge', 'normalize', 'storage', 'logger', 'monitoring', 'refusal', 'rev'];
+  const store = await importLib('adminStore', DEPS);
+  store.resetKB();
+
+  const made = store.upsertKB({ question: '환불 기간은?', keywords: ['환불'], answer: '7일 이내' });
+  assert.equal(made.ok, true);
+  const id = made.entry.id;
+  const find = () => store.listKB().find((e) => e.id === id);
+
+  // ① 종전 식 재현 — 내가 본 모습을 들고 가지 않으면 그 사이 바뀐 것을 그대로 덮는다.
+  const seen = store.kbRev(made.entry); // A 가 편집을 시작할 때 본 모습
+  store.upsertKB({ id, answer: '14일 이내' }); // 그 사이 B 가 고쳤다
+  assert.equal(store.upsertKB({ id, answer: '7일 이내' }).ok, true);
+  assert.equal(find().answer, '7일 이내', '재현 조건이 성립하지 않는다 — 덮어쓰기가 일어나지 않았다');
+
+  // ② 들고 가면 거절한다 — **지금 값을 함께** 돌려준다(화면이 무엇을 덮는지 보여줄 수 있어야 한다).
+  store.upsertKB({ id, answer: '30일 이내' });
+  const r = store.upsertKB({ id, answer: '7일 이내', baseRev: seen });
+  assert.equal(r.ok, false);
+  assert.equal(r.conflict, 'changed');
+  assert.equal(r.current.answer, '30일 이내', '지금 저장된 값을 돌려주지 않는다');
+  assert.equal(find().answer, '30일 이내', '거절해 놓고 덮어썼다');
+  // 거절 문장은 화면에 그대로 뜬다 — 코드 어휘를 보이지 않는다(DS 29-3).
+  assert.equal(/rev|conflict|baseRev|id/.test(r.error), false, `거절 문장에 코드 어휘가 있다: ${r.error}`);
+
+  // ③ 지금 모습을 들고 가면 그대로 저장된다 — 없는 충돌을 만들지 않는다.
+  const ok2 = store.upsertKB({ id, answer: '45일 이내', baseRev: store.kbRev(find()) });
+  assert.equal(ok2.ok, true);
+  assert.equal(ok2.created, false);
+  assert.equal(find().answer, '45일 이내');
+
+  // ④ 그 사이 **지워진** 자료는 「생성」으로 되살아나지 않는다.
+  const goneRev = store.kbRev(find());
+  assert.equal(store.deleteKB(id), true);
+  const revive = store.upsertKB({ id, question: '환불 기간은?', keywords: ['환불'], answer: '7일 이내' });
+  assert.equal(revive.ok && revive.created, true, '재현 조건이 성립하지 않는다 — 지운 자료가 되살아나지 않았다');
+  assert.equal(store.deleteKB(id), true);
+  const refused = store.upsertKB({ id, question: '환불 기간은?', keywords: ['환불'], answer: '7일 이내', baseRev: goneRev });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.conflict, 'gone');
+  assert.equal(store.listKB().some((e) => e.id === id), false, '거절해 놓고 되살렸다');
+
+  // ⑤ 커스텀 규칙도 **같은 관문**을 지난다 — 같은 일을 두 탭이 다르게 하지 않는다.
+  for (const cr of store.listCustomRules()) store.deleteCustomRule(cr.intent);
+  const rule = store.upsertCustomRule({ label: '배송 문의', keywords: ['배송'], reply: '2~3일 걸려요' });
+  const ruleSeen = store.customRuleRev(rule.rule);
+  store.upsertCustomRule({ intent: rule.rule.intent, reply: 'B 가 고친 답변' });
+  const rr = store.upsertCustomRule({ intent: rule.rule.intent, reply: 'A 가 쓴 답변', baseRev: ruleSeen });
+  assert.equal(rr.ok, false);
+  assert.equal(rr.conflict, 'changed');
+  assert.equal(rr.current.reply, 'B 가 고친 답변');
+  assert.equal(store.listCustomRules()[0].reply, 'B 가 고친 답변', '거절해 놓고 덮어썼다');
+  assert.equal(store.upsertCustomRule({ intent: rule.rule.intent, reply: 'A 가 쓴 답변', baseRev: store.customRuleRev(store.listCustomRules()[0]) }).ok, true);
+  store.deleteCustomRule(rule.rule.intent);
+  assert.equal(store.upsertCustomRule({ intent: rule.rule.intent, label: 'x', keywords: ['배송'], reply: 'y', baseRev: ruleSeen }).conflict, 'gone');
+
+  // ⑥ 기본 규칙 답변도 같은 자로 잰다. 켜기/끄기는 **들고 오지 않으므로** 막히지 않는다
+  //    (한 칸 패치라 밀어낼 글이 없다 — 길을 막기만 하는 거절은 두지 않는다).
+  const ovSeen = store.ruleOverrideRev('hours');
+  store.setRuleOverride('hours', { reply: 'B 가 쓴 답변' });
+  assert.equal(store.overrideConflict('hours', ovSeen), 'changed');
+  assert.equal(store.overrideConflict('hours', store.ruleOverrideRev('hours')), null);
+  assert.equal(store.overrideConflict('hours', undefined), null, '들고 오지 않은 요청까지 막는다');
+  assert.equal(store.overrideConflict('hours', ''), null);
+
+  // ⑦ 재는 자는 **한 벌**이다 — 같은 내용이면 같은 값, 한 글자라도 다르면 다른 값(DS 42-2).
+  const a = { id: 'kb_1', category: '일반', question: 'q', keywords: ['k'], answer: 'a' };
+  assert.equal(store.kbRev(a), store.kbRev({ ...a }));
+  assert.notEqual(store.kbRev(a), store.kbRev({ ...a, answer: 'b' }));
+  assert.notEqual(store.kbRev(a), store.kbRev({ ...a, keywords: ['k', 'k2'] }));
+  // 한글 한 글자 차이를 놓치지 않는다(상위 바이트를 함께 섞지 않으면 같은 값이 될 수 있다).
+  assert.notEqual(store.kbRev({ ...a, answer: '요금' }), store.kbRev({ ...a, answer: '요구' }));
+
+  // ⑧ 문서 일괄 등록은 종전 그대로다 — 겨룰 상대가 없는 자리까지 막지 않는다.
+  const bulk = store.bulkUpsertKB([{ id: 'doc_t_001', question: '문서 질문', keywords: ['문서'], answer: '문서 답변' }]);
+  assert.equal(bulk.errors.length, 0);
+  assert.equal(bulk.created.length + bulk.updated.length, 1);
+});
+
+/**
+ * DS 46-2 — 접수 상태는 **되돌아갈 수 있었다**. A 가 완료로 바꾸면 연락처는 그 자리에서
+ * 파기되는데(개인정보처리방침 4조·되돌릴 수 없다), 30초 묵은 B 의 화면은 그 접수를 그대로
+ * 「상담 시작」으로 되돌릴 수 있었다 — 큐에는 **아무도 전화할 수 없는 건**이 하나 선다.
+ */
+test('그 사이 끝난 접수를 묵은 화면이 되돌리지 않는다 (DS 46-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const esc = await importLib('escalation', ['handoff', 'storage', 'refusal', 'pii', 'limits', 'logger', 'monitoring', 'normalize', 'rev']);
+  esc.resetTickets();
+
+  const t = esc.createTicket({ sessionId: 's-1', tenant: null, message: '전화 주세요', contact: '010-1234-5678' }).ticket;
+  const seen = esc.ticketRev(t); // B 의 화면이 받은 모습
+
+  // ① A 가 완료 처리 — 연락처는 그 자리에서 파기된다.
+  const done = esc.updateTicket(t.id, { status: 'resolved' });
+  assert.equal(done.ok, true);
+  assert.equal(done.ticket.contact, undefined);
+  assert.ok(done.ticket.contactPurgedAt, '파기 사실이 남지 않는다');
+
+  // ② 종전 식 재현 — 묵은 화면의 「상담 시작」이 그대로 되돌린다(회신할 곳 없는 대기 건이 생긴다).
+  const back = esc.updateTicket(t.id, { status: 'in_progress' });
+  assert.equal(back.ok, true);
+  assert.equal(back.ticket.status, 'in_progress', '재현 조건이 성립하지 않는다');
+  assert.equal(back.ticket.contact, undefined, '파기한 연락처가 되살아났다');
+
+  // ③ 내가 본 모습을 들고 가면 거절한다 — **지금 무엇인지**를 이름으로 말한다.
+  assert.equal(esc.updateTicket(t.id, { status: 'resolved' }).ok, true);
+  const r = esc.updateTicket(t.id, { status: 'in_progress', baseRev: seen });
+  assert.equal(r.ok, false);
+  assert.equal(r.conflict, 'changed');
+  assert.ok(r.error.includes('완료'), `지금 무엇인지 말하지 않는다: ${r.error}`);
+  assert.equal(/resolved|rev|conflict|status/.test(r.error), false, `거절 문장에 코드 어휘가 있다: ${r.error}`);
+  assert.equal(esc.getTicket(t.id).status, 'resolved', '거절해 놓고 바꿨다');
+
+  // ④ 지금 모습을 들고 가면 바뀐다. 들고 오지 않으면 종전 그대로다(옛 화면을 막지 않는다).
+  assert.equal(esc.updateTicket(t.id, { status: 'open', baseRev: esc.ticketRev(esc.getTicket(t.id)) }).ok, true);
+  assert.equal(esc.updateTicket(t.id, { status: 'resolved' }).ok, true);
+
+  // ⑤ 같은 접수를 둘이 붙잡는 자리 — 뒤의 요청은 앞의 변경을 모른 채 들어온다.
+  const two = esc.createTicket({ sessionId: 's-2', tenant: null, message: '연락 바랍니다' }).ticket;
+  const bothSaw = esc.ticketRev(two);
+  assert.equal(esc.updateTicket(two.id, { status: 'in_progress', baseRev: bothSaw }).ok, true);
+  const second = esc.updateTicket(two.id, { status: 'in_progress', baseRev: bothSaw });
+  assert.equal(second.ok, false, '둘 다 자기가 처음 붙잡았다고 믿는다');
+  assert.equal(second.conflict, 'changed');
+
+  // ⑥ 없는 접수는 「바뀜」이 아니라 「사라짐」이다 — 두 사실에 다른 말을 한다.
+  const none = esc.updateTicket('ESC-9999', { status: 'resolved', baseRev: bothSaw });
+  assert.equal(none.ok, false);
+  assert.equal(none.conflict, 'gone');
+  assert.notEqual(none.error, second.error);
+
+  // ⑦ 모습은 **상태·메모·연락처 유무·시각**으로 만든다 — 같은 값으로 되돌아와도 손댄 것을 안다.
+  const three = esc.createTicket({ sessionId: 's-3', tenant: null, message: '…' }).ticket;
+  const before = esc.ticketRev(three);
+  assert.equal(esc.updateTicket(three.id, { note: '메모' }).ok, true);
+  assert.notEqual(esc.ticketRev(esc.getTicket(three.id)), before, '메모만 바뀐 것을 모른다');
+});
+
+/**
+ * DS 46-1·46-2 — 화면 쪽 배선: **무엇을 보고 고치기 시작했는지**를 들고 다니고, 거절당했을 때
+ * 적던 글을 버리지 않으며, 그 자리에서 다음 길(불러오기·덮어쓰기·새로 등록)을 준다.
+ */
+test('편집 폼이 「내가 본 모습」을 들고 다니고 거절을 그 자리에서 말한다 (DS 46-1·46-2)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const kbRoute = readFileSync(new URL('../src/app/api/admin/kb/route.ts', import.meta.url), 'utf8');
+  const ruleRoute = readFileSync(new URL('../src/app/api/admin/rules/route.ts', import.meta.url), 'utf8');
+  const escRoute = readFileSync(new URL('../src/app/api/admin/escalations/route.ts', import.meta.url), 'utf8');
+  const store = readFileSync(new URL('../src/lib/adminStore.ts', import.meta.url), 'utf8');
+  const refusal = readFileSync(new URL('../src/lib/refusal.ts', import.meta.url), 'utf8');
+
+  // ① 재는 자는 한 벌이고(`@/lib/rev`), 목록 응답이 그 값을 실어 보낸다.
+  assert.match(store, /export function kbRev\(e: KBEntry\): string/, '자료의 모습을 재는 자가 없다');
+  assert.match(store, /export function customRuleRev\(r: CustomRule\): string/, '규칙의 모습을 재는 자가 없다');
+  assert.match(kbRoute, /entries: listKB\(\)\.map\(\(e\) => \(\{ \.\.\.e, rev: kbRev\(e\) \}\)\)/, '자료 목록이 모습을 싣지 않는다');
+  assert.match(ruleRoute, /rev: customRuleRev\(r\)/, '규칙 목록이 모습을 싣지 않는다');
+  assert.match(ruleRoute, /rev: ruleOverrideRev\(r\.intent\)/, '기본 규칙 목록이 모습을 싣지 않는다');
+  assert.match(escRoute, /rev: ticketRev\(t\)/, '접수 목록이 모습을 싣지 않는다');
+  // 콘솔이 모습을 **따로 계산하지 않는다** — 두 벌이면 영영 어긋나거나 영영 같아진다(DS 42-2).
+  assert.equal(/from '@\/lib\/rev'/.test(src), false, '콘솔이 모습을 따로 계산한다');
+
+  // ② 거절 문장은 거절하는 한 곳에 있다(DS 29-3) — 콘솔·서버가 각자 적지 않는다.
+  assert.match(refusal, /export const CHANGED_TARGET_MESSAGE =/, '바뀐 대상을 말하는 문장이 없다');
+  assert.match(refusal, /export function changedStatusMessage\(statusLabel: string\): string/, '접수가 지금 무엇인지 말하는 문장이 없다');
+  assert.equal(/그 사이 다른 화면에서 이 항목이 바뀌었습니다/.test(src), false, '콘솔이 서버 문장을 베껴 적는다');
+
+  // ③ 편집을 시작할 때 본 모습을 들고, 저장할 때 돌려보낸다(새 자료에는 들고 갈 것이 없다).
+  assert.match(src, /setEditingRev\(e\.rev \?\? null\)/, '자료 편집이 본 모습을 들고 있지 않다');
+  assert.match(src, /setCrEditingRev\(r\.rev \?\? null\)/, '규칙 편집이 본 모습을 들고 있지 않다');
+  assert.match(src, /\.\.\.\(editingId && editingRev \? \{ baseRev: editingRev \} : \{\}\)/, '자료 저장이 본 모습을 보내지 않는다');
+  assert.match(src, /\.\.\.\(crEditing && crEditingRev \? \{ baseRev: crEditingRev \} : \{\}\)/, '규칙 저장이 본 모습을 보내지 않는다');
+  assert.match(src, /\.\.\.\(target\?\.rev \? \{ baseRev: target\.rev \} : \{\}\)/, '접수 상태 변경이 본 모습을 보내지 않는다');
+  // 켜기/끄기는 들고 가지 않는다 — 밀어낼 글이 없는데 막으면 길만 막는다.
+  assert.match(src, /const base = patch\.reply !== undefined \? rules\.find\(\(r\) => r\.intent === intent\)\?\.rev : undefined;/, '기본 규칙 저장이 답변일 때만 모습을 들고 가지 않는다');
+
+  // ④ 거절당해도 **적던 글은 그대로** 둔다 — 폼을 거두는 문보다 먼저 돌아선다.
+  const submit = src.slice(src.indexOf('const submitKB = async ()'), src.indexOf('const reloadKbConflict'));
+  assert.match(submit, /if \(data\.conflict\) \{/, '자료 저장이 「그 사이 바뀜」을 가려내지 않는다');
+  assert.ok(submit.indexOf('setKbConflict({') < submit.indexOf('loadKbForm(EMPTY_FORM)'), '거절당한 자리에서 적던 글을 버린다');
+
+  // ⑤ 그 자리에서 다음 길을 준다 — 불러오기(확인을 거친다)·덮어쓰기, 지워진 것에는 새로 등록.
+  assert.match(src, /function ConflictNote\(\{ notice, nowLabel, onReload, onOverwrite, onRecreate \}/, '그 자리에서 말하는 자리가 없다');
+  assert.ok(src.includes('그 사이 다른 화면에서 바뀌었습니다'), '무슨 일이 일어났는지 말하지 않는다');
+  assert.ok(src.includes('그 사이 다른 화면에서 지워졌습니다'), '지워진 것을 바뀐 것과 같이 말한다');
+  assert.ok(src.includes('적으신 내용은 이 칸에 그대로 있습니다'), '적던 글이 남아 있다는 사실을 말하지 않는다');
+  assert.ok(src.includes('지금 저장된 내용 불러오기') && src.includes('내가 적은 내용으로 덮어쓰기'), '다음 길이 없다');
+  assert.ok(src.includes('이 내용으로 새로 등록하기'), '지워진 자료에서 갈 곳이 없다');
+  assert.match(src, /title: '지금 저장된 내용을 불러올까요\?'/, '적던 글을 확인 없이 버린다');
+  // 지워진 자료를 되살릴 때는 「수정」이라 말하지 않는다 — 변경 이력에는 「생성」으로 남는다.
+  assert.match(src, /const recreateKbConflict = \(\) => \{\n\s*setEditingId\(null\);/, '지워진 자료를 수정이라 부른다');
+
+  // ⑥ 접수는 「바꾸지 않았다」는 사실까지 말하고 목록을 새로 받는다(그 줄이 지금 값으로 돌아온다).
+  const pt = src.slice(src.indexOf('const patchTicket = async ('), src.indexOf('// ---- Test ----'));
+  assert.match(pt, /} else if \(data\.conflict\) \{/, '접수가 「그 사이 바뀜」을 가려내지 않는다');
+  assert.ok(pt.includes('이번 변경은 적용되지 않았습니다'), '바꾸지 않았다는 사실을 말하지 않는다');
+  assert.match(pt, /await loadEsc\(\);\n\s*notify\(/, '거절당한 줄을 묵은 값 그대로 둔다');
+
+  // ⑦ 서버는 「입력이 틀렸다」와 다른 코드로 돌려준다 — 화면이 둘을 다르게 다룬다.
+  assert.match(kbRoute, /return fail\('conflict', result\.error, \{/, '자료 저장이 충돌을 입력 오류로 돌려준다');
+  assert.match(ruleRoute, /return fail\('conflict', result\.error, \{/, '규칙 저장이 충돌을 입력 오류로 돌려준다');
+  assert.match(escRoute, /if \(result\.conflict === 'changed'\) \{/, '접수가 충돌을 「없는 접수」로 돌려준다');
+
+  // ⑧ 첫 렌더에는 아무 경고도 없다 — 겪기 전에 말하지 않는다.
+  const html = await render();
+  assert.equal(html.includes('그 사이 다른 화면에서'), false, '겪기도 전에 바뀌었다고 말한다');
 });

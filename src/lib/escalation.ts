@@ -8,7 +8,8 @@ import { isHandoffReason, type HandoffReason } from '@/lib/handoff';
 import { maskPii, mergeKinds } from '@/lib/pii';
 import { SUMMARY_TEXT_LEN, TICKET_MESSAGE_LEN, TICKET_NOTE_LEN, clip } from '@/lib/limits';
 import { loadJson, scheduleSave } from '@/lib/storage';
-import { BAD_STATUS_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE } from '@/lib/refusal';
+import { revOf } from '@/lib/rev';
+import { BAD_STATUS_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE, changedStatusMessage } from '@/lib/refusal';
 
 export type EscalationStatus = 'open' | 'in_progress' | 'resolved' | 'canceled';
 
@@ -259,12 +260,36 @@ export function queryTickets(limit: number = TICKET_PAGE_DEFAULT): TicketPage {
   return { tickets: picked, total: all.length, limit: n, truncated: true };
 }
 
-export type UpdateTicketResult = { ok: true; ticket: EscalationTicket } | { ok: false; error: string };
+/**
+ * 접수 한 건의 모습 (DS 46-2) — 목록에 실어 보내는 쪽과 바꾸기 직전에 견주는 쪽이 같은 식을 쓴다.
+ *
+ * 연락처는 **있는가만** 센다(원문을 해시에 넣을 까닭이 없다). `updatedAt` 이 들어 있어
+ * 상태가 같은 값으로 되돌아온 경우에도 「그 사이 누가 손댔다」를 놓치지 않는다.
+ */
+export function ticketRev(t: EscalationTicket): string {
+  return revOf({ id: t.id, status: t.status, note: t.note ?? '', hasContact: Boolean(t.contact), updatedAt: t.updatedAt });
+}
 
-export function updateTicket(id: string, patch: { status?: EscalationStatus; note?: string }): UpdateTicketResult {
+export type UpdateTicketResult =
+  | { ok: true; ticket: EscalationTicket }
+  | { ok: false; error: string; conflict?: 'gone' | 'changed'; current?: EscalationTicket };
+
+export function updateTicket(id: string, patch: { status?: EscalationStatus; note?: string; baseRev?: string }): UpdateTicketResult {
   const t = tickets.find((x) => x.id === id);
   // 「티켓」·「상태값」은 코드 어휘다 — 운영자 화면은 「접수」라고 부른다(DS 29-3).
-  if (!t) return { ok: false, error: STALE_TARGET_MESSAGE };
+  if (!t) return { ok: false, error: STALE_TARGET_MESSAGE, conflict: 'gone' };
+  /**
+   * 내가 보던 모습이 아니면 바꾸지 않는다 (DS 46-2).
+   *
+   * 접수 목록은 30초마다 갱신되지만 운영자의 손은 그 사이에도 움직인다. 종전에는 A 가 완료로
+   * 바꿔 **연락처를 파기한** 접수를 B 의 묵은 화면이 「상담 시작」으로 되돌릴 수 있었다 —
+   * 되돌아온 접수는 회신할 곳이 없고(파기는 되돌릴 수 없다), 큐에는 아무도 전화할 수 없는
+   * 건이 하나 선다. 거절하면서 **지금 무엇인지**를 이름으로 말한다.
+   */
+  const base = String(patch.baseRev ?? '').trim();
+  if (base && ticketRev(t) !== base) {
+    return { ok: false, error: changedStatusMessage(STATUS_LABELS[t.status]), conflict: 'changed', current: { ...t } };
+  }
   if (patch.status !== undefined) {
     if (!ESCALATION_STATUSES.includes(patch.status)) return { ok: false, error: BAD_STATUS_MESSAGE };
     t.status = patch.status;

@@ -11,11 +11,32 @@ interface KBEntryView {
   keywords: string[];
   answer: string;
   source?: string;
+  /**
+   * 이 자료를 **불러온 그때의 모습** — 서버가 붙여 보낸다 (DS 46-1).
+   * 편집 폼이 이 값을 들고 있다가 저장할 때 돌려보내면, 그 사이 다른 운영자가 고친 것을
+   * 말없이 덮어쓰는 대신 서버가 거절한다. 옛 응답에는 없다 — 없으면 종전처럼 그대로 저장한다.
+   */
+  rev?: string;
 }
 
 /** 문서 업로드 미리보기 항목(등록 전 후보). */
 interface KBCandidateView extends KBEntryView {
   chunkIndex: number;
+}
+
+/**
+ * 「그 사이 다른 화면에서 바뀌었다」 (DS 46-1).
+ *
+ * 이 콘솔은 여러 사람이 같은 토큰으로 들어와 30초마다 갱신되는 목록을 보는 화면이다. 편집 폼은
+ * 연 순간의 사진이고 저장은 그 사진을 통째로 덮어쓴다 — 거절하지 않으면 남이 고친 것이 말없이
+ * 사라진다. 거절당했을 때 **적던 글은 그대로 두고**(DS 27-2) 다음 길만 보여 주기 위해,
+ * 사유와 지금 저장된 값을 함께 들고 있는다.
+ */
+interface Conflict<T> {
+  kind: 'gone' | 'changed';
+  message: string;
+  /** 지금 저장된 값(지워졌으면 없다) — 「불러오기」가 쓰는 값이다. */
+  current?: T;
 }
 
 interface ImportForm {
@@ -125,6 +146,8 @@ interface RuleView {
   enabled: boolean;
   replyOverride: string | null;
   effectiveReply: string;
+  /** 불러온 그때의 모습 — 답변을 고쳐 저장할 때 돌려보낸다 (DS 46-1). */
+  rev?: string;
 }
 
 /** 먼저 답하는 규칙 — 이 값이 있으면 그 규칙은 **한 번도 쓰이지 않는다**(DS 44-3). */
@@ -145,6 +168,8 @@ interface CustomRuleView {
   createdAt: string;
   /** 옛 응답에는 없다 — 그때는 「모른다」이므로 아무 말도 하지 않는다. */
   shadowedBy?: RuleShadowView | null;
+  /** 불러온 그때의 모습 — 편집 폼이 들고 있다가 저장할 때 돌려보낸다 (DS 46-1). */
+  rev?: string;
 }
 
 interface CustomRuleForm {
@@ -189,6 +214,11 @@ interface TicketView {
   note?: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * 이 줄을 **받았을 때의 모습** — 상태를 바꿀 때 그대로 돌려보낸다 (DS 46-2).
+   * 목록은 30초마다 갱신되지만 그 사이에도 다른 운영자의 손은 움직인다. 옛 응답에는 없다.
+   */
+  rev?: string;
 }
 
 interface OpsStats {
@@ -1182,6 +1212,48 @@ function SyncStatus({ at, onRefresh }: { at: number; onRefresh: () => void }) {
       </span>
       <button type="button" style={S.btnGhost} onClick={onRefresh}>새로고침</button>
     </>
+  );
+}
+
+/**
+ * 「그 사이 다른 화면에서 바뀌었습니다」를 **편집 폼 안에서** 말한다 (DS 46-1).
+ *
+ * 사라지는 토스트에 맡기지 않는다 — 적던 글은 그대로 두고, 그 자리에 머무르며 다음 길을 준다.
+ * 길은 둘뿐이다: **지금 저장된 내용을 불러오거나**(내가 적던 글을 버린다 — 확인을 거친다),
+ * **내가 적은 것으로 덮어쓰거나**(무엇을 덮는지 보고 고른다). 지워진 대상에는 길이 하나다.
+ * 색만으로 말하지 않는다 — 제목 글자와 버튼 이름이 그 자체로 사실을 적는다(고대비·흑백 인쇄).
+ */
+function ConflictNote({ notice, nowLabel, onReload, onOverwrite, onRecreate }: {
+  notice: { kind: 'gone' | 'changed'; message: string };
+  /** 지금 저장된 내용 한 줄(없으면 생략) — 무엇을 덮게 되는지 보고 고르게 한다. */
+  nowLabel?: string;
+  onReload: () => void;
+  onOverwrite: () => void;
+  onRecreate: () => void;
+}) {
+  const gone = notice.kind === 'gone';
+  return (
+    <div role="alert" className="ac-conflict" style={{ marginTop: 10, padding: '10px 12px', border: '1px solid var(--danger)', borderRadius: 10, background: 'var(--bg)' }}>
+      <p style={{ fontSize: 12.5, fontWeight: 800, color: 'var(--danger)' }}>
+        {gone ? '그 사이 다른 화면에서 지워졌습니다' : '그 사이 다른 화면에서 바뀌었습니다'}
+      </p>
+      <p className="ac-rulehint" style={{ marginTop: 4 }}>
+        {notice.message} 적으신 내용은 이 칸에 그대로 있습니다.
+      </p>
+      {!gone && nowLabel && (
+        <p className="ac-rulehint" style={{ marginTop: 4 }}>지금 저장된 내용: {nowLabel}</p>
+      )}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+        {gone ? (
+          <button type="button" className="ac-linkbtn" onClick={onRecreate}>이 내용으로 새로 등록하기</button>
+        ) : (
+          <>
+            <button type="button" className="ac-linkbtn" onClick={onReload}>지금 저장된 내용 불러오기</button>
+            <button type="button" className="ac-linkbtn" onClick={onOverwrite}>내가 적은 내용으로 덮어쓰기</button>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2365,6 +2437,12 @@ export default function AdminPage() {
   /** 안내 자료 폼을 프로그램이 채운다 — 기준선도 함께 옮긴다(사용자 입력은 `setForm` 그대로). */
   const loadKbForm = useCallback((next: KBForm) => { formBase.current.kb = next; setForm(next); }, []);
   const [editingId, setEditingId] = useState<string | null>(null);
+  /**
+   * 편집을 **시작할 때 본** 모습 (DS 46-1) — 저장할 때 그대로 돌려보낸다.
+   * 이 값이 없으면(옛 응답·새 자료) 종전처럼 그대로 저장한다 — 모르는 것을 단정하지 않는다.
+   */
+  const [editingRev, setEditingRev] = useState<string | null>(null);
+  const [kbConflict, setKbConflict] = useState<Conflict<KBEntryView> | null>(null);
   const [kbQuery, setKbQuery] = useState('');
   const [kbCat, setKbCat] = useState('');
   const [kbErr, setKbErr] = useState<{ question?: string; keywords?: string; answer?: string }>({});
@@ -2479,6 +2557,9 @@ export default function AdminPage() {
   /** 규칙 빌더를 프로그램이 채운다 — 기준선도 함께 옮긴다(DS 27-2). */
   const loadRuleForm = useCallback((next: CustomRuleForm) => { formBase.current.rule = next; setCrForm(next); }, []);
   const [crEditing, setCrEditing] = useState<string | null>(null);
+  /** 규칙 편집을 시작할 때 본 모습 (DS 46-1) — 자료 쪽(`editingRev`)과 같은 규칙이다. */
+  const [crEditingRev, setCrEditingRev] = useState<string | null>(null);
+  const [crConflict, setCrConflict] = useState<Conflict<CustomRuleView> | null>(null);
   const [crErr, setCrErr] = useState<{ label?: string; keywords?: string; reply?: string }>({});
   const [crBusy, setCrBusy] = useState(false);
   const [ruleProbe, setRuleProbe] = useState('');
@@ -3242,10 +3323,12 @@ export default function AdminPage() {
       question: form.question,
       keywords: form.keywords,
       answer: form.answer,
+      // 수정은 **내가 본 모습 위에서만** 한다 (DS 46-1). 새 자료에는 겨룰 상대가 없다.
+      ...(editingId && editingRev ? { baseRev: editingRev } : {}),
     };
     // 세션이 만료된 채로 저장하면 401 이 온다 — 다른 쓰기 경로와 같이 잠금 화면으로 넘긴다
     // (종전에는 「저장하지 못했습니다: 관리자 토큰이 필요합니다」 라는 내부 문구만 토스트로 떴다).
-    let data: { ok?: boolean; error?: string } | null;
+    let data: { ok?: boolean; error?: string; conflict?: 'gone' | 'changed'; current?: KBEntryView } | null;
     try {
       const res = await afetch('/api/admin/kb', {
         method: 'POST',
@@ -3260,20 +3343,73 @@ export default function AdminPage() {
     }
     if (!data) return;
     if (!data.ok) {
+      /**
+       * 그 사이 다른 화면에서 바뀐 것은 **적던 글을 버릴 이유가 아니다** (DS 46-1).
+       * 폼은 그대로 두고 그 자리에 사유와 길(지금 값 불러오기 · 그대로 덮어쓰기)을 띄운다.
+       * 목록은 새로 받는다 — 운영자가 바뀐 결과를 바로 볼 수 있어야 한다.
+       */
+      if (data.conflict) {
+        setKbConflict({ kind: data.conflict, message: data.error || '', ...(data.current ? { current: data.current } : {}) });
+        await loadKB();
+        notify(data.error || '', 'fail');
+        return;
+      }
       failed('저장하지 못했습니다', data.error);
       return;
     }
     loadKbForm(EMPTY_FORM);
     setEditingId(null);
+    setEditingRev(null);
+    setKbConflict(null);
     setKbErr({});
     await loadKB();
     flash(editingId ? '수정되었습니다.' : '추가되었습니다.');
+  };
+
+  /**
+   * 그 사이 바뀐 자료를 **지금 저장된 내용으로** 다시 연다 (DS 46-1).
+   * 내가 적던 글을 버리는 일이므로 확인을 거친다(DS 27-2 와 같은 관문).
+   */
+  const reloadKbConflict = async () => {
+    const cur = kbConflict?.current;
+    if (!cur) return;
+    const ok = await askConfirm({
+      title: '지금 저장된 내용을 불러올까요?',
+      target: cur.question,
+      body: '이 폼에 적던 내용은 사라지고, 다른 화면에서 저장한 내용이 그 자리에 들어옵니다.',
+      confirmLabel: '불러오기',
+    });
+    if (!ok) return;
+    setEditingId(cur.id);
+    setEditingRev(cur.rev ?? null);
+    setKbConflict(null);
+    setKbErr({});
+    loadKbForm({ id: cur.id, category: cur.category, question: cur.question, keywords: cur.keywords.join(', '), answer: cur.answer });
+  };
+
+  /** 그래도 내가 적은 것으로 간다 — **지금 값 위에** 덮어쓴다(무엇을 덮는지 보고 고른 길이다). */
+  const overwriteKbConflict = () => {
+    setEditingRev(kbConflict?.current?.rev ?? null);
+    setKbConflict(null);
+  };
+
+  /**
+   * 그 사이 **지워진** 자료 — 되살릴지는 운영자가 정한다 (DS 46-1).
+   * 「수정」이 아니라 「추가」로 바꿔 둔다: 지워진 자료를 수정했다고 말하면 변경 이력(생성)과 어긋난다.
+   */
+  const recreateKbConflict = () => {
+    setEditingId(null);
+    setEditingRev(null);
+    setKbConflict(null);
   };
 
   const editKB = async (e: KBEntryView) => {
     // 적던 내용을 말없이 갈아 끼우지 않는다 — 표에서 「수정」을 잘못 누르는 것이 가장 흔한 길이다.
     if (!(await confirmDiscard(formDirty(form, formBase.current.kb), '안내 자료 편집 폼'))) return;
     setEditingId(e.id);
+    // 무엇을 보고 고치기 시작했는지 함께 들고 간다 (DS 46-1).
+    setEditingRev(e.rev ?? null);
+    setKbConflict(null);
     setKbErr({});
     loadKbForm({ id: e.id, category: e.category, question: e.question, keywords: e.keywords.join(', '), answer: e.answer });
     goTab('kb');
@@ -3289,6 +3425,8 @@ export default function AdminPage() {
   const draftKbFromQuestion = async (question: string) => {
     if (!(await confirmDiscard(formDirty(form, formBase.current.kb), '안내 자료 편집 폼'))) return;
     setEditingId(null);
+    setEditingRev(null);
+    setKbConflict(null);
     setKbErr({});
     loadKbForm({ ...EMPTY_FORM, question });
     goTab('kb');
@@ -3314,7 +3452,7 @@ export default function AdminPage() {
         // 남겨 두면 「수정 저장」이 **지운 자료를 다시 만들고**(서버는 없는 식별자를 새로 만든다)
         // 화면은 「수정되었습니다」라고 말한다 — 변경 이력에는 「생성」으로 남아 둘이 어긋난다.
         // 규칙 쪽(`removeCustomRule`)은 처음부터 거두고 있었다. 같은 일을 두 탭이 다르게 하고 있었다.
-        if (editingId === id) { setEditingId(null); loadKbForm(EMPTY_FORM); setKbErr({}); }
+        if (editingId === id) { setEditingId(null); setEditingRev(null); setKbConflict(null); loadKbForm(EMPTY_FORM); setKbErr({}); }
         await loadKB();
         flash('삭제되었습니다.');
       } else {
@@ -3386,7 +3524,7 @@ export default function AdminPage() {
       }
       // 초기화는 모든 자료를 지운다 — 수정 중이던 자료도 사라졌으므로 폼을 거둔다 (DS 27-3).
       // **새 자료를 적던 중**이면 건드리지 않는다: 그 글은 지워진 것과 아무 상관이 없다.
-      if (editingId) { setEditingId(null); loadKbForm(EMPTY_FORM); setKbErr({}); }
+      if (editingId) { setEditingId(null); setEditingRev(null); setKbConflict(null); loadKbForm(EMPTY_FORM); setKbErr({}); }
       await loadKB();
       flash('기본 지식베이스로 초기화했습니다.');
     } catch {
@@ -3395,16 +3533,31 @@ export default function AdminPage() {
   };
 
   const patchRule = async (intent: string, patch: { enabled?: boolean; reply?: string | null }) => {
+    /**
+     * 답변을 덮어쓰는 저장만 **내가 본 모습**을 들고 간다 (DS 46-1).
+     * 켜기/끄기는 한 칸 패치라 남의 글을 밀어낼 일이 없다 — 들고 가면 목록이 30초 묵었을 때
+     * 스위치가 영문 없이 거절당한다(길을 막기만 하고 주는 것이 없는 거절은 두지 않는다).
+     */
+    const base = patch.reply !== undefined ? rules.find((r) => r.intent === intent)?.rev : undefined;
     try {
       const res = await afetch('/api/admin/rules', {
         method: 'PATCH',
         headers: authHeaders(true),
-        body: JSON.stringify({ intent, ...patch }),
+        body: JSON.stringify({ intent, ...patch, ...(base ? { baseRev: base } : {}) }),
       });
       if (on401(res)) return;
       const data = await res.json();
       if (data.ok) {
         setRules((prev) => prev.map((r) => (r.intent === intent ? data.rule : r)));
+      } else if (data.conflict) {
+        /**
+         * 적은 글은 입력칸에 그대로 둔다(브라우저가 들고 있는 값이다 — 지우지 않는다).
+         * 대신 ① 어느 규칙인지 이름을 붙여 말하고 ② 목록의 그 줄을 **지금 저장된 값**으로 바꾼다
+         * — 다시 저장하면 그 값 위에서 저장된다(묵은 모습으로 영영 거절당하지 않는다).
+         */
+        const label = rules.find((r) => r.intent === intent)?.label ?? '';
+        if (data.current) setRules((prev) => prev.map((r) => (r.intent === intent ? (data.current as RuleView) : r)));
+        notify(`${label ? `「${label}」 — ` : ''}${data.message || data.error} 입력칸의 글은 그대로 있습니다.`, 'fail');
       } else {
         failed('저장하지 못했습니다', data.message || data.error);
       }
@@ -3441,6 +3594,8 @@ export default function AdminPage() {
       keywords: crForm.keywords,
       reply: crForm.reply,
       escalate: crForm.escalate,
+      // 수정은 **내가 본 모습 위에서만** 한다 (DS 46-1) — 자료 쪽과 같은 규칙이다.
+      ...(crEditing && crEditingRev ? { baseRev: crEditingRev } : {}),
     };
     setCrBusy(true);
     try {
@@ -3452,11 +3607,20 @@ export default function AdminPage() {
       if (on401(res)) return;
       const data = await res.json();
       if (!data.ok) {
+        // 그 사이 다른 화면에서 바뀌었거나 지워진 규칙 — 적던 글은 그대로 두고 길만 준다 (DS 46-1).
+        if (data.conflict) {
+          setCrConflict({ kind: data.conflict, message: data.message || data.error || '', ...(data.current ? { current: data.current as CustomRuleView } : {}) });
+          await loadRules();
+          notify(data.message || data.error || '', 'fail');
+          return;
+        }
         failed('저장하지 못했습니다', data.message || data.error);
         return;
       }
       loadRuleForm(EMPTY_CR_FORM);
       setCrEditing(null);
+      setCrEditingRev(null);
+      setCrConflict(null);
       await loadRules();
       // 저장했다고만 말하고 끝내지 않는다 — 쓰이지 않을 규칙이면 그 사실을 **저장한 자리에서** 알린다(DS 44-3).
       const shadow = data.shadowedBy as RuleShadowView | null | undefined;
@@ -3474,6 +3638,37 @@ export default function AdminPage() {
       setCrBusy(false);
       release('rule');
     }
+  };
+
+  /** 그 사이 바뀐 규칙을 지금 저장된 내용으로 다시 연다 (DS 46-1) — 자료 쪽과 같은 관문이다. */
+  const reloadCrConflict = async () => {
+    const cur = crConflict?.current;
+    if (!cur) return;
+    const ok = await askConfirm({
+      title: '지금 저장된 내용을 불러올까요?',
+      target: cur.label,
+      body: '이 폼에 적던 내용은 사라지고, 다른 화면에서 저장한 내용이 그 자리에 들어옵니다.',
+      confirmLabel: '불러오기',
+    });
+    if (!ok) return;
+    setCrEditing(cur.intent);
+    setCrEditingRev(cur.rev ?? null);
+    setCrConflict(null);
+    setCrErr({});
+    loadRuleForm({ label: cur.label, keywords: cur.keywords.join(', '), reply: cur.reply, escalate: cur.escalate });
+  };
+
+  /** 그래도 내가 적은 것으로 간다 — 지금 값 위에 덮어쓴다. */
+  const overwriteCrConflict = () => {
+    setCrEditingRev(crConflict?.current?.rev ?? null);
+    setCrConflict(null);
+  };
+
+  /** 그 사이 지워진 규칙 — 되살릴지는 운영자가 정한다(새 규칙으로 간다). */
+  const recreateCrConflict = () => {
+    setCrEditing(null);
+    setCrEditingRev(null);
+    setCrConflict(null);
   };
 
   // 규칙 켜기/끄기 스위치. DS 5-4 가 삭제·수정만 손봤던 탓에 여기만 예외 처리가 빠져 있었다 —
@@ -3514,6 +3709,8 @@ export default function AdminPage() {
       if (data.ok) {
         if (crEditing === intent) {
           setCrEditing(null);
+          setCrEditingRev(null);
+          setCrConflict(null);
           loadRuleForm(EMPTY_CR_FORM);
         }
         await loadRules();
@@ -3643,7 +3840,9 @@ export default function AdminPage() {
       const res = await afetch('/api/admin/escalations', {
         method: 'PATCH',
         headers: authHeaders(true),
-        body: JSON.stringify({ id, status }),
+        // **내가 본 그 줄 위에서만** 바꾼다 (DS 46-2) — 목록은 30초마다 갱신되지만 그 사이에도
+        // 다른 운영자의 손은 움직인다. 옛 응답(rev 없음)에는 들고 갈 값이 없다.
+        body: JSON.stringify({ id, status, ...(target?.rev ? { baseRev: target.rev } : {}) }),
       });
       if (on401(res)) return;
       const data = await res.json();
@@ -3652,6 +3851,14 @@ export default function AdminPage() {
         // 파기는 조용히 하지 않는다 — 무엇이 사라졌는지 운영자가 알아야 한다.
         const purged = (status === 'resolved' || status === 'canceled') && Boolean(target?.contact);
         flash(`접수 ${shortTicket(id)} → ${TICKET_STATUS_LABELS[status]}${purged ? ' · 연락처 파기' : ''}`);
+      } else if (data.conflict) {
+        /**
+         * 그 사이 다른 화면에서 바뀐 접수 (DS 46-2) — **바꾸지 않았다**는 사실과 지금 무엇인지를
+         * 함께 말하고, 목록을 새로 받아 그 줄을 지금 값으로 되돌린다. 종전에는 완료 처리돼
+         * 연락처가 파기된 접수를 묵은 화면이 「상담 시작」으로 되돌릴 수 있었다.
+         */
+        await loadEsc();
+        notify(`접수 ${shortTicket(id)} — ${data.message || data.error} 이번 변경은 적용되지 않았습니다.`, 'fail');
       } else {
         failed('상태를 바꾸지 못했습니다', data.message || data.error);
       }
@@ -4731,7 +4938,17 @@ export default function AdminPage() {
                     </div>
                   </details>
                 )}
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {/* 그 사이 다른 화면에서 바뀐 자료 — 적던 글은 그대로 두고 길만 준다 (DS 46-1). */}
+                {kbConflict && (
+                  <ConflictNote
+                    notice={kbConflict}
+                    {...(kbConflict.current ? { nowLabel: `${kbConflict.current.question} / ${kbConflict.current.answer.slice(0, 40)}${kbConflict.current.answer.length > 40 ? '…' : ''}` } : {})}
+                    onReload={reloadKbConflict}
+                    onOverwrite={overwriteKbConflict}
+                    onRecreate={recreateKbConflict}
+                  />
+                )}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                   <button type="button" {...busyBtn(kbBusy, kbBusy, S.btn)} onClick={submitKB}>
                     {kbBusy ? '저장 중…' : editingId ? '수정 저장' : '추가'}
                   </button>
@@ -4741,6 +4958,8 @@ export default function AdminPage() {
                       style={S.btnGhost}
                       onClick={() => {
                         setEditingId(null);
+                        setEditingRev(null);
+                        setKbConflict(null);
                         loadKbForm(EMPTY_FORM);
                         setKbErr({});
                       }}
@@ -4770,6 +4989,9 @@ export default function AdminPage() {
           // 빌더에 적던 규칙을 말없이 갈아 끼우지 않는다(DS 27-2).
           if (!(await confirmDiscard(formDirty(crForm, formBase.current.rule), '시나리오 룰 빌더'))) return;
           setCrEditing(r.intent);
+          // 무엇을 보고 고치기 시작했는지 함께 들고 간다 (DS 46-1).
+          setCrEditingRev(r.rev ?? null);
+          setCrConflict(null);
           loadRuleForm({ label: r.label, keywords: r.keywords.join(', '), reply: r.reply, escalate: r.escalate });
           setCrErr({});
           ruleFormRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
@@ -5031,12 +5253,22 @@ export default function AdminPage() {
                 <p className="ac-rulehint" style={{ marginTop: 6 }}>여기서는 표현 포함 여부만 봅니다. 기본 규칙이나 먼저 만든 규칙이 같은 표현을 쓰면 그쪽이 먼저 답하므로, 저장한 뒤 목록의 「가려짐」 표시와 「응답 테스트」에서 확인하세요.</p>
               </div>
 
+              {/* 자료 쪽과 같은 자리·같은 말 (DS 46-1) — 같은 일을 두 탭이 다르게 하지 않는다. */}
+              {crConflict && (
+                <ConflictNote
+                  notice={crConflict}
+                  {...(crConflict.current ? { nowLabel: `${crConflict.current.label} / ${crConflict.current.reply.slice(0, 40)}${crConflict.current.reply.length > 40 ? '…' : ''}` } : {})}
+                  onReload={reloadCrConflict}
+                  onOverwrite={overwriteCrConflict}
+                  onRecreate={recreateCrConflict}
+                />
+              )}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                 <button type="button" {...busyBtn(crBusy, crBusy, S.btn)} onClick={submitCustomRule}>
                   {crBusy ? '저장 중…' : crEditing ? '수정 저장' : '규칙 추가'}
                 </button>
                 {crEditing && (
-                  <button type="button" style={S.btnGhost} onClick={() => { setCrEditing(null); loadRuleForm(EMPTY_CR_FORM); setCrErr({}); }}>
+                  <button type="button" style={S.btnGhost} onClick={() => { setCrEditing(null); setCrEditingRev(null); setCrConflict(null); loadRuleForm(EMPTY_CR_FORM); setCrErr({}); }}>
                     취소
                   </button>
                 )}

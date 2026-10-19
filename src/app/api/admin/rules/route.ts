@@ -3,10 +3,10 @@
 import { NextRequest } from 'next/server';
 import { RULES } from '@/lib/rules';
 import { shadowOfRule } from '@/lib/chat';
-import { getRuleOverride, setRuleOverride, listCustomRules, upsertCustomRule, deleteCustomRule, MAX_RULE_REPLY_LEN, CustomRuleInput, type CustomRule } from '@/lib/adminStore';
+import { getRuleOverride, setRuleOverride, listCustomRules, upsertCustomRule, deleteCustomRule, customRuleRev, ruleOverrideRev, overrideConflict, MAX_RULE_REPLY_LEN, CustomRuleInput, type CustomRule } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, reqQuery, optStr, requireAdmin, isAdminAuthed } from '@/lib/http';
-import { STALE_TARGET_MESSAGE, tooLongMessage } from '@/lib/refusal';
+import { CHANGED_TARGET_MESSAGE, STALE_TARGET_MESSAGE, tooLongMessage } from '@/lib/refusal';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +22,8 @@ function ruleView(intent: string) {
     enabled: ov ? ov.enabled : true,
     replyOverride: ov?.reply ?? null,
     effectiveReply: ov?.reply || r.reply,
+    /** 지금 보고 있는 모습 — 답변을 고쳐 저장할 때 그대로 돌려보낸다 (DS 46-1). */
+    rev: ruleOverrideRev(r.intent),
   };
 }
 
@@ -30,7 +32,8 @@ function ruleView(intent: string) {
  * 판정은 엔진 자신(`shadowOfRule`)이 한다. 화면이 패턴을 다시 해석하면 실제와 어긋난다.
  */
 function customRuleView(r: CustomRule) {
-  return { ...r, shadowedBy: r.enabled ? shadowOfRule(r.keywords, r.intent) : null };
+  // `rev` 는 **지금 보고 있는 모습**이다 (DS 46-1) — 편집 폼이 이 값을 들고 있다가 저장할 때 돌려보낸다.
+  return { ...r, rev: customRuleRev(r), shadowedBy: r.enabled ? shadowOfRule(r.keywords, r.intent) : null };
 }
 
 export async function GET(req: NextRequest) {
@@ -56,7 +59,16 @@ export async function POST(req: NextRequest) {
     return fail('conflict', '기본 규칙과 같은 이름은 쓸 수 없습니다. 규칙 이름을 바꿔 주세요.', undefined, { status: 400 });
   }
   const result = upsertCustomRule(parsed.data);
-  if (!result.ok) return fail('invalid_input', result.error);
+  if (!result.ok) {
+    // 그 사이 다른 화면에서 바뀌었거나 지워진 규칙 (DS 46-1) — 적던 글을 버리지 않게 사유를 함께 보낸다.
+    if (result.conflict) {
+      return fail('conflict', result.error, {
+        conflict: result.conflict,
+        ...(result.current ? { current: customRuleView(result.current) } : {}),
+      });
+    }
+    return fail('invalid_input', result.error);
+  }
   logAudit({
     action: 'rule.custom.upsert',
     target: result.rule.intent,
@@ -64,7 +76,7 @@ export async function POST(req: NextRequest) {
     authed: isAdminAuthed(req),
   });
   // 저장은 됐지만 **쓰이지 않을** 수 있다 — 그 사실을 저장한 자리에서 바로 말한다(DS 44-3).
-  return ok({ rule: result.rule, created: result.created, shadowedBy: customRuleView(result.rule).shadowedBy });
+  return ok({ rule: customRuleView(result.rule), created: result.created, shadowedBy: customRuleView(result.rule).shadowedBy });
 }
 
 // 커스텀 룰 삭제: DELETE /api/admin/rules?intent=cr_xxx
@@ -82,7 +94,7 @@ export async function PATCH(req: NextRequest) {
   const denied = requireAdmin(req);
   if (denied) return denied;
 
-  const parsed = await readJson<{ intent?: unknown; enabled?: unknown; reply?: unknown }>(req);
+  const parsed = await readJson<{ intent?: unknown; enabled?: unknown; reply?: unknown; baseRev?: unknown }>(req);
   if (!parsed.ok) return parsed.res;
   const body = parsed.data;
 
@@ -102,6 +114,12 @@ export async function PATCH(req: NextRequest) {
 
   const enabled = body.enabled as boolean | undefined;
   const reply = body.reply as string | null | undefined;
+  // 답변을 덮어쓰는 저장만 **내가 본 모습**을 들고 온다 (DS 46-1) — 켜기/끄기는 한 칸 패치라
+  // 겨룰 글이 없다. 들고 왔는데 다르면 거절하고 지금 값을 함께 보낸다.
+  const baseRev = typeof body.baseRev === 'string' ? body.baseRev : undefined;
+  if (overrideConflict(intent, baseRev)) {
+    return fail('conflict', CHANGED_TARGET_MESSAGE, { conflict: 'changed', current: ruleView(intent) });
+  }
   setRuleOverride(intent, { enabled, reply });
 
   const parts: string[] = [];

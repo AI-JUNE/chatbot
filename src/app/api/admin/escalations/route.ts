@@ -1,7 +1,7 @@
 // 관리 콘솔 에스컬레이션 API — 목록·상태 변경 + 운영 통계(자동처리율).
 // 인증: lib/http requireAdmin. 시크릿은 Vercel 환경변수로만.
 import { NextRequest } from 'next/server';
-import { queryTickets, updateTicket, getTicket, escalationStats, ESCALATION_STATUSES, STATUS_LABELS, TICKET_PAGE_DEFAULT, TICKET_PAGE_MAX, EscalationStatus } from '@/lib/escalation';
+import { queryTickets, updateTicket, getTicket, escalationStats, ticketRev, ESCALATION_STATUSES, STATUS_LABELS, TICKET_PAGE_DEFAULT, TICKET_PAGE_MAX, EscalationStatus } from '@/lib/escalation';
 import { convStats, listTurns, unansweredQuestions } from '@/lib/convlog';
 import { feedbackSummary } from '@/lib/feedback';
 import { intentLabel, intentLabelMap } from '@/lib/intents';
@@ -37,6 +37,9 @@ export async function GET(req: NextRequest) {
       ...t,
       tenantLabel: tenantLabel(t.tenant ?? null),
       piiLabels: piiKindLabels(t.piiKinds),
+      // 「내가 본 그때의 모습」 — 상태를 바꿀 때 그대로 돌려보낸다 (DS 46-2). 목록은 30초마다
+      // 갱신되지만 그 사이에도 다른 운영자의 손은 움직인다.
+      rev: ticketRev(t),
     })),
     /** 「전체 몇 건 중 몇 건을 보냈는가」 — 화면이 그 사실을 적는다 (DS 43-3). */
     ticketPage: { total: page.total, shown: page.tickets.length, limit: page.limit, truncated: page.truncated },
@@ -79,7 +82,7 @@ export async function PATCH(req: NextRequest) {
   const denied = requireAdmin(req);
   if (denied) return denied;
 
-  const parsed = await readJson<{ id?: unknown; status?: unknown; note?: unknown }>(req);
+  const parsed = await readJson<{ id?: unknown; status?: unknown; note?: unknown; baseRev?: unknown }>(req);
   if (!parsed.ok) return parsed.res;
   const body = parsed.data;
 
@@ -107,8 +110,24 @@ export async function PATCH(req: NextRequest) {
   // 파기 여부를 남기려면 바꾸기 **전**의 상태를 알아야 한다(완료·취소 시 연락처가 지워진다).
   const hadContact = Boolean(getTicket(id.value)?.contact);
 
-  const result = updateTicket(id.value, { status, note });
-  if (!result.ok) return fail('not_found', result.error);
+  const baseRev = typeof body.baseRev === 'string' ? body.baseRev : undefined;
+  const result = updateTicket(id.value, { status, note, baseRev });
+  if (!result.ok) {
+    /**
+     * 그 사이 다른 화면에서 바뀐 접수 (DS 46-2) — 「없는 접수」와 다른 사실이므로 다른 코드로
+     * 돌려준다. 지금 값을 함께 보내 **그 줄만** 바로 고쳐 그리게 한다(30초를 기다리면 운영자는
+     * 그 사이에 같은 버튼을 다시 누른다).
+     */
+    if (result.conflict === 'changed') {
+      return fail('conflict', result.error, {
+        conflict: 'changed',
+        ...(result.current
+          ? { current: { ...result.current, tenantLabel: tenantLabel(result.current.tenant ?? null), piiLabels: piiKindLabels(result.current.piiKinds), rev: ticketRev(result.current) } }
+          : {}),
+      });
+    }
+    return fail('not_found', result.error);
+  }
 
   const parts: string[] = [];
   // 감사 로그의 「대상·내용」은 운영자가 그대로 읽는 칸이다 — 상태 코드(`in_progress`)가 아니라 이름으로 남긴다.
@@ -117,5 +136,5 @@ export async function PATCH(req: NextRequest) {
   // 개인정보 파기는 감사 로그에 남는다 — 연락처 원문은 싣지 않는다(§10.3).
   if (hadContact && !result.ticket.contact) parts.push('연락처 파기');
   logAudit({ action: 'escalation.update', target: id.value, detail: parts.join(', '), authed: isAdminAuthed(req) });
-  return ok({ ticket: result.ticket });
+  return ok({ ticket: { ...result.ticket, rev: ticketRev(result.ticket) } });
 }
