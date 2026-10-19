@@ -9,6 +9,7 @@ import { exportPartners, importPartners } from '@/lib/partners';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, requireAdmin, isAdminAuthed, MAX_IMPORT_BYTES } from '@/lib/http';
 import { kstStamp } from '@/lib/kst';
+import type { SavedInfo } from '@/lib/storage';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,12 +50,23 @@ export async function POST(req: NextRequest) {
   // 파트너 스냅샷은 있을 때만 복원한다(없으면 기존 데이터 유지). 실패해도 사유를 응답에 담아 삼키지 않는다.
   let partners: { partners: number; accounts: number } | null = null;
   let partnersError: string | null = null;
+  let partnersSaved: SavedInfo | null = null;
   const raw = (parsed.data as { partners?: unknown }).partners;
   if (raw && typeof raw === 'object') {
     const r = importPartners(raw);
-    if (r.ok) partners = { partners: r.partners, accounts: r.accounts };
-    else partnersError = r.error;
+    if (r.ok) {
+      partners = { partners: r.partners, accounts: r.accounts };
+      partnersSaved = r.saved ?? null;
+    } else partnersError = r.error;
   }
+
+  // 복원한 것이 **디스크까지 갔는가** (DS 47-1). 둘 중 하나라도 보관되지 않으면 보관되지
+  // 않았다고 말한다 — 화면은 「복원 완료」 뒤에 그 사실을 덧붙인다.
+  const saved = !result.saved?.persisted
+    ? result.saved
+    : partnersSaved && !partnersSaved.persisted
+      ? partnersSaved
+      : { persisted: true };
 
   logAudit({
     action: 'backup.restore',
@@ -62,6 +74,7 @@ export async function POST(req: NextRequest) {
       `스냅샷 복원(kb ${result.kb} · 오버라이드 ${result.overrides} · 커스텀룰 ${result.customRules}` +
       (partners ? ` · 파트너 ${partners.partners} · 고객사 ${partners.accounts}` : '') +
       (partnersError ? ' · 파트너 복원 실패' : '') +
+      (saved && !saved.persisted ? ' · 서버 보관 실패' : '') +
       ')',
     authed: isAdminAuthed(req, true),
   });
@@ -71,5 +84,6 @@ export async function POST(req: NextRequest) {
     customRules: result.customRules,
     ...(partners ? { partners: partners.partners, accounts: partners.accounts } : {}),
     ...(partnersError ? { partnersError } : {}),
+    ...(saved ? { saved } : {}),
   });
 }

@@ -2,7 +2,7 @@
 // 기본은 미리보기(dry-run)이고, commit:true 일 때만 실제 KB에 반영한다(오등록 방지).
 // [승인 필요] 파일 스토리지 업로드·임베딩 색인 — 현재는 텍스트 본문만 받아 인메모리 KB에 등록한다.
 import { NextRequest } from 'next/server';
-import { bulkUpsertKB, docOverlap } from '@/lib/adminStore';
+import { bulkUpsertKB, docOverlap, saveAdminNow } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { documentToCandidates, docIdPrefix, MAX_DOC_CHARS, DEFAULT_CHUNK_CHARS } from '@/lib/ingest';
 import { toNfc } from '@/lib/normalize';
@@ -81,5 +81,7 @@ export async function POST(req: NextRequest) {
     updated: result.updated.length,
     errors: result.errors,
     overlap,
+    // 여러 건을 한 번에 넣었어도 쓰기는 한 번이다 — 그 한 번의 결과를 함께 말한다(DS 47-1).
+    saved: saveAdminNow(),
   });
 }

@@ -12,6 +12,7 @@ import {
   rollupByPartner,
   upsertAccount,
   upsertPartner,
+  savePartnersNow,
   defaultFeeRateBp,
   ACCOUNT_STATUS_LABELS,
   LEAD_SOURCE_LABELS,
@@ -83,7 +84,8 @@ export async function POST(req: NextRequest) {
       detail: `${r.created ? '등록' : '수정'}: ${r.partner.name.slice(0, 40)}`,
       authed,
     });
-    return ok({ partner: r.partner, created: r.created });
+    // 「등록했습니다」는 디스크를 보고 나온 말이어야 한다 (DS 47-1).
+    return ok({ partner: r.partner, created: r.created, saved: savePartnersNow() });
   }
 
   if (kind === 'account') {
@@ -101,7 +103,7 @@ export async function POST(req: NextRequest) {
       detail: `${r.created ? '등록' : '수정'}: ${r.account.name.slice(0, 40)} / 귀속 ${ownerName} / 경로 ${LEAD_SOURCE_LABELS[r.account.source]}${last ? ` / ${last.note.slice(0, 40)}` : ''}`,
       authed,
     });
-    return ok({ account: r.account, created: r.created });
+    return ok({ account: r.account, created: r.created, saved: savePartnersNow() });
   }
 
   // 화면의 세그먼트(고객사/파트너)가 늘 하나를 고르므로 여기까지 오지 않는다 —
@@ -120,5 +122,5 @@ export async function DELETE(req: NextRequest) {
   const r = deletePartner(id.value);
   if (!r.ok) return fail('conflict', r.error);
   logAudit({ action: 'partner.delete', target: id.value, authed: auth.principal.authed });
-  return ok({});
+  return ok({ saved: savePartnersNow() });
 }

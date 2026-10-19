@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { importLib } from './_compile.mjs';
+import { compileLibs, importLib } from './_compile.mjs';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
 const TSC = path.join(REPO, 'node_modules', 'typescript', 'bin', 'tsc');
@@ -307,7 +307,9 @@ test('지식베이스가 표(검색·카테고리 필터)+우측 편집 폼으�
   assert.match(kb, /aria-label=\{`삭제: \$\{e\.question\}`\}/, '행 버튼에 대상 이름이 있어야 한다');
   // 확인 절차는 유지하되, 브라우저 기본 대화상자가 아니라 브랜드 대화상자를 거친다(DS 5-4).
   assert.match(src, /askConfirm\(\{[\s\S]{0,200}이 안내 자료를 삭제할까요/, '삭제는 확인을 거친다');
-  assert.match(src, /flash\(editingId \? '수정되었습니다\.' : '추가되었습니다\.'\)/, '저장 토스트');
+  // 저장 토스트 — 끝났다고 말하는 한 문(`flashSaved`)을 지난다. 그 문은 서버가 보낸 보관
+  // 결과를 함께 받아, 디스크에 닿지 않았으면 같은 문장에 그 사실을 적는다 (DS 47-1).
+  assert.match(src, /flashSaved\(editingId \? '수정되었습니다\.' : '추가되었습니다\.', data\.saved\)/, '저장 토스트');
   const mobile = css.slice(css.indexOf('@media (max-width:900px){'));
   assert.match(mobile, /\.ac-split,\.ac-split-test\{grid-template-columns:minmax\(0,1fr\)\}/, '좁은 화면에서는 한 단');
   assert.match(mobile, /\.ac-col-wide\{display:none\}/, '좁은 화면에서는 키워드 열을 감춘다');
@@ -362,7 +364,8 @@ test('시나리오 룰이 「조건 → 응답」 카드 빌더와 미리보기�
   // 무엇을 지우는지(규칙 이름)를 대화상자가 따로 강조한다.
   assert.match(src, /askConfirm\(\{[\s\S]{0,200}이 규칙을 삭제할까요/, '삭제는 확인을 거친다');
   assert.match(src, /target: target\?\.label \?\? intent/, '지우는 대상을 밝힌다');
-  assert.match(src, /flash\(crEditing \? '규칙을 수정했습니다\.' : '규칙을 추가했습니다\.'\)/, '저장 토스트');
+  // 저장 토스트 — 자료 쪽과 같은 문(`flashSaved`)을 지난다 (DS 47-1).
+  assert.match(src, /flashSaved\(crEditing \? '규칙을 수정했습니다\.' : '규칙을 추가했습니다\.', data\.saved/, '저장 토스트');
   // 내부 용어(intent·정규식·커스텀 룰)가 화면 문자열에 남지 않는다
   for (const leak of ['커스텀 룰', '정규식', '패턴: /', '({r.intent}', '>{r.intent}']) {
     assert.equal(t.includes(leak), false, `내부 용어 노출: ${leak}`);
@@ -2491,4 +2494,242 @@ test('편집 폼이 「내가 본 모습」을 들고 다니고 거절을 그 �
   // ⑧ 첫 렌더에는 아무 경고도 없다 — 겪기 전에 말하지 않는다.
   const html = await render();
   assert.equal(html.includes('그 사이 다른 화면에서'), false, '겪기도 전에 바뀌었다고 말한다');
+});
+
+/* ══════════ 디자인 스프린트 — 44차 재감사 (DS 47-1·47-2·47-3) ══════════ */
+
+/**
+ * 저장소와 스토어가 **같은 한 벌**을 보게 한 번에 컴파일한다.
+ * `importLib` 를 따로 두 번 부르면 컴파일 키가 달라 서로 다른 `storage` 인스턴스를 들고
+ * 돌아온다 — 드라이버를 바꿔도 스토어 쪽은 꿈쩍하지 않는다.
+ */
+async function loadPersistLibs(dir) {
+  process.env.STORAGE_DIR = dir;
+  const out = compileLibs(['adminStore', 'partners', 'storage', 'knowledge', 'normalize', 'logger', 'monitoring', 'refusal', 'rev', 'pii']);
+  const load = (n) => import(pathToFileURL(path.join(out, `${n}.mjs`)).href);
+  return { storage: await load('storage'), store: await load('adminStore'), partners: await load('partners') };
+}
+
+/**
+ * DS 47-1 — 이 제품은 「서버 메모리에 반영됨」과 「디스크에 보관됨」을 한 번도 구분해 말하지
+ * 않았다. 쓰기 라우트는 메모리를 갈아 끼운 뒤 곧바로 성공을 돌려주고, 디스크 쓰기는 응답
+ * **뒤** 300ms 디바운스 타이머(`unref()`)에 맡겼다. 그래서
+ *  ① 「저장되었습니다」라고 말하는 그 순간 디스크에는 아무것도 닿지 않았고
+ *  ② 뒤이어 쓰기가 실패해도(읽기전용 FS — 라이브 배포의 기본값) 그 사실은 저장소 상태 탭에만 남고
+ *  ③ 백업 복원은 파트너·고객사를 **디스크에 적지도 않았다**(관리 콘텐츠 쪽만 적었다).
+ */
+test('저장했다는 말이 디스크를 보고 나온다 (DS 47-1)', opts, async () => {
+  delete process.env.ADMIN_PERSIST;
+  const dir = mkdtempSync(path.join(tmpdir(), 'gowon-persist-'));
+  const { storage, store, partners } = await loadPersistLibs(dir);
+  storage.setDriver('file');
+  const file = path.join(dir, 'admin.json');
+  const diskHas = (s) => existsSync(file) && readFileSync(file, 'utf8').includes(s);
+
+  // ① 종전 식 재현 — 저장 함수가 돌아온 그 순간 디스크에는 아무것도 없다(쓰기는 뒤에 일어난다).
+  store.resetKB();
+  storage.resetStorageState(); // 대기 중인 쓰기를 거둔다 — 아직 디스크는 비어 있다
+  assert.equal(existsSync(file), false, '재현 조건이 성립하지 않는다 — 이미 파일이 있다');
+  const made = store.upsertKB({ question: '환불 기간은?', keywords: ['환불'], answer: '7일 이내' });
+  assert.equal(made.ok, true);
+  assert.equal(existsSync(file), false, '재현 조건이 성립하지 않는다 — 디바운스 없이 즉시 쓰였다');
+
+  // ② 「저장되었습니다」라고 말하기 전에 지나는 문 — 지나면 디스크에 있다.
+  assert.deepEqual(store.saveAdminNow(), { persisted: true });
+  assert.ok(diskHas('7일 이내'), '보관했다고 답했는데 디스크에 없다');
+
+  // ③ 바뀐 것이 없으면 그대로 「보관됨」이다 — 없는 실패를 만들지 않는다.
+  assert.deepEqual(store.saveAdminNow(), { persisted: true });
+
+  // ④ 쓰기가 실패하는 환경(읽기전용 FS)에서는 **보관되지 않았다고 말한다**.
+  storage.setDriver({
+    name: 'file',
+    read: () => null,
+    write: () => { throw Object.assign(new Error("EROFS: read-only file system, open '/var/task/data/admin.json'"), { code: 'EROFS' }); },
+    remove: () => {},
+  });
+  store.upsertKB({ id: made.entry.id, answer: '14일 이내' });
+  const refused = store.saveAdminNow();
+  assert.equal(refused.persisted, false, '쓰기가 실패했는데 보관했다고 말한다');
+  assert.equal(refused.reason, 'readonly');
+  // 사유는 **코드**로만 간다 — 오류 원문·파일 경로가 화면까지 가지 않는다(DS 29-3).
+  const wire = JSON.stringify(refused);
+  assert.equal(/EROFS|var\/task|admin\.json/.test(wire), false, `오류 원문이 화면으로 간다: ${wire}`);
+  // 보관만 못 한 것이다 — 화면 속 값과 서비스는 멀쩡하다.
+  assert.equal(store.listKB().find((e) => e.id === made.entry.id).answer, '14일 이내');
+  assert.equal(storage.storageStatus().namespaces.find((n) => n.ns === 'admin').health, 'readonly', '사유가 상태에 남지 않는다');
+
+  // ⑤ 저장이 꺼진 배포에서는 **다른 사유**를 말한다(읽기전용과 섞지 않는다).
+  storage.setDriver('file');
+  process.env.ADMIN_PERSIST = 'false';
+  store.upsertKB({ id: made.entry.id, answer: '30일 이내' });
+  assert.deepEqual(store.saveAdminNow(), { persisted: false, reason: 'disabled' });
+  delete process.env.ADMIN_PERSIST;
+
+  // ⑥ 백업 복원이 **디스크에 적는다** — 종전에는 파트너·고객사만 메모리에 갈아 끼우고 끝났다.
+  const pfile = path.join(dir, 'partners.json');
+  const iso = new Date().toISOString();
+  const snap = {
+    version: 1, savedAt: iso, partnerSeq: 1, accountSeq: 1,
+    partners: [{ id: 'PTR-0001', name: '제이투모로우원', status: 'active', feeRateBp: 1000, createdAt: iso, updatedAt: iso }],
+    accounts: [{ id: 'ACC-0001', name: '이음', partnerId: 'PTR-0001', source: 'partner', status: 'contracted', contractedAt: '2026-09-01', createdAt: iso, updatedAt: iso }],
+  };
+  const restored = partners.importPartners(snap);
+  assert.equal(restored.ok, true);
+  assert.deepEqual(restored.saved, { persisted: true });
+  assert.ok(existsSync(pfile), '복원한 파트너가 디스크에 없다 — 재시작하면 복원 전으로 돌아간다');
+  assert.ok(readFileSync(pfile, 'utf8').includes('제이투모로우원'), '복원한 파트너가 디스크에 없다');
+  assert.ok(readFileSync(pfile, 'utf8').includes('이음'), '복원한 고객사가 디스크에 없다');
+
+  // 기동 때 읽어 들이는 길은 **되쓰지 않는다** — 방금 읽은 것을 다시 적지 않는다.
+  assert.equal(partners.importPartners(snap, { persist: false }).saved, undefined, '읽어 들이기가 디스크를 되쓴다');
+
+  // ⑦ 파트너 쪽도 같은 문을 지난다(같은 일을 두 탭이 다르게 하지 않는다).
+  partners.upsertPartner({ name: '새 파트너' });
+  assert.deepEqual(partners.savePartnersNow(), { persisted: true });
+
+  partners.resetPartners();
+  store.resetKB();
+  delete process.env.STORAGE_DIR;
+});
+
+/**
+ * DS 47-1 (배선) — 쓰기 응답이 보관 결과를 싣고, 화면이 그것을 **머무는 안내**로 말한다.
+ */
+test('쓰기 응답이 보관 결과를 싣고 화면이 그 사실을 말한다 (DS 47-1)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const routes = {
+    '안내 자료': readFileSync(new URL('../src/app/api/admin/kb/route.ts', import.meta.url), 'utf8'),
+    '문서 등록': readFileSync(new URL('../src/app/api/admin/kb/import/route.ts', import.meta.url), 'utf8'),
+    '규칙': readFileSync(new URL('../src/app/api/admin/rules/route.ts', import.meta.url), 'utf8'),
+    '파트너': readFileSync(new URL('../src/app/api/admin/partners/route.ts', import.meta.url), 'utf8'),
+    '백업 복원': readFileSync(new URL('../src/app/api/admin/backup/route.ts', import.meta.url), 'utf8'),
+  };
+  // ① 쓰기 라우트는 하나도 빠짐없이 보관 결과를 싣는다.
+  for (const [what, route] of Object.entries(routes)) {
+    assert.match(route, /saved/, `${what} 쓰기가 보관 결과를 보내지 않는다`);
+  }
+  assert.match(routes['안내 자료'], /saved: saveAdminNow\(\)/, '자료 저장이 디스크를 보지 않는다');
+  assert.match(routes['규칙'], /saved: saveAdminNow\(\)/, '규칙 저장이 디스크를 보지 않는다');
+  assert.match(routes['파트너'], /saved: savePartnersNow\(\)/, '파트너 저장이 디스크를 보지 않는다');
+
+  // ② 사유 문장은 **한 벌**이다 — 저장소 상태 패널과 같은 사전을 쓴다(두 군데서 다르게 적지 않는다).
+  assert.match(src, /function savedWarning\(saved: SavedView \| undefined \| null\): string \| null \{/, '보관 결과를 말하는 한 곳이 없다');
+  assert.match(src, /STORAGE_HEALTH\[saved\.reason\]\?\.hint/, '사유 문장을 베껴 적었다');
+  assert.ok(src.includes('다만 이 변경은 서버에 보관되지 않았습니다'), '무슨 일이 일어났는지 말하지 않는다');
+  // 「아래」처럼 자리를 가리키는 말이 섞이면 토스트에서는 가리킬 곳이 없다 — 두 자리가 같은 문장을 쓴다.
+  assert.equal(/hint: '아래/.test(src), false, '토스트에서 가리킬 수 없는 자리를 가리킨다');
+
+  // ③ 그 안내는 **머물러 있다** — 2.5초 뒤 사라지면 「백업을 받아 두세요」가 전달되지 않는다(DS 29-2).
+  const gate = src.slice(src.indexOf('const flashSaved = ('), src.indexOf('const flashSaved = (') + 400);
+  assert.match(gate, /notify\(`\$\{msg\} \$\{warn\}`, 'fail'\)/, '보관 실패 안내가 스스로 사라진다');
+
+  // ④ 저장·삭제를 말하는 자리는 전부 그 문을 지난다 — 한 자리라도 빠지면 그 화면만 거짓이 된다.
+  assert.equal(/\bflash\('삭제되었습니다/.test(src), false, '자료 삭제가 보관 결과를 보지 않는다');
+  for (const sig of [
+    /flashSaved\(editingId \? '수정되었습니다/,
+    /flashSaved\('삭제되었습니다\.', data\.saved/,
+    /flashSaved\('기본 지식베이스로 초기화했습니다\.', data\.saved/,
+    /flashSaved\(crEditing \? '규칙을 수정했습니다/,
+    /flashSaved\('규칙을 삭제했습니다\.', data\.saved/,
+    /flashSaved\(data\.created \? '파트너를 등록했습니다/,
+    /flashSaved\(data\.created \? '고객사를 등록했습니다/,
+    /flashSaved\('파트너를 삭제했습니다\.', data\.saved/,
+  ]) assert.match(src, sig, `보관 결과를 보지 않는 저장 안내가 있다: ${sig}`);
+  // 복원은 「모두 덮어씁니다」라고 말하고 확인까지 받은 자리다 — 그것이 디스크까지 갔는지 말한다.
+  assert.match(src, /flashSaved\(\n\s*`복원 완료:/, '복원이 보관 결과를 보지 않는다');
+
+  // ⑤ 이미 머무는 안내(쓰이지 않는 규칙·남는 조각)에는 **덧붙인다** — 토스트는 한 번에 하나다.
+  assert.match(src, /목록에서 다음에 할 일을 확인해 주세요\.\$\{savedWarn \? ` \$\{savedWarn\}` : ''\}/, '쓰이지 않는 규칙 안내가 보관 사실을 덮는다');
+  assert.match(src, /아래에서 확인해 주세요\.\$\{warn \? ` \$\{warn\}` : ''\}/, '남는 조각 안내가 보관 사실을 덮는다');
+
+  // ⑥ 첫 렌더에는 아무 경고도 없다 — 겪기 전에 말하지 않는다.
+  const html = await render();
+  assert.equal(html.includes('서버에 보관되지 않'), false, '겪기도 전에 보관 실패를 말한다');
+});
+
+/**
+ * DS 47-2 — 「보관할 수 있는가」와 「보관한 적이 있는가」를 `persisted` 한 칸으로 답했다.
+ * 접수 탭은 그 값만 보고 사유를 「저장 승인 전」으로 단정했다 — 승인이 **이미 난** 환경에서도
+ * 첫 접수가 들어오기 전에는 false 라서, 멀쩡히 보관되는 접수를 두고 「재시작되면 사라집니다」라고
+ * 말했다. `/api/health` 는 그 반대쪽이다: 주석은 읽기전용을 degraded 라 적어 두었는데 코드는
+ * `error` 만 세어, 모든 쓰기가 실패하는 동안에도 밖에서 보는 신호등이 초록이었다.
+ */
+test('보관되지 않는 사유를 틀리게 말하지 않는다 (DS 47-2)', opts, async () => {
+  delete process.env.ADMIN_PERSIST;
+  const dir = mkdtempSync(path.join(tmpdir(), 'gowon-persist2-'));
+  const { storage } = await loadPersistLibs(dir);
+  storage.setDriver('file');
+  const nsOf = (ns) => storage.storageStatus().namespaces.find((n) => n.ns === ns);
+
+  // ① 승인이 **나지 않은** 환경 — 사유는 「승인 대기」다.
+  delete process.env.PERSIST_PII;
+  storage.resetStorageState();
+  assert.equal(storage.loadJson('tickets').ok, false);
+  assert.equal(nsOf('tickets').health, 'awaiting_approval');
+  assert.equal(nsOf('tickets').persisted, false);
+
+  // ② 승인이 **난** 환경인데 아직 저장분이 없다 — 종전 식 재현: `persisted` 는 여전히 false 다.
+  //    그 값으로 사유를 단정하면 **이미 난 승인을 안 났다고** 말한다.
+  process.env.PERSIST_PII = 'true';
+  storage.resetStorageState();
+  assert.equal(storage.loadJson('tickets').reason, 'empty');
+  assert.equal(nsOf('tickets').persisted, false, '재현 조건이 성립하지 않는다');
+  assert.equal(nsOf('tickets').health, 'empty', '승인이 난 환경을 승인 대기라 말한다');
+  delete process.env.PERSIST_PII;
+
+  // ③ 화면은 `persisted` 가 아니라 **사유를 아는 칸**을 읽고, 문장도 한 벌을 쓴다.
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  assert.equal(/ticketsPersisted/.test(src), false, '접수 탭이 보관 이력으로 사유를 단정한다');
+  assert.match(src, /const ticketsHealth = storage\?\.namespaces\.find\(\(n\) => n\.ns === 'tickets'\)\?\.health \?\? null;/, '접수 탭이 사유를 읽지 않는다');
+  assert.match(src, /ticketsHealth !== 'ok' && ticketsHealth !== 'empty'/, '보관되는 상태에도 경고를 띄운다');
+  assert.match(src, /STORAGE_HEALTH\[ticketsHealth\]\.hint/, '사유 문장을 베껴 적었다');
+  assert.equal(src.includes('저장 승인 전까지는 서비스가 재시작되면 사라집니다'), false, '사유를 단정하는 문장이 남아 있다');
+
+  // ④ 밖에서 보는 신호등 — **보관해야 하는데 못 하는 것**을 센다.
+  const health = readFileSync(new URL('../src/app/api/health/route.ts', import.meta.url), 'utf8');
+  assert.match(health, /n\.health === 'error' \|\| n\.health === 'readonly'/, '읽기전용 환경을 정상이라 보고한다');
+  // 의도된 설정(승인 대기·저장 끔)은 degraded 가 아니다 — 영영 노랑인 신호등은 뜻이 없다.
+  const judge = health.slice(health.indexOf('const failing'), health.indexOf('const failing') + 200);
+  assert.equal(/awaiting_approval|disabled/.test(judge), false, '의도된 설정까지 장애로 센다');
+
+  delete process.env.STORAGE_DIR;
+});
+
+/**
+ * DS 47-3 — 저장소 상태 카드의 제목은 화면이 **베껴 적은 사전**에서 왔다. 서버는 같은 이름을
+ * 이미 들고 있었는데(`NAMESPACES[].label`) 응답에 싣지 않아 두 벌이 되었고, 그 뒤 늘어난 두 칸
+ * (파트너·귀속 / 답변 평가)이 사전에 없어 카드 제목에 `partners`·`feedback` 이라는 **영문 코드가
+ * 그대로** 그려졌다 — 콘솔 진단이 걷어낸 바로 그 내부 문구다.
+ */
+test('저장 영역 이름을 화면이 베껴 적지 않는다 (DS 47-3)', opts, async () => {
+  delete process.env.ADMIN_PERSIST;
+  const dir = mkdtempSync(path.join(tmpdir(), 'gowon-persist3-'));
+  const { storage } = await loadPersistLibs(dir);
+
+  // ① 모든 저장 영역에 **사람 말 이름**이 있다 — 새 영역이 늘면 이 검사가 먼저 걸린다.
+  const list = storage.storageStatus().namespaces;
+  assert.ok(list.length >= 6, `저장 영역이 줄었다: ${list.length}`);
+  for (const n of list) {
+    assert.ok(n.label && n.label !== n.ns, `이름 없는 저장 영역: ${n.ns}`);
+    assert.equal(/^[ -~]+$/.test(n.label), false, `영문 코드가 이름 자리에 있다: ${n.ns} → ${n.label}`);
+  }
+  // 종전에 화면 사전에 없어 코드가 뜨던 두 칸.
+  assert.equal(list.find((n) => n.ns === 'partners').label, '파트너·귀속');
+  assert.equal(list.find((n) => n.ns === 'feedback').label, '답변 평가');
+  // 개인정보가 들어 있다는 사실은 이름에 적는다 — 승인 대기의 사유가 그것이다.
+  for (const ns of ['tickets', 'convlog']) {
+    assert.match(list.find((n) => n.ns === ns).label, /개인정보/, `개인정보 영역임을 이름이 말하지 않는다: ${ns}`);
+  }
+
+  // ② 이름은 서버가 보내고, 화면은 사전을 들고 있지 않다.
+  const health = readFileSync(new URL('../src/app/api/health/route.ts', import.meta.url), 'utf8');
+  assert.match(health, /label: n\.label/, '이름을 응답에 싣지 않는다');
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  assert.equal(/STORAGE_NS_LABELS/.test(src), false, '화면이 이름 사전을 베껴 들고 있다');
+  assert.match(src, /\{n\.label \|\| UNNAMED_STORAGE_NS\}/, '카드 제목이 서버가 보낸 이름을 쓰지 않는다');
+  // 이름을 모르면 코드를 그리는 대신 사람 말로 뭉갠다(옛 응답을 받았을 때의 마지막 그물).
+  assert.match(src, /const UNNAMED_STORAGE_NS = '저장 영역';/, '이름을 모를 때 코드가 뜬다');
+
+  delete process.env.STORAGE_DIR;
 });

@@ -1450,6 +1450,9 @@ const UNNAMED_AUDIT_ACTION = '관리 작업';
 
 interface StorageNsView {
   ns: string;
+  /** 사람이 읽는 이름 — **서버가 보낸다** (DS 47-3). 옛 응답에는 없으므로 optional. */
+  label?: string;
+  /** 보관한 적이 있는가 — **사유는 이 값이 아니라 `health` 가 말한다** (DS 47-2). */
   persisted: boolean;
   health: 'ok' | 'empty' | 'disabled' | 'awaiting_approval' | 'readonly' | 'error';
   lastSavedAt: string | null;
@@ -1488,12 +1491,17 @@ interface StorageView {
   namespaces: StorageNsView[];
 }
 
-const STORAGE_NS_LABELS: Record<string, string> = {
-  admin: '관리 콘텐츠(KB·룰)',
-  audit: '감사 로그',
-  tickets: '상담 티켓(개인정보)',
-  convlog: '대화 로그(개인정보)',
-};
+/**
+ * 저장 영역의 이름을 **알 수 없을 때**만 쓰는 말 (DS 47-3).
+ *
+ * 종전에는 이 파일이 이름 사전을 따로 들고 있었다(`admin`·`audit`·`tickets`·`convlog` 넷).
+ * 서버는 이미 같은 이름을 들고 있었는데(`NAMESPACES[].label`) 응답에 싣지 않아 **두 벌**이
+ * 되었고, 그 뒤 늘어난 두 칸(파트너·계약 귀속 / 답변 평가)이 사전에 없어 카드 제목에
+ * `partners`·`feedback` 이라는 **영문 코드가 그대로** 그려졌다 — 운영자 화면의 내부 문구다
+ * (DS 2-5·2-12 가 걷어낸 그 자리다). 이제 이름은 서버가 보내고, 이 말은 옛 응답을 받았을 때의
+ * 마지막 그물이다(코드를 그리지 않는다).
+ */
+const UNNAMED_STORAGE_NS = '저장 영역';
 
 const STORAGE_HEALTH: Record<StorageNsView['health'], { label: string; hint: string }> = {
   ok: { label: '저장됨', hint: '디스크에 반영되었습니다.' },
@@ -1501,8 +1509,37 @@ const STORAGE_HEALTH: Record<StorageNsView['health'], { label: string; hint: str
   disabled: { label: '저장 꺼짐', hint: '배포 설정에서 저장이 꺼져 있어 재시작하면 사라집니다.' },
   awaiting_approval: { label: '승인 대기', hint: '개인정보가 포함되어 있어, 저장 승인이 나기 전까지는 서버에 보관하지 않습니다.' },
   readonly: { label: '읽기전용 환경', hint: '이 환경에서는 변경 내용을 서버에 보관할 수 없습니다. 「백업 내려받기」로 파일을 받아 두세요.' },
-  error: { label: '저장 실패', hint: '아래 오류를 확인해 주세요. 데이터는 메모리에 남아 있습니다.' },
+  // 「아래」처럼 자리를 가리키는 말을 쓰지 않는다 — 이 문장은 카드 안과 저장 토스트
+  // **두 자리에서** 쓰이고(DS 47-1), 토스트에는 가리킬 아래가 없다. 오류 원문은 카드가 따로 적는다.
+  error: { label: '저장 실패', hint: '저장 중 오류가 생겼습니다. 데이터는 메모리에 남아 있습니다.' },
 };
+
+/**
+ * 쓰기 응답이 함께 보내는 **보관 결과** (DS 47-1) — 서버가 디스크를 보고 적어 보낸 값이다.
+ * 옛 응답에는 없으므로 전부 optional이고, 없으면 종전처럼 아무 말도 하지 않는다.
+ */
+interface SavedView {
+  persisted?: boolean;
+  reason?: StorageNsView['health'];
+}
+
+/**
+ * 「저장되었습니다」에 **덧붙여야 하는 사실**이 있으면 그 문장 (DS 47-1).
+ *
+ * 왜 필요한가: 저장은 두 단계다 — 서버 메모리에 반영되는 것과 디스크에 보관되는 것. 종전에는
+ * 응답이 첫 단계만 보고 성공이라 답했고(디스크 쓰기는 응답 **뒤** 300ms 디바운스였다), 그
+ * 쓰기가 실패하면(읽기전용 FS·용량) 그 사실은 저장소 상태 탭에만 남았다. 운영자는 「수정되었습니다」를
+ * 보고 다음 일을 하고, 배포가 한 번 재시작되면 **적어 넣은 안내 자료가 사라져 있다**.
+ *
+ * 사유 문장은 저장소 상태 패널과 **한 벌**(`STORAGE_HEALTH`)이다 — 같은 사실을 두 군데서 다르게
+ * 적지 않는다.
+ */
+function savedWarning(saved: SavedView | undefined | null): string | null {
+  if (!saved || saved.persisted !== false) return null;
+  const hint = saved.reason ? STORAGE_HEALTH[saved.reason]?.hint ?? '' : '';
+  // 앞은 **일어난 일**, 뒤는 **왜**다 — 뒤 문장은 저장소 상태 카드가 쓰는 그 문장이다.
+  return `다만 이 변경은 서버에 보관되지 않았습니다.${hint ? ` ${hint}` : ''}`;
+}
 
 interface KBForm {
   id: string;
@@ -2528,10 +2565,13 @@ export default function AdminPage() {
         loadImpForm(EMPTY_IMPORT);
         await loadKB();
         const done = `문서 등록 완료: 신규 ${data.created} · 갱신 ${data.updated}${data.errors?.length ? ` · 실패 ${data.errors.length}` : ''}`;
+        // 보관되지 않았다는 사실은 「남는 조각」 안내와 **함께** 적는다 — 둘 중 하나만 말하면
+        // 운영자는 나머지를 영영 못 본다(토스트는 한 번에 하나다 · DS 29-2).
+        const warn = savedWarning(data.saved as SavedView | undefined);
         if (overlap && overlap.stale.length > 0) {
-          notify(`${done} · 지난 등록분 ${overlap.stale.length}건이 남았습니다 — 아래에서 확인해 주세요.`, 'fail');
+          notify(`${done} · 지난 등록분 ${overlap.stale.length}건이 남았습니다 — 아래에서 확인해 주세요.${warn ? ` ${warn}` : ''}`, 'fail');
         } else {
-          flash(done);
+          flashSaved(done, data.saved as SavedView | undefined);
         }
       } else {
         setCandidates(data.candidates as KBCandidateView[]);
@@ -2828,7 +2868,7 @@ export default function AdminPage() {
       }
       loadPartnerForm(EMPTY_PARTNER_FORM);
       await loadPartners(partnerFilter);
-      flash(data.created ? '파트너를 등록했습니다.' : '파트너를 수정했습니다.');
+      flashSaved(data.created ? '파트너를 등록했습니다.' : '파트너를 수정했습니다.', data.saved as SavedView | undefined);
     } catch {
       setPartnerErr('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
@@ -2869,7 +2909,7 @@ export default function AdminPage() {
       }
       loadAccountForm(EMPTY_ACCOUNT_FORM);
       await loadPartners(partnerFilter);
-      flash(data.created ? '고객사를 등록했습니다.' : '고객사를 수정했습니다.');
+      flashSaved(data.created ? '고객사를 등록했습니다.' : '고객사를 수정했습니다.', data.saved as SavedView | undefined);
     } catch {
       setPartnerErr('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
@@ -2899,7 +2939,7 @@ export default function AdminPage() {
       }
       if (pForm.id === p.id) loadPartnerForm(EMPTY_PARTNER_FORM);
       await loadPartners(partnerFilter);
-      flash('파트너를 삭제했습니다.');
+      flashSaved('파트너를 삭제했습니다.', data.saved as SavedView | undefined);
     } catch {
       setPartnerErr('연결이 원활하지 않아 삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.');
     }
@@ -3193,6 +3233,17 @@ export default function AdminPage() {
 
   const flash = (msg: string) => notify(msg, 'ok');
 
+  /**
+   * 저장·삭제가 **끝났다고 말하는 한 문** (DS 47-1).
+   * 서버에 보관되지 않았으면 그 사실을 같은 문장에 적고 **머물러 있게** 한다(2.5초 뒤 사라지는
+   * 안내로는 「백업을 받아 두세요」가 전달되지 않는다 — DS 29-2 가 실패에 세운 규칙과 같다).
+   */
+  const flashSaved = (msg: string, saved: SavedView | undefined | null) => {
+    const warn = savedWarning(saved);
+    if (warn) notify(`${msg} ${warn}`, 'fail');
+    else flash(msg);
+  };
+
   // ── 보이는 동안에만 도는 자동 확인 (DS 24-1) ──
   // 로그인 전에는 돌지 않는다(잠금 화면에서 관리 API를 두드리지 않는다).
   useEffect(() => {
@@ -3328,7 +3379,7 @@ export default function AdminPage() {
     };
     // 세션이 만료된 채로 저장하면 401 이 온다 — 다른 쓰기 경로와 같이 잠금 화면으로 넘긴다
     // (종전에는 「저장하지 못했습니다: 관리자 토큰이 필요합니다」 라는 내부 문구만 토스트로 떴다).
-    let data: { ok?: boolean; error?: string; conflict?: 'gone' | 'changed'; current?: KBEntryView } | null;
+    let data: { ok?: boolean; error?: string; conflict?: 'gone' | 'changed'; current?: KBEntryView; saved?: SavedView } | null;
     try {
       const res = await afetch('/api/admin/kb', {
         method: 'POST',
@@ -3363,7 +3414,7 @@ export default function AdminPage() {
     setKbConflict(null);
     setKbErr({});
     await loadKB();
-    flash(editingId ? '수정되었습니다.' : '추가되었습니다.');
+    flashSaved(editingId ? '수정되었습니다.' : '추가되었습니다.', data.saved);
   };
 
   /**
@@ -3454,7 +3505,7 @@ export default function AdminPage() {
         // 규칙 쪽(`removeCustomRule`)은 처음부터 거두고 있었다. 같은 일을 두 탭이 다르게 하고 있었다.
         if (editingId === id) { setEditingId(null); setEditingRev(null); setKbConflict(null); loadKbForm(EMPTY_FORM); setKbErr({}); }
         await loadKB();
-        flash('삭제되었습니다.');
+        flashSaved('삭제되었습니다.', data.saved as SavedView | undefined);
       } else {
         failed('삭제하지 못했습니다', data.message || data.error);
       }
@@ -3482,6 +3533,8 @@ export default function AdminPage() {
     if (!ok) return;
     setStaleBusy(true);
     let done = 0;
+    // 여러 번 지워도 운영자에게 할 말은 한 번이다 — **마지막** 보관 결과를 들고 간다(DS 47-1).
+    let lastSaved: SavedView | undefined;
     try {
       for (const it of items) {
         const res = await afetch(`/api/admin/kb?id=${encodeURIComponent(it.id)}`, { method: 'DELETE', headers: authHeaders() });
@@ -3492,9 +3545,10 @@ export default function AdminPage() {
           return;
         }
         done += 1;
+        lastSaved = data.saved as SavedView | undefined;
       }
       setImpOverlap(null);
-      flash(`지난 등록분 ${done}건을 지웠습니다.`);
+      flashSaved(`지난 등록분 ${done}건을 지웠습니다.`, lastSaved);
     } catch {
       failed(done > 0 ? `${done}건을 지웠고 나머지는 지우지 못했습니다` : '지우지 못했습니다');
     } finally {
@@ -3526,7 +3580,7 @@ export default function AdminPage() {
       // **새 자료를 적던 중**이면 건드리지 않는다: 그 글은 지워진 것과 아무 상관이 없다.
       if (editingId) { setEditingId(null); setEditingRev(null); setKbConflict(null); loadKbForm(EMPTY_FORM); setKbErr({}); }
       await loadKB();
-      flash('기본 지식베이스로 초기화했습니다.');
+      flashSaved('기본 지식베이스로 초기화했습니다.', data.saved as SavedView | undefined);
     } catch {
       failed('초기화하지 못했습니다');
     }
@@ -3624,13 +3678,14 @@ export default function AdminPage() {
       await loadRules();
       // 저장했다고만 말하고 끝내지 않는다 — 쓰이지 않을 규칙이면 그 사실을 **저장한 자리에서** 알린다(DS 44-3).
       const shadow = data.shadowedBy as RuleShadowView | null | undefined;
+      const savedWarn = savedWarning(data.saved as SavedView | undefined);
       if (shadow) {
         notify(
-          `규칙을 저장했지만 상담창에서는 쓰이지 않습니다 — 「${shadow.keyword}」${shadow.kind === 'builtin' ? '는 기본 규칙' : '는 먼저 만든 규칙'} 「${shadow.label}」이 먼저 답합니다. 목록에서 다음에 할 일을 확인해 주세요.`,
+          `규칙을 저장했지만 상담창에서는 쓰이지 않습니다 — 「${shadow.keyword}」${shadow.kind === 'builtin' ? '는 기본 규칙' : '는 먼저 만든 규칙'} 「${shadow.label}」이 먼저 답합니다. 목록에서 다음에 할 일을 확인해 주세요.${savedWarn ? ` ${savedWarn}` : ''}`,
           'fail',
         );
       } else {
-        flash(crEditing ? '규칙을 수정했습니다.' : '규칙을 추가했습니다.');
+        flashSaved(crEditing ? '규칙을 수정했습니다.' : '규칙을 추가했습니다.', data.saved as SavedView | undefined);
       }
     } catch {
       notify('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.', 'fail');
@@ -3684,7 +3739,7 @@ export default function AdminPage() {
       const data = await res.json();
       if (data.ok) {
         await loadRules();
-        flash(r.enabled ? `「${r.label}」 규칙을 껐습니다.` : `「${r.label}」 규칙을 켰습니다.`);
+        flashSaved(r.enabled ? `「${r.label}」 규칙을 껐습니다.` : `「${r.label}」 규칙을 켰습니다.`, data.saved as SavedView | undefined);
       } else {
         failed('변경하지 못했습니다', data.message || data.error);
       }
@@ -3714,7 +3769,7 @@ export default function AdminPage() {
           loadRuleForm(EMPTY_CR_FORM);
         }
         await loadRules();
-        flash('규칙을 삭제했습니다.');
+        flashSaved('규칙을 삭제했습니다.', data.saved as SavedView | undefined);
       } else {
         failed('삭제하지 못했습니다', data.message || data.error);
       }
@@ -3813,7 +3868,12 @@ export default function AdminPage() {
         return;
       }
       await Promise.all([loadKB(), loadRules()]);
-      flash(`복원 완료: 안내 자료 ${data.kb}건 · 규칙 ${data.customRules}건 · 기본 규칙 답변 수정 ${data.overrides}건`);
+      // 복원은 「모두 덮어씁니다」라고 말하고 확인까지 받은 일이다 — 그것이 **디스크까지 갔는지**를
+      // 같은 자리에서 말한다(DS 47-1). 파트너·고객사 복원은 종전에는 디스크에 적히지도 않았다.
+      flashSaved(
+        `복원 완료: 안내 자료 ${data.kb}건 · 규칙 ${data.customRules}건 · 기본 규칙 답변 수정 ${data.overrides}건`,
+        data.saved as SavedView | undefined,
+      );
     } catch {
       failed('복원하지 못했습니다', '연결을 확인한 뒤 다시 시도해 주세요. 기존 자료는 그대로입니다.');
     } finally {
@@ -5328,7 +5388,16 @@ export default function AdminPage() {
           t.status === 'open' ? { label: '상담 시작', status: 'in_progress', primary: true }
           : t.status === 'in_progress' ? { label: '완료', status: 'resolved', primary: true }
           : { label: '다시 열기', status: 'open', primary: false };
-        const ticketsPersisted = storage?.namespaces.find((n) => n.ns === 'tickets')?.persisted ?? null;
+        // 접수가 **지금 서버에 보관되지 않는가**, 그리고 **왜인가** (DS 47-2).
+        // 종전에는 `persisted` 한 칸을 보고 사유를 「저장 승인 전」으로 단정했다. 그 값은
+        // 「보관한 적이 있는가」라서, 승인이 **이미 난** 환경에서도 첫 접수가 들어오기 전에는
+        // false 다 — 운영자는 멀쩡히 보관되는 접수를 두고 「재시작되면 사라집니다」라고 읽었고,
+        // 반대로 쓰기가 실패하는 환경에서는 승인 탓이라는 **틀린 사유**를 읽었다.
+        // 사유를 아는 칸은 `health` 하나이고, 그 문장도 한 벌(`STORAGE_HEALTH`)로 쓴다.
+        const ticketsHealth = storage?.namespaces.find((n) => n.ns === 'tickets')?.health ?? null;
+        const ticketsWarn = ticketsHealth && ticketsHealth !== 'ok' && ticketsHealth !== 'empty'
+          ? STORAGE_HEALTH[ticketsHealth].hint
+          : null;
         return (
           <>
             <div className="ac-kpi" style={{ marginBottom: 16 }}>
@@ -5478,9 +5547,9 @@ export default function AdminPage() {
               )}
               <Pager info={escView} label="상담원 요청" onPage={escView.onPage} />
             </section>
-            {ticketsPersisted === false && (
+            {ticketsWarn && (
               <p style={{ ...S.tag, marginTop: -6 }}>
-                상담 요청에는 개인정보가 들어 있어 저장 승인 전까지는 서비스가 재시작되면 사라집니다. 승인 상태는 「감사 로그 › 저장소 상태」에서 확인할 수 있습니다.
+                지금 들어온 상담 요청은 서버에 보관되지 않습니다. {ticketsWarn} 자세한 상태는 「감사 로그 › 저장소 상태」에서 확인할 수 있습니다.
               </p>
             )}
           </>
@@ -6277,7 +6346,7 @@ export default function AdminPage() {
                       return (
                         <li key={n.ns} className="ac-nscard" data-health={n.health}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-                            <strong style={{ fontSize: 13.5 }}>{STORAGE_NS_LABELS[n.ns] || n.ns}</strong>
+                            <strong style={{ fontSize: 13.5 }}>{n.label || UNNAMED_STORAGE_NS}</strong>
                             <span className="ac-pill" style={tone}>{meta.label}</span>
                           </div>
                           <p style={{ fontSize: 12.5, color: 'var(--sub)', marginTop: 6, lineHeight: 1.5 }}>{meta.hint}</p>

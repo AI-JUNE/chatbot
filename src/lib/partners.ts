@@ -15,7 +15,7 @@
 //   "파트너 담당자는 자기 고객사만" 같은 필터를 이 함수 한 곳에만 끼우면 된다.
 //
 // [승인 필요] 실제 정산·청구, 파트너 계정 로그인(partner_admin 권한), 화이트라벨.
-import { loadJson, scheduleSave } from '@/lib/storage';
+import { loadJson, saveJson, saveNow, savedInfo, scheduleSave, type SavedInfo } from '@/lib/storage';
 import { compact } from '@/lib/normalize';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 
@@ -452,8 +452,29 @@ function persist(): void {
   scheduleSave(PARTNERS_NS, exportPartners);
 }
 
-/** 스냅샷 복원. 형식이 어긋난 항목은 건너뛰고 개수를 돌려준다. */
-export function importPartners(input: unknown): { ok: true; partners: number; accounts: number } | { ok: false; error: string } {
+/**
+ * 방금 한 변경이 **서버에 보관되었는가** (DS 47-1) — 「등록했습니다」라고 답하기 전에 지난다.
+ */
+export function savePartnersNow(): SavedInfo {
+  return savedInfo(saveNow(PARTNERS_NS));
+}
+
+export type PartnerImportResult =
+  /** `saved` 는 **쓰기를 시도한 복원**에만 있다(기동 때의 읽어 들이기에는 없다). */
+  | { ok: true; partners: number; accounts: number; saved?: SavedInfo }
+  | { ok: false; error: string };
+
+/**
+ * 스냅샷 복원. 형식이 어긋난 항목은 건너뛰고 개수를 돌려준다.
+ *
+ * **복원한 것을 디스크에 적는다** (DS 47-1). 종전에는 메모리만 갈아 끼우고 쓰기를 한 번도
+ * 부르지 않았다 — 관리 콘텐츠 쪽(`importSnapshot`)은 적는데 이쪽만 빠져 있었다. 그래서 복원
+ * 직후 서비스가 다시 뜨면 **파트너·고객사만 복원 전으로 돌아갔다**(안내 자료·규칙은 그대로다).
+ * 화면은 「복원 완료: … 파트너 n · 고객사 n」이라고 수까지 세어 말한 뒤였다.
+ *
+ * 기동 때의 읽어 들이기는 `persist: false` 로 부른다 — 방금 읽은 것을 되쓰지 않는다.
+ */
+export function importPartners(input: unknown, opts: { persist?: boolean } = {}): PartnerImportResult {
   if (!input || typeof input !== 'object') return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   const snap = input as Partial<PartnerSnapshot>;
   if (!Array.isArray(snap.partners) || !Array.isArray(snap.accounts)) {
@@ -528,7 +549,8 @@ export function importPartners(input: unknown): { ok: true; partners: number; ac
   accounts = nextAccounts;
   partnerSeq = Math.max(numTail(snap.partners.map(rawId)), Number(snap.partnerSeq) || 0);
   accountSeq = Math.max(numTail(snap.accounts.map(rawId)), Number(snap.accountSeq) || 0);
-  return { ok: true, partners: partners.length, accounts: accounts.length };
+  const saved = opts.persist === false ? undefined : savedInfo(saveJson(PARTNERS_NS, exportPartners()));
+  return { ok: true, partners: partners.length, accounts: accounts.length, ...(saved ? { saved } : {}) };
 }
 
 /** 'PTR-0007' 같은 id에서 가장 큰 일련번호를 뽑는다(복원 후 id 충돌 방지). */
@@ -552,5 +574,6 @@ export function resetPartners(): void {
 (function loadPersisted() {
   const r = loadJson(PARTNERS_NS);
   if (!r.ok) return;
-  importPartners(r.data);
+  // 방금 읽은 것을 되쓰지 않는다 — 기동마다 같은 내용으로 디스크를 건드리면 안 된다.
+  importPartners(r.data, { persist: false });
 })();

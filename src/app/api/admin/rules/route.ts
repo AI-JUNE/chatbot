@@ -3,7 +3,7 @@
 import { NextRequest } from 'next/server';
 import { RULES } from '@/lib/rules';
 import { shadowOfRule } from '@/lib/chat';
-import { getRuleOverride, setRuleOverride, listCustomRules, upsertCustomRule, deleteCustomRule, customRuleRev, ruleOverrideRev, overrideConflict, MAX_RULE_REPLY_LEN, CustomRuleInput, type CustomRule } from '@/lib/adminStore';
+import { getRuleOverride, setRuleOverride, listCustomRules, upsertCustomRule, deleteCustomRule, customRuleRev, ruleOverrideRev, overrideConflict, saveAdminNow, MAX_RULE_REPLY_LEN, CustomRuleInput, type CustomRule } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, reqQuery, optStr, requireAdmin, isAdminAuthed } from '@/lib/http';
 import { CHANGED_TARGET_MESSAGE, STALE_TARGET_MESSAGE, tooLongMessage } from '@/lib/refusal';
@@ -76,7 +76,9 @@ export async function POST(req: NextRequest) {
     authed: isAdminAuthed(req),
   });
   // 저장은 됐지만 **쓰이지 않을** 수 있다 — 그 사실을 저장한 자리에서 바로 말한다(DS 44-3).
-  return ok({ rule: customRuleView(result.rule), created: result.created, shadowedBy: customRuleView(result.rule).shadowedBy });
+  // 같은 자리에서 **보관되었는지**도 함께 말한다 — 「저장되었습니다」가 가리키는 것이
+  // 화면 속 메모리뿐일 수 있다(DS 47-1).
+  return ok({ rule: customRuleView(result.rule), created: result.created, shadowedBy: customRuleView(result.rule).shadowedBy, saved: saveAdminNow() });
 }
 
 // 커스텀 룰 삭제: DELETE /api/admin/rules?intent=cr_xxx
@@ -87,7 +89,7 @@ export async function DELETE(req: NextRequest) {
   if (!intent.ok) return intent.res;
   if (!deleteCustomRule(intent.value)) return fail('not_found', STALE_TARGET_MESSAGE);
   logAudit({ action: 'rule.custom.delete', target: intent.value, authed: isAdminAuthed(req) });
-  return ok({});
+  return ok({ saved: saveAdminNow() });
 }
 
 export async function PATCH(req: NextRequest) {
@@ -126,5 +128,5 @@ export async function PATCH(req: NextRequest) {
   if (enabled !== undefined) parts.push(enabled ? '활성화' : '비활성화');
   if (reply !== undefined) parts.push(reply === null ? '응답문 기본값 복원' : '응답문 변경');
   logAudit({ action: 'rule.override', target: intent, detail: parts.join(', '), authed: isAdminAuthed(req) });
-  return ok({ rule: ruleView(intent) });
+  return ok({ rule: ruleView(intent), saved: saveAdminNow() });
 }

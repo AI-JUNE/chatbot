@@ -3,7 +3,7 @@
 // KB·룰 오버라이드·커스텀 룰은 개인정보가 아니므로 승인 없이 저장한다(파일 드라이버 기본).
 import { KB, KBEntry } from '@/lib/knowledge';
 import { keywordHit, prepare } from '@/lib/normalize';
-import { flushSaves, loadJson, saveJson, scheduleSave } from '@/lib/storage';
+import { flushSaves, loadJson, saveJson, saveNow, savedInfo, scheduleSave, type SavedInfo } from '@/lib/storage';
 import { revOf } from '@/lib/rev';
 import { CHANGED_TARGET_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE } from '@/lib/refusal';
 
@@ -395,12 +395,21 @@ export function flushAdminPersist(): void {
   flushSaves();
 }
 
+/**
+ * 방금 한 변경이 **서버에 보관되었는가** (DS 47-1) — 「저장되었습니다」라고 답하기 전에 지난다.
+ * 라우트는 이 값을 응답에 실어 보내고, 화면은 보관되지 않았으면 그 사실을 말한다.
+ */
+export function saveAdminNow(): SavedInfo {
+  return savedInfo(saveNow(ADMIN_NS));
+}
+
 function isStrArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === 'string');
 }
 
 export type ImportResult =
-  | { ok: true; kb: number; overrides: number; customRules: number }
+  /** `saved` 는 **쓰기를 시도한 복원**에만 있다(기동 때의 읽어 들이기에는 없다 · DS 47-1). */
+  | { ok: true; kb: number; overrides: number; customRules: number; saved?: SavedInfo }
   | { ok: false; error: string };
 
 /** 스냅샷 검증 후 관리 콘텐츠 전체 교체. 무효 항목은 건너뛴다. */
@@ -462,8 +471,10 @@ export function importSnapshot(input: unknown, opts: { persist?: boolean } = {})
   ruleOverrides.clear();
   for (const [k, v] of overrides) ruleOverrides.set(k, v);
 
-  if (opts.persist !== false) saveJson(ADMIN_NS, exportSnapshot());
-  return { ok: true, kb: kb.length, overrides: overrides.size, customRules: rules.length };
+  // 복원은 「모두 덮어씁니다」라고 말하고 확인까지 받은 자리다 — 그 쓰기가 실패했는지를
+  // 부르는 쪽이 알 수 있어야 한다(DS 47-1).
+  const saved = opts.persist === false ? undefined : savedInfo(saveJson(ADMIN_NS, exportSnapshot()));
+  return { ok: true, kb: kb.length, overrides: overrides.size, customRules: rules.length, ...(saved ? { saved } : {}) };
 }
 
 // 모듈 초기화 시 저장된 스냅샷 복원(없거나 손상되면 코드 기본값 유지 — 실패 사유는 storage 상태에 남는다).

@@ -1,7 +1,7 @@
 // 관리 콘솔 KB API. 인메모리 스토어(스텁) — [승인 필요] DB 영구 저장.
 // 인증: lib/http requireAdmin(ADMIN_TOKEN + ADMIN_AUTH_REQUIRED 게이트). 시크릿은 Vercel 환경변수로만.
 import { NextRequest } from 'next/server';
-import { listKB, upsertKB, deleteKB, resetKB, kbRev } from '@/lib/adminStore';
+import { listKB, upsertKB, deleteKB, resetKB, kbRev, saveAdminNow } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, reqQuery, requireAdmin, isAdminAuthed } from '@/lib/http';
 import { STALE_TARGET_MESSAGE } from '@/lib/refusal';
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
   if (body.reset === true) {
     resetKB();
     logAudit({ action: 'kb.reset', detail: '기본 KB로 초기화', authed: isAdminAuthed(req) });
-    return ok({ entries: listKB() });
+    return ok({ entries: listKB(), saved: saveAdminNow() });
   }
   const result = upsertKB(body);
   if (!result.ok) {
@@ -49,7 +49,12 @@ export async function POST(req: NextRequest) {
     detail: `${result.created ? '생성' : '수정'}: ${result.entry.question.slice(0, 60)}`,
     authed: isAdminAuthed(req),
   });
-  return ok({ entry: { ...result.entry, rev: kbRev(result.entry) }, created: result.created }, result.created ? 201 : 200);
+  // 「저장되었습니다」는 **디스크를 보고 나온 말**이어야 한다 (DS 47-1) — 보관이 막혔거나
+  // 실패했으면 화면이 그 사실을 말할 수 있게 결과를 함께 보낸다.
+  return ok(
+    { entry: { ...result.entry, rev: kbRev(result.entry) }, created: result.created, saved: saveAdminNow() },
+    result.created ? 201 : 200,
+  );
 }
 
 export async function DELETE(req: NextRequest) {
@@ -59,5 +64,5 @@ export async function DELETE(req: NextRequest) {
   if (!id.ok) return id.res;
   if (!deleteKB(id.value)) return fail('not_found', STALE_TARGET_MESSAGE);
   logAudit({ action: 'kb.delete', target: id.value, authed: isAdminAuthed(req) });
-  return ok({});
+  return ok({ saved: saveAdminNow() });
 }

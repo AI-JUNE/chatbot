@@ -37,20 +37,25 @@ export interface StorageDriver {
 export interface Namespace {
   /** 파일명·상태 키. 영숫자와 하이픈만. */
   id: string;
-  /** 사람이 읽는 이름(관리 콘솔 표시용). */
+  /**
+   * 사람이 읽는 이름 — **관리 콘솔 저장소 상태 카드의 제목으로 그대로 그려진다** (DS 47-3).
+   * 그래서 코드 어휘를 쓰지 않고 콘솔 메뉴와 같은 말을 쓴다(「지식베이스」·「감사 로그」…).
+   * 새 네임스페이스를 더할 때 이 칸을 비우면 화면에 영문 식별자가 뜬다.
+   */
   label: string;
   /** 개인정보를 포함할 수 있는가 — true면 PERSIST_PII 승인 전까지 디스크에 쓰지 않는다. */
   pii: boolean;
 }
 
 export const NAMESPACES: Record<string, Namespace> = {
-  admin: { id: 'admin', label: '관리 콘텐츠(KB·룰)', pii: false },
+  admin: { id: 'admin', label: '지식베이스·시나리오 룰', pii: false },
   audit: { id: 'audit', label: '감사 로그', pii: false },
-  partners: { id: 'partners', label: '파트너·계약 귀속', pii: false },
+  partners: { id: 'partners', label: '파트너·귀속', pii: false },
   // 평가는 평가값·서버가 만든 근거 라벨·세션 해시뿐이라 개인정보가 없다(DS 32-1).
   feedback: { id: 'feedback', label: '답변 평가', pii: false },
-  tickets: { id: 'tickets', label: '상담 티켓', pii: true },
-  convlog: { id: 'convlog', label: '대화 로그', pii: true },
+  // 개인정보가 들어 있다는 사실을 **이름에 적는다** — 승인 대기 상태의 사유가 그것이다.
+  tickets: { id: 'tickets', label: '상담원 요청(개인정보)', pii: true },
+  convlog: { id: 'convlog', label: '대화 기록(개인정보)', pii: true },
 };
 
 // ---- 설정 ----
@@ -147,7 +152,12 @@ export type NsHealth = 'ok' | 'empty' | 'disabled' | 'awaiting_approval' | 'read
 export interface NsStatus {
   ns: string;
   label: string;
-  /** 실제로 디스크(또는 드라이버)에 쓰고 있는가. */
+  /**
+   * 실제로 디스크(또는 드라이버)에 쓰고 있는가.
+   *
+   * **이 값만으로 사유를 단정할 수 없다** (DS 47-2) — 보관할 수 있는 환경인데 아직 저장분이
+   * 없을 때도(`empty`) false 다. 「왜 보관되지 않는가」를 아는 칸은 `health` 하나다.
+   */
   persisted: boolean;
   health: NsHealth;
   /** 마지막 성공 저장 시각(ISO). 없으면 null. */
@@ -361,6 +371,52 @@ function runSave(ns: string, produce: () => unknown): void {
   } catch (e) {
     recordFailure(ns, e, 'produce');
   }
+}
+
+/**
+ * 한 네임스페이스의 **보관을 지금 끝내고 그 결과를 돌려준다** (DS 47-1).
+ *
+ * 왜 필요한가: 쓰기는 디바운스(300ms) 뒤에 일어나고 그 타이머는 `unref()` 되어 있다. 즉
+ * 「저장되었습니다」라고 답하는 그 순간에는 **디스크에 아무것도 닿지 않았고**, 뒤이어 실패해도
+ * (읽기전용 FS·용량 초과) 그 사실은 `storageStatus()` 에만 남는다 — 운영자는 저장소 상태 탭을
+ * 따로 열어 보지 않으면 모른다. 서버리스에서는 응답 뒤 인스턴스가 얼어 **타이머가 아예 돌지
+ * 않을** 수도 있다. 그래서 「저장했다」고 말하는 자리는 말하기 전에 이 함수를 지난다.
+ *
+ * @returns 쓰기를 했으면 그 결과, 막혀 있으면 사유, **쓸 것이 없으면** `null`
+ */
+export function saveNow(ns: string): SaveResult | null {
+  const pending = timers.get(ns);
+  if (pending) {
+    timers.delete(ns);
+    clearTimeout(pending.timer);
+    try {
+      return saveJson(ns, pending.produce());
+    } catch (e) {
+      recordFailure(ns, e, 'produce');
+      return { ok: false, reason: 'error', error: describeError(e) };
+    }
+  }
+  // 대기 중인 쓰기가 없다 — 막혀서 등록되지 않았는지(사유가 있다), 바뀐 것이 없는지를 가린다.
+  const blocked = persistBlock(ns);
+  return blocked ? { ok: false, reason: blocked } : null;
+}
+
+/** 보관이 막힌 사유 — 화면이 사람 말로 옮겨 적는 코드다(오류 원문·경로는 담지 않는다). */
+export type PersistReason = 'disabled' | 'awaiting_approval' | 'readonly' | 'error';
+
+/**
+ * 이번 변경이 **서버에 보관되었는가** — 응답에 실어 화면까지 가는 모양 (DS 47-1).
+ * 사유는 코드로만 보낸다(문장은 화면이 한 벌로 들고 있다 · DS 29-3).
+ */
+export interface SavedInfo {
+  persisted: boolean;
+  reason?: PersistReason;
+}
+
+/** 쓰기 결과를 응답에 실을 수 있는 모양으로. `null`(쓸 것이 없음)은 이미 디스크와 같다는 뜻이다. */
+export function savedInfo(r: SaveResult | null): SavedInfo {
+  if (!r) return { persisted: true };
+  return r.ok ? { persisted: true } : { persisted: false, reason: r.reason };
 }
 
 /**
