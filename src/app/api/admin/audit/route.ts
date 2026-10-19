@@ -1,7 +1,7 @@
 // 감사 로그 API — 최근 관리 작업 이력 조회(JSON)·CSV 다운로드.
 // 인증: x-admin-token 헤더 또는 CSV 다운로드용 ?token= (lib/http requireAdmin, allowQueryToken).
 import { NextRequest, NextResponse } from 'next/server';
-import { listAudit, auditActionLabel, auditToCsv } from '@/lib/audit';
+import { listAudit, auditActionLabel, auditToCsv, auditRetention } from '@/lib/audit';
 import { ok, intQuery, requireAdmin } from '@/lib/http';
 import { kstStamp } from '@/lib/kst';
 
@@ -28,5 +28,7 @@ export async function GET(req: NextRequest) {
     ...e,
     actionLabel: auditActionLabel(e.action),
   }));
-  return ok({ events });
+  // 「보여 준 수」가 전부인지 일부인지 화면이 말할 수 있어야 한다 (DS 48-1) — 이 응답은 최근
+  // 100건만 싣고, 서버가 든 것도 최근 500건뿐이다. 모수를 모르면 운영자는 본 것을 전부로 읽는다.
+  return ok({ events, retention: auditRetention() });
 }

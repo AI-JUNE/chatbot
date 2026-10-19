@@ -1448,6 +1448,17 @@ interface AuditView {
  */
 const UNNAMED_AUDIT_ACTION = '관리 작업';
 
+/**
+ * 「언제부터 몇 건까지 들고 있는가」 — 대화 집계(`stats.conversation.retention`)와 **같은 모양**이다
+ * (서버 `@/lib/retention` 의 `RetentionInfo`). 옛 응답에는 없으므로 받는 쪽이 null 을 견딘다.
+ */
+interface RetentionView {
+  limit: number;
+  kept: number;
+  knownFrom: string;
+  dropped: boolean;
+}
+
 interface StorageNsView {
   ns: string;
   /** 사람이 읽는 이름 — **서버가 보낸다** (DS 47-3). 옛 응답에는 없으므로 optional. */
@@ -3060,6 +3071,8 @@ export default function AdminPage() {
 
   // ---- Audit ----
   const [auditEvents, setAuditEvents] = useState<AuditView[]>([]);
+  /** 「언제부터 몇 건까지 들고 있는가」 — 보여 준 수의 모수 (DS 48-1). 옛 응답에는 없다. */
+  const [auditRange, setAuditRange] = useState<RetentionView | null>(null);
   const auditSeqRef = useRef(0);
   const loadAudit = useCallback(async (quiet = false) => {
     const seq = ++auditSeqRef.current;
@@ -3070,7 +3083,10 @@ export default function AdminPage() {
       if (on401(res)) return;
       const data = await res.json();
       if (seq !== auditSeqRef.current) return;
-      if (data.ok) setAuditEvents(data.events || []);
+      if (data.ok) {
+        setAuditEvents(data.events || []);
+        setAuditRange((data.retention as RetentionView | undefined) || null);
+      }
       if (data.ok || !quiet) markPhase('audit', data.ok ? 'done' : 'error');
     } catch {
       if (seq === auditSeqRef.current && !quiet) markPhase('audit', 'error');
@@ -3282,10 +3298,13 @@ export default function AdminPage() {
   // ── 변경 이력은 탭을 열 때마다 다시 읽는다 (DS 24-2) ──
   // 이 탭에 쌓이는 것은 **이 콘솔이 방금 한 일**이다. 마운트 때 한 번만 읽으면, 자료를 고치고
   // 규칙을 바꾸고 접수 상태를 바꾼 뒤 열어도 그 기록이 하나도 보이지 않는다.
+  // 보관 상태도 같이 다시 읽는다 (DS 48-2) — 이 탭이 「지금 보관되는가」를 말하게 되었는데
+  // 그 값을 로그인할 때 한 번만 받으면, 그 뒤 쓰기가 막혀도 화면은 계속 괜찮다고 말한다.
   useEffect(() => {
     if (tab !== 'audit' || !authInfo?.allowed) return;
     loadAudit(true);
-  }, [tab, authInfo?.allowed, loadAudit]);
+    loadStorage();
+  }, [tab, authInfo?.allowed, loadAudit, loadStorage]);
 
   // 내려받는 중인 항목 이름(빈 문자열이면 진행 중 아님) — 버튼에 진행 표시를 달고 중복 클릭을 막는다.
   const [dlBusy, setDlBusy] = useState('');
@@ -3850,7 +3869,8 @@ export default function AdminPage() {
     const ok = await askConfirm({
       title: '이 파일로 덮어쓸까요?',
       target: file.name,
-      body: '지금 등록된 안내 자료와 규칙이 파일의 내용으로 바뀝니다. 되돌릴 수 없으니, 먼저 「백업 내려받기」로 현재 상태를 받아 두세요.',
+      // 변경 이력만은 덮지 않는다 (DS 48-3) — 무엇이 바뀌고 무엇이 그대로인지 묻기 전에 말한다.
+      body: '지금 등록된 안내 자료와 규칙이 파일의 내용으로 바뀝니다. 변경 이력은 덮어쓰지 않고, 파일에만 있는 기록을 더합니다. 되돌릴 수 없으니, 먼저 「백업 내려받기」로 현재 상태를 받아 두세요.',
       confirmLabel: '덮어쓰기',
     });
     if (!ok) return;
@@ -3867,11 +3887,14 @@ export default function AdminPage() {
         failed('복원하지 못했습니다', data.message || data.error);
         return;
       }
-      await Promise.all([loadKB(), loadRules()]);
+      await Promise.all([loadKB(), loadRules(), loadAudit(true)]);
       // 복원은 「모두 덮어씁니다」라고 말하고 확인까지 받은 일이다 — 그것이 **디스크까지 갔는지**를
       // 같은 자리에서 말한다(DS 47-1). 파트너·고객사 복원은 종전에는 디스크에 적히지도 않았다.
+      // 변경 이력은 **더한 수**로 말한다(덮은 것이 아니다 · DS 48-3). 더한 것이 없으면 적지 않는다.
+      const added = typeof data.auditAdded === 'number' ? data.auditAdded : 0;
       flashSaved(
-        `복원 완료: 안내 자료 ${data.kb}건 · 규칙 ${data.customRules}건 · 기본 규칙 답변 수정 ${data.overrides}건`,
+        `복원 완료: 안내 자료 ${data.kb}건 · 규칙 ${data.customRules}건 · 기본 규칙 답변 수정 ${data.overrides}건`
+          + (added > 0 ? ` · 변경 이력 ${added}건 추가` : ''),
         data.saved as SavedView | undefined,
       );
     } catch {
@@ -6228,13 +6251,32 @@ export default function AdminPage() {
           target: (e: AuditView) => e.target || e.detail || '',
           authed: (e: AuditView) => (e.authed ? '로그인됨' : '인증 없이 수행'),
         }, auditFilter);
+        /**
+         * 이 기록이 **지금 서버에 보관되는가**, 그리고 **왜 아닌가** (DS 48-2).
+         * 변경 이력은 「누가 무엇을 바꿨는가」의 증거인데, 쓰기가 막힌 환경에서는 그 증거가
+         * 메모리에만 남아 다음 재시작에 통째로 사라진다 — 자료·규칙 저장은 그 사실을 말하게
+         * 되었는데(DS 47-1) 정작 이 기록 자신은 아무 말도 하지 않았다.
+         * 사유를 아는 칸은 `health` 하나이고, 문장은 한 벌(`STORAGE_HEALTH`)에서 꺼낸다.
+         */
+        const auditHealth = storage?.namespaces.find((n) => n.ns === 'audit')?.health ?? null;
+        const auditWarn = auditHealth && auditHealth !== 'ok' && auditHealth !== 'empty'
+          ? STORAGE_HEALTH[auditHealth].hint
+          : null;
         return (
           <>
             <section style={{ ...S.card, padding: 0 }} aria-labelledby="audit-h">
               <div className="ac-toolbar">
                 <div style={{ marginRight: 4 }}>
                   <h2 id="audit-h" style={S.h2}>관리 작업 기록</h2>
-                  <p style={{ ...S.tag, marginTop: 2 }}>안내 자료·규칙 편집, 상담 요청 처리, 백업 복원 이력(최근 100건). 토큰 값은 기록하지 않습니다.</p>
+                  <p style={{ ...S.tag, marginTop: 2 }}>안내 자료·규칙 편집, 상담 요청 처리, 백업 복원 이력. 토큰 값은 기록하지 않습니다.</p>
+                  {/* 보여 준 수를 전부라고 말하지 않는다 (DS 48-1) — 이 표는 최근 100건만 받고,
+                      서버가 든 것도 한도까지뿐이다. 옛 응답(모수 없음)에는 종전 문구를 쓴다. */}
+                  <p style={{ ...S.tag, marginTop: 2 }}>
+                    {auditRange
+                      ? `보관 중인 ${auditRange.kept.toLocaleString('ko-KR')}건 중 최근 ${auditEvents.length.toLocaleString('ko-KR')}건 · ${timeLabel(auditRange.knownFrom)} 이후 · 보관 한도 ${auditRange.limit.toLocaleString('ko-KR')}건`
+                      : '최근 100건'}
+                    {auditRange?.dropped && ' · 한도를 넘어선 더 오래된 기록은 서버에도 남아 있지 않습니다'}
+                  </p>
                 </div>
                 <label htmlFor="audit-filter" className="ac-srhide">작업 종류로 거르기</label>
                 <select id="audit-filter" className="ac-select" value={auditFilter} onChange={(e) => setAuditFilter(e.target.value)} style={{ marginLeft: 'auto' }}>
@@ -6281,7 +6323,9 @@ export default function AdminPage() {
                     </thead>
                     <tbody>
                       {auditView.rows.map((e) => (
-                        <tr key={e.id}>
+                        // 번호는 인스턴스마다 1번부터 다시 매겨진다 — 백업을 합치면(DS 48-3)
+                        // 같은 번호가 둘일 수 있으므로 시각까지 합쳐 줄을 가른다.
+                        <tr key={`${e.id}\u0000${e.at}`}>
                           <td style={{ whiteSpace: 'nowrap', color: 'var(--sub)' }}>{timeLabel(e.at)}</td>
                           <td style={{ whiteSpace: 'nowrap' }}><span className="ac-pill">{e.actionLabel || UNNAMED_AUDIT_ACTION}</span></td>
                           <td style={{ minWidth: 160 }}>
@@ -6302,6 +6346,13 @@ export default function AdminPage() {
               )}
               <Pager info={auditView} label="관리 작업 기록" onPage={auditView.onPage} />
             </section>
+            {/* 접수 탭이 자기 보관 상태를 말하는 것과 같은 한 줄 (DS 47-2·48-2). 색만으로
+                말하지 않는다 — 문장 자체가 일어난 일과 할 일을 적는다. */}
+            {auditWarn && (
+              <p style={{ ...S.tag, marginTop: -6 }}>
+                이 기록은 지금 서버에 보관되지 않습니다 — 재시작하면 사라집니다. {auditWarn}
+              </p>
+            )}
 
             <section style={S.card} aria-labelledby="storage-h">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>

@@ -2733,3 +2733,230 @@ test('저장 영역 이름을 화면이 베껴 적지 않는다 (DS 47-3)', opts
 
   delete process.env.STORAGE_DIR;
 });
+
+/* ══════════ 디자인 스프린트 — 45차 재감사 (DS 48-1·48-2·48-3) ══════════ */
+
+/** 변경 이력과 저장소를 **같은 한 벌**로 컴파일한다(드라이버를 바꾸면 양쪽이 같이 움직이도록). */
+async function loadAuditLibs(dir) {
+  process.env.STORAGE_DIR = dir;
+  const out = compileLibs(['audit', 'storage', 'csv', 'kst', 'refusal', 'retention', 'logger', 'monitoring']);
+  const load = (n) => import(pathToFileURL(path.join(out, `${n}.mjs`)).href);
+  return { storage: await load('storage'), audit: await load('audit') };
+}
+
+/** 내려받기 파일의 꼬리 주석만 — 표와 빈 줄로 떨어져 있고 모두 `#` 로 시작한다. */
+function csvNotes(csv) {
+  return csv.split('\r\n').filter((l) => l.startsWith('# ') || l.startsWith('"# '));
+}
+
+/**
+ * DS 48-1 — 변경 이력은 「누가 무엇을 바꿨는가」의 증거인데 **빠진 것을 말하지 않았다**.
+ * 서버는 최근 500건만 들고 한도를 넘기면 가장 오래된 것을 말없이 버리는데
+ *  ① 화면은 「최근 100건」이라고만 적었고(그 100건이 전부인지 일부인지 말하지 않았다)
+ *  ② 내려받은 파일은 한도를 한 글자도 말하지 않아 받는 사람이 **전체 이력으로 읽었다**.
+ * 43차가 대화 기록에 세운 규칙(DS 43-1)이 정작 증거 쪽에는 서 있지 않았다.
+ */
+test('변경 이력이 「무엇까지 들고 있는가」를 말한다 (DS 48-1)', opts, async () => {
+  delete process.env.ADMIN_PERSIST;
+  const dir = mkdtempSync(path.join(tmpdir(), 'gowon-audit1-'));
+  const { audit } = await loadAuditLibs(dir);
+
+  // ① 모수를 답하는 한 곳이 있다 — 대화 기록(`turnRetention`)과 **같은 모양**이다.
+  audit.resetAudit();
+  for (const q of ['환불', '배송', '예약']) audit.logAudit({ action: 'kb.upsert', target: q, detail: `수정: ${q}`, authed: true });
+  const r = audit.auditRetention();
+  assert.deepEqual(Object.keys(r).sort(), ['dropped', 'kept', 'knownFrom', 'limit'], '모수의 모양이 대화 기록과 다르다');
+  assert.equal(r.kept, 3);
+  assert.equal(r.limit, 500);
+  assert.equal(r.dropped, false, '버린 적이 없는데 버렸다고 말한다');
+  assert.equal(audit.auditCount(), 3);
+
+  // ② 내려받는 파일이 제 모수를 말한다 — 종전에는 시각 기준 한 줄뿐이었다.
+  const notes = csvNotes(audit.auditToCsv()).join('\n');
+  assert.ok(notes.includes('한국 시간'), '파일이 시각 기준을 말하지 않는다');
+  assert.ok(notes.includes('관리 작업 3건'), `담긴 건수를 말하지 않는다:\n${notes}`);
+  assert.ok(notes.includes('보관 한도 500건'), '보관 한도를 말하지 않는다');
+  assert.ok(notes.includes('이후의 기록만 담겨 있습니다'), '언제부터의 기록인지 말하지 않는다');
+  assert.ok(notes.includes('「관리 작업 0건」이 아니라 「기록 없음」'), '빈 기간을 0건으로 읽게 둔다');
+  // 조사는 받침에 맞춘다 — 화면 말에 「은(는)」을 남기지 않는다(DS 29-3 과 같은 규칙).
+  assert.ok(notes.includes('오래된 관리 작업은'), `조사가 어긋났다:\n${notes}`);
+  assert.equal(csvNotes(audit.auditToCsv()).length, 3, '주석 수가 다르다');
+
+  // ③ 종전 식 재현 — 한도를 넘기면 가장 오래된 기록이 **말없이** 사라진다.
+  audit.resetAudit();
+  for (let i = 0; i < 505; i += 1) audit.logAudit({ action: 'kb.delete', target: `K-${i}`, authed: true });
+  const kept = audit.listAudit(500);
+  assert.equal(kept.length, 500, '재현 조건이 성립하지 않는다');
+  assert.equal(kept.some((e) => e.target === 'K-0'), false, '재현 조건이 성립하지 않는다 — 버려지지 않았다');
+  // 이제는 **버렸다는 사실이 남는다**(그 앞은 「변경 없음」이 아니라 「기록 없음」이다).
+  const after = audit.auditRetention();
+  assert.equal(after.dropped, true, '버린 사실이 남지 않는다');
+  assert.equal(after.kept, 500);
+  assert.equal(after.knownFrom, kept[kept.length - 1].at, '경계가 남은 가장 오래된 기록을 가리키지 않는다');
+
+  // ④ 두 내려받기 파일이 **같은 틀**로 말한다 — 나란히 받은 사람이 기준을 헷갈리지 않게.
+  const auditSrc = readFileSync(new URL('../src/lib/audit.ts', import.meta.url), 'utf8');
+  const convSrc = readFileSync(new URL('../src/lib/convlog.ts', import.meta.url), 'utf8');
+  for (const [what, s] of [['변경 이력', auditSrc], ['대화 기록', convSrc]]) {
+    assert.match(s, /from '@\/lib\/retention'/, `${what} 이 보관 범위를 제 손으로 적는다`);
+    assert.match(s, /retentionNotes\(/, `${what} 파일이 모수를 한 벌로 말하지 않는다`);
+  }
+
+  // ⑤ 화면·응답 배선 — 서버가 모수를 싣고, 화면이 보여 준 수를 전부라 말하지 않는다.
+  const route = readFileSync(new URL('../src/app/api/admin/audit/route.ts', import.meta.url), 'utf8');
+  assert.match(route, /retention: auditRetention\(\)/, '응답이 모수를 싣지 않는다');
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  assert.match(src, /setAuditRange\(\(data\.retention as RetentionView \| undefined\) \|\| null\)/, '화면이 모수를 받지 않는다');
+  assert.ok(src.includes('보관 중인 ${auditRange.kept.toLocaleString(\'ko-KR\')}건 중 최근'), '보여 준 수의 모수를 적지 않는다');
+  assert.ok(src.includes('한도를 넘어선 더 오래된 기록은 서버에도 남아 있지 않습니다'), '버린 사실을 화면이 말하지 않는다');
+  assert.equal(src.includes('백업 복원 이력(최근 100건)'), false, '보여 준 수를 전부라 말하던 문장이 남아 있다');
+
+  audit.resetAudit();
+  delete process.env.STORAGE_DIR;
+});
+
+/**
+ * DS 48-2 — 44차(DS 47-1)가 안내 자료·규칙·파트너 저장에 「보관되지 않았습니다」를 붙였는데,
+ * 정작 **변경 이력 자신**은 아무 말도 하지 않았다. 이 기록의 쓰기도 같은 디바운스를 쓰므로
+ * 읽기전용 환경에서는 메모리에만 남고, 재시작하면 「누가 무엇을 바꿨는가」가 통째로 사라진다.
+ */
+test('변경 이력이 자기 보관 상태를 말한다 (DS 48-2)', opts, async () => {
+  delete process.env.ADMIN_PERSIST;
+  const dir = mkdtempSync(path.join(tmpdir(), 'gowon-audit2-'));
+  const { audit, storage } = await loadAuditLibs(dir);
+
+  // ① 쓰기가 막힌 환경 — 기록은 남지만 **디스크에는 닿지 않는다**(서비스는 멀쩡하다).
+  audit.resetAudit();
+  storage.resetStorageState();
+  storage.setDriver({
+    name: 'file',
+    read: () => null,
+    write: () => { throw Object.assign(new Error("EROFS: read-only file system, open '/var/task/data/audit.json'"), { code: 'EROFS' }); },
+    remove: () => {},
+  });
+  audit.logAudit({ action: 'backup.restore', target: 'snap', detail: '복원', authed: true });
+  const saved = storage.saveJson('audit', audit.exportAudit());
+  assert.equal(saved.ok, false, '재현 조건이 성립하지 않는다 — 쓰기가 성공했다');
+  assert.equal(saved.reason, 'readonly');
+  assert.equal(storage.storageStatus().namespaces.find((n) => n.ns === 'audit').health, 'readonly', '사유가 상태에 남지 않는다');
+  assert.equal(audit.listAudit(10).length, 1, '보관 실패가 기록을 지웠다');
+  storage.setDriver('file');
+
+  // ② 화면은 **사유를 아는 칸**을 읽고, 문장은 한 벌(`STORAGE_HEALTH`)에서 꺼낸다.
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  assert.match(src, /const auditHealth = storage\?\.namespaces\.find\(\(n\) => n\.ns === 'audit'\)\?\.health \?\? null;/, '변경 이력 탭이 사유를 읽지 않는다');
+  assert.match(src, /auditHealth !== 'ok' && auditHealth !== 'empty'/, '보관되는 상태에도 경고를 띄운다');
+  assert.match(src, /STORAGE_HEALTH\[auditHealth\]\.hint/, '사유 문장을 베껴 적었다');
+  assert.ok(src.includes('이 기록은 지금 서버에 보관되지 않습니다 — 재시작하면 사라집니다.'), '보관되지 않는다는 사실을 말하지 않는다');
+
+  // ③ 그 값은 **탭을 열 때** 다시 읽는다 — 로그인할 때 한 번 받은 값으로는 계속 괜찮다고 말한다.
+  assert.match(src, /if \(tab !== 'audit' \|\| !authInfo\?\.allowed\) return;\n\s*loadAudit\(true\);\n\s*loadStorage\(\);/, '보관 상태를 묵은 값으로 말한다');
+
+  // ④ 겪기 전에는 말하지 않는다(첫 렌더에 경고가 없다).
+  const html = await render();
+  assert.equal(html.includes('이 기록은 지금 서버에 보관되지 않습니다'), false, '겪기도 전에 경고한다');
+
+  audit.resetAudit();
+  delete process.env.STORAGE_DIR;
+});
+
+/**
+ * DS 48-3 — 보관이 막힌 환경에서 화면이 운영자에게 하라고 말하는 일이 「백업 내려받기」인데
+ * (DS 47-1 의 읽기전용 안내), **그 파일에 변경 이력이 들어 있지 않았다**. 증거만 인스턴스
+ * 메모리에 남아 다음 콜드 스타트에 사라졌다. 그렇다고 복원이 이 칸을 덮어서도 안 된다 —
+ * 백업을 뜬 뒤의 기록이 사라지면 복원 자체가 증거를 지우는 일이 된다.
+ */
+test('백업이 변경 이력을 들고 나가고, 복원은 덮지 않고 합친다 (DS 48-3)', opts, async () => {
+  delete process.env.ADMIN_PERSIST;
+  const dir = mkdtempSync(path.join(tmpdir(), 'gowon-audit3-'));
+  const { audit, storage } = await loadAuditLibs(dir);
+  storage.setDriver('file');
+  storage.resetStorageState();
+
+  // ① 종전 식 재현 — 「덮어쓰기」로 되돌리면 백업 **뒤에** 일어난 일의 기록이 사라진다.
+  audit.resetAudit();
+  audit.logAudit({ action: 'kb.upsert', target: 'KB-1', detail: '수정: 환불 기간', authed: true });
+  audit.logAudit({ action: 'rule.override', target: 'greeting', detail: '답변 수정', authed: true });
+  const snap = audit.exportAudit();
+  audit.logAudit({ action: 'partner.delete', target: 'PTR-0009', detail: '', authed: false });
+  assert.equal(audit.auditCount(), 3);
+  audit.importAudit(snap);
+  assert.equal(audit.auditCount(), 2, '재현 조건이 성립하지 않는다');
+  assert.equal(audit.listAudit(10).some((e) => e.target === 'PTR-0009'), false, '재현 조건이 성립하지 않는다 — 기록이 남았다');
+
+  // ② 합치는 문 — 재시작으로 비어 있던 자리에 파일 속 기록이 **더해지고**, 그 사이의 기록은 남는다.
+  audit.resetAudit();
+  audit.logAudit({ action: 'partner.delete', target: 'PTR-0009', detail: '', authed: false });
+  const merged = audit.mergeAudit(snap);
+  assert.equal(merged.ok, true);
+  assert.equal(merged.added, 2, '파일 속 기록을 더하지 않는다');
+  assert.equal(merged.kept, 3);
+  const all = audit.listAudit(500).map((e) => e.target);
+  assert.ok(all.includes('PTR-0009'), '복원이 그 사이의 기록을 지웠다');
+  assert.ok(all.includes('KB-1') && all.includes('greeting'), '파일 속 기록이 들어오지 않았다');
+
+  // ③ 두 번 올려도 늘지 않는다 — 같은 건인지는 번호가 아니라 **내용 전체**로 가린다.
+  const again = audit.mergeAudit(snap);
+  assert.equal(again.added, 0, '같은 파일을 두 번 올리면 기록이 불어난다');
+  assert.equal(again.skipped, 2);
+  assert.equal(audit.auditCount(), 3);
+  assert.equal(again.saved, undefined, '더한 것이 없는데 디스크를 되쓴다');
+
+  // ④ 번호가 같아도 **내용이 다르면 다른 일**이다(번호는 인스턴스마다 1번부터 다시 매겨진다).
+  const sameId = {
+    version: 1, savedAt: new Date().toISOString(), seq: 1,
+    events: [{ id: snap.events[0].id, at: '2026-01-02T03:04:05.000Z', action: 'kb.delete', target: '다른 자료', detail: '', authed: true }],
+  };
+  assert.equal(audit.mergeAudit(sameId).added, 1, '같은 번호라는 이유로 다른 일을 버린다');
+  assert.ok(audit.listAudit(500).some((e) => e.target === '다른 자료'));
+  // 시각순으로 선다 — 목록·파일·한도 버리기가 모두 「뒤가 최신」을 전제로 돈다.
+  const ats = audit.listAudit(500).map((e) => e.at);
+  assert.deepEqual(ats, [...ats].sort().reverse(), '합친 뒤 시간순이 깨졌다');
+
+  // ⑤ 합친 결과는 **디스크까지 간다**(「합쳤습니다」가 메모리만 가리키지 않게 · DS 47-1).
+  const file = path.join(dir, 'audit.json');
+  assert.ok(existsSync(file), '합친 기록이 디스크에 없다');
+  assert.ok(readFileSync(file, 'utf8').includes('PTR-0009'), '합친 기록이 디스크에 없다');
+
+  // ⑥ 백업 파일이 아닌 것·모르는 작업 코드는 종전 규칙 그대로다(삼키지 않고, 늘리지도 않는다).
+  const bad = audit.mergeAudit(null);
+  assert.equal(bad.ok, false);
+  assert.ok(bad.error.includes('백업 파일'), `거절 문장이 코드 어휘다: ${bad.error}`);
+  const before = audit.auditCount();
+  assert.equal(audit.mergeAudit({ events: [{ id: 'X-1', action: 'someone.new' }] }).added, 0, '모르는 작업을 받아들인다');
+  assert.equal(audit.auditCount(), before);
+
+  // ⑦ 한도는 합칠 때도 지킨다 — 넘긴 만큼 가장 오래된 쪽을 버리고 **그 사실을 남긴다**.
+  audit.resetAudit();
+  const many = {
+    version: 1, savedAt: new Date().toISOString(), seq: 600,
+    events: Array.from({ length: 520 }, (_, i) => ({
+      id: `A-${String(i).padStart(6, '0')}`,
+      at: new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString(),
+      action: 'kb.upsert', target: `K-${i}`, detail: '', authed: true,
+    })),
+  };
+  const big = audit.mergeAudit(many);
+  assert.equal(big.added, 520);
+  assert.equal(big.kept, 500, '한도를 넘겨 들고 있다');
+  assert.equal(audit.auditRetention().dropped, true, '버린 사실이 남지 않는다');
+  assert.equal(audit.listAudit(500).some((e) => e.target === 'K-0'), false, '한도를 넘긴 기록이 남아 있다');
+
+  // ⑧ 배선 — 내려받기에 싣고(제 자신을 꺼내 간 사실까지), 복원은 덮는 문을 쓰지 않는다.
+  const route = readFileSync(new URL('../src/app/api/admin/backup/route.ts', import.meta.url), 'utf8');
+  assert.match(route, /JSON\.stringify\(\{ \.\.\.snapshot, partners, audit \}/, '백업 파일에 변경 이력이 없다');
+  assert.ok(route.indexOf("action: 'backup.export'") < route.indexOf('const audit = exportAudit();'), '파일이 제 자신을 꺼내 간 사실을 담지 않는다');
+  assert.match(route, /const a = mergeAudit\(rawAudit\);/, '복원이 변경 이력을 합치지 않는다');
+  assert.equal(/importAudit/.test(route), false, '복원이 변경 이력을 덮어쓰는 문을 쓴다');
+  assert.match(route, /auditAdded,/, '더한 수를 화면에 보내지 않는다');
+
+  // ⑨ 화면은 「덮었다」가 아니라 「더했다」로 말하고, 묻기 전에 그 사실을 알린다.
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  assert.ok(src.includes('변경 이력은 덮어쓰지 않고, 파일에만 있는 기록을 더합니다.'), '무엇이 그대로인지 묻기 전에 말하지 않는다');
+  assert.ok(src.includes('변경 이력 ${added}건 추가'), '더한 수를 결과에 적지 않는다');
+  // 번호가 겹칠 수 있으므로 줄을 가르는 열쇠에 시각이 들어간다.
+  assert.ok(src.includes('<tr key={`${e.id}\\u0000${e.at}`}>'), '같은 번호 두 줄이 한 줄로 뭉개진다');
+
+  audit.resetAudit();
+  delete process.env.STORAGE_DIR;
+});

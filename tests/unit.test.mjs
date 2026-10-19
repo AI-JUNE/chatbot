@@ -2880,7 +2880,10 @@ test('내려받는 대화 기록이 가림·보관 범위를 열과 주석으로
   assert.equal(/'휴대폰 번호'|'주민등록번호'/.test(s), false, 'convlog 가 가림 종류 사전을 따로 들고 있다');
   // 보관 한도는 한 곳에서 온다(화면 문구와 파일 주석이 다른 수를 말하지 않게).
   assert.match(s, /export const TURN_RETENTION = MAX_LOGS;/, '보관 한도에 이름이 없다');
-  assert.match(s, /보관 한도 \$\{TURN_RETENTION\}건/, '파일이 보관 한도를 말하지 않는다');
+  // 꼬리 주석의 문장은 변경 이력 CSV 와 **한 벌**이다(`@/lib/retention` · DS 48-1) — 두 파일을
+  // 나란히 받은 사람이 어느 쪽 기준을 믿어야 하는지 헷갈리지 않게. 실제 출력은 runtime 이 본다.
+  assert.match(s, /retentionNotes\('대화', turnRetention\(\)\)/, '파일이 보관 범위를 한 벌로 말하지 않는다');
+  assert.match(read('src/lib/retention.ts'), /보관 한도 \$\{r\.limit\}건/, '파일이 보관 한도를 말하지 않는다');
   assert.match(s, /\$\{CLIP_MARK\}/, '줄임 표시를 손으로 적었다');
 });
 

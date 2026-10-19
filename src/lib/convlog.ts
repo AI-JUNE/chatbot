@@ -12,6 +12,7 @@ import { compact } from '@/lib/normalize';
 import { tenantLabel } from '@/lib/tenants';
 import { csvCell, csvRow } from '@/lib/csv';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
+import { RetentionInfo, retentionNotes } from '@/lib/retention';
 
 export interface ChatTurnLog {
   id: string;
@@ -203,9 +204,9 @@ export function turnCount(): number {
 
 /**
  * 「언제부터의 기록인가」 (DS 43-1) — 화면·파일이 모수를 밝힐 때 쓰는 단일 출처.
- * 집계(`convStats().retention`)와 같은 값이다.
+ * 집계(`convStats().retention`)와 같은 값이고, 변경 이력(`auditRetention`)과 같은 모양이다.
  */
-export function turnRetention(): { limit: number; kept: number; knownFrom: string; dropped: boolean } {
+export function turnRetention(): RetentionInfo {
   return { limit: MAX_LOGS, kept: logs.length, knownFrom, dropped: droppedAny };
 }
 
@@ -257,10 +258,11 @@ export function turnsToCsv(intentLabels?: Record<string, string>): string {
   // 꼬리 주석 — 정산 CSV 와 같은 모양(`# …`). 빈 줄로 표와 떼어 둔다.
   const notes = [
     KST_CSV_NOTE,
-    `보관 중인 대화 ${turns.length}건을 담았습니다(보관 한도 ${TURN_RETENTION}건). 그보다 오래된 대화는 이 파일에도 없습니다.`,
     // 「몇 건」만으로는 **어디까지 믿을 수 있는지**를 알 수 없다 — 날짜로 거르는 사람에게는
     // 「그 날이 0건」과 「그 날 기록이 없음」이 전혀 다른 사실이다 (DS 43-1).
-    `${kstDateTime(knownFrom)} 이후의 기록만 담겨 있습니다 — 그보다 앞선 날이 비어 있는 것은 「대화 0건」이 아니라 「기록 없음」입니다.`,
+    // 이 두 문장은 변경 이력 CSV 와 **한 벌**이다(`@/lib/retention` · DS 48-1) — 두 파일을
+    // 나란히 받은 사람이 어느 쪽 기준을 믿어야 하는지 헷갈리지 않게.
+    ...retentionNotes('대화', turnRetention()),
     '「고객 메시지」·「챗봇 답변」은 저장할 때 개인정보를 가린 글입니다. 가린 종류는 「개인정보 가림」 열에 적습니다.',
     `길어서 줄인 글의 끝에는 「${CLIP_MARK}」 표시가 붙어 있습니다.`,
   ];

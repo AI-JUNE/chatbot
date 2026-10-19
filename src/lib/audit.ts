@@ -3,10 +3,11 @@
 // 저장이 막히거나 실패하면 메모리 링버퍼로 계속 동작하고, 사유는 storageStatus()에 남는다.
 // [승인 필요] 외부 SIEM 전송.
 // 토큰 값 등 시크릿은 절대 기록하지 않는다(인증 사용 여부만 boolean으로 기록).
-import { loadJson, scheduleSave } from '@/lib/storage';
+import { loadJson, saveJson, savedInfo, scheduleSave, SavedInfo } from '@/lib/storage';
 import { csvCell, csvRow } from '@/lib/csv';
 import { KST_CSV_NOTE, kstDateTime } from '@/lib/kst';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
+import { RetentionInfo, retentionNotes } from '@/lib/retention';
 
 export type AuditAction =
   | 'kb.upsert'
@@ -70,6 +71,31 @@ const MAX_EVENTS = 500;
 let events: AuditEvent[] = [];
 let seq = 0;
 
+/**
+ * **언제부터의 기록을 들고 있는가** (DS 48-1) — 대화 기록(DS 43-1)과 같은 경계다.
+ *
+ * 왜 필요한가: 이 목록은 「누가 무엇을 바꿨는가」의 **증거**인데 최근 500건만 들고 있고,
+ * 한도를 넘기면 가장 오래된 기록이 말없이 사라진다. 종전에는 그 사실을 어디에서도 말하지
+ * 않았다 — 화면은 「최근 100건」이라고만 적었고(그 100건이 서버가 든 전부인지 일부인지
+ * 말하지 않았다), 내려받은 파일은 한도를 한 글자도 말하지 않아 받는 사람이 전체 이력으로
+ * 읽었다. 「그 기간에 아무 변경이 없었다」와 「그 기간 기록이 없다」는 전혀 다른 사실이다.
+ *
+ *  - 기동·초기화 직후: 지금(그 전의 일은 **모른다** — 재기동으로 통째로 비었을 수 있다)
+ *  - 한도에 걸려 버린 순간: 남아 있는 가장 오래된 기록의 시각
+ *  - 보관된 기록을 읽어 들인 직후·백업을 합친 직후: 남은 가장 오래된 기록의 시각
+ */
+let knownFrom = new Date().toISOString();
+/** 한도에 걸려 **버린 적이 있는가**. 화면이 사유를 달리 적는다. */
+let droppedAny = false;
+
+/** 한도를 넘긴 만큼 가장 오래된 것을 버리고, 버렸으면 경계를 그 자리로 옮긴다. */
+function trimToLimit(): void {
+  if (events.length <= MAX_EVENTS) return;
+  events = events.slice(-MAX_EVENTS);
+  knownFrom = events[0]?.at || knownFrom;
+  droppedAny = true;
+}
+
 export function logAudit(input: { action: AuditAction; target?: string; detail?: string; authed?: boolean }): AuditEvent {
   seq += 1;
   const e: AuditEvent = {
@@ -81,9 +107,22 @@ export function logAudit(input: { action: AuditAction; target?: string; detail?:
     authed: input.authed === true,
   };
   events.push(e);
-  if (events.length > MAX_EVENTS) events = events.slice(-MAX_EVENTS);
+  trimToLimit();
   scheduleSave(AUDIT_NS, exportAudit);
   return { ...e };
+}
+
+/** 보관 중인 관리 작업 기록 수. 화면이 「전체 몇 건 중 몇 건」을 말할 때 쓴다. */
+export function auditCount(): number {
+  return events.length;
+}
+
+/**
+ * 「언제부터 몇 건까지 들고 있는가」 (DS 48-1) — 화면·파일이 모수를 밝히는 단일 출처.
+ * 대화 기록의 `turnRetention()` 과 **같은 모양**이다(두 화면이 같은 사실을 같은 틀로 말한다).
+ */
+export function auditRetention(): RetentionInfo {
+  return { limit: MAX_EVENTS, kept: events.length, knownFrom, dropped: droppedAny };
 }
 
 /** 최신순 목록(기본 100건). */
@@ -115,12 +154,17 @@ export function auditToCsv(): string {
     ]),
   );
   // 파일이 제 시각 기준을 말하지 않으면 받는 사람은 9시간 어긋난 줄 모른 채 그 열로 거른다.
-  return [header, ...rows, '', csvCell(`# ${KST_CSV_NOTE}`)].join('\r\n');
+  // 「무엇까지 담겼는가」도 같은 자리에서 말한다 (DS 48-1) — 종전에는 한도를 한 글자도 적지
+  // 않아, 받는 사람이 이 파일을 **전체 이력**으로 읽었다. 문장은 대화 기록 CSV 와 한 벌이다.
+  const notes = [KST_CSV_NOTE, ...retentionNotes('관리 작업', auditRetention())];
+  return [header, ...rows, '', ...notes.map((n) => csvCell(`# ${n}`))].join('\r\n');
 }
 
 export function resetAudit(): void {
   events = [];
   seq = 0;
+  knownFrom = new Date().toISOString();
+  droppedAny = false;
   scheduleSave(AUDIT_NS, exportAudit);
 }
 
@@ -147,18 +191,18 @@ export function exportAudit(): AuditSnapshot {
  */
 const ACTIONS = new Set<string>(Object.keys(AUDIT_ACTION_LABELS));
 
-/** 스냅샷 복원. 알 수 없는 action·형식 위반 항목은 건너뛴다. */
-export function importAudit(input: unknown): { ok: true; count: number } | { ok: false; error: string } {
-  if (!input || typeof input !== 'object') return { ok: false, error: RESTORE_FORMAT_MESSAGE };
+/** 들어온 기록 중 **읽을 수 있는 것만** 골라 같은 모양으로. 형식이 아예 아니면 null. */
+function readEvents(input: unknown): AuditEvent[] | null {
+  if (!input || typeof input !== 'object') return null;
   const snap = input as Partial<AuditSnapshot>;
-  if (!Array.isArray(snap.events)) return { ok: false, error: RESTORE_FORMAT_MESSAGE };
-  const restored: AuditEvent[] = [];
+  if (!Array.isArray(snap.events)) return null;
+  const out: AuditEvent[] = [];
   for (const raw of snap.events) {
     if (!raw || typeof raw !== 'object') continue;
     const e = raw as AuditEvent;
     if (typeof e.id !== 'string' || !e.id.trim()) continue;
     if (typeof e.action !== 'string' || !ACTIONS.has(e.action)) continue;
-    restored.push({
+    out.push({
       id: e.id,
       at: typeof e.at === 'string' && e.at ? e.at : new Date().toISOString(),
       action: e.action as AuditAction,
@@ -167,13 +211,93 @@ export function importAudit(input: unknown): { ok: true; count: number } | { ok:
       authed: e.authed === true,
     });
   }
-  events = restored.slice(-MAX_EVENTS);
+  return out;
+}
+
+/** 번호가 뒤에 다시 쓰이지 않게 — 들고 있는 가장 큰 번호 뒤에서 이어 센다. */
+function syncSeq(snapSeq: unknown): void {
   const maxSeq = events.reduce((m, e) => {
     const n = Number(String(e.id).replace(/[^0-9]/g, ''));
     return Number.isFinite(n) && n > m ? n : m;
-  }, 0);
-  seq = typeof snap.seq === 'number' && snap.seq > maxSeq ? snap.seq : maxSeq;
+  }, seq);
+  seq = typeof snapSeq === 'number' && snapSeq > maxSeq ? snapSeq : maxSeq;
+}
+
+/**
+ * 보관된 기록 **읽어 들이기**(기동 때) — 들고 있는 것을 통째로 갈아 끼운다.
+ * 디스크가 곧 그 인스턴스의 상태인 자리라서 덮어쓰는 것이 맞다. 사람이 올린 백업은
+ * 이 문이 아니라 `mergeAudit` 을 지난다(증거를 덮는 경로를 열지 않는다 · DS 48-3).
+ */
+export function importAudit(input: unknown): { ok: true; count: number } | { ok: false; error: string } {
+  const restored = readEvents(input);
+  if (!restored) return { ok: false, error: RESTORE_FORMAT_MESSAGE };
+  events = restored.slice(-MAX_EVENTS);
+  // 남은 가장 오래된 기록이 경계다 — 그 앞은 보관된 기록에도 없다 (DS 48-1).
+  knownFrom = events[0]?.at || new Date().toISOString();
+  droppedAny = restored.length > MAX_EVENTS;
+  seq = 0;
+  syncSeq((input as Partial<AuditSnapshot>).seq);
   return { ok: true, count: events.length };
+}
+
+/** 두 기록이 **같은 한 건인가** — 내용이 한 글자라도 다르면 다른 건이다(합칠 때만 쓴다). */
+function identityOf(e: AuditEvent): string {
+  return [e.id, e.at, e.action, e.target, e.detail, e.authed ? '1' : '0'].join('\u0000');
+}
+
+export interface MergeAuditResult {
+  ok: true;
+  /** 이번에 더해진 건수. */
+  added: number;
+  /** 이미 들고 있어 더하지 않은 건수. */
+  skipped: number;
+  /** 합친 뒤 보관 중인 건수. */
+  kept: number;
+  /** 합친 결과가 디스크까지 갔는가(더한 것이 없으면 쓰지 않는다 · DS 47-1). */
+  saved?: SavedInfo;
+}
+
+/**
+ * 백업 속 변경 이력을 **합친다** (DS 48-3) — 덮어쓰지 않는다.
+ *
+ * 왜 합치는가: 변경 이력은 「누가 무엇을 바꿨는가」의 증거다. 복원이 이것을 갈아 끼우면
+ * **백업을 뜬 뒤에 일어난 모든 일의 기록이 사라진다** — 복원 자체가 그 기록을 지우는 일이
+ * 되어, 복원으로 무엇을 덮었는지 나중에 되짚을 수 없다. 고객사 삭제 API 를 만들지 않은 것과
+ * 같은 규칙이다(정산 근거를 지울 수 있는 경로를 열지 않는다).
+ *
+ * 그래서 이 문은 **더하기만** 한다: 파일에만 있는 기록을 넣고, 이미 들고 있는 것은 건너뛰고,
+ * 시각순으로 세운 뒤 한도를 넘긴 만큼만 가장 오래된 쪽을 버린다(그 사실은 경계에 남는다).
+ * 번호(`id`)는 인스턴스마다 1번부터 다시 매겨지므로 같은 번호가 서로 다른 일을 가리킬 수
+ * 있다 — 그래서 같은 건인지는 **번호가 아니라 내용 전체**로 가린다.
+ */
+export function mergeAudit(input: unknown): MergeAuditResult | { ok: false; error: string } {
+  const incoming = readEvents(input);
+  if (!incoming) return { ok: false, error: RESTORE_FORMAT_MESSAGE };
+  const seen = new Set(events.map(identityOf));
+  let added = 0;
+  for (const e of incoming) {
+    const key = identityOf(e);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    events.push(e);
+    added += 1;
+  }
+  const skipped = incoming.length - added;
+  if (added > 0) {
+    // 시각순으로 세운다 — 목록·CSV·한도 버리기가 모두 「뒤가 최신」을 전제로 돈다.
+    events.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    knownFrom = events[0]?.at || knownFrom;
+    trimToLimit();
+    syncSeq((input as Partial<AuditSnapshot>).seq);
+  }
+  return {
+    ok: true,
+    added,
+    skipped,
+    kept: events.length,
+    // 「합쳤습니다」는 디스크를 보고 나온 말이어야 한다 (DS 47-1).
+    ...(added > 0 ? { saved: savedInfo(saveJson(AUDIT_NS, exportAudit())) } : {}),
+  };
 }
 
 // 기동 시 복원(없거나 손상되면 빈 상태로 시작 — 사유는 storageStatus()에 남는다).
