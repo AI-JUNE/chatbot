@@ -259,6 +259,28 @@ function contactTail(ticket: { contact?: string }, ask: string): string {
   );
 }
 
+/**
+ * **올 수 없는 답을 기다리게 하지 않는다** (DS 45-1).
+ *
+ * 연락처를 남기지 않은 고객에게 종전 문구는 「접수는 유지되니 **이 창을 열어두시면** 상담원이
+ * 순서대로 응대해 드릴게요」였고, 위젯 접수 카드는 「연락처를 남기지 않으셔서, **이 대화창으로**
+ * 안내드립니다」였다. 둘 다 **상담원이 이 창에 말을 걸 수 있다**고 말하는데, 이 제품에는 그 길이
+ * 없다 — 상담원이 고객 쪽으로 글을 보내는 창구가 없고(접수 알림 연동도 [승인 필요]), 위젯은
+ * 자기가 보낸 요청의 답만 받는다(`/api/chat`·`/api/feedback`·`/api/escalation` 셋뿐이다).
+ * 그래서 연락처 없이 접수한 사람은 창을 지키고 앉아 **영영 오지 않는 답**을 기다린다
+ * (QUALITY_BAR §1 「핵심 흐름이 처음부터 끝까지 끊기지 않는다」·§13 「하지 못하는 일을
+ * 할 수 있다고 말하지 않는다」).
+ *
+ * 그래서 사실과 **다음에 할 일**을 함께 적는다: 지금은 먼저 연락드릴 수 없다는 사실 + 번호만
+ * 보내면 이 접수에 붙는다는 길(실제로 열려 있는 길이다 — `computeReply` 0-a2, DS 37-1).
+ */
+function noContactLine(): string {
+  return (
+    ' 다만 연락받으실 곳을 남기지 않으셔서, 저희가 먼저 연락드릴 방법은 없어요.' +
+    ' 전화번호나 이메일만 보내 주시면 이 접수에 붙여 두고 순서대로 연락드릴게요.'
+  );
+}
+
 /** 폴백 제안 번호 선택("1", "2번", "3.") 파싱. 범위 밖이면 null. */
 function parsePick(text: string, max: number): number | null {
   const m = text.match(/^([1-9])\s*(번|\.)?$/);
@@ -357,7 +379,23 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
       if (res.kind === 'cancelled') {
         updateSession(sessionId, { form: undefined, pendingSuggestions: undefined });
         return {
-          reply: `${form.title}를 중단했어요. 입력하신 내용은 저장하지 않았습니다. 다시 필요하시면 언제든 말씀해 주세요.`,
+          /**
+           * **지키지 못할 약속을 하지 않는다** (DS 45-2).
+           *
+           * 종전 문구는 「입력하신 내용은 저장하지 않았습니다」였다. 접수(티켓)를 만들지 않는
+           * 것은 사실이지만, 수집 중에 고객이 친 말은 **턴마다** 대화 기록에 적힌다
+           * (`/api/chat` → `logTurn`) — 그 글은 관리 콘솔의 최근 대화·전역 검색·「답하지 못한
+           * 질문」·내려받기 CSV·백업 스냅샷으로 나가고, 뒤에 상담원을 부르면 이관 요약의
+           * 「직전 대화」로 상담원에게도 간다. 「저장하지 않았다」는 말을 믿고 이름·연락처를
+           * 적은 뒤 취소한 사람에게 그것은 사실이 아니다(§13).
+           *
+           * 그래서 **일어난 일 그대로** 적는다: 접수는 만들지 않았고, 대화는 남으며, 전화번호·
+           * 이메일 같은 값은 가려서 보관한다(`lib/pii` — DS 39-1 이 세운 저장 관문).
+           */
+          reply:
+            `${form.title}를 중단했어요. 접수는 만들지 않았습니다.` +
+            ' 지금까지 나눈 대화는 상담 기록에 남고, 전화번호·이메일 같은 값은 가려서 보관합니다.' +
+            ' 다시 필요하시면 언제든 말씀해 주세요.',
           intent: `form:${form.id}:cancelled`,
           escalate: false,
           source: 'context',
@@ -456,7 +494,10 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
           (q ? ` 현재 접수 순번은 ${q.position}번입니다.` : '') +
           `\n${renderCollected(form, values)}\n` +
           (created ? '' : '이미 접수된 요청에 이어서 기록했어요. ') +
-          '상담원이 확인 후 순서대로 연락드릴게요. 내용을 고치시려면 "상담원"이라고 입력해 주세요.',
+          // 연락처를 건너뛴 접수(장애 신고의 연락처는 선택 항목이다)에 「연락드릴게요」라고
+          // 적으면 그 약속을 지킬 길이 없다 — 접수에 붙어 있는 값으로 가른다 (DS 45-1).
+          (ticket.contact ? '상담원이 확인 후 순서대로 연락드릴게요.' : `상담원이 확인하도록 접수해 두었어요.${noContactLine()}`) +
+          ' 내용을 고치시려면 "상담원"이라고 입력해 주세요.',
         intent: `form:${form.id}:complete`,
         escalate: false,
         source: 'context',
@@ -494,7 +535,8 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
     if (SKIP_RE.test(text)) {
       updateSession(sessionId, { awaitingContact: false });
       return {
-        reply: '네, 알겠습니다. 접수는 유지되니 이 창을 열어두시면 상담원이 순서대로 응대해 드릴게요. 다른 궁금한 점이 있으면 말씀해 주세요.',
+        // 접수는 남는다는 사실은 그대로 두고, **창을 지키면 답이 온다**는 말만 거둔다 (DS 45-1).
+        reply: `네, 알겠습니다. 접수는 그대로 남아 있어요.${noContactLine()} 다른 궁금한 점이 있으면 말씀해 주세요.`,
         intent: 'contact_skipped',
         escalate: false,
         source: 'context',
@@ -567,7 +609,8 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
     const wait = q ? ` 현재 접수 순번은 ${q.position}번입니다.` : '';
     const tail = created
       ? `\n접수번호는 ${ticket.id}입니다.${wait}${contactTail(ticket, ' 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기"라고 입력해 주세요)')}`
-      : `\n이미 접수된 요청(${ticket.id})이 있어 이어서 도와드릴게요.${wait}${contactTail(ticket, ' 연락처를 남겨주시면 더 빠르게 연락드릴 수 있어요. (건너뛰려면 "건너뛰기")')}`;
+      // 「더 빠르게」는 **느린 길이 있다**는 말이다 — 연락처가 없으면 느린 길도 없다 (DS 45-1).
+      : `\n이미 접수된 요청(${ticket.id})이 있어 이어서 도와드릴게요.${wait}${contactTail(ticket, ' 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (건너뛰려면 "건너뛰기")')}`;
     return {
       reply: baseReply + tail,
       intent: intentName,

@@ -1269,3 +1269,60 @@ test('조합 중에 누른 Esc 는 상담창을 접지 않는다 (DS 41-1)', opt
   make(old)(mod.composingKey, (reset) => oldClosed.push(reset), true, false, { current: null })(ev(true)[0]);
   assert.deepEqual(oldClosed, [false], '종전 식에서도 접히지 않는다 — 결함이 재현되지 않는다');
 });
+
+/* ══════════ 디자인 스프린트 — 42차 재감사 (DS 45-1·45-2) ══════════ */
+
+/**
+ * DS 45-1 — 접수 완료 카드가 「연락처를 남기지 않으셔서, **이 대화창으로** 안내드립니다」라고 했다.
+ *
+ * 그 말은 상담원이 이 창에 글을 보낼 수 있다는 뜻인데, 위젯이 부르는 창구는 자기가 보낸 요청의
+ * 답만 돌려주는 셋(`/api/chat`·`/api/feedback`·`/api/escalation`)뿐이다. 연락처 없이 접수한
+ * 사람은 창을 지키고 앉아 영영 오지 않는 답을 기다렸다.
+ */
+test('연락처 없이 접수한 카드가 올 수 없는 답을 약속하지 않는다 (DS 45-1)', opts, async () => {
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  const card = src.slice(src.indexOf("{handoff.stage === 'done' && handoff.ticket && ("), src.indexOf('{/* 답변 평가'));
+  // 「없어야 하는 말」은 **주석을 걷고** 본다 — 왜 거뒀는지 적어 둔 주석에 그 말이 들어 있다.
+  const code = card.replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
+
+  assert.equal(code.includes('이 대화창으로 안내드립니다'), false, '상담원이 이 창에 말을 걸 수 있다고 말한다');
+  assert.match(card, /먼저 연락드릴 방법이 없어요/, '연락이 갈 수 없다는 사실을 말하지 않는다');
+  // 사실만 말하고 끝내지 않는다 — 바로 아래의 「연락처 남기기」로 데려간다(DS 44-3 과 같은 규칙).
+  assert.match(card, /아래에서 연락처를 남겨주시면/, '다음에 할 일을 가리키지 않는다');
+  assert.match(card, /\{!handoff\.ticket\.contactOnFile && \(/, '연락처가 없을 때만 나오는 자리가 아니다');
+  assert.match(card, /onClick=\{addContact\}/, '데려갈 버튼이 그 자리에 없다');
+  // 연락처가 붙어 있는 접수에는 종전 그대로다(멀쩡한 약속까지 거두지 않는다).
+  assert.match(card, /남겨주신 연락처로 상담원이 확인 후 연락드립니다/, '연락처를 남긴 사람에게 할 말까지 거뒀다');
+
+  // 위젯이 상담원 쪽 글을 받아 오는 창구는 없다 — 이것이 위 문구를 거둔 까닭이다.
+  const calls = [...new Set([...src.matchAll(/\/api\/[\w/-]+/g)].map((m) => m[0]))].sort();
+  assert.deepEqual(calls, ['/api/chat', '/api/escalation', '/api/feedback'], '위젯이 부르는 창구가 달라졌다 — 이 판단을 다시 보아야 한다');
+  assert.equal(/setInterval|EventSource|WebSocket/.test(src), false, '상담원 쪽 글을 받아 오는 길이 생겼다면 문구를 다시 보아야 한다');
+});
+
+/**
+ * DS 45-2 — 방침이 약속한 「상담 입력창 안내」가 입력창에 없었다.
+ *
+ * 개인정보처리방침 §10 과 이용약관은 「상담 입력창에는 주민등록번호·카드번호 등 민감정보를
+ * 입력하지 않도록 **안내합니다**」라고 적어 두었는데, 고객이 입력창 아래에서 읽는 줄은
+ * 「AI 자동응답 …」 하나뿐이었다. 서버는 저장 전에 가리지만(`lib/pii`) 그것은 들어온 뒤의 일이다.
+ */
+test('입력창이 민감정보를 적지 말라고 안내한다 (DS 45-2)', opts, async () => {
+  const html = await render({ tenant: TENANT });
+
+  assert.ok(html.includes('주민등록번호·카드번호 등 민감정보는 입력하지 마세요'), '방침이 약속한 안내가 화면에 없다');
+  // 테넌트가 바꿀 수 없는 자리다 — 고원이 방침으로 한 약속이지 고객사 문구가 아니다.
+  assert.ok(html.includes(TENANT.aiNotice), 'AI 고지가 밀려났다');
+  const tenantless = await render({});
+  assert.ok(tenantless.includes('주민등록번호·카드번호 등 민감정보는 입력하지 마세요'), '기본 위젯에는 안내가 없다');
+
+  // 화면을 보지 않는 사람에게도 **칸에 들어온 순간** 읽힌다.
+  assert.match(html, /aria-label="메시지 입력"[^>]*aria-describedby="gw-pii"/, '입력칸이 그 안내를 가리키지 않는다');
+  assert.match(html, /id="gw-pii"/, '가리킬 대상이 없다');
+
+  // 방침·약관이 그 안내를 한다고 적어 둔 쪽도 함께 확인한다(한쪽만 고치면 다시 어긋난다).
+  for (const page of ['../src/app/privacy/page.tsx', '../src/app/terms/page.tsx']) {
+    const s = readFileSync(new URL(page, import.meta.url), 'utf8');
+    assert.match(s, /주민등록번호[·\s]*카드번호/, `${page} 가 민감정보 안내를 더 이상 약속하지 않는다 — 화면 쪽을 다시 보아야 한다`);
+  }
+});

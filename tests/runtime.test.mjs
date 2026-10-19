@@ -2398,7 +2398,8 @@ test('위젯 카드로 접수한 뒤의 질문이 연락처로 읽히지 않는�
   setup('rt-ds35-skip-new', true);
   const skipNew = replyTo('환불 수수료는 없어요?', 'rt-ds35-skip-new');
   assert.notEqual(skipNew.intent, 'contact_skipped', '카드가 끝낸 질문을 대화창이 다시 묻는다');
-  assert.equal(skipNew.reply.includes('접수는 유지되니'), false, '질문은 사라지고 접수 안내만 남는다');
+  // 「건너뛰기」로 읽혔을 때만 나가는 말 — 문구는 DS 45-1 에서 바뀌었고, 검사의 뜻은 그대로다.
+  assert.equal(skipNew.reply.includes('접수는 그대로 남아 있어요'), false, '질문은 사라지고 접수 안내만 남는다');
 
   // ② 질문에 섞인 **남의 번호**가 고객의 연락처로 저장된다(상담원은 그 번호로 전화한다).
   const old = setup('rt-ds35-num-old', false);
@@ -3749,4 +3750,163 @@ test('가려진 규칙을 가려내고, 가린 기본 규칙을 끄면 되살아
   // 빈 표현·공백은 아무것도 가리지 않는다(없는 경고를 만들지 않는다).
   assert.equal(chat.shadowOfRule(['', '   ']), null);
   assert.equal(chat.shadowOfRule([]), null);
+});
+
+/* ══════════ 디자인 스프린트 — 42차 재감사 (DS 45-1·45-2·45-3) ══════════ */
+
+/**
+ * DS 45-1 — 상담원이 **이 창에 말을 걸 수 있다**고 말했다.
+ *
+ * 연락처를 건너뛴 고객에게 엔진은 「접수는 유지되니 **이 창을 열어두시면** 상담원이 순서대로
+ * 응대해 드릴게요」라고 했고, 폼을 마친 고객에게는 연락처가 있든 없든 「상담원이 확인 후
+ * 순서대로 연락드릴게요」라고 했다. 그런데 이 제품에는 상담원이 고객 쪽으로 글을 보내는 길이
+ * 없다 — 위젯이 부르는 창구는 `/api/chat`·`/api/feedback`·`/api/escalation` 셋뿐이고
+ * 그마저 자기가 보낸 요청의 답만 받는다. 연락처 없이 접수한 사람은 창을 지키고 앉아
+ * **영영 오지 않는 답**을 기다렸다.
+ */
+test('연락처 없이 접수한 사람에게 올 수 없는 답을 약속하지 않는다 (DS 45-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const chat = await eng('chat');
+  const esc = await eng('escalation');
+  const { resetSessions, getSession } = await eng('session');
+
+  // ── ① 연락처를 묻고 「건너뛰기」를 받은 자리 ──
+  resetSessions();
+  esc.resetTickets();
+  const sid = 'rt-ds45-skip';
+  assert.equal(chat.replyTo('상담원 연결해 주세요', sid).escalate, true, '상담원 전환이 일어나야 이 검증이 의미가 있다');
+  assert.equal(getSession(sid).awaitingContact, true, '서버가 연락처를 묻지 않는다 — 전제가 깨졌다');
+
+  const skipped = chat.replyTo('괜찮아요', sid);
+  assert.equal(skipped.intent, 'contact_skipped', '건너뛰기로 읽히지 않으면 이 검증은 아무것도 지키지 않는다');
+  assert.equal(
+    /이 창을 열어두시면|응대해 드릴게요|이 대화창으로/.test(skipped.reply),
+    false,
+    '상담원이 이 창에 말을 걸 수 있다고 말한다 — 그 길은 없다',
+  );
+  assert.match(skipped.reply, /접수는 그대로 남아 있어요/, '접수가 남는다는 사실까지 함께 지웠다');
+  assert.match(skipped.reply, /먼저 연락드릴 방법은 없어요/, '연락이 갈 수 없다는 사실을 말하지 않는다');
+
+  // ── ② 가리킨 길이 **실제로 열려 있다** — 번호만 보내면 그 접수에 붙는다(DS 37-1).
+  const added = chat.replyTo('010-1234-5678', sid);
+  assert.equal(added.intent, 'contact_captured', '안내한 길이 닫혀 있다 — 없는 조작을 보여 준 셈이다');
+  assert.equal(esc.getTicket(added.ticketId).contact, '010-1234-5678');
+  assert.match(chat.replyTo('상담원', sid).reply, /남겨 주신 연락처/, '연락처가 붙은 뒤에도 못 한다고 말한다');
+
+  // ── ③ 폼 완료 — 연락처를 건너뛴 접수에 「연락드릴게요」라고 적지 않는다 ──
+  resetSessions();
+  esc.resetTickets();
+  const sidNo = 'rt-ds45-form-nocontact';
+  assert.equal(chat.replyTo('위젯이 안 돼요', sidNo).intent, 'form:trouble:start', '장애 신고 폼이 시작되지 않는다 — 전제가 깨졌다');
+  chat.replyTo('위젯이 열리지 않아요', sidNo);
+  chat.replyTo('1', sidNo);
+  const doneNo = chat.replyTo('건너뛰기', sidNo);
+  assert.equal(doneNo.intent, 'form:trouble:complete', '폼이 끝나지 않았다 — 전제가 깨졌다');
+  assert.equal(esc.getTicket(doneNo.ticketId).contact, undefined, '연락처 없이 끝난 접수가 아니다 — 재현 조건이 깨졌다');
+  assert.equal(
+    doneNo.reply.includes('상담원이 확인 후 순서대로 연락드릴게요'),
+    false,
+    '회신할 곳이 없는데 연락드린다고 말한다',
+  );
+  assert.match(doneNo.reply, /먼저 연락드릴 방법은 없어요/, '연락이 갈 수 없다는 사실을 말하지 않는다');
+
+  // 연락처를 남긴 접수에는 종전 그대로다 — 멀쩡한 약속까지 거두지 않는다.
+  resetSessions();
+  esc.resetTickets();
+  const sidYes = 'rt-ds45-form-contact';
+  chat.replyTo('위젯이 안 돼요', sidYes);
+  chat.replyTo('위젯이 열리지 않아요', sidYes);
+  chat.replyTo('1', sidYes);
+  const doneYes = chat.replyTo('010-2222-3333', sidYes);
+  assert.equal(doneYes.intent, 'form:trouble:complete');
+  assert.equal(esc.getTicket(doneYes.ticketId).contact, '010-2222-3333');
+  assert.match(doneYes.reply, /상담원이 확인 후 순서대로 연락드릴게요/, '연락처를 남긴 사람에게 할 말까지 거뒀다');
+});
+
+/**
+ * DS 45-2 — 「입력하신 내용은 저장하지 않았습니다」는 사실이 아니었다.
+ *
+ * 접수(티켓)를 만들지 않는 것은 사실이지만, 수집 중에 고객이 친 말은 **턴마다** 남는다 —
+ * 세션 대화 버퍼에 쌓여 뒤에 상담원을 부르면 이관 요약의 「직전 대화」로 상담원에게 가고,
+ * `/api/chat` 은 같은 턴을 대화 기록(`logTurn`)에도 적는다(관리 콘솔 최근 대화·전역 검색·
+ * 내려받기 CSV·백업 스냅샷으로 퍼진다). 그 말을 믿고 이름·연락처를 적은 뒤 취소한 사람에게
+ * 그것은 거짓이다(§13).
+ */
+test('중단한 접수에 「저장하지 않았다」고 말하지 않는다 (DS 45-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const chat = await eng('chat');
+  const esc = await eng('escalation');
+  const { resetSessions, getSession } = await eng('session');
+  resetSessions();
+  esc.resetTickets();
+
+  const sid = 'rt-ds45-cancel';
+  assert.equal(chat.replyTo('예약하고 싶어요', sid).intent, 'form:reservation:start', '예약 폼이 시작되지 않는다 — 전제가 깨졌다');
+  chat.replyTo('홍길동', sid);
+  const cancelled = chat.replyTo('취소', sid);
+  assert.equal(cancelled.intent, 'form:reservation:cancelled');
+
+  // 접수를 만들지 않는 것은 사실이다 — 그 말은 그대로 둔다.
+  assert.equal(esc.listTickets().length, 0, '중단했는데 접수가 생겼다');
+  assert.match(cancelled.reply, /접수는 만들지 않았습니다/, '중단으로 무엇이 일어나지 않았는지 말하지 않는다');
+  // 사실이 아닌 쪽은 거둔다.
+  assert.equal(cancelled.reply.includes('저장하지 않았습니다'), false, '남는 글을 두고 저장하지 않았다고 말한다');
+  assert.match(cancelled.reply, /상담 기록에 남/, '남는다는 사실을 말하지 않는다');
+
+  // ── 정말로 남는다 ── 중단은 고객이 친 말을 지우지 않는다.
+  assert.deepEqual(
+    getSession(sid).turns.filter((t) => t.speaker === 'customer').map((t) => t.text),
+    ['예약하고 싶어요', '홍길동', '취소'],
+    '중단이 고객이 친 말을 지운다면 이 검증은 아무것도 지키지 않는다',
+  );
+  // 그리고 뒤에 상담원을 부르면 그 이름이 이관 요약으로 상담원에게 간다.
+  const handoff = chat.replyTo('상담원 연결해 주세요', sid);
+  assert.ok(
+    esc.getTicket(handoff.ticketId).summary.includes('홍길동'),
+    '중단한 폼의 입력이 이관 요약에 닿지 않는다면 이 결함은 사라진 것이다',
+  );
+});
+
+/**
+ * DS 45-3 — 고객이 말하지 않은 때를 우리가 지어내 **되읽어 주고** 그대로 접수했다.
+ *
+ * ① `RELATIVE_DAYS` 는 위에서부터 첫 번째로 걸리는 것을 쓰는데 「내일」이 「모레」보다 앞에
+ *    있어, 「내일모레」가 **하루 당겨졌다**.
+ * ② 분을 숫자로만 봐서 「2시 반」이 **2시 00분**이 됐다(30분 당겨진 약속이 접수된다).
+ * ③ 「낼」이 부분 일치라 「보낼게요」의 꼬리가 **오늘**로 읽혔다.
+ *
+ * 세 값 모두 고객에게 그대로 되읽히고(「10월 20일, 몇 시가 좋을까요?」) 접수 요약에 적혀
+ * 운영자에게 간다 — 고객은 자기가 말한 약속을 확인받았다고 믿은 채 다른 날에 기다린다.
+ */
+test('고객이 말한 때를 그대로 알아듣는다 (DS 45-3)', opts, async () => {
+  const S = await slotsLib();
+
+  // ── ① 「내일모레」 ──
+  assert.deepEqual(S.parseDateTimeParts('내일모레 오후 2시', FIXED_NOW), { date: '2026-09-05', time: '14:00' });
+  assert.equal(S.parseDateTime('내일모레', FIXED_NOW).value, '2026-09-05 (시간 미정)');
+  // 나머지 상대 날짜는 종전 그대로다.
+  assert.equal(S.parseDateTimeParts('모레', FIXED_NOW).date, '2026-09-05');
+  assert.equal(S.parseDateTimeParts('내일', FIXED_NOW).date, '2026-09-04');
+  assert.equal(S.parseDateTimeParts('오늘', FIXED_NOW).date, '2026-09-03');
+  assert.equal(S.parseDateTimeParts('글피', FIXED_NOW).date, '2026-09-06');
+
+  // ── ② 「반」도 분이다 ──
+  assert.deepEqual(S.parseDateTimeParts('오후 2시 반', FIXED_NOW), { date: null, time: '14:30' });
+  assert.equal(S.parseDateTimeParts('2시반', FIXED_NOW).time, '02:30');
+  // 숫자 분·콜론 표기는 종전 그대로다.
+  assert.equal(S.parseDateTimeParts('오후 2시 30분', FIXED_NOW).time, '14:30');
+  assert.equal(S.parseDateTimeParts('14:30', FIXED_NOW).time, '14:30');
+  assert.equal(S.parseDateTimeParts('오후 2시', FIXED_NOW).time, '14:00');
+
+  // ── ③ 「보낼게요」의 꼬리를 날짜로 읽지 않는다 ──
+  assert.deepEqual(S.parseDateTimeParts('자료 보낼게요', FIXED_NOW), { date: null, time: null });
+  assert.equal(S.parseDateTimeParts('내일 보낼게요', FIXED_NOW).date, '2026-09-04', '「내일」까지 함께 잃으면 안 된다');
+  assert.equal(S.parseDateTimeParts('낼 오후 2시', FIXED_NOW).date, '2026-09-04', '「낼」을 통째로 버리면 안 된다');
+
+  // ── ④ 접수에 적히는 값이 함께 바뀐다(이 값이 운영자가 읽는 「희망 일시」다) ──
+  const form = S.getForm('reservation');
+  let st = S.startForm(form).state;
+  st = S.applyInput(form, st, '홍길동', FIXED_NOW).state;
+  const r = S.applyInput(form, st, '내일모레 오후 2시 반', FIXED_NOW);
+  assert.equal(r.state.values.datetime, '2026-09-05 14:30', '접수에 적히는 값이 고객이 말한 때와 다르다');
 });

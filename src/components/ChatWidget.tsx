@@ -379,6 +379,19 @@ function clock(ms: number): string {
   }
 }
 
+/**
+ * 입력창 아래 상시 안내 (DS 45-2).
+ *
+ * 개인정보처리방침 §10 과 이용약관은 「상담 입력창에는 주민등록번호·카드번호 등 민감정보를
+ * 입력하지 않도록 **안내합니다**」라고 적어 두었는데, 정작 입력창에는 그 안내가 어디에도
+ * 없었다 — 고객이 읽는 유일한 한 줄은 「AI 자동응답 …」뿐이었다. 적어 둔 말이 사실이 되게 한다
+ * (§13 「하지 않는 일을 한다고 말하지 않는다」).
+ *
+ * 서버는 이미 주민등록번호·카드번호를 **저장 전에 가리지만**(`lib/pii`), 그것은 들어온 뒤의
+ * 일이다. 안내는 **보내기 전에** 보여야 한다 — 보낸 뒤에 가려 봤자 고객은 자기가 보낸 줄 안다.
+ */
+const SENSITIVE_INPUT_NOTICE = '주민등록번호·카드번호 등 민감정보는 입력하지 마세요';
+
 let msgSeq = 0;
 function nextKey(): number { msgSeq += 1; return msgSeq; }
 
@@ -1708,9 +1721,14 @@ export default function ChatWidget({
                                   다른 길로 연락처를 남긴 사람이 뒤에 「연락처 없이 접수」를 눌렀을 때
                                   「연락처를 남기지 않으셔서」라고 거짓을 말한다 — 서버에는 그 번호가
                                   그대로 있는데 고객은 아무도 연락하지 않는다고 읽는다. */}
+                              {/* 「이 대화창으로 안내드립니다」는 **상담원이 이 창에 말을 걸 수 있다**는 뜻인데
+                                  이 제품에는 그 길이 없다 (DS 45-1) — 위젯은 자기가 보낸 요청의 답만 받고,
+                                  상담원이 고객 쪽으로 글을 보내는 창구는 없다(알림 연동도 [승인 필요]).
+                                  그래서 창을 지키고 앉아 영영 오지 않는 답을 기다리게 했다. 사실을 적고
+                                  바로 아래의 「연락처 남기기」로 데려간다. */}
                               {handoff.ticket.contactOnFile
                                 ? '남겨주신 연락처로 상담원이 확인 후 연락드립니다.'
-                                : '연락처를 남기지 않으셔서, 이 대화창으로 안내드립니다.'}
+                                : '연락처를 남기지 않으셔서 저희가 먼저 연락드릴 방법이 없어요. 아래에서 연락처를 남겨주시면 순서대로 연락드립니다.'}
                               {' '}추가로 궁금한 점은 계속 물어보셔도 괜찮아요.
                             </p>
                             {/* 연락처 없이 접수한 사람이 마음을 바꿀 길 — 종전에는 이 카드에 버튼이
@@ -1848,7 +1866,9 @@ export default function ChatWidget({
               placeholder="메시지를 입력하세요"
               aria-label="메시지 입력"
               aria-invalid={tooLong || undefined}
-              aria-describedby={input.length > COUNT_FROM ? 'gw-count' : undefined}
+              // 민감정보 안내는 **이 칸에 대한 설명**이다 — 화면을 보지 않는 사람에게도 칸에
+              // 들어온 순간 읽혀야 한다(눈으로 보는 사람에게는 칸 아래에 늘 떠 있다). DS 45-2
+              aria-describedby={input.length > COUNT_FROM ? 'gw-count gw-pii' : 'gw-pii'}
               // 초점 표시(outline)를 지우지 않는다 — globals.css 의 :focus-visible 가 그린다(DS 14-2).
               style={{ flex: 1, minWidth: 0, border: `1px solid ${tooLong ? 'var(--danger)' : 'var(--line-2)'}`, borderRadius: 999, padding: '11px 15px', fontSize: 13.5, color: 'var(--ink)', background: 'var(--bg)' }}
             />
@@ -1875,7 +1895,9 @@ export default function ChatWidget({
             </div>
           )}
           <div style={{ padding: '0 14px 10px', background: 'var(--surface)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--mut)', textAlign: 'center' }}>
-            {tenant?.aiNotice || 'AI 자동응답 · 정확한 확인이 필요하면 상담원을 연결해 주세요'}
+            <p style={{ margin: 0 }}>{tenant?.aiNotice || 'AI 자동응답 · 정확한 확인이 필요하면 상담원을 연결해 주세요'}</p>
+            {/* 테넌트가 바꿀 수 없는 자리에 둔다 — 고원이 방침으로 한 약속이지 고객사 문구가 아니다. */}
+            <p id="gw-pii" style={{ margin: '3px 0 0' }}>{SENSITIVE_INPUT_NOTICE}</p>
           </div>
         </div>
       )}
