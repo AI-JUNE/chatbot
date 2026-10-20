@@ -31,7 +31,26 @@ interface HandoffState {
    * 위젯이 방금 보낸 값으로 판단하면, 앞서 다른 길로(서버가 묻고 고객이 입력) 연락처를 남긴
    * 사람이 뒤에 「연락처 없이 접수」를 눌렀을 때 「연락처를 남기지 않으셔서」라고 **거짓**을 말한다.
    */
-  ticket?: { id: string; statusLabel: string; created: boolean; contactOnFile: boolean };
+  ticket?: {
+    id: string;
+    statusLabel: string;
+    created: boolean;
+    contactOnFile: boolean;
+    /**
+     * 처리 상태 코드(`open`·`in_progress`·`resolved`·`canceled`) — 되물어 **확인한 뒤**에만 찬다
+     * (DS 50-1). 라벨만으로 가르지 않는 까닭: 라벨은 사람에게 보여 주는 말이고, 「끝난 접수인가」는
+     * 화면이 약속을 할지 말지 정하는 판정이다(글자가 바뀌면 판정이 흔들려서는 안 된다).
+     */
+    status?: string;
+    /**
+     * 저장소에서 되살린 값이라 **지금도 사실인지 확인하지 못했다** (DS 50-1).
+     * 참인 동안 화면은 처리 상태를 말하지 않는다 — 접수할 때 참이었던 「접수」가 그 사이
+     * 「완료」로 바뀌어 있을 수 있고, 그때는 연락처도 파기되어 약속할 회신이 없다.
+     */
+    stale?: boolean;
+    /** 되물었지만 서버가 답하지 못했다 — 모른다고 말할 자리(지어내지 않는다). */
+    unchecked?: boolean;
+  };
   queue?: QueueInfo;
 }
 
@@ -170,6 +189,25 @@ export async function postJson(url: string, body: unknown, ms: number): Promise<
       body: JSON.stringify(body),
       ...(ctl ? { signal: ctl.signal } : {}),
     });
+    const data = await r.json().catch(() => null);
+    return { r, data };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * 기한 안에 끝내는 JSON GET — 되살린 접수의 처리 상태를 되묻는 자리 (DS 50-1).
+ *
+ * `postJson` 과 **같은 규칙**이다: 본문까지 같은 기한 안에서 읽고(헤더만 오고 본문이 멈추는
+ * 응답이 있다), JSON 이 아니면 `data` 는 null 이다. 이 요청의 실패는 사용자에게 알리는 오류가
+ * 아니라 「모른다」로 떨어진다 — 부르는 쪽이 그렇게 다룬다.
+ */
+export async function getJson(url: string, ms: number): Promise<{ r: Response; data: any }> {
+  const ctl = typeof AbortController === 'undefined' ? null : new AbortController();
+  const timer = ctl ? setTimeout(() => ctl.abort(), ms) : undefined;
+  try {
+    const r = await fetch(url, { method: 'GET', ...(ctl ? { signal: ctl.signal } : {}) });
     const data = await r.json().catch(() => null);
     return { r, data };
   } finally {
@@ -766,6 +804,90 @@ export function handoffChanged(stage: string | undefined, seen: string | undefin
 }
 
 /**
+ * **끝난 접수인가** (DS 50-1) — 완료·취소된 접수는 더 진행되지 않는다.
+ *
+ * 되살린 접수 카드는 그때의 값을 그대로 들고 있어, 운영자가 그 사이 완료·취소한 접수에 대고도
+ * 「남겨주신 연락처로 상담원이 확인 후 연락드립니다」라고 약속했다. 완료·취소 시 연락처는
+ * 그 자리에서 파기되므로(`lib/escalation.updateTicket` — 개인정보처리방침 4조) 그 약속을 지킬
+ * 길은 이미 없다. 끝난 접수는 ① 회신을 약속하지 않고 ② 「연락처 남기기」를 권하지 않고
+ * (그 길은 **새 접수**를 만든다) ③ 다른 답변의 「상담원 연결하기」를 다시 내준다 — 종전에는
+ * 끝난 접수 하나가 「접수번호 …로 상담원 연결이 접수돼 있어요」로 남아 **다시 부를 길을 막았다**.
+ *
+ * 상태 **코드**로 가른다(라벨이 아니다) — 라벨은 사람에게 보여 주는 말이라 바뀔 수 있다.
+ */
+export function ticketClosed(status: string | undefined): boolean {
+  return status === 'resolved' || status === 'canceled';
+}
+
+/** 접수 완료 카드가 들고 있는 값 — 화면 상태(`HandoffState['ticket']`)와 같은 모양이다. */
+export interface FiledCard {
+  id: string;
+  statusLabel: string;
+  created: boolean;
+  contactOnFile: boolean;
+  status?: string;
+  stale?: boolean;
+  unchecked?: boolean;
+}
+
+/** 접수 완료 카드가 할 말 — 아는 것만 적는다 (DS 50-1). */
+export interface FiledCardView {
+  /** 카드 머리글. */
+  heading: string;
+  /** 접수번호 뒤에 붙일 처리 상태. **확인하지 못한 동안은 빈 문자열**이다. */
+  status: string;
+  /** 상태를 되묻는 중·되묻지 못했음을 밝히는 한 줄(알고 있으면 빈 문자열). */
+  checking: string;
+  /** 다음에 무엇이 일어나는가 — **지킬 수 있는 약속만** 적는다. */
+  note: string;
+  /** 「연락처 남기기」를 권할 자리인가. */
+  canAddContact: boolean;
+}
+
+/**
+ * 접수 완료 카드의 글자를 한 곳에서 고른다 (DS 50-1).
+ *
+ * 떼어낸 까닭: 「되살린 카드가 그때의 상태를 지금 사실처럼 말하지 않는가」는 JSX 를 읽어서는
+ * 알 수 없다 — 돌려 봐야 안다(`unreadCount`·`handoffChanged` 를 떼어 둔 것과 같은 까닭).
+ * 네 가지 자리를 **한 판정**으로 가른다: 끝난 접수 / 아직 확인 못 한 접수 / 되묻지 못한 접수 /
+ * 지금 열려 있는 접수. 종전에는 `contactOnFile` 하나로만 갈려, 되살린 카드가 완료·취소된
+ * 접수에 대고도 「남겨주신 연락처로 상담원이 확인 후 연락드립니다」라고 약속했다.
+ */
+export function filedCardView(t: FiledCard, addingContact = false): FiledCardView {
+  const closed = ticketClosed(t.status);
+  const unknown = t.stale === true;
+  // 되묻는 중(짧은 한순간) — 이때만 「연락처 남기기」를 숨긴다. 되묻지 못했으면 다시 내준다:
+  // 끝난 접수인지 모르는 채 길을 막으면, 연락처 없이 접수한 사람에게 남는 길이 없다(DS 34-3).
+  // 끝난 접수였다면 그 누름은 **새 접수**가 되고, 그때는 서버가 번호가 바뀐 사실을 말한다(DS 50-2).
+  const waiting = unknown && t.unchecked !== true;
+  return {
+    heading: closed
+      ? t.status === 'resolved' ? '상담이 끝난 접수예요' : '취소된 접수예요'
+      : t.created ? '상담원 연결이 접수됐어요'
+      : addingContact ? '연락처를 남겼어요'
+      : '이미 접수된 요청이 있어요',
+    status: unknown ? '' : t.statusLabel,
+    checking: !unknown ? '' : t.unchecked ? '지금은 처리 상태를 확인하지 못했어요.' : '처리 상태를 확인하고 있어요.',
+    note: closed
+      ? t.status === 'resolved'
+        ? '이 접수는 처리가 끝났어요. 더 필요한 것이 있으면 다시 물어봐 주세요.'
+        : '이 접수는 취소됐어요. 다시 도움이 필요하시면 말씀해 주세요.'
+      : unknown
+        // 모르는 동안은 **약속을 하지 않는다** — 회신 여부는 서버가 답한 뒤에 적는다.
+        ? '추가로 궁금한 점은 계속 물어보셔도 괜찮아요.'
+        : t.contactOnFile
+          // **서버가 아는 것**으로 말한다(DS 34-2). 방금 보낸 값으로 판단하면, 앞서 다른 길로
+          // 연락처를 남긴 사람이 뒤에 「연락처 없이 접수」를 눌렀을 때 「연락처를 남기지
+          // 않으셔서」라고 거짓을 말한다 — 서버에는 그 번호가 그대로 있다.
+          ? '남겨주신 연락처로 상담원이 확인 후 연락드립니다. 추가로 궁금한 점은 계속 물어보셔도 괜찮아요.'
+          // 「이 대화창으로 안내드립니다」는 **상담원이 이 창에 말을 걸 수 있다**는 뜻인데 이
+          // 제품에는 그 길이 없다 (DS 45-1) — 사실을 적고 아래의 「연락처 남기기」로 데려간다.
+          : '연락처를 남기지 않으셔서 저희가 먼저 연락드릴 방법이 없어요. 아래에서 연락처를 남겨주시면 순서대로 연락드립니다. 추가로 궁금한 점은 계속 물어보셔도 괜찮아요.',
+    canAddContact: !closed && !t.contactOnFile && !waiting,
+  };
+}
+
+/**
  * 위젯 아이콘 — 16px 뷰박스 선 아이콘(stroke 1.4).
  * 랜딩(`app/page.tsx`)·관리 콘솔과 같은 규약을 쓴다. 이모지를 쓰지 않는다:
  * 이모지는 기기·OS마다 모양이 달라 브랜드가 화면마다 어긋나고, 색을 따라오지 않는다.
@@ -901,7 +1023,10 @@ export default function ChatWidget({
           stage: 'done',
           contact: '',
           error: '',
-          ticket: { ...savedHandoff.ticket, created: false },
+          // `stale` — 되살린 처리 상태는 **접수했을 때의 값**이다 (DS 50-1). 그 사이 운영자가
+          // 상담 중·완료·취소로 옮겼을 수 있으므로, 되물어 확인하기 전에는 화면이 상태를
+          // 말하지 않는다(아래 효과가 한 번 되묻는다).
+          ticket: { ...savedHandoff.ticket, created: false, stale: true },
         });
         // 되살린 카드는 이미 본 결과다 — 접기 전 단계로 적어 두지 않으면 접어 둔 런처에
         // 「접수 결과가 바뀌었다」가 한 번 더 뜬다(DS 28-2).
@@ -951,6 +1076,61 @@ export default function ChatWidget({
     if (!mounted) return;
     saveThread(threadId, sessionId, msgs, Date.now(), rated, filedCard);
   }, [mounted, threadId, sessionId, msgs, rated, filedCard]);
+
+  /**
+   * ── 되살린 접수의 **지금** 상태 (DS 50-1) ──
+   *
+   * 되살린 카드가 들고 있는 처리 상태는 **접수했을 때의 값**이다(저장소에 적어 둔 그 순간의
+   * 라벨이다). 임베드 위젯은 호스트가 페이지를 옮길 때마다 iframe 이 다시 뜨므로 이 카드는
+   * 30분 동안 몇 번이고 되살아나는데, 그 사이 운영자는 상담 중·완료·취소로 옮긴다. 그래서
+   * 종전 카드는 이미 완료된 접수를 「접수」라 적고 「남겨주신 연락처로 상담원이 확인 후
+   * 연락드립니다」라고 약속했다 — 완료·취소 시 연락처는 그 자리에서 파기되므로 그 약속을 지킬
+   * 길은 이미 없고, 고객은 오지 않을 전화를 기다린다(§13 「하지 못하는 일을 할 수 있다고
+   * 말하지 않는다」). 46차까지 이 자리를 「다음 회차」로 적어 둔 까닭은 되묻는 창구가
+   * **접수번호만으로 열려 있었기** 때문이다 — 그 문은 49차에 세션으로 잠겼다(DS 49-1).
+   *
+   * 되묻는 것은 **한 번**이다(주기적으로 다시 묻지 않는다): 사내망처럼 여러 사람이 한 IP 를
+   * 쓰는 곳에서는 조회 제한(30회/분)이 공유되므로, 페이지를 옮길 때마다 한 번이 상한이다.
+   * 답하지 못하면(제한·404·끊김) **모른다고 적는다** — 접수 저장소는 인스턴스 메모리라
+   * 404 가 「그 접수가 없다」의 증거가 되지 못한다(다른 인스턴스가 받았을 수 있다).
+   */
+  const staleTicketId = handoff?.ticket?.stale === true ? handoff.ticket.id : '';
+  useEffect(() => {
+    if (!staleTicketId || !sessionId) return;
+    let alive = true;
+    const gen = genRef.current;
+    /** 이 카드가 아직 그 접수를 그리고 있을 때만 고친다(그 사이 새 접수를 만들었을 수 있다). */
+    const patch = (next: Partial<NonNullable<HandoffState['ticket']>>) => {
+      if (!alive || gen !== genRef.current) return;
+      setHandoff((h) =>
+        h?.ticket && h.ticket.id === staleTicketId && h.ticket.stale
+          ? { ...h, ticket: { ...h.ticket, ...next } }
+          : h,
+      );
+    };
+    (async () => {
+      try {
+        const { r, data } = await getJson(
+          `/api/escalation?id=${encodeURIComponent(staleTicketId)}&sessionId=${encodeURIComponent(sessionId)}`,
+          POST_TIMEOUT_MS,
+        );
+        if (r.ok && data?.ok && data?.ticket?.id === staleTicketId) {
+          patch({
+            status: typeof data.ticket.status === 'string' ? data.ticket.status : undefined,
+            statusLabel: typeof data.ticket.statusLabel === 'string' ? data.ticket.statusLabel : '',
+            // 서버가 말해 주지 않으면 **없다고 본다** — 있다고 보면 지킬 수 없는 약속이 남는다.
+            contactOnFile: data.ticket.contactOnFile === true,
+            stale: false,
+          });
+          return;
+        }
+        patch({ unchecked: true });
+      } catch {
+        patch({ unchecked: true });
+      }
+    })();
+    return () => { alive = false; };
+  }, [staleTicketId, sessionId]);
 
   // 적던 말도 글자마다 보관한다(DS 27-1). 대화 본문과 열쇠가 달라 말풍선을 다시 쓰지 않는다.
   // 복원 전(서버 렌더 직후)에는 쓰지 않는다 — 빈 칸으로 덮어써 되살릴 글을 지워 버리면 안 된다.
@@ -1362,8 +1542,14 @@ export default function ChatWidget({
    * 「상담원 연결하기」가 되살아났다. 그 버튼은 `openHandoff` 로 카드를 새로 열어 **접수번호를
    * 들고 있던 상태를 지운다** — 화면에서도, 저장소에서도(DS 35-1) 번호가 사라지고 그 자리에
    * 처음 보는 접수 폼이 뜬다. 접수번호는 고객이 그대로 읽고 상담원에게 말하는 유일한 값이다.
+   *
+   * 다만 **끝난 접수는 들고 있는 접수가 아니다** (DS 50-1). 완료·취소로 확인된 접수가 이 자리에
+   * 남아 있으면 다른 답변마다 「접수번호 …로 상담원 연결이 접수돼 있어요」가 뜨고 — 사실이
+   * 아니다 — 그 대화에서 상담원을 다시 부를 길이 **하나도 없다**(버튼이 그 문구로 바뀐다).
+   * 아직 확인하지 못한 접수(`stale`)는 그대로 들고 있는 것으로 본다: 모르는 동안 중복 접수를
+   * 권하지 않는 쪽이 맞다.
    */
-  const filedTicket = handoff?.ticket ?? null;
+  const filedTicket = handoff?.ticket && !ticketClosed(handoff.ticket.status) ? handoff.ticket : null;
   /**
    * 접수번호를 아직 받지 못한 채 보내는 중 — 이때 다른 답변에서 또 누르면 보내 둔 요청의 답이
    * **먼저 누른 말풍선**으로 돌아가(`submitHandoff` 가 들고 있는 열쇠다) 방금 적던 카드를 덮는다.
@@ -1723,47 +1909,36 @@ export default function ChatWidget({
                           </>
                         )}
 
-                        {handoff.stage === 'done' && handoff.ticket && (
+                        {handoff.stage === 'done' && handoff.ticket && (() => {
+                          // 「방금 무엇이 일어났는가」·「지금 무엇인가」·「무엇을 약속할 수 있는가」를
+                          // 한 판정에서 고른다 (DS 50-1 — `filedCardView`).
+                          const view = filedCardView(handoff.ticket, handoff.addingContact === true);
+                          return (
                           <div role="status" aria-live="polite">
                             <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--brand-600)', display: 'flex', alignItems: 'center', gap: 5 }}>
                               <WIcon name="check" size={13} />
-                              {/* 「방금 무엇이 일어났는가」를 그대로 말한다. 새 접수가 생긴 것이
-                                  가장 큰 사실이므로 먼저 본다 — 연락처를 더하러 들어왔더라도 그
-                                  사이에 앞 접수가 닫혔으면 번호가 **새로** 발급된다(DS 34-3). */}
-                              <span>
-                                {handoff.ticket.created ? '상담원 연결이 접수됐어요'
-                                  : handoff.addingContact ? '연락처를 남겼어요'
-                                  : '이미 접수된 요청이 있어요'}
-                              </span>
+                              <span>{view.heading}</span>
                             </div>
                             <div style={{ fontSize: 12.5, color: 'var(--ink)', marginTop: 6 }}>
                               접수번호 <strong>{handoff.ticket.id}</strong>
-                              {handoff.ticket.statusLabel ? ` · ${handoff.ticket.statusLabel}` : ''}
+                              {view.status ? ` · ${view.status}` : ''}
                             </div>
+                            {/* 되살린 카드는 처리 상태를 **아직 모른다** — 모르는 것을 모른다고 적는다. */}
+                            {view.checking && (
+                              <div style={{ fontSize: 11.5, color: 'var(--mut)', marginTop: 4 }}>{view.checking}</div>
+                            )}
                             {handoff.queue && (
                               <div style={{ fontSize: 11.5, color: 'var(--sub)', marginTop: 4 }}>
                                 접수 순번 {handoff.queue.position}번 (대기 {handoff.queue.waiting}건)
                               </div>
                             )}
                             <p style={{ fontSize: 11.5, lineHeight: 1.55, color: 'var(--sub)', marginTop: 7 }}>
-                              {/* **서버가 아는 것**으로 말한다(DS 34-2). 방금 보낸 값으로 판단하면, 앞서
-                                  다른 길로 연락처를 남긴 사람이 뒤에 「연락처 없이 접수」를 눌렀을 때
-                                  「연락처를 남기지 않으셔서」라고 거짓을 말한다 — 서버에는 그 번호가
-                                  그대로 있는데 고객은 아무도 연락하지 않는다고 읽는다. */}
-                              {/* 「이 대화창으로 안내드립니다」는 **상담원이 이 창에 말을 걸 수 있다**는 뜻인데
-                                  이 제품에는 그 길이 없다 (DS 45-1) — 위젯은 자기가 보낸 요청의 답만 받고,
-                                  상담원이 고객 쪽으로 글을 보내는 창구는 없다(알림 연동도 [승인 필요]).
-                                  그래서 창을 지키고 앉아 영영 오지 않는 답을 기다리게 했다. 사실을 적고
-                                  바로 아래의 「연락처 남기기」로 데려간다. */}
-                              {handoff.ticket.contactOnFile
-                                ? '남겨주신 연락처로 상담원이 확인 후 연락드립니다.'
-                                : '연락처를 남기지 않으셔서 저희가 먼저 연락드릴 방법이 없어요. 아래에서 연락처를 남겨주시면 순서대로 연락드립니다.'}
-                              {' '}추가로 궁금한 점은 계속 물어보셔도 괜찮아요.
+                              {view.note}
                             </p>
                             {/* 연락처 없이 접수한 사람이 마음을 바꿀 길 — 종전에는 이 카드에 버튼이
                                 하나도 없었고, 대화창에 적은 전화번호는 연락처가 아니라 새 질문으로
                                 처리됐다(DS 34-3). */}
-                            {!handoff.ticket.contactOnFile && (
+                            {view.canAddContact && (
                               <button
                                 onClick={addContact}
                                 aria-label={`접수번호 ${handoff.ticket.id}에 연락처 남기기`}
@@ -1773,7 +1948,8 @@ export default function ChatWidget({
                               </button>
                             )}
                           </div>
-                        )}
+                          );
+                        })()}
                       </div>
                     )}
 

@@ -281,6 +281,34 @@ function noContactLine(): string {
   );
 }
 
+/**
+ * **번호가 바뀐 것을 말한다** (DS 50-2).
+ *
+ * 세션당 열린 접수는 재사용되지만(`createTicket`), 운영자가 완료·취소로 닫은 뒤에 같은 대화가
+ * 다시 접수하면 번호는 **새로 발급된다**(`created === true`). 종전에는 그 자리마다 `created` 를
+ * 버리거나 잘못 읽어, 고객이 들고 있는 번호와 다른 번호를 **같은 번호인 척** 말했다:
+ *  - 연락처만 보낸 사람에게 「접수번호 ESC-0003 **그대로** 상담원이 연락드릴게요」
+ *    (고객이 받아 적은 번호는 ESC-0002 이고, 「그대로」는 사실이 아니다)
+ *  - 연락처 수집 대기에서 번호를 남긴 사람에게 「연락처가 접수번호 ESC-0005에 등록됐어요」
+ *    (바뀐 사실을 말하지 않아, 고객은 앞 번호가 그 접수인 줄 안다)
+ * 접수번호는 고객이 받아 적어 전화로 읽어 주는 **단 하나의 값**이다 — 그것이 조용히 갈리면
+ * 상담원은 없는 번호를 찾고, 고객은 자기 접수가 사라졌다고 듣는다(QUALITY_BAR §13).
+ *
+ * **까닭은 말하지 않는다**: `created` 가 참이라는 사실만으로는 앞 접수가 완료된 것인지 취소된
+ * 것인지(또는 운영자가 저장분을 되돌린 것인지) 알 수 없다. 어느 쪽이든 고객에게 참인 것은
+ * 「그 번호로는 더 진행되지 않는다」 하나다.
+ *
+ * 새 번호는 **부르는 쪽이 이미 적는다** — 여기서 한 번 더 적으면 한 문장에 같은 번호가 두 번
+ * 나온다. 이 문장이 보태는 사실은 「앞 번호는 끝났다」 하나다.
+ *
+ * @param prevId 이 대화에 **앞서 알려 준** 접수번호(`session.ticketId`). 없으면 알린 적이 없다.
+ * @param nextId 이번에 쓰는 접수번호 — 앞 번호와 같으면 알릴 것이 없다.
+ */
+function renumberedLine(prevId: string | undefined, nextId: string, created: boolean): string {
+  if (!created || !prevId || prevId === nextId) return '';
+  return ` 앞서 안내드린 접수번호 ${prevId}는 더 진행되지 않아 새로 접수했어요.`;
+}
+
 /** 폴백 제안 번호 선택("1", "2번", "3.") 파싱. 범위 밖이면 null. */
 function parsePick(text: string, max: number): number | null {
   const m = text.match(/^([1-9])\s*(번|\.)?$/);
@@ -419,7 +447,7 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
         // 같은 항목에서 계속 못 알아들으면 고객을 붙잡아 두지 않고 상담원에게 넘긴다.
         for (const [k, v] of Object.entries(res.state.values)) setSlot(sessionId, k, v);
         const pending = form.slots.filter((sl) => !(sl.key in res.state.values)).map((sl) => sl.key);
-        const { ticket } = createTicket({
+        const { ticket, created } = createTicket({
           sessionId,
           tenant: tenantOf(sessionId),
           reason: 'max_retry',
@@ -440,6 +468,8 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
         return {
           reply:
             `제가 ${josa(res.slot.label, '을', '를')} 계속 알아듣지 못해서 상담원에게 연결해 드릴게요. 접수번호는 ${ticket.id}입니다.` +
+            // 앞서 알려 준 번호가 있었다면 바뀐 사실을 함께 적는다 (DS 50-2).
+            renumberedLine(ctx.ticketId, ticket.id, created) +
             (q ? ` 현재 접수 순번은 ${q.position}번입니다.` : '') +
             ' 지금까지 입력하신 내용은 상담원에게 함께 전달됩니다.' +
             contactTail(ticket, hasContact ? '' : ' 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기")'),
@@ -491,6 +521,8 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
       return {
         reply:
           `${form.doneLead} 접수번호는 ${ticket.id}입니다.` +
+          // 앞서 알려 준 번호가 있었다면 바뀐 사실을 함께 적는다 (DS 50-2).
+          renumberedLine(ctx.ticketId, ticket.id, created) +
           (q ? ` 현재 접수 순번은 ${q.position}번입니다.` : '') +
           `\n${renderCollected(form, values)}\n` +
           (created ? '' : '이미 접수된 요청에 이어서 기록했어요. ') +
@@ -516,12 +548,15 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
       // 열린 티켓에 연락처 첨부(세션당 열린 티켓 재사용) — 영구 저장은 [승인 필요]
       setSlot(sessionId, 'contact', contact);
       const reasonCode = ctx.handoffReason ?? 'customer_request';
-      const { ticket } = createTicket({ sessionId, tenant: tenantOf(sessionId), contact, summary: summaryFor(sessionId, reasonCode) });
+      const { ticket, created } = createTicket({ sessionId, tenant: tenantOf(sessionId), contact, summary: summaryFor(sessionId, reasonCode) });
       updateSession(sessionId, { awaitingContact: false, ticketId: ticket.id });
       const q = queuePosition(ticket.id);
       return {
         reply:
-          `연락처가 접수번호 ${ticket.id}에 등록됐어요. 상담원이 순서대로 연락드릴게요.` +
+          `연락처가 접수번호 ${ticket.id}에 등록됐어요.` +
+          // 앞 접수가 닫혀 번호가 새로 발급됐으면 그 사실을 먼저 말한다 (DS 50-2).
+          renumberedLine(ctx.ticketId, ticket.id, created) +
+          ' 상담원이 순서대로 연락드릴게요.' +
           (q ? ` 현재 접수 순번은 ${q.position}번입니다.` : '') +
           ' 그동안 다른 궁금한 점도 편하게 물어봐 주세요.',
         intent: 'contact_captured',
@@ -556,14 +591,19 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
     const before = ctx.slots?.contact;
     setSlot(sessionId, 'contact', contact);
     const reasonCode = ctx.handoffReason ?? 'customer_request';
-    const { ticket } = createTicket({ sessionId, tenant: tenantOf(sessionId), contact, summary: summaryFor(sessionId, reasonCode) });
+    const { ticket, created } = createTicket({ sessionId, tenant: tenantOf(sessionId), contact, summary: summaryFor(sessionId, reasonCode) });
     updateSession(sessionId, { awaitingContact: false, ticketId: ticket.id });
     const masked = maskPii(contact).text;
+    // 번호가 새로 발급됐으면 「그대로」가 아니다 (DS 50-2) — 그 자리에는 바뀐 사실을 적는다.
+    const renumbered = renumberedLine(ctx.ticketId, ticket.id, created);
     return {
       reply:
         before && before !== contact
-          ? `연락처를 ${masked}로 바꿨어요. 접수번호 ${ticket.id} 그대로 상담원이 순서대로 연락드릴게요.`
-          : `연락처 ${masked}가 접수번호 ${ticket.id}에 등록됐어요. 상담원이 순서대로 연락드릴게요.`,
+          ? renumbered
+            // 번호가 갈렸으면 「그대로」를 쓸 수 없다 — 새 번호를 말하고 앞 번호가 끝났음을 밝힌다.
+            ? `연락처를 ${masked}로 바꿨어요.${renumbered} 새 접수번호는 ${ticket.id}입니다. 상담원이 순서대로 연락드릴게요.`
+            : `연락처를 ${masked}로 바꿨어요. 접수번호 ${ticket.id} 그대로 상담원이 순서대로 연락드릴게요.`
+          : `연락처 ${masked}가 접수번호 ${ticket.id}에 등록됐어요.${renumbered} 상담원이 순서대로 연락드릴게요.`,
       intent: before && before !== contact ? 'contact_updated' : 'contact_captured',
       escalate: false,
       source: 'context',
@@ -608,7 +648,8 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
     const q = queuePosition(ticket.id);
     const wait = q ? ` 현재 접수 순번은 ${q.position}번입니다.` : '';
     const tail = created
-      ? `\n접수번호는 ${ticket.id}입니다.${wait}${contactTail(ticket, ' 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기"라고 입력해 주세요)')}`
+      // 앞서 알려 준 번호가 있었다면 바뀐 사실을 함께 적는다 (DS 50-2).
+      ? `\n접수번호는 ${ticket.id}입니다.${renumberedLine(ctx.ticketId, ticket.id, created)}${wait}${contactTail(ticket, ' 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (원치 않으시면 "건너뛰기"라고 입력해 주세요)')}`
       // 「더 빠르게」는 **느린 길이 있다**는 말이다 — 연락처가 없으면 느린 길도 없다 (DS 45-1).
       : `\n이미 접수된 요청(${ticket.id})이 있어 이어서 도와드릴게요.${wait}${contactTail(ticket, ' 연락받으실 전화번호나 이메일을 남겨주시면 순서대로 연락드릴게요. (건너뛰려면 "건너뛰기")')}`;
     return {
@@ -849,7 +890,8 @@ function maybeAutoEscalate(text: string, sessionId: string, result: ChatReply): 
   const q = queuePosition(ticket.id);
   const wait = q ? ` 현재 접수 순번은 ${q.position}번입니다.` : '';
   const lead = created
-    ? `제가 계속 정확히 답변드리지 못하고 있어 상담원에게 연결해 드릴게요. 접수번호는 ${ticket.id}입니다.${wait}`
+    // 앞서 알려 준 번호가 있었다면 바뀐 사실을 함께 적는다 (DS 50-2 — escalateWith 와 같은 규칙).
+    ? `제가 계속 정확히 답변드리지 못하고 있어 상담원에게 연결해 드릴게요. 접수번호는 ${ticket.id}입니다.${renumberedLine(ctx.ticketId, ticket.id, created)}${wait}`
     : `이미 접수된 요청(${ticket.id})으로 상담원이 이어서 도와드릴게요.${wait}`;
   return {
     ...result,

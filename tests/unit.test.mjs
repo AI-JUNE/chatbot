@@ -2183,12 +2183,25 @@ test('위젯의 모든 요청에 기한이 있다 (DS 23-1)', () => {
   assert.match(s, /setTimeout\(\(\) => ctl\.abort\(\), ms\)/, '기한 타이머가 없다');
 
   // 본문 읽기까지 같은 기한 안에 있어야 한다 — 헤더만 오고 본문이 멈추는 응답이 있다.
-  const helper = s.slice(s.indexOf('export async function postJson'), s.indexOf('function isTimeout'));
-  assert.match(helper, /const data = await r\.json\(\)\.catch\(\(\) => null\)/, '본문을 기한 안에서 읽지 않거나, 파싱 실패로 안내까지 잃는다');
-  assert.equal(/clearTimeout/.test(helper.slice(0, helper.indexOf('const data'))), false, '응답이 오자마자 타이머를 지우면 본문 대기가 다시 무한이 된다');
+  // 보내는 쪽(postJson)과 되묻는 쪽(getJson · DS 50-1)이 **같은 규칙**을 지키는지 각각 본다.
+  for (const [name, next] of [
+    ['export async function postJson', 'export async function getJson'],
+    ['export async function getJson', 'function isTimeout'],
+  ]) {
+    const helper = s.slice(s.indexOf(name), s.indexOf(next));
+    assert.match(helper, /new AbortController\(\)/, `${name} 가 기한이 지나도 요청을 끊지 못한다`);
+    assert.match(helper, /const data = await r\.json\(\)\.catch\(\(\) => null\)/, `${name} 가 본문을 기한 안에서 읽지 않거나, 파싱 실패로 안내까지 잃는다`);
+    assert.equal(
+      /clearTimeout/.test(helper.slice(0, helper.indexOf('const data'))),
+      false,
+      `${name} 이 응답이 오자마자 타이머를 지운다 — 본문 대기가 다시 무한이 된다`,
+    );
+  }
 
-  // 위젯이 직접 fetch 를 부르는 자리는 postJson 안의 한 곳뿐이다(= 기한 없는 요청 0건).
-  assert.equal((s.match(/[^a-zA-Z]fetch\(/g) || []).length, 1, '기한을 거치지 않는 요청이 남아 있다');
+  // 위젯이 직접 fetch 를 부르는 자리는 그 두 함수 안뿐이다(= 기한 없는 요청 0건).
+  assert.equal((s.match(/[^a-zA-Z]fetch\(/g) || []).length, 2, '기한을 거치지 않는 요청이 남아 있다');
+  assert.match(s, /export async function getJson\(url: string, ms: number\)/, '되묻는 요청에 기한을 가진 공용 함수가 없다');
+  assert.match(s, /getJson\(\s*`\/api\/escalation\?id=/, '접수 상태 되묻기가 기한을 거치지 않는다');
   for (const url of ['/api/chat', '/api/feedback', '/api/escalation']) {
     assert.match(s, new RegExp(`postJson\\(\\s*'${url}'`), `${url} 요청이 기한을 거치지 않는다`);
   }
@@ -3130,4 +3143,104 @@ test('공개 상태 응답이 잠금 상태를 밖에 알리지 않는다 (DS 49
   assert.ok(get.indexOf('signature:') > get.indexOf('isAdminAuthed(req)'), '서명 설정이 아직 공개 응답에 있다');
   // 등록한 쪽이 「이 URL 이 응답하는가」를 보는 값은 그대로 둔다.
   assert.match(get, /live: KAKAO_LIVE/, '등록 확인에 쓰는 값까지 거뒀다');
+});
+
+/* ══════════ 50순위 — 백로그 소진 후 47차 재감사 (DS 50-1·50-2·50-3) ══════════ */
+
+/**
+ * DS 50-1 — 되살린 접수의 상태를 **되묻는 배선**.
+ *
+ * 판정과 문구는 돌려서 본다(`tests/widget.test.mjs` 같은 번호). 여기서 고정하는 것은 효과의
+ * 배선이다: ① 되살린 카드만 `stale` 로 표시하는가 ② 자기 세션을 들고 묻는가(DS 49-1 이 세운
+ * 주인 확인) ③ **한 번만** 묻는가(주기적으로 묻지 않는다 — 사내망에서는 조회 제한 30회/분이
+ * 한 IP 에 공유된다) ④ 답하지 못하면 모른다고 적는가 ⑤ 그 사이 대화를 지웠거나 새 접수를
+ * 만들었으면 응답을 싣지 않는가(DS 20-1 의 세대 대조와 같은 규칙).
+ */
+test('되살린 접수의 상태를 자기 세션으로 한 번 되묻는다 (DS 50-1)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+
+  // ① 되살린 카드만 「모른다」로 시작한다 — 방금 접수한 카드는 표시하지 않는다.
+  const restore = s.slice(s.indexOf('const savedHandoff = saved.handoff;'), s.indexOf('setResumed(true);'));
+  assert.match(restore, /created: false, stale: true/, '되살린 카드가 그때의 상태를 지금 상태처럼 들고 온다');
+  const submit = fnBody(s, 'async function submitHandoff(');
+  assert.equal(/stale: true/.test(submit), false, '방금 접수한 카드까지 모르는 것으로 표시한다');
+
+  // ② 되묻는 조건과 창구 — `stale` 인 접수에만, 자기 세션을 들고.
+  assert.match(s, /const staleTicketId = handoff\?\.ticket\?\.stale === true \? handoff\.ticket\.id : '';/, '되묻는 대상을 가리지 않는다');
+  assert.match(
+    s,
+    /getJson\(\s*`\/api\/escalation\?id=\$\{encodeURIComponent\(staleTicketId\)\}&sessionId=\$\{encodeURIComponent\(sessionId\)\}`/,
+    '접수번호만으로 묻거나, 값을 그대로 주소에 붙인다',
+  );
+  // ③ 한 번만 묻는다 — 되살릴 때마다 한 번이고, 그 뒤로는 다시 묻지 않는다.
+  const effect = s.slice(s.indexOf('const staleTicketId ='), s.indexOf('// 적던 말도 글자마다 보관한다'));
+  assert.match(effect, /\}, \[staleTicketId, sessionId\]\);/, '되묻는 조건이 바뀔 때마다 다시 묻는다');
+  assert.equal(/setInterval|setTimeout/.test(effect), false, '주기적으로 되묻는다 — 조회 제한을 한 IP 가 공유한다');
+
+  // ④ 답을 받으면 상태·회신 여부를 함께 고치고 「모른다」를 거둔다. 못 받으면 모른다고 적는다.
+  assert.match(effect, /stale: false,/, '확인한 뒤에도 모르는 상태로 남는다');
+  assert.match(effect, /contactOnFile: data\.ticket\.contactOnFile === true/, '서버가 말하지 않은 회신 가능 여부를 있다고 본다');
+  assert.equal((effect.match(/patch\(\{ unchecked: true \}\)/g) || []).length, 2, '되묻지 못한 자리(거절·끊김)를 모른다고 적지 않는다');
+
+  // ⑤ 그 사이 대화를 지웠거나(세대) 카드가 다른 접수로 바뀌었으면 싣지 않는다.
+  assert.match(effect, /gen !== genRef\.current/, '지운 대화의 응답이 끼어든다');
+  assert.match(effect, /h\.ticket\.id === staleTicketId && h\.ticket\.stale/, '다른 접수 카드에 지난 응답을 싣는다');
+
+  // 조회 응답은 **주인 확인을 지난 뒤**에만 회신 가능 여부를 말한다(DS 49-1 과 한 벌이다).
+  const route = read('src/app/api/escalation/route.ts');
+  const get = route.slice(route.indexOf('export async function GET('));
+  assert.ok(get.indexOf('getTicketForSession(id.value, owner.value)') < get.indexOf('contactOnFile'), '주인 확인보다 먼저 값을 싣는다');
+  assert.match(get, /rateGuard\('escalation-lookup', req\.headers, 30\)/, '조회 횟수 제한이 사라졌다');
+});
+
+/**
+ * DS 50-1 — 끝난 접수가 **다시 부를 길을 막지 않는다**.
+ *
+ * 접수번호를 들고 있는 동안 다른 답변의 「상담원 연결하기」는 안내 문구로 바뀐다(DS 35-2 —
+ * 중복 접수를 막는 자리다). 그런데 그 판정이 「접수가 있는가」였기 때문에, 운영자가 완료·취소한
+ * 접수 하나가 그 대화에서 **상담원을 다시 부를 유일한 버튼을 영구히 가렸다** — 게다가 그 문구는
+ * 「접수번호 …로 상담원 연결이 접수돼 있어요」라고 현재형으로 말한다(사실이 아니다).
+ */
+test('끝난 접수는 다시 부를 길을 막지 않는다 (DS 50-1)', () => {
+  const s = read('src/components/ChatWidget.tsx');
+  assert.match(
+    s,
+    /const filedTicket = handoff\?\.ticket && !ticketClosed\(handoff\.ticket\.status\) \? handoff\.ticket : null;/,
+    '끝난 접수가 아직 「들고 있는 접수」로 남아 있다',
+  );
+  // 아직 확인하지 못한 접수(stale)는 들고 있는 것으로 본다 — 모르는 동안 중복 접수를 권하지 않는다.
+  assert.equal(/!handoff\.ticket\.stale \? handoff\.ticket/.test(s), false, '모르는 동안 중복 접수를 권한다');
+  // 판정은 상태 **코드**로 한다(라벨은 사람에게 보여 주는 말이라 바뀔 수 있다).
+  const fn = s.slice(s.indexOf('export function ticketClosed('), s.indexOf('/** 접수 완료 카드가 들고 있는 값'));
+  assert.match(fn, /status === 'resolved' \|\| status === 'canceled'/, '끝난 접수 판정이 상태 코드가 아니다');
+  assert.equal(/'완료'|'취소'/.test(fn), false, '라벨 글자로 판정한다');
+});
+
+/**
+ * DS 50-2 — 접수번호가 **갈렸는데 같은 번호인 척** 말했다.
+ *
+ * 세션당 열린 접수는 재사용되지만(`createTicket`), 운영자가 완료·취소로 닫은 뒤에 같은 대화가
+ * 다시 접수하면 번호는 새로 발급된다(`created === true`). 접수번호를 알리는 자리 여섯 곳 중
+ * 둘은 그 값을 **버렸고**(연락처 수집·연락처만 보낸 경우), 한 곳은 「접수번호 ESC-0003 **그대로**」
+ * 라고 적었다 — 고객이 받아 적은 번호는 ESC-0002 다. 문장은 `renumberedLine` 한 곳에서 만든다.
+ */
+test('접수번호를 알리는 자리가 모두 바뀐 사실을 말한다 (DS 50-2)', () => {
+  const s = read('src/lib/chat.ts');
+
+  assert.match(s, /function renumberedLine\(prevId: string \| undefined, nextId: string, created: boolean\)/, '바뀐 사실을 말하는 한 문장이 없다');
+  assert.match(s, /앞서 안내드린 접수번호 \$\{prevId\}는 더 진행되지 않아 새로 접수했어요/, '앞 번호가 끝났다는 사실을 말하지 않는다');
+  // 까닭은 말하지 않는다 — `created` 만으로는 완료인지 취소인지(또는 복원인지) 알 수 없다.
+  const fn = s.slice(s.indexOf('function renumberedLine('), s.indexOf("/** 폴백 제안 번호 선택"));
+  assert.equal(/완료|취소/.test(fn), false, '알 수 없는 까닭을 지어낸다');
+  assert.match(fn, /if \(!created \|\| !prevId \|\| prevId === nextId\) return '';/, '번호가 그대로인데도 바뀌었다고 말한다');
+
+  // 접수번호를 알리는 자리가 모두 이 문장을 거친다(세어 고정한다 — 새 자리가 조용히 빠지지 않게).
+  // 여섯 곳: 폼 중단(max_retry)·폼 완료·연락처 수집·연락처만 보낸 경우·규칙 전환·연속 저신뢰.
+  assert.equal((s.match(/renumberedLine\(ctx\.ticketId, ticket\.id, created\)/g) || []).length, 6, '접수번호를 알리는 자리 중 빠진 곳이 있다');
+  // 「그대로」는 **번호가 그대로일 때만** 쓴다.
+  const grammar = s.slice(s.indexOf('// 0-a2)'), s.indexOf('// 0-b)'));
+  assert.match(grammar, /renumbered\s*\n\s*\/\/[^\n]*\n\s*\? `연락처를 \$\{masked\}로 바꿨어요\.\$\{renumbered\} 새 접수번호는 \$\{ticket\.id\}입니다\./, '번호가 갈렸는데 「그대로」라고 말한다');
+  assert.match(grammar, /: `연락처를 \$\{masked\}로 바꿨어요\. 접수번호 \$\{ticket\.id\} 그대로/, '번호가 그대로인 경우의 말까지 바꿨다');
+  // `created` 를 버리는 자리가 남아 있지 않다(그 값이 곧 「번호가 새로 발급됐다」다).
+  assert.equal(/const \{ ticket \} = createTicket\(\{ sessionId, tenant: tenantOf\(sessionId\), contact,/.test(s), false, 'created 를 버리는 접수 자리가 남아 있다');
 });

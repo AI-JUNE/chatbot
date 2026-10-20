@@ -174,6 +174,30 @@ export function createTicket(input: {
   const existing = tickets.find((t) => t.sessionId === sessionId && (t.status === 'open' || t.status === 'in_progress'));
   if (existing) {
     existing.updatedAt = now();
+    /**
+     * 「고객이 마지막으로 한 말」을 **다시 요청할 때마다** 갱신한다 (DS 50-3).
+     *
+     * 세션당 열린 접수는 재사용되므로 한 접수가 30분짜리 대화 전체를 덮을 수 있다. 종전에는
+     * 이 칸이 **첫 접수 때의 말**에서 멈췄고, 바로 아래 「이관 요약」만 최신 대화로 갱신됐다 —
+     * 한 접수 안에서 10:00 의 「배송이 안 와요」와 10:25 의 「그냥 환불해 주세요」가 서로 다른
+     * 칸에 적힌 티켓이 된다. 상담원이 전화를 걸기 전에 읽는 칸은 **이름이 「마지막」이라고 적힌
+     * 쪽**이고, 그 값이 거기서 가장 오래된 말이었다(DS 20-3 이 이 칸이 비는 것을 고친 그 자리 —
+     * 그때 본 것은 「비었다」이고, 이번에 본 것은 「멈췄다」다).
+     *
+     * 빈 값으로는 덮지 않는다 — 되살린 대화에 고객 말이 없으면(`lastUserText` 가 빈 문자열)
+     * 적어 둔 말을 지우는 쪽이 더 나쁘다. 가리는 관문도 **같은 함수 안에서** 지난다(DS 39-2):
+     * 이 자리를 그냥 대입하면 재사용 경로만 마스킹을 건너뛰어, 번호가 든 본문이 운영자 화면·
+     * 백업·CSV 로 원문째 나간다.
+     */
+    const resaid = String(input.message || '').trim();
+    if (resaid) {
+      const body = maskPii(resaid);
+      existing.message = clip(body.text, TICKET_MESSAGE_LEN);
+      // 가린 종류는 **지금 본문의 것**이다 — 본문이 바뀌었으므로 앞 본문의 종류를 들고 있으면
+      // 화면이 「가린 것이 있다」고 말하는데 정작 그 자리가 없다.
+      if (body.hits.length) existing.piiKinds = body.hits;
+      else delete existing.piiKinds;
+    }
     if (input.contact) {
       existing.contact = String(input.contact).trim().slice(0, 100);
       // 다시 받은 연락처는 「파기됨」이 아니다(다시 열린 접수에 새로 남긴 경우).

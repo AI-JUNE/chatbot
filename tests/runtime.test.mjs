@@ -3956,3 +3956,111 @@ test('남의 접수번호로는 접수를 볼 수 없다 (DS 49-1)', opts, async
   assert.notEqual(other.id, mine.id, '두 세션이 같은 접수를 쓴다 — 전제가 깨졌다');
   assert.equal(E.getTicketForSession(other.id, 'rt-ds49-mine'), undefined, '다른 세션의 접수가 열린다');
 });
+
+/* ══════════ 50순위 — 백로그 소진 후 47차 재감사 (DS 50-2·50-3) ══════════ */
+
+/**
+ * DS 50-3 — 재사용되는 접수의 「고객이 마지막으로 한 말」이 **첫 접수 때의 말**에서 멈췄다.
+ *
+ * 세션당 열린 접수는 재사용되므로 한 접수가 30분짜리 대화 전체를 덮을 수 있다. 종전에는
+ * 재사용 경로가 `updatedAt`·연락처·요약·고객사만 갱신하고 본문은 손대지 않아, **요약은 최신
+ * 대화인데 바로 위 칸 「고객이 마지막으로 한 말」은 가장 오래된 말**인 티켓이 됐다. 상담원이
+ * 전화를 걸기 전에 읽는 칸은 이름이 「마지막」이라고 적힌 쪽이다(DS 20-3 이 이 칸이 비는 것을
+ * 고친 그 자리 — 그때 본 것은 「비었다」이고 이번에 본 것은 「멈췄다」다).
+ */
+test('다시 접수하면 「마지막으로 한 말」이 따라온다 (DS 50-3)', opts, async () => {
+  const E = await importLib('escalation', ['handoff', 'storage', 'refusal']);
+
+  const first = E.createTicket({
+    sessionId: 'rt-ds50-reuse', tenant: null, reason: 'user_request',
+    message: '배송이 3주째 안 와요', summary: '요약: 배송 지연',
+  });
+  assert.equal(first.created, true, '첫 접수가 만들어지지 않았다 — 전제가 깨졌다');
+
+  const again = E.createTicket({
+    sessionId: 'rt-ds50-reuse', tenant: null, reason: 'rule:agent',
+    message: '아니 그냥 환불해 주세요', summary: '요약: 환불 요청',
+  });
+  // ① 같은 접수를 쓴다(번호가 늘지 않는다) — 이것이 이 결함이 서는 전제다.
+  assert.equal(again.created, false, '세션당 접수 재사용이 깨졌다 — 이 결함의 전제가 사라졌다');
+  assert.equal(again.ticket.id, first.ticket.id);
+  // ② 요약은 종전에도 갱신됐다 — **그래서** 두 칸이 서로 다른 때를 가리켰다.
+  assert.equal(again.ticket.summary, '요약: 환불 요청', '요약이 갱신되지 않는다 — 어긋남의 한쪽이 사라졌다');
+  // ③ 이제 본문도 같은 때를 가리킨다.
+  assert.equal(again.ticket.message, '아니 그냥 환불해 주세요', '「마지막으로 한 말」이 첫 접수 때의 말에서 멈춘다');
+  assert.equal(E.getTicket(first.ticket.id).message, '아니 그냥 환불해 주세요', '보관 중인 접수에는 옛 말이 남아 있다');
+
+  // ④ **빈 값으로는 덮지 않는다** — 되살린 대화에 고객 말이 없을 수 있다(그때는 적어 둔 말이 낫다).
+  E.createTicket({ sessionId: 'rt-ds50-reuse', tenant: null, message: '   ' });
+  assert.equal(E.getTicket(first.ticket.id).message, '아니 그냥 환불해 주세요', '빈 말로 적어 둔 말을 지운다');
+  E.createTicket({ sessionId: 'rt-ds50-reuse', tenant: null });
+  assert.equal(E.getTicket(first.ticket.id).message, '아니 그냥 환불해 주세요', '본문을 보내지 않은 요청이 적어 둔 말을 지운다');
+
+  // ⑤ 가리는 관문을 **같은 함수 안에서** 지난다(DS 39-2) — 재사용 경로만 원문이 되면 안 된다.
+  const masked = E.createTicket({ sessionId: 'rt-ds50-reuse', tenant: null, message: '제 번호 010-1234-5678 입니다' });
+  assert.equal(masked.ticket.message.includes('010-1234-5678'), false, '재사용 경로가 마스킹을 건너뛴다');
+  assert.match(masked.ticket.message, /010-\*+-5678/, '가린 모양이 저장 관문과 다르다');
+  assert.deepEqual(masked.ticket.piiKinds, ['phone'], '가린 종류를 세지 않는다');
+  // 가린 종류는 **지금 본문의 것**이다 — 번호가 없는 말로 바뀌면 함께 사라진다.
+  const plain = E.createTicket({ sessionId: 'rt-ds50-reuse', tenant: null, message: '언제쯤 연락 오나요' });
+  assert.equal(plain.ticket.piiKinds, undefined, '앞 본문의 가린 종류가 남아 있다');
+
+  // ⑥ 상한도 같다 — 새로 만드는 쪽과 **같은 자리에서** 자른다(`TICKET_MESSAGE_LEN` = 300).
+  const long = E.createTicket({ sessionId: 'rt-ds50-reuse', tenant: null, message: '가'.repeat(5000) });
+  const fresh = E.createTicket({ sessionId: 'rt-ds50-reuse-2', tenant: null, message: '가'.repeat(5000) });
+  assert.equal(fresh.created, true, '견줄 대상이 새 접수가 아니다');
+  assert.ok(long.ticket.message.length < 5000, '재사용 경로에 길이 상한이 없다');
+  assert.equal(long.ticket.message.length, fresh.ticket.message.length, '재사용 경로의 상한이 새 접수와 다르다');
+});
+
+/**
+ * DS 50-2 — 운영자가 닫은 접수 뒤에 발급된 **새 번호를 같은 번호인 척** 말했다.
+ *
+ * 고객이 받아 적은 번호는 ESC-0002 인데, 그 접수가 완료된 뒤 연락처만 보내면 서버는 새 접수
+ * ESC-0003 을 만들고 「접수번호 ESC-0003 **그대로** 상담원이 연락드릴게요」라고 답했다.
+ * 접수번호는 고객이 전화로 읽어 주는 단 하나의 값이다 — 조용히 갈리면 상담원은 없는 번호를
+ * 찾고, 고객은 자기 접수가 사라졌다고 듣는다. 엔진을 **실제로 돌려** 두 자리를 본다.
+ */
+test('앞 접수가 닫힌 뒤 바뀐 접수번호를 말한다 (DS 50-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const chat = await eng('chat');
+  const E = await eng('escalation');
+  const S = await eng('session');
+
+  // ── ① 연락처만 보낸 경우(0-a2) — 종전에 「그대로」라고 적던 자리.
+  const sid = 'rt-ds50-renum';
+  const old = E.createTicket({ sessionId: sid, tenant: null, reason: 'user_request', message: '환불 문의' }).ticket;
+  S.updateSession(sid, { ticketId: old.id, slots: { contact: 'first@example.com' }, handoffReason: 'customer_request' });
+  // 운영자가 완료로 바꾼다 — 연락처는 그 자리에서 파기된다(방침 4조).
+  assert.equal(E.updateTicket(old.id, { status: 'resolved' }).ok, true);
+
+  const r = chat.replyTo('010-9876-5432', sid, null);
+  assert.notEqual(r.ticketId, old.id, '닫힌 접수를 그대로 쓴다 — 이 결함의 전제가 사라졌다');
+  assert.ok(r.reply.includes(`앞서 안내드린 접수번호 ${old.id}는 더 진행되지 않아`), '앞 번호가 끝난 사실을 말하지 않는다');
+  assert.ok(r.reply.includes(`새 접수번호는 ${r.ticketId}입니다`), '새 번호를 말하지 않는다');
+  assert.equal(r.reply.includes('그대로'), false, '번호가 갈렸는데 「그대로」라고 말한다');
+
+  // ── ② 번호가 **그대로일 때는** 종전 말 그대로다(멀쩡한 문장을 바꾸지 않는다).
+  const sid2 = 'rt-ds50-same';
+  const live = E.createTicket({ sessionId: sid2, tenant: null, reason: 'user_request', message: '환불 문의', contact: 'first@example.com' }).ticket;
+  S.updateSession(sid2, { ticketId: live.id, slots: { contact: 'first@example.com' }, handoffReason: 'customer_request' });
+  const r2 = chat.replyTo('010-9876-5432', sid2, null);
+  assert.equal(r2.ticketId, live.id, '열려 있는 접수를 재사용하지 않는다');
+  assert.ok(r2.reply.includes(`접수번호 ${live.id} 그대로`), '번호가 그대로인 경우의 말까지 바꿨다');
+  assert.equal(r2.reply.includes('더 진행되지 않아'), false, '번호가 그대로인데 바뀌었다고 말한다');
+
+  // ── ③ 연락처 수집 대기(0-a) — 번호가 바뀐 사실을 말하지 않던 자리.
+  const sid3 = 'rt-ds50-await';
+  const old3 = E.createTicket({ sessionId: sid3, tenant: null, reason: 'user_request', message: '상담원' }).ticket;
+  S.updateSession(sid3, { ticketId: old3.id, awaitingContact: true, handoffReason: 'customer_request' });
+  assert.equal(E.updateTicket(old3.id, { status: 'canceled' }).ok, true);
+  const r3 = chat.replyTo('010-1111-2222', sid3, null);
+  assert.notEqual(r3.ticketId, old3.id);
+  assert.ok(r3.reply.includes(`앞서 안내드린 접수번호 ${old3.id}는 더 진행되지 않아`), '연락처 수집 자리가 바뀐 번호를 말하지 않는다');
+  assert.ok(r3.reply.includes(`접수번호 ${r3.ticketId}`), '새 번호를 말하지 않는다');
+
+  // ── ④ 앞서 알려 준 번호가 **없었으면** 아무 말도 보태지 않는다(첫 접수에 지난 번호는 없다).
+  const r4 = chat.replyTo('상담원 연결해 주세요', 'rt-ds50-first', null);
+  assert.ok(r4.ticketId, '첫 접수가 만들어지지 않았다');
+  assert.equal(r4.reply.includes('더 진행되지 않아'), false, '알려 준 적 없는 번호가 끝났다고 말한다');
+});
