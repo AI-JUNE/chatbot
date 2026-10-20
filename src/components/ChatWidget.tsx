@@ -395,9 +395,38 @@ const SENSITIVE_INPUT_NOTICE = '주민등록번호·카드번호 등 민감정�
 let msgSeq = 0;
 function nextKey(): number { msgSeq += 1; return msgSeq; }
 
-/** 새 대화 세션 식별자 — 서버 세션(`lib/session.ts`) 키가 된다. */
-function newSessionId(): string {
-  return `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+/**
+ * 새 대화 세션 식별자 — 서버 세션(`lib/session.ts`) 키가 된다 (DS 49-3).
+ *
+ * **이 값은 이 대화의 유일한 열쇠다.** 서버는 이 글자 하나로 대화 문맥(최근 12턴·수집한
+ * 연락처·진행 중인 접수)을 찾고, 접수 API 는 같은 세션의 열린 접수를 **그대로 재사용한다**
+ * (`escalation.createTicket`). 접수 상태 조회도 이 값으로 주인을 가린다(DS 49-1).
+ * 즉 두 손님이 같은 값을 들면 **뒤에 온 사람이 앞사람의 접수번호·연락처 보유 여부를 본다.**
+ *
+ * 그런데 종전 식은 `Date.now()` + `Math.random().toString(36).slice(2, 8)` 이었다.
+ *  - `Math.random` 은 암호학적 난수가 아니다 — 방침 §2 는 「세션 식별자(**무작위 생성**)」라고 적었다.
+ *  - 뒷자리는 **6자가 보장되지도 않는다**: `Math.random()` 이 0.5 같은 값이면
+ *    `'0.i'.slice(2, 8)` → `i` 한 글자다. 같은 밀리초에 그 값을 받은 두 손님은 **같은 세션**이 된다.
+ *
+ * 그래서 브라우저가 주는 암호학적 난수를 쓴다(`crypto`). 없는 환경(아주 오래된 브라우저·
+ * 서버 렌더 중 호출)에서는 종전 식으로 떨어지되 **길이를 보장한다** — 떨어진 자리에서도
+ * 한 글자가 되지 않게. 앞의 `web_` 은 그대로 둔다(채널을 읽을 수 있는 접두사 · 이관 요약이
+ * 앞 6자만 보여 준다).
+ */
+export function newSessionId(): string {
+  try {
+    const c = globalThis.crypto;
+    if (c && typeof c.randomUUID === 'function') return `web_${c.randomUUID().replace(/-/g, '')}`;
+    if (c && typeof c.getRandomValues === 'function') {
+      const bytes = c.getRandomValues(new Uint8Array(16));
+      return `web_${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+    }
+  } catch {
+    /* 난수원에 손댈 수 없는 환경 — 아래 마지막 그물로 떨어진다 */
+  }
+  // 마지막 그물: 두 벌의 난수를 **자릿수를 채워** 잇는다(짧은 표기로 줄어들지 않게).
+  const chunk = () => Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  return `web_${Date.now().toString(36)}${chunk()}${chunk()}`;
 }
 
 /**

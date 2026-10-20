@@ -3910,3 +3910,49 @@ test('고객이 말한 때를 그대로 알아듣는다 (DS 45-3)', opts, async 
   const r = S.applyInput(form, st, '내일모레 오후 2시 반', FIXED_NOW);
   assert.equal(r.state.values.datetime, '2026-09-05 14:30', '접수에 적히는 값이 고객이 말한 때와 다르다');
 });
+
+/* ══════════ 49순위 — 백로그 소진 후 46차 재감사 (DS 49-1) ══════════ */
+
+/**
+ * DS 49-1 — 접수 상태 조회가 **접수번호만으로** 열렸다.
+ *
+ * 고객용 조회 창구(`GET /api/escalation?id=…`)는 인증이 없고 접수번호는 연번(`ESC-0001`)이다.
+ * 종전에는 번호 하나로 `getTicket` 을 불러 상태·이관 사유·접수 시각·대기 인원을 돌려줬으니,
+ * 밖에서 1번부터 훑으면 「접수가 몇 건 있고 · 언제 들어왔고 · 무엇 때문에 상담원으로
+ * 넘어갔는가」가 그대로 읽혔다. 라우트는 돌려 볼 수 없는 자리라 가리는 자를 저장소에
+ * **한 벌**로 두었다(`getTicketForSession`) — 여기서 그 자를 실제로 돌려 본다.
+ */
+test('남의 접수번호로는 접수를 볼 수 없다 (DS 49-1)', opts, async () => {
+  const E = await importLib('escalation', ['handoff', 'storage', 'refusal']);
+
+  const mine = E.createTicket({ sessionId: 'rt-ds49-mine', tenant: null, reason: 'user_request', message: '사람 바꿔 주세요' }).ticket;
+
+  // ① 종전 식 재현 — 번호만 알면 그대로 열린다(이것이 결함의 크기다).
+  const peeked = E.getTicket(mine.id);
+  assert.ok(peeked, '번호만으로는 이미 찾을 수 없다 — 이 재현이 깨지면 결함이 사라진 것이다');
+  assert.equal(peeked.reasonCode, 'customer_request', '이관 사유까지 그대로 읽혔다');
+
+  // ② 자기 세션으로는 그대로 볼 수 있다(쓸 수 있는 길을 막지 않는다).
+  const own = E.getTicketForSession(mine.id, 'rt-ds49-mine');
+  assert.ok(own, '자기 접수를 자기 세션으로도 볼 수 없다');
+  assert.equal(own.id, mine.id);
+  assert.equal(own.status, 'open');
+
+  // ③ 남의 세션·빈 세션·없는 번호는 **모두 같은 답**이다 — 다르게 거절하면 그 차이가
+  //    곧 「있다/없다」를 알려 주는 자가 된다(번호를 훑는 사람이 읽는 것이 그 차이다).
+  assert.equal(E.getTicketForSession(mine.id, 'rt-ds49-other'), undefined, '남의 세션으로 열린다');
+  assert.equal(E.getTicketForSession(mine.id, ''), undefined, '세션을 비워 보내면 열린다');
+  assert.equal(E.getTicketForSession(mine.id, '  '), undefined, '공백만 보내면 열린다');
+  assert.equal(E.getTicketForSession('ESC-9999', 'rt-ds49-mine'), undefined, '없는 번호에 다른 답을 돌려준다');
+  // 앞뒤 공백은 같은 세션으로 본다(저장 쪽도 `trim` 한 값을 들고 있다).
+  assert.ok(E.getTicketForSession(mine.id, ' rt-ds49-mine '), '같은 세션인데 공백 때문에 거절한다');
+
+  // ④ 돌려주는 것은 **사본**이다 — 조회가 보관 중인 접수를 건드리지 못한다.
+  own.status = 'resolved';
+  assert.equal(E.getTicketForSession(mine.id, 'rt-ds49-mine').status, 'open', '조회로 받은 값을 고치면 원본이 바뀐다');
+
+  // ⑤ 같은 번호가 다른 세션의 접수를 가리키는 일은 없다(접수는 세션당 하나를 재사용한다).
+  const other = E.createTicket({ sessionId: 'rt-ds49-other', tenant: null, reason: 'user_request', message: '저도요' }).ticket;
+  assert.notEqual(other.id, mine.id, '두 세션이 같은 접수를 쓴다 — 전제가 깨졌다');
+  assert.equal(E.getTicketForSession(other.id, 'rt-ds49-mine'), undefined, '다른 세션의 접수가 열린다');
+});

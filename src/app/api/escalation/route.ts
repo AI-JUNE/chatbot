@@ -1,7 +1,7 @@
 // 상담원 연결(에스컬레이션) 접수 API — 고객용(위젯에서 호출).
 // 인메모리 스텁 — [승인 필요] 실제 상담원 알림·DB 영구 저장.
 import { NextRequest } from 'next/server';
-import { createTicket, getTicket, queuePosition, toReasonCode, STATUS_LABELS } from '@/lib/escalation';
+import { createTicket, getTicketForSession, queuePosition, toReasonCode, STATUS_LABELS } from '@/lib/escalation';
 import { buildHandoffSummary } from '@/lib/handoff';
 import { intentLabelMap } from '@/lib/intents';
 import { tenantLabel } from '@/lib/tenants';
@@ -146,14 +146,40 @@ export async function POST(req: NextRequest) {
   );
 }
 
+/**
+ * 접수 상태 조회 — **접수번호만으로는 열리지 않는다** (DS 49-1).
+ *
+ * 종전에는 번호 하나만 받아 상태·이관 사유·접수 시각·대기 인원을 돌려줬다. 이 창구는
+ * 인증이 없고 접수번호는 **연번**(`ESC-0001`)이라, 밖에서 1번부터 훑으면 「접수가 몇 건
+ * 있는지 · 언제 들어왔는지 · 무엇 때문에 상담원으로 넘어갔는지」가 그대로 읽혔다
+ * (「없는 번호」는 404 라, 응답 자체가 접수가 어디까지 찼는지 알려 주는 자다). 횟수 제한도
+ * 없어 훑는 일을 막는 것이 하나도 없었다 — 개인정보처리방침 §10 이 보호 조치로 적어 둔
+ * 「요청 횟수 제한」이 정작 읽기 경로에는 걸려 있지 않았다.
+ *
+ * 그래서 **자기 접수인지**를 함께 묻는다: 접수를 만든 그 세션(`sessionId`)을 아는 사람만
+ * 볼 수 있다. 위젯은 이 값을 이미 들고 있으므로(`sessionStorage`) 쓸 수 있는 길은 그대로다.
+ * 가리는 자는 저장소에 **한 벌**로 둔다(`getTicketForSession`) — 없는 번호와 남의 번호를
+ * 다른 말로 거절하면 그 차이가 곧 「있다/없다」를 알려 주는 자가 되므로, 거절은 한 문장이다.
+ */
 export async function GET(req: NextRequest) {
   const rl = startRequest('/api/escalation', 'GET', req.headers.get('x-request-id'));
+  const limited = rateGuard('escalation-lookup', req.headers, 30);
+  if (limited) {
+    rl.end({ status: 429, code: 'rate_limited' });
+    return withRequestId(limited, rl.requestId);
+  }
   const id = reqQuery(req, 'id');
   if (!id.ok) {
     rl.end({ status: 400, code: 'invalid_input' });
     return withRequestId(id.res, rl.requestId);
   }
-  const t = getTicket(id.value);
+  // 두 값을 **모두 받은 뒤에** 찾는다 — 번호만으로 먼저 찾으면 그 응답이 존재를 알린다.
+  const owner = reqQuery(req, 'sessionId', 60);
+  if (!owner.ok) {
+    rl.end({ status: 400, code: 'invalid_input' });
+    return withRequestId(owner.res, rl.requestId);
+  }
+  const t = getTicketForSession(id.value, owner.value);
   if (!t) {
     rl.end({ status: 404, code: 'not_found' });
     return withRequestId(fail('not_found', '해당 접수번호가 없습니다.'), rl.requestId);

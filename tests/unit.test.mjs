@@ -3050,3 +3050,84 @@ test('유니코드 정규화는 한 곳에서만 적는다 (DS 42-3)', () => {
   assert.match(s, /function docLen\(v: string\): number \{\n\s*return \(v \|\| ''\)\.normalize\('NFC'\)\.length;/, '콘솔이 코드 단위로 글자를 센다');
   assert.equal(/imp\.text\.length/.test(s), false, '본문 길이를 코드 단위로 세는 자리가 남아 있다');
 });
+
+/* ══════════ 49순위 — 백로그 소진 후 46차 재감사 (DS 49-1·49-2) ══════════ */
+
+/**
+ * DS 49-1 — 접수 조회 창구의 **배선**. 「정말 가려지는가」는 `runtime.test.mjs` 가 저장소를
+ * 돌려서 본다(라우트는 next 의존 때문에 컴파일 대상이 아니다). 여기서는 그 문을 라우트가
+ * 실제로 지나는지, 번호만으로 찾는 옛길이 남아 있지 않은지, 거절이 한 문장인지를 고정한다.
+ */
+test('접수 조회가 주인 확인과 횟수 제한을 지난다 (DS 49-1)', () => {
+  const route = read('src/app/api/escalation/route.ts');
+  const get = route.slice(route.indexOf('export async function GET('));
+
+  // ① 번호만으로 찾는 옛길이 남아 있지 않다 — 두 값을 함께 받는 문 하나만 쓴다.
+  assert.match(get, /getTicketForSession\(id\.value, owner\.value\)/, '조회가 주인을 가리지 않는다');
+  assert.equal(/getTicket\(/.test(get), false, '번호만으로 찾는 길이 남아 있다');
+  assert.equal(/getTicket,/.test(route), false, '옛 함수를 아직 들여온다');
+
+  // ② 세션을 **필수**로 받는다(없으면 400) — 선택으로 두면 보내지 않는 쪽이 종전 그대로 열린다.
+  assert.match(get, /reqQuery\(req, 'sessionId', 60\)/, '세션을 필수로 받지 않는다');
+  assert.ok(
+    get.indexOf("reqQuery(req, 'sessionId'") < get.indexOf('getTicketForSession('),
+    '찾은 뒤에 세션을 본다 — 그 응답이 존재를 알린다',
+  );
+
+  // ③ 훑는 일을 막는다 — 읽기 경로에도 횟수 제한이 걸린다(방침 §10 이 적어 둔 보호 조치다).
+  assert.match(get, /rateGuard\('escalation-lookup', req\.headers, 30\)/, '조회에 횟수 제한이 없다');
+  assert.ok(get.indexOf('rateGuard(') < get.indexOf("reqQuery(req, 'id')"), '제한이 입력 검사 뒤에 있다');
+
+  // ④ 거절은 한 문장이다 — 없는 번호와 남의 번호를 다르게 거절하면 그 차이가 답이 된다.
+  assert.equal((get.match(/fail\('not_found'/g) || []).length, 1, '거절하는 자리가 둘 이상이다');
+  assert.equal(/forbidden|unauthorized/.test(get), false, '남의 접수에 다른 코드로 거절한다');
+
+  // ⑤ 응답에 늘어난 칸이 없다(연락처·세션·메모는 종전처럼 싣지 않는다).
+  const body = get.slice(get.indexOf('ok({'));
+  for (const banned of ['contact', 'sessionId', 'note', 'summary', 'message']) {
+    assert.equal(new RegExp(`${banned}:`).test(body), false, `조회 응답에 ${banned} 가 실린다`);
+  }
+  // 로그도 종전 규칙 그대로다 — 세션 원문은 남기지 않는다.
+  for (const call of get.match(/rl\.end\(\{[\s\S]*?\}\)/g) ?? []) {
+    assert.equal(/(?<![.\w])sessionId\s*[,:}]/.test(call), false, '조회 로그가 세션 원문을 남긴다');
+  }
+
+  // ⑥ 가리는 자는 저장소에 한 벌이다 — 비교는 상수 시간, 빈 세션은 거절한다.
+  const lib = read('src/lib/escalation.ts');
+  const fn = lib.slice(lib.indexOf('export function getTicketForSession('));
+  assert.match(fn, /safeEqual\(t\.sessionId, sid\)/, '세션을 글자 단위로 견준다');
+  assert.match(fn, /if \(!sid\) return undefined;/, '빈 세션이 통과한다');
+});
+
+/**
+ * DS 49-2 — 공개 응답이 **우리 문이 잠겨 있지 않다는 사실**을 밖에 알렸다.
+ *
+ * `/api/health` 는 `adminAuthRequired`·`adminTokenConfigured` 를, 카카오 웹훅 GET 은
+ * `signature.configured`·`required` 를 인증 없이 돌려줬다. 지금 배포본의 그 값은 모두
+ * false 이므로([승인 필요]) 두 응답은 「관리 콘솔에 토큰이 없다」·「서명 없이 보낸 요청도
+ * 받는다」를 라이브 주소를 아는 누구에게나 알리는 안내문이었다.
+ */
+test('공개 상태 응답이 잠금 상태를 밖에 알리지 않는다 (DS 49-2)', () => {
+  const health = read('src/app/api/health/route.ts');
+
+  // ① 토큰을 **맞췄을 때만** 적는다 — 게이트 OFF 면 통과되는 `requireAdmin` 은 쓰지 않는다.
+  assert.match(health, /const authed = isAdminAuthed\(req\);/, '헬스체크가 토큰 일치를 보지 않는다');
+  assert.equal(/requireAdmin\(/.test(health), false, '게이트 OFF 면 통과되는 문을 쓴다');
+  for (const key of ['adminAuthRequired:', 'adminTokenConfigured:', 'partnerPortal:']) {
+    const i = health.indexOf(key);
+    assert.ok(i > 0, `${key} 칸이 사라졌다 — 토큰을 맞춘 사람은 볼 수 있어야 한다`);
+    assert.ok(i > health.indexOf('...(authed'), `${key} 가 아직 공개 응답에 있다`);
+  }
+  // ② 외부 감시·콘솔이 읽는 칸은 종전대로 공개다(저장소·테넌트 상태는 잠금 상태가 아니다).
+  assert.ok(health.indexOf('dependencies') < health.indexOf('...(authed'), '저장소 상태가 토큰 뒤로 숨었다');
+  assert.match(health, /status: failing\.length \|\| brokenTenant \? 'degraded' : 'ok'/, '신호등 판정이 바뀌었다');
+  // ③ 토큰 값 자체는 어느 쪽에도 실리지 않는다(종전 규칙).
+  assert.equal(/ADMIN_TOKEN\s*[,}]/.test(health.replace(/process\.env\.ADMIN_TOKEN/g, '')), false, '토큰 값을 노출한다');
+
+  const kakao = read('src/app/api/kakao/webhook/route.ts');
+  const get = kakao.slice(kakao.indexOf('export async function GET('), kakao.indexOf('export async function POST('));
+  assert.match(get, /isAdminAuthed\(req\)/, '웹훅 GET 이 서명 설정을 아무에게나 말한다');
+  assert.ok(get.indexOf('signature:') > get.indexOf('isAdminAuthed(req)'), '서명 설정이 아직 공개 응답에 있다');
+  // 등록한 쪽이 「이 URL 이 응답하는가」를 보는 값은 그대로 둔다.
+  assert.match(get, /live: KAKAO_LIVE/, '등록 확인에 쓰는 값까지 거뒀다');
+});

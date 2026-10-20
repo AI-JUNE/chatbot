@@ -9,6 +9,7 @@ import { maskPii, mergeKinds } from '@/lib/pii';
 import { SUMMARY_TEXT_LEN, TICKET_MESSAGE_LEN, TICKET_NOTE_LEN, clip } from '@/lib/limits';
 import { loadJson, scheduleSave } from '@/lib/storage';
 import { revOf } from '@/lib/rev';
+import { safeEqual } from '@/lib/webhookAuth';
 import { BAD_STATUS_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE, changedStatusMessage } from '@/lib/refusal';
 
 export type EscalationStatus = 'open' | 'in_progress' | 'resolved' | 'canceled';
@@ -215,6 +216,27 @@ export function createTicket(input: {
 export function getTicket(id: string): EscalationTicket | undefined {
   const t = tickets.find((x) => x.id === id);
   return t ? { ...t } : undefined;
+}
+
+/**
+ * **이 접수가 이 세션의 것인가** — 고객이 자기 접수를 조회하는 유일한 길 (DS 49-1).
+ *
+ * 접수번호는 연번(`ESC-0001`)이라 그 자체로는 아무것도 지키지 못한다. 종전에 고객용 조회
+ * 창구(`GET /api/escalation`)는 번호만 받아 상태·이관 사유·접수 시각·대기 인원을 돌려줬고,
+ * 인증도 횟수 제한도 없었다 — 밖에서 1번부터 훑으면 접수가 몇 건이고 언제 들어왔고 무엇
+ * 때문에 넘어간 건인지가 그대로 읽혔다.
+ *
+ * 가리는 자는 **한 벌**이다(DS 42-2·46-1 과 같은 규칙) — 라우트가 「찾기」와 「주인 확인」을
+ * 따로 적으면 조회 자리가 늘어날 때 한쪽이 빠진다. 없는 번호와 남의 번호는 **같은 답**
+ * (`undefined`)으로 돌려준다: 다르게 거절하면 그 차이가 곧 「있다/없다」를 알려 주는 자다.
+ * 비교는 상수 시간으로 한다(`safeEqual` — 세션 식별자도 이 대화의 열쇠다 · DS 49-3).
+ */
+export function getTicketForSession(id: string, sessionId: string): EscalationTicket | undefined {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return undefined;
+  const t = tickets.find((x) => x.id === id);
+  if (!t || !safeEqual(t.sessionId, sid)) return undefined;
+  return { ...t };
 }
 
 export function listTickets(): EscalationTicket[] {

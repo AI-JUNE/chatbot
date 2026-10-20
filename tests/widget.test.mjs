@@ -1326,3 +1326,97 @@ test('입력창이 민감정보를 적지 말라고 안내한다 (DS 45-2)', opt
     assert.match(s, /주민등록번호[·\s]*카드번호/, `${page} 가 민감정보 안내를 더 이상 약속하지 않는다 — 화면 쪽을 다시 보아야 한다`);
   }
 });
+
+/* ══════════ 49순위 — 백로그 소진 후 46차 재감사 (DS 49-3) ══════════ */
+
+/** `globalThis.crypto` 를 잠시 갈아 끼운다(게터 속성이라 defineProperty 로 바꾸고 되돌린다). */
+function withCrypto(value, fn) {
+  const had = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  Object.defineProperty(globalThis, 'crypto', { value, configurable: true, writable: true });
+  try {
+    return fn();
+  } finally {
+    if (had) Object.defineProperty(globalThis, 'crypto', had);
+    else delete globalThis.crypto;
+  }
+}
+
+/** `Math.random` 을 고정값으로 묶는다(종전 식의 짧은 표기를 재현하기 위해서다). */
+function withRandom(value, fn) {
+  const real = Math.random;
+  Math.random = () => value;
+  try {
+    return fn();
+  } finally {
+    Math.random = real;
+  }
+}
+
+/**
+ * ── DS 49-3 — 대화의 유일한 열쇠를 `Math.random()` 으로 만들었다 ──
+ *
+ * 서버는 세션 식별자 하나로 대화 문맥(최근 12턴·수집한 연락처·진행 중인 접수)을 찾고,
+ * 접수 API 는 **같은 세션의 열린 접수를 그대로 재사용한다**. 즉 두 손님이 같은 값을 들면
+ * 뒤에 온 사람이 앞사람의 접수번호와 연락처 보유 여부를 본다. 개인정보처리방침 §2 는
+ * 그 값을 「세션 식별자(무작위 생성)」라고 적어 두었는데, 종전 식의 뒷자리는 암호학적
+ * 난수가 아니었고 **여섯 자가 보장되지도 않았다**: `0.5.toString(36)` 은 `'0.i'` 라서
+ * `slice(2, 8)` 이 한 글자로 줄어든다.
+ */
+test('새 대화 식별자가 추측할 수 없는 값에서 나온다 (DS 49-3)', opts, async () => {
+  const mod = await loadModule();
+
+  // ① 종전 식 재현 — 뒷자리가 한 글자로 줄고, 같은 밀리초의 두 손님이 **같은 세션**이 된다.
+  const oldForm = (now) => `web_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  withRandom(0.5, () => {
+    const a = oldForm(1_760_000_000_000);
+    const b = oldForm(1_760_000_000_000);
+    assert.equal(a.split('_')[2], 'i', '종전 식의 짧은 표기가 재현되지 않는다 — 결함이 사라진 것이다');
+    assert.equal(a, b, '같은 값을 두 번 받아도 다른 세션이 된다 — 이 재현이 깨지면 결함이 사라진 것이다');
+  });
+
+  // ② 지금 식 — 브라우저 난수(`crypto`)에서 나오고, 모양이 고정이며, 겹치지 않는다.
+  const ids = new Set();
+  for (let i = 0; i < 2000; i += 1) {
+    const id = mod.newSessionId();
+    assert.match(id, /^web_[0-9a-f]{32}$/, `식별자 모양이 다르다: ${id}`);
+    ids.add(id);
+  }
+  assert.equal(ids.size, 2000, '2000번 중에 겹치는 값이 나왔다');
+
+  // 서버가 받는 상한(60자)을 넘지 않는다 — 넘으면 400 으로 거절당해 대화가 시작되지 않는다.
+  assert.ok(mod.newSessionId().length <= 60, '세션 식별자가 서버 입력 상한을 넘는다');
+
+  // ③ `randomUUID` 가 없는 브라우저는 `getRandomValues` 로 떨어진다(모양은 같다).
+  const bytesOnly = {
+    getRandomValues(a) {
+      for (let i = 0; i < a.length; i += 1) a[i] = (i * 7 + 3) % 256;
+      return a;
+    },
+  };
+  withCrypto(bytesOnly, () => {
+    const id = mod.newSessionId();
+    assert.match(id, /^web_[0-9a-f]{32}$/, 'getRandomValues 경로의 모양이 다르다');
+    assert.equal(id.includes('undefined'), false, '난수를 읽지 못한 자리가 글자로 남는다');
+  });
+
+  // ④ 난수원이 아예 없는 환경에서도 **한 글자로 줄어들지 않는다**(마지막 그물).
+  //    `Math.random` 을 0.5 로 묶어도 자릿수를 채운다 — 종전 식이 무너지던 바로 그 입력이다.
+  withCrypto(undefined, () => {
+    withRandom(0.5, () => {
+      const id = mod.newSessionId();
+      assert.match(id, /^web_[0-9a-z]{24,}$/, `마지막 그물에서 식별자가 짧아진다: ${id}`);
+      assert.ok(id.length <= 60, '마지막 그물이 서버 입력 상한을 넘는다');
+    });
+    assert.notEqual(mod.newSessionId(), mod.newSessionId(), '마지막 그물이 같은 값을 두 번 돌려준다');
+  });
+
+  // ⑤ 소스 — 난수원을 **먼저** 보고, `Math.random` 은 마지막 그물에만 남아 있다.
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  const fn = sliceFn(src, 'export function newSessionId(');
+  assert.ok(fn.indexOf('globalThis.crypto') < fn.indexOf('Math.random'), '난수원보다 Math.random 을 먼저 본다');
+  assert.equal((fn.match(/Math\.random/g) || []).length, 1, 'Math.random 을 쓰는 자리가 둘 이상이다');
+  assert.equal(/slice\(2, 8\)/.test(fn), false, '짧은 표기로 줄어드는 자리가 남아 있다');
+  // 위젯이 세션을 새로 만드는 자리는 이 함수 하나를 지난다(대화 지우기·첫 진입 모두).
+  assert.equal((src.match(/newSessionId\(\)/g) || []).length >= 1, true, '세션을 새로 만드는 자리가 사라졌다');
+  assert.equal(/web_\$\{Date\.now\(\)\.toString\(36\)\}_/.test(src), false, '종전 식이 아직 남아 있다');
+});

@@ -26,22 +26,37 @@ import {
   toKakaoResponse,
 } from '@/lib/kakao';
 import { checkRate } from '@/lib/ratelimit';
-import { ok, fail, readJsonWithRaw } from '@/lib/http';
+import { ok, fail, readJsonWithRaw, isAdminAuthed } from '@/lib/http';
 import { startRequest, hashId } from '@/lib/logger';
 import { captureError } from '@/lib/monitoring';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  // 헬스체크·상태 확인용(민감정보 없음). 시크릿 값은 노출하지 않고 설정 여부만 알린다.
+/**
+ * 헬스체크·상태 확인용(민감정보 없음). 시크릿 값은 노출하지 않고 설정 여부만 알린다.
+ *
+ * **서명 검증이 걸려 있는지는 아무에게나 말하지 않는다** (DS 49-2). 이 주소는 카카오가 부르는
+ * 자리라 인증이 없고, 종전에는 `signature.configured`·`required` 를 그대로 실어 보냈다 —
+ * 지금 배포본의 그 값은 둘 다 false 이므로(시크릿 미설정 · [승인 필요]) 이 응답은
+ * 「서명 없이 보낸 요청도 받는다」를 밖에 알리는 안내문이었다. 그 사실을 아는 사람은
+ * 가짜 대화를 넣어 **대화 기록·접수에 없는 사실을 남길 수 있다**(POST 는 시크릿이 없으면
+ * 검증을 건너뛴다 — 그렇게 하기로 정한 설정이지만, 광고할 일은 아니다).
+ * `live`·`mode` 는 그대로 둔다 — 등록한 쪽이 「이 URL 이 응답하는가」를 보는 값이다.
+ */
+export async function GET(req: NextRequest) {
   return ok({
     channel: 'kakao',
     live: KAKAO_LIVE,
     mode: KAKAO_LIVE ? 'live' : 'stub',
-    signature: {
-      configured: Boolean(process.env.KAKAO_WEBHOOK_SECRET),
-      required: process.env.KAKAO_SIGNATURE_REQUIRED === 'true',
-    },
+    // 토큰을 맞춘 사람에게만 적는다(게이트 OFF 로 통과되는 경우는 세지 않는다 · `/api/health` 와 같은 규칙).
+    ...(isAdminAuthed(req)
+      ? {
+          signature: {
+            configured: Boolean(process.env.KAKAO_WEBHOOK_SECRET),
+            required: process.env.KAKAO_SIGNATURE_REQUIRED === 'true',
+          },
+        }
+      : {}),
   });
 }
 
