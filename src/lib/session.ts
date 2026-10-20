@@ -51,6 +51,59 @@ export interface SessionContext {
   updatedAt: number;
 }
 
+/**
+ * **「누구인지 모른다」를 가리키던 값들** (DS 51-2).
+ *
+ * 세션 식별자는 이 대화의 유일한 열쇠다(DS 49-3) — 서버는 이 글자 하나로 최근 12턴·수집한
+ * 연락처·진행 중인 접수를 찾고, 접수 조회는 이 값으로 **주인을 가린다**(DS 49-1). 그런데
+ * 세션을 보내지 않은 요청은 전부 `'anon'` 한 칸을 함께 썼고(카카오는 `kakao:kakao-anon`),
+ * 그 값은 **코드에 적혀 있는 글자**다. 그래서 세 가지가 어긋났다:
+ *  - 세션을 보내지 않은 두 손님은 **같은 사람**이 된다 — 한쪽이 남긴 연락처가 다른 쪽의 이관
+ *    요약에 들어가고, 한쪽이 접수한 번호를 다른 쪽이 받는다. `awaitingContact` 도 공유되므로
+ *    뒤에 온 사람의 **보통 질문이 연락처로 저장**된다(DS 35-3 이 한 세션 안에서 고친 그 모양이
+ *    서로 모르는 사람 사이에서 일어난다).
+ *  - 관리 콘솔 「응답 테스트」가 바로 그 칸을 쓰고 있었다 — 운영자의 시험 대화와 밖에서 온
+ *    요청이 한 세션에 섞이고, 시험으로 생긴 접수가 `'anon'` 의 것으로 남는다.
+ *  - 그래서 접수 주인 확인이 **알려진 글자 하나로 열린다**: `?id=ESC-0001&sessionId=anon`.
+ *    49차가 접수번호 훑기를 막으려고 세운 문인데, 그 문에 공용 열쇠가 꽂혀 있었다.
+ *
+ * 이 값들은 「열쇠」로 쓰지 않는다 — 가리는 자리(`escalation.getTicketForSession`)가 거절하고,
+ * 창구(라우트)는 세션을 들고 오지 않은 요청에 **한 번 쓰는 식별자**를 발급한다.
+ */
+const SHARED_SESSION_KEYS = new Set(['', 'anon', 'kakao-anon', 'kakao:', 'kakao:anon', 'kakao:kakao-anon']);
+
+/** 여러 사람이 함께 쓰는(= 아무것도 지키지 못하는) 세션 값인가. */
+export function isSharedSessionKey(id: unknown): boolean {
+  if (typeof id !== 'string') return true;
+  return SHARED_SESSION_KEYS.has(id.trim().toLowerCase());
+}
+
+/** 난수원이 없는 런타임의 마지막 그물 — **자릿수를 채운다**(DS 49-3 과 같은 규칙). */
+function fallbackHex(bytes: number): string {
+  let out = '';
+  for (let i = 0; i < bytes * 2; i += 1) out += Math.floor(Math.random() * 16).toString(16);
+  return out;
+}
+
+/**
+ * 세션을 들고 오지 않은 요청에 **서버가 한 번 쓰는 식별자**를 발급한다 (DS 51-2).
+ *
+ * 이어지지 않는다 — 세션을 보내지 않았으면 이 대화에는 문맥이 없는 것이 사실이고, 그 사실을
+ * 공용 칸으로 메우면 **남의 대화**가 문맥이 된다. 모양은 서버 입력 상한(60자) 안이고,
+ * 추측할 수 없는 값이다(위젯의 식별자와 같은 난수원 · DS 49-3).
+ */
+export function newVisitorSessionId(prefix = 'web'): string {
+  const c: Crypto | undefined = typeof globalThis.crypto === 'undefined' ? undefined : globalThis.crypto;
+  let hex = '';
+  if (c && typeof c.randomUUID === 'function') hex = c.randomUUID().replace(/-/g, '');
+  else if (c && typeof c.getRandomValues === 'function') {
+    const buf = new Uint8Array(16);
+    c.getRandomValues(buf);
+    hex = Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
+  } else hex = fallbackHex(16);
+  return `${prefix}_${hex}`;
+}
+
 const TTL_MS = 30 * 60 * 1000; // 30분
 const MAX_SESSIONS = 2000;
 

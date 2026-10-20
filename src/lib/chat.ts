@@ -274,7 +274,7 @@ function contactTail(ticket: { contact?: string }, ask: string): string {
  * 그래서 사실과 **다음에 할 일**을 함께 적는다: 지금은 먼저 연락드릴 수 없다는 사실 + 번호만
  * 보내면 이 접수에 붙는다는 길(실제로 열려 있는 길이다 — `computeReply` 0-a2, DS 37-1).
  */
-function noContactLine(): string {
+export function noContactLine(): string {
   return (
     ' 다만 연락받으실 곳을 남기지 않으셔서, 저희가 먼저 연락드릴 방법은 없어요.' +
     ' 전화번호나 이메일만 보내 주시면 이 접수에 붙여 두고 순서대로 연락드릴게요.'

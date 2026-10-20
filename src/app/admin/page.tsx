@@ -2172,6 +2172,29 @@ const REQUEST_TIMEOUT_MS = 15_000;
 /** 「응답 테스트」는 서버가 LLM 을 부를 수 있다(상한 8초 × 재시도 1회 = 약 16초) — 그보다 길게 둔다. */
 const CHAT_TEST_TIMEOUT_MS = 25_000;
 
+/**
+ * 「응답 테스트」 대화의 세션 식별자 — 위젯과 **같은 난수원**을 쓴다 (DS 51-2·49-3).
+ *
+ * 종전에는 이 화면이 세션을 보내지 않았고, 서버는 세션 없는 요청을 모두 `'anon'` 한 칸에
+ * 몰아넣었다 — 두 운영자의 시험 대화가 겹치고, 밖에서 세션 없이 들어온 요청과도 섞였다.
+ * 접두사로 시험 대화임을 읽을 수 있게 둔다(이관 요약은 앞 6자만 보여 준다).
+ */
+function newConsoleSessionId(): string {
+  try {
+    const c = globalThis.crypto;
+    if (c && typeof c.randomUUID === 'function') return `console_${c.randomUUID().replace(/-/g, '')}`;
+    if (c && typeof c.getRandomValues === 'function') {
+      const bytes = c.getRandomValues(new Uint8Array(16));
+      return `console_${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+    }
+  } catch {
+    /* 난수원에 손댈 수 없는 환경 — 아래 마지막 그물로 떨어진다 */
+  }
+  // 마지막 그물도 **자릿수를 채운다**(짧은 표기로 한 글자가 되지 않게 · DS 49-3).
+  const chunk = () => Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  return `console_${chunk()}${chunk()}${chunk()}`;
+}
+
 function afetch(input: string, init: RequestInit = {}, ms: number = REQUEST_TIMEOUT_MS): Promise<Response> {
   if (typeof AbortController === 'undefined') return fetch(input, init);
   const ctl = new AbortController();
@@ -3978,6 +4001,18 @@ export default function AdminPage() {
   >([]);
 
   const [testBusy, setTestBusy] = useState(false);
+  /**
+   * 이 콘솔의 시험 대화 식별자 — **이 탭만의 것**이다 (DS 51-2).
+   *
+   * 종전에는 「응답 테스트」가 세션을 아예 보내지 않았고, 서버는 세션 없는 요청을 모두
+   * `'anon'` 한 칸에 몰아넣었다(`lib/session`). 그래서 ① 두 운영자의 시험 대화가 한 세션을
+   * 함께 썼고 ② 밖에서 세션 없이 들어온 요청과도 섞여, 시험 중에 켜진 연락처 수집 상태가
+   * 남의 다음 질문을 **연락처로** 받아 적고 시험으로 생긴 접수에 남의 말이 요약으로 들어갔다
+   * ③ 그 접수는 주인이 `'anon'` 이라 `?id=ESC-0001&sessionId=anon` 으로 누구에게나 열렸다.
+   * 멀티턴 시험(슬롯 수집 폼)은 이 값이 있어야 이어진다 — 탭을 여는 동안 한 번만 만든다.
+   */
+  const testSessionRef = useRef('');
+  if (!testSessionRef.current) testSessionRef.current = newConsoleSessionId();
   const testEndRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     testEndRef.current?.scrollIntoView({ block: 'end' });
@@ -4009,7 +4044,13 @@ export default function AdminPage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           // 고객사를 실어 보낸다 — 위젯이 보내는 것과 같은 값이다(DS 36-3).
-          body: JSON.stringify({ message: q, ...(tenantAtSend ? { tenant: tenantAtSend } : {}) }),
+          // 세션도 실어 보낸다 — 이 탭만의 값이다(DS 51-2). 보내지 않으면 서버가 발급하므로
+          // 시험 대화가 턴마다 끊기고, 종전에는 공용 칸(`anon`)에 남의 대화와 함께 쌓였다.
+          body: JSON.stringify({
+            message: q,
+            sessionId: testSessionRef.current,
+            ...(tenantAtSend ? { tenant: tenantAtSend } : {}),
+          }),
         },
         CHAT_TEST_TIMEOUT_MS,
       );

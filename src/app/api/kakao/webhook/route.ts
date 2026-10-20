@@ -13,7 +13,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { replyToAsync } from '@/lib/chat';
 import { logTurn } from '@/lib/convlog';
-import { getSession, updateSession } from '@/lib/session';
+import { getSession, updateSession, newVisitorSessionId } from '@/lib/session';
+import { getTicket, isClosedStatus } from '@/lib/escalation';
 import {
   KAKAO_LIVE,
   KAKAO_TOO_LONG_TEXT,
@@ -95,7 +96,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(kakaoErrorResponse(tooLong ? KAKAO_TOO_LONG_TEXT : '발화를 확인하지 못했어요.'));
   }
 
-  const sessionId = `kakao:${parsed.userId}`;
+  /**
+   * 사용자 id 가 없으면 **한 번 쓰는 식별자**를 발급한다 (DS 51-2).
+   *
+   * 종전에는 `parseKakaoPayload` 가 `'kakao-anon'` 을 지어내 `kakao:kakao-anon` 한 세션에
+   * 전부 몰아넣었다 — id 를 보내지 않은 요청들이 서로의 최근 대화·연락처·접수를 공유했고,
+   * 세션당 접수 재사용 규칙에 걸려 **서로 모르는 사람의 접수가 한 건으로 합쳐졌다**.
+   * 중복 전달 판정 키(`kakaoEventKey`)는 페이로드의 값을 그대로 쓰므로 재전달에도 변하지 않는다.
+   */
+  const sessionId = parsed.userId ? `kakao:${parsed.userId}` : newVisitorSessionId('kakao');
   const sessionHash = hashId(sessionId);
   // 이 대화가 어디서 왔는지 세션에 남긴다 — 상담원 이관 요약이 회신 창구를 그대로 받아 쓴다.
   updateSession(sessionId, { channel: 'kakao' });
@@ -144,9 +153,26 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // 이 대화가 **이미 접수해 둔 상태인가** — 카카오에는 버튼을 숨기는 위젯 화면이 없으므로
-  // 어댑터가 그 사실을 알아야 접수를 다시 권하지 않는다(DS 37-2, 위젯의 DS 35-2 와 같은 판정).
-  const res = toKakaoResponse(result, { filedTicket: getSession(sessionId).ticketId ?? null });
+  /**
+   * 이 대화가 **이미 접수해 둔 상태인가** — 카카오에는 버튼을 숨기는 위젯 화면이 없으므로
+   * 어댑터가 그 사실을 알아야 접수를 다시 권하지 않는다(DS 37-2, 위젯의 DS 35-2 와 같은 판정).
+   *
+   * 세션에 적힌 접수번호만 넘기지 않는다 (DS 51-3) — 그 값은 끝까지 남으므로, 운영자가 그
+   * 접수를 완료·취소한 뒤에도 「상담원이 순서대로 연락드릴게요」라고 **현재형으로** 말하고
+   * 「상담원 연결」 버튼까지 감췄다. 저장소에서 **지금 모습**을 읽어 넘긴다(이 창구는 서버 안이라
+   * 위젯처럼 조회 API 를 거칠 일이 없다). 번호가 가리키는 접수가 사라졌으면 들고 있지 않는다.
+   */
+  const filedId = getSession(sessionId).ticketId;
+  const filedTicket = filedId ? getTicket(filedId) : undefined;
+  const res = toKakaoResponse(result, {
+    filedTicket: filedTicket
+      ? {
+          id: filedTicket.id,
+          closed: isClosedStatus(filedTicket.status),
+          contactOnFile: Boolean(filedTicket.contact),
+        }
+      : null,
+  });
   rememberKakaoResponse(key, res);
   rl.end({
     status: 200,

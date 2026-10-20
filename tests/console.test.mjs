@@ -1799,7 +1799,8 @@ test('응답 테스트가 어느 고객사 기준인지 고르고 그 기준으�
 
   // ① 기준을 고를 수 있고, 고른 값이 요청에 실린다(위젯이 보내는 것과 같은 값).
   assert.match(src, /const \[testTenant, setTestTenant\] = useState\(''\)/, '기준을 고르는 상태가 없다');
-  assert.match(src, /JSON\.stringify\(\{ message: q, \.\.\.\(tenantAtSend \? \{ tenant: tenantAtSend \} : \{\}\) \}\)/, '고른 기준을 보내지 않는다');
+  // 세션도 함께 실어 보낸다(DS 51-2) — 보내는 값이 늘었고, 고객사를 싣는 규칙은 그대로다.
+  assert.match(src, /message: q,\n\s*sessionId: testSessionRef\.current,\n\s*\.\.\.\(tenantAtSend \? \{ tenant: tenantAtSend \} : \{\}\),/, '고른 기준을 보내지 않는다');
   assert.match(src, /<select\n\s*id="ac-test-tenant"/, '기준 선택 상자가 없다');
   assert.match(src, /<label htmlFor="ac-test-tenant"/, '선택 상자에 라벨이 없다');
 

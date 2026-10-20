@@ -2636,12 +2636,14 @@ test('카카오 응답이 접수한 사실을 알고, 긴 답을 말 중간에�
   assert.deepEqual(toKakaoResponse(base).template.quickReplies, [{ label: '상담원 연결', action: 'message', messageText: '상담원' }]);
 
   // ② 접수한 뒤에는 권하지 않고 **접수번호를 글자로** 알린다(버튼을 숨길 화면이 없는 창구다).
-  const after = toKakaoResponse(base, { filedTicket: 'ESC-0007' });
+  //    어댑터가 받는 값은 번호가 아니라 **지금 모습**이다(DS 51-3) — 뜻은 그대로, 모양만 옮겼다.
+  const open7 = { id: 'ESC-0007', closed: false, contactOnFile: true };
+  const after = toKakaoResponse(base, { filedTicket: open7 });
   assert.equal(after.template.quickReplies, undefined, '접수한 사람에게 접수를 다시 권한다');
   assert.match(texts(after)[0], /이미 접수번호 ESC-0007/, '접수한 사실을 알리지 않는다');
 
   // ③ 이번 턴에 접수된 답변은 본문이 이미 접수번호를 말한다 — 같은 말을 두 번 하지 않는다.
-  const now = toKakaoResponse({ ...base, ticketId: 'ESC-0007', reply: '접수번호는 ESC-0007입니다.' }, { filedTicket: 'ESC-0007' });
+  const now = toKakaoResponse({ ...base, ticketId: 'ESC-0007', reply: '접수번호는 ESC-0007입니다.' }, { filedTicket: open7 });
   assert.equal(texts(now)[0].includes('이미 접수번호'), false, '방금 한 말을 한 번 더 한다');
   assert.equal(now.template.quickReplies, undefined);
 
@@ -4063,4 +4065,216 @@ test('앞 접수가 닫힌 뒤 바뀐 접수번호를 말한다 (DS 50-2)', opts
   const r4 = chat.replyTo('상담원 연결해 주세요', 'rt-ds50-first', null);
   assert.ok(r4.ticketId, '첫 접수가 만들어지지 않았다');
   assert.equal(r4.reply.includes('더 진행되지 않아'), false, '알려 준 적 없는 번호가 끝났다고 말한다');
+});
+
+/* ══════════ 51순위 — 백로그 소진 후 48차 재감사 (DS 51-1·51-2·51-3) ══════════ */
+
+/**
+ * DS 51-1 — 횟수 제한·잠금이 **요청자가 적어 보낸 글자**로 사람을 갈랐다.
+ *
+ * 종전 식은 `x-forwarded-for` 의 **맨 앞**을 그대로 바구니 이름으로 썼다. 그 자리는 프록시가
+ * 덮어쓰지 않는 한 요청을 보낸 사람이 적는 칸이다 — 한 줄만 바꿔 보내면 열쇠가 매 요청
+ * 달라지고, 그 열쇠에 걸려 있던 것이 모두 함께 풀린다: 관리 토큰 무차별 대입 잠금(5회/10분)·
+ * 고객용 접수 조회 제한(30회/분 — 49차가 접수번호 훑기를 막으려고 건 그 제한이다)·대화·접수·
+ * 평가의 분당 제한 전부. 돌려 볼 수 있는 자리로 내리고(`lib/clientKey`) 여기서 실제로 센다.
+ */
+test('제한을 세는 열쇠를 요청자가 고를 수 없다 (DS 51-1)', opts, async () => {
+  const C = await importLib('clientKey');
+  const H = (o) => new Headers(o);
+
+  /** 종전 식 — 맨 앞을 그대로 쓰고, 없으면 x-real-ip, 모양은 보지 않는다. */
+  const before = (h) => {
+    const fwd = h.get('x-forwarded-for');
+    if (fwd) return fwd.split(',')[0].trim().slice(0, 64) || 'unknown';
+    return h.get('x-real-ip')?.slice(0, 64) || 'unknown';
+  };
+
+  // ── ① 종전 식 재현 — 보내는 글자를 바꾸면 **매번 다른 바구니**가 된다.
+  const rotated = ['rot-a', 'rot-b', 'rot-c', '198.51.100.7'].map((v) => H({ 'x-forwarded-for': v }));
+  assert.equal(new Set(rotated.map(before)).size, 4, '종전 결함이 재현되지 않는다 — 이 검증은 아무것도 지키지 않는다');
+  assert.equal(new Set(rotated.map(C.clientKey)).size, 2, '지금 식도 보내는 글자에 따라 갈린다');
+
+  // ── ② 플랫폼이 적는 헤더를 먼저 본다 — 요청자가 보낸 값은 그 뒤로 밀린다.
+  assert.equal(C.clientKey(H({ 'x-vercel-forwarded-for': '203.0.113.9', 'x-forwarded-for': '1.2.3.4' })), '203.0.113.9');
+  assert.equal(C.clientKey(H({ 'x-real-ip': '203.0.113.9', 'x-forwarded-for': '1.2.3.4' })), '203.0.113.9');
+  assert.equal(before(H({ 'x-real-ip': '203.0.113.9', 'x-forwarded-for': '1.2.3.4' })), '1.2.3.4', '종전 식은 보낸 값을 먼저 봤다');
+
+  // ── ③ `x-forwarded-for` 는 **맨 뒤**를 쓴다(가장 가까운 프록시가 덧붙이는 자리다).
+  assert.equal(C.clientKey(H({ 'x-forwarded-for': '1.2.3.4, 203.0.113.9' })), '203.0.113.9');
+  assert.equal(C.clientKey(H({ 'x-forwarded-for': '203.0.113.9' })), '203.0.113.9', '한 칸뿐인 값을 버린다');
+
+  // ── ④ 주소 모양이 아닌 글자는 열쇠로 쓰지 않는다 — 돌려 가며 보내도 **한 바구니**다.
+  for (const bad of ['rot-a', 'not an ip', '999.1.1.1', '', '  ', 'DROP TABLE', '1.2.3']) {
+    assert.equal(C.clientKey(H({ 'x-forwarded-for': bad })), C.UNKNOWN_CLIENT, `모양이 아닌 값(${bad})을 열쇠로 쓴다`);
+  }
+  assert.equal(C.clientKey(H({})), C.UNKNOWN_CLIENT, '아무 헤더도 없는 요청에 이름을 지어낸다');
+  // 멀쩡한 요청자를 한 바구니로 몰지 않는다 — IPv6·IPv4 사상 주소도 주소다.
+  assert.equal(C.clientKey(H({ 'x-real-ip': '2001:db8::1' })), '2001:db8::1');
+  assert.equal(C.clientKey(H({ 'x-real-ip': '[2001:db8::1]' })), '[2001:db8::1]');
+  assert.equal(C.looksLikeIp('::ffff:203.0.113.9'), true);
+  assert.equal(C.looksLikeIp('255.255.255.255'), true);
+  assert.equal(C.looksLikeIp('256.0.0.1'), false);
+
+  // ── ⑤ 열쇠는 길이가 묶여 있다(아주 긴 글자로 바구니 목록을 밀어내지 못한다).
+  assert.ok(C.clientKey(H({ 'x-real-ip': `203.0.113.9${'0'.repeat(200)}` })).length <= 64);
+});
+
+/**
+ * DS 51-1(둘째 자리) — 잠금이 **자리 밀림으로 조용히 풀렸다.**
+ *
+ * 실패 기록은 2,000칸까지 들고, 종전에는 상한에 닿으면 삽입 순서 맨 앞(`keys().next()`)을
+ * 그대로 지웠다 — 그 자리에 지금 잠겨 있는 키가 있으면 10분 잠금이 말없이 사라졌다.
+ * 열쇠가 요청자의 손에 있던 것과 한 뿌리다: 열쇠를 바꿔 자리를 채우면 남의 잠금을 밀어낼 수 있었다.
+ */
+test('자리를 채워도 잠금이 밀려 나가지 않는다 (DS 51-1)', opts, async () => {
+  const A = await importLib('adminAuth');
+  A.resetLockouts();
+
+  // ① 맨 앞에 잠긴 키를 하나 둔다 — 종전 식이 가장 먼저 지우던 그 자리다.
+  const victim = 'victim-key';
+  for (let i = 0; i < A.lockThreshold(); i += 1) A.recordAttempt(victim, false);
+  assert.equal(A.lockoutStatus(victim).locked, true, '잠기지 않았다 — 전제가 깨졌다');
+
+  // ② 열쇠를 바꿔 가며 자리를 가득 채운다(상한 2,000칸 + 여유).
+  for (let i = 0; i < 2_100; i += 1) A.recordAttempt(`filler-${i}`, false);
+
+  // ③ 잠금은 남아 있고, 밀려 나간 것은 **잠기지 않은 자리**다.
+  assert.equal(A.lockoutStatus(victim).locked, true, '자리가 밀려 잠금이 풀렸다');
+  assert.equal(A.lockoutStatus('filler-0').failures, 0, '자리가 전혀 밀려나지 않았다 — 전제가 깨졌다');
+  // ④ 가득 찬 뒤의 실패도 계속 세어진다(지우지 않고 멈추면 그쪽이 새 구멍이 된다).
+  assert.equal(A.recordAttempt('filler-new', false).failures, 1, '가득 찬 뒤의 실패를 세지 않는다');
+  A.resetLockouts();
+});
+
+/**
+ * DS 51-2 — 세션을 보내지 않은 손님을 **모두 같은 사람**으로 묶었다.
+ *
+ * 세션 식별자는 이 대화의 유일한 열쇠다(DS 49-3) — 서버는 이 글자 하나로 최근 12턴·수집한
+ * 연락처·진행 중인 접수를 찾고, 접수 조회는 이 값으로 주인을 가린다(DS 49-1). 그런데 세션을
+ * 보내지 않은 요청은 전부 `'anon'` 한 칸을 함께 썼고(카카오는 `kakao:kakao-anon`), 그 값은
+ * **코드에 적혀 있는 글자**다. 관리 콘솔 「응답 테스트」가 바로 그 칸을 쓰고 있었다.
+ */
+test('세션을 보내지 않은 손님이 서로의 대화를 보지 않는다 (DS 51-2)', opts, async () => {
+  const S = await importLib('session');
+  const E = await importLib('escalation', ['handoff', 'storage', 'refusal']);
+
+  // ── ① 공용 값을 가린다(대소문자·공백을 다르게 적어도 같은 칸이다).
+  for (const v of ['anon', ' anon ', 'ANON', '', '  ', 'kakao-anon', 'kakao:kakao-anon', 'kakao:', null, undefined, 7]) {
+    assert.equal(S.isSharedSessionKey(v), true, `공용 세션 값(${String(v)})을 열쇠로 쓴다`);
+  }
+  for (const v of [S.newVisitorSessionId('web'), 'web_0123456789abcdef', 'console_abc', 'kakao:u-99']) {
+    assert.equal(S.isSharedSessionKey(v), false, `멀쩡한 세션(${v})을 공용으로 본다`);
+  }
+
+  // ── ② 종전 식 재현 — 한 칸을 함께 쓰면 **뒤에 온 사람이 앞사람의 것을 본다.**
+  S.resetSessions();
+  S.updateSession('anon', { slots: { contact: '010-1234-5678' }, ticketId: 'ESC-0001', awaitingContact: true });
+  const shared = S.getSession('anon');
+  assert.equal(shared.slots.contact, '010-1234-5678', '종전 결함이 재현되지 않는다 — 이 검증은 아무것도 지키지 않는다');
+  assert.equal(shared.ticketId, 'ESC-0001', '앞사람의 접수번호가 보이지 않는다 — 재현이 깨졌다');
+  assert.equal(shared.awaitingContact, true, '연락처를 묻는 상태까지 공유되던 자리다');
+
+  // ── ③ 창구가 발급하는 값은 서로를 보지 못한다(이어지지 않는 것이 사실이다).
+  const a = S.newVisitorSessionId('web');
+  const b = S.newVisitorSessionId('web');
+  S.updateSession(a, { slots: { contact: '010-1111-2222' } });
+  assert.equal(S.getSession(b).slots, undefined, '새 손님이 남의 연락처를 들고 시작한다');
+  assert.equal(S.getSession(a).slots.contact, '010-1111-2222', '자기 값도 들고 있지 못한다');
+
+  // ── ④ 발급값의 모양 — 서버 입력 상한(60자) 안이고, 돌려도 겹치지 않는다.
+  const seen = new Set();
+  for (let i = 0; i < 2_000; i += 1) {
+    const v = S.newVisitorSessionId('web');
+    assert.match(v, /^web_[0-9a-f]{32}$/, `발급값의 모양이 어긋난다(${v})`);
+    assert.ok(v.length <= 60, '서버 입력 상한을 넘는다');
+    seen.add(v);
+  }
+  assert.equal(seen.size, 2_000, '발급한 세션 식별자가 겹친다');
+  assert.match(S.newVisitorSessionId('kakao'), /^kakao_[0-9a-f]{32}$/);
+
+  // ── ⑤ 접수 주인 확인이 **알려진 글자 하나로 열리지 않는다.**
+  const t = E.createTicket({ sessionId: 'anon', tenant: null, reason: 'rule:agent', message: '상담원 연결' }).ticket;
+  assert.equal(t.sessionId, 'anon', '전제가 깨졌다 — 공용 주인으로 적힌 접수가 없다');
+  assert.ok(E.getTicket(t.id), '번호만으로 찾을 수 없다 — 재현이 깨졌다');
+  assert.equal(E.getTicketForSession(t.id, 'anon'), undefined, '공용 세션 값으로 남의 접수가 열린다');
+  assert.equal(E.getTicketForSession(t.id, ' ANON '), undefined, '대소문자·공백을 바꾸면 열린다');
+  const kko = E.createTicket({ sessionId: 'kakao:kakao-anon', tenant: null, reason: 'rule:agent', message: '상담원' }).ticket;
+  assert.equal(E.getTicketForSession(kko.id, 'kakao:kakao-anon'), undefined, '카카오 공용 세션으로 열린다');
+  // 멀쩡한 세션의 접수는 그대로 열린다 — 쓸 수 있는 길을 막지 않는다(DS 49-1).
+  const mine = 'web_0123456789abcdef0123456789abcdef';
+  const ok1 = E.createTicket({ sessionId: mine, tenant: null, reason: 'rule:agent', message: '상담원' }).ticket;
+  assert.ok(E.getTicketForSession(ok1.id, mine), '자기 접수를 자기 세션으로도 볼 수 없다');
+
+  // ── ⑥ 카카오 페이로드가 **모르는 사용자를 지어내지 않는다.**
+  const K = await importLib('kakao', ['chat', 'webhookAuth']);
+  assert.equal(K.parseKakaoPayload({ userRequest: { utterance: '안녕' } }).userId, '', '사용자 id 를 지어낸다');
+  assert.equal(K.parseKakaoPayload({ userRequest: { utterance: '안녕', user: { id: ' u-7 ' } } }).userId, 'u-7');
+  // 중복 전달 판정 키는 **페이로드의 값**으로 만든다 — 재전달에도 변하지 않아야 한다.
+  const hdr = new Headers({ 'x-kakao-timestamp': '1700000000000' });
+  assert.equal(K.kakaoEventKey(hdr, '', '안녕'), K.kakaoEventKey(hdr, '', '안녕'), '재전달이 다른 이벤트로 보인다');
+});
+
+/**
+ * DS 51-3 — 카카오가 **끝난 접수를 현재형으로** 말하고, 연락처 없는 접수에 회신을 약속했다.
+ *
+ * 세션에 적힌 접수번호(`session.ticketId`)는 끝까지 남는다. 종전 어댑터는 그 번호 한 글자만
+ * 받아 「이미 접수번호 ESC-0007로 접수돼 있어요. 다시 접수하지 않으셔도 상담원이 순서대로
+ * 연락드릴게요」라고 적었고, 같은 판정으로 「상담원 연결」 버튼까지 감췄다 — 완료·취소 시
+ * 연락처는 그 자리에서 파기되므로(방침 4조) 지킬 길이 이미 없는 약속이고, 그 접수 하나가
+ * 상담원을 다시 부를 유일한 길을 막았다. 웹에서는 47차에 고친 자리다(DS 50-1·45-1).
+ */
+test('카카오가 끝난 접수를 현재형으로 말하지 않는다 (DS 51-3)', opts, async () => {
+  const E = await importLib('escalation', ['handoff', 'storage', 'refusal']);
+  const S = await importLib('session');
+  const K = await importLib('kakao', ['chat', 'webhookAuth']);
+  const engine = await importLib('chat', ['escalation', 'handoff', 'storage', 'refusal']);
+  const base = { reply: '그 부분은 제가 정확히 답하기 어려워요.', intent: 'fallback', source: 'fallback', escalate: true, confidence: 0.1 };
+  const texts = (res) => res.template.outputs.map((o) => o.simpleText.text).join('\n');
+  const agentReply = (res) => (res.template.quickReplies ?? []).some((q) => q.label === '상담원 연결');
+  const PROMISE = '다시 접수하지 않으셔도 상담원이 순서대로 연락드릴게요.';
+
+  // ── ① 종전 식이 넘기던 값을 그대로 둬 본다 — 접수가 끝난 뒤에도 **번호는 그대로 남는다.**
+  const sid = 'kakao:u-ds51';
+  const t = E.createTicket({ sessionId: sid, tenant: null, reason: 'rule:agent', message: '상담원', contact: '010-1234-5678' }).ticket;
+  S.updateSession(sid, { ticketId: t.id, channel: 'kakao' });
+  assert.equal(E.updateTicket(t.id, { status: 'resolved' }).ok, true);
+  const closedNow = E.getTicket(t.id);
+  assert.equal(S.getSession(sid).ticketId, t.id, '종전 결함이 재현되지 않는다 — 세션이 끝난 번호를 놓았다');
+  assert.equal(closedNow.status, 'resolved');
+  assert.equal(closedNow.contact, undefined, '완료 시 연락처가 파기되지 않는다 — 전제가 깨졌다');
+  assert.equal(E.isClosedStatus(closedNow.status), true);
+
+  // ── ② 끝난 접수는 들고 있지 않는다 — 약속하지 않고, 상담원을 다시 부를 길을 내준다.
+  const closed = K.toKakaoResponse(base, {
+    filedTicket: { id: t.id, closed: E.isClosedStatus(closedNow.status), contactOnFile: Boolean(closedNow.contact) },
+  });
+  assert.equal(texts(closed).includes('이미 접수번호'), false, '끝난 접수를 현재형으로 말한다');
+  assert.equal(texts(closed).includes('연락드릴게요'), false, '지킬 길 없는 약속을 한다');
+  assert.equal(agentReply(closed), true, '끝난 접수가 상담원을 다시 부를 길을 막는다');
+
+  // ── ③ 취소된 접수도 같다(상태 **코드**로 가른다 — 라벨은 바뀌는 말이다).
+  const t2 = E.createTicket({ sessionId: 'kakao:u-ds51b', tenant: null, reason: 'rule:agent', message: '상담원' }).ticket;
+  assert.equal(E.updateTicket(t2.id, { status: 'canceled' }).ok, true);
+  const canceled = K.toKakaoResponse(base, { filedTicket: { id: t2.id, closed: true, contactOnFile: false } });
+  assert.equal(texts(canceled).includes('이미 접수번호'), false);
+  assert.equal(agentReply(canceled), true);
+  assert.equal(E.isClosedStatus('open'), false, '진행 중인 접수를 끝났다고 본다');
+  assert.equal(E.isClosedStatus('in_progress'), false, '상담 중인 접수를 끝났다고 본다');
+
+  // ── ④ 진행 중이고 **연락처가 있는** 접수에는 종전 말 그대로다(멀쩡한 문장을 바꾸지 않는다).
+  const open = K.toKakaoResponse(base, { filedTicket: { id: 'ESC-0009', closed: false, contactOnFile: true } });
+  assert.ok(texts(open).includes('이미 접수번호 ESC-0009로 접수돼 있어요.'), '접수한 사실을 알리지 않는다');
+  assert.ok(texts(open).includes(PROMISE), '회신 안내가 사라졌다');
+  assert.equal(agentReply(open), false, '접수한 사람에게 접수를 다시 권한다');
+
+  // ── ⑤ 진행 중이지만 **연락처가 없는** 접수에는 회신을 약속하지 않는다 (DS 45-1 과 같은 문장).
+  const noContact = K.toKakaoResponse(base, { filedTicket: { id: 'ESC-0010', closed: false, contactOnFile: false } });
+  assert.ok(texts(noContact).includes('이미 접수번호 ESC-0010로 접수돼 있어요.'), '접수한 사실을 알리지 않는다');
+  assert.equal(texts(noContact).includes(PROMISE), false, '연락처가 없는데 연락을 약속한다');
+  assert.ok(texts(noContact).includes(engine.noContactLine().trim()), '엔진과 다른 말로 안내한다');
+  assert.equal(agentReply(noContact), false, '접수한 사람에게 접수를 다시 권한다');
+
+  // ── ⑥ 들고 있는 접수가 없으면 종전 그대로 상담원 연결을 권한다.
+  assert.equal(agentReply(K.toKakaoResponse(base, { filedTicket: null })), true);
+  assert.equal(agentReply(K.toKakaoResponse(base)), true);
 });

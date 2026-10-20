@@ -36,13 +36,33 @@ const MAX_KEYS = 2000;
 /** 이 시간 동안 아무 시도가 없으면 카운트를 잊는다. */
 const IDLE_RESET_MS = 60 * 60_000;
 
+/**
+ * 자리를 비운다 — **잠금은 마지막에 지운다** (DS 51-1).
+ *
+ * 종전에는 상한에 닿으면 삽입 순서 맨 앞을 그대로 지웠다. 그 자리에 **지금 잠겨 있는 키**가
+ * 있으면 잠금이 말없이 풀렸다 — 열쇠를 바꿔 가며 2,000칸을 채우면 다른 사람의 10분 잠금을
+ * 밀어낼 수 있었다(열쇠가 요청자의 손에 있던 것이 종전 문제의 뿌리다 — `lib/ratelimit.clientIp`).
+ * 잠기지 않은 자리를 먼저 쓰고, 전부 잠겨 있으면 **가장 먼저 풀리는 잠금**부터 지운다
+ * (지우지 않고 멈추면 새 실패를 세지 못해, 자리를 가득 채운 쪽이 그 뒤로 마음껏 시도한다).
+ */
 function sweep(now: number): void {
   if (attempts.size < MAX_KEYS) return;
   for (const [k, v] of attempts) if (now - v.at > IDLE_RESET_MS && now >= v.lockedUntil) attempts.delete(k);
   while (attempts.size >= MAX_KEYS) {
-    const first = attempts.keys().next().value;
-    if (first === undefined) break;
-    attempts.delete(first);
+    let victim: string | undefined;
+    let soonest = Infinity;
+    for (const [k, v] of attempts) {
+      if (now >= v.lockedUntil) {
+        victim = k;
+        break;
+      }
+      if (v.lockedUntil < soonest) {
+        soonest = v.lockedUntil;
+        victim = k;
+      }
+    }
+    if (victim === undefined) break;
+    attempts.delete(victim);
   }
 }
 

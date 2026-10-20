@@ -3,7 +3,8 @@
 // 민감정보 없음: 토큰 값은 반환하지 않고 설정 여부·일치 여부만 알린다.
 import { NextRequest } from 'next/server';
 import { ok, requireAdmin, isAdminAuthed, ADMIN_AUTH_REQUIRED } from '@/lib/http';
-import { rateGuard, clientIp } from '@/lib/ratelimit';
+import { rateGuard } from '@/lib/ratelimit';
+import { clientKey } from '@/lib/clientKey';
 import { lockoutStatus, recordAttempt } from '@/lib/adminAuth';
 
 export const dynamic = 'force-dynamic';
@@ -15,7 +16,9 @@ export async function GET(req: NextRequest) {
 
   const tokenConfigured = Boolean(process.env.ADMIN_TOKEN);
   const presented = Boolean(req.headers.get('x-admin-token'));
-  const key = clientIp(req.headers);
+  // 잠금을 세는 열쇠 — **요청자가 고를 수 없는 값**이다(DS 51-1). 종전에는 `x-forwarded-for`
+  // 맨 앞을 그대로 썼으므로, 한 줄을 바꿔 보내면 실패 횟수가 매번 처음부터 셌다.
+  const key = clientKey(req.headers);
 
   // 실패 누적 잠금 — 느린 대입까지 막는다. 잠긴 동안에는 토큰을 아예 검사하지 않는다.
   const locked = lockoutStatus(key);

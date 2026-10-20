@@ -4,6 +4,7 @@
 
 import { NextResponse } from 'next/server';
 import { errorBody, fail } from '@/lib/http';
+import { clientKey } from '@/lib/clientKey';
 
 type Bucket = { count: number; resetAt: number };
 
@@ -41,18 +42,18 @@ function sweep(store: Map<string, Bucket>, now: number) {
   }
 }
 
-/** 요청 헤더에서 클라이언트 식별자(프록시 뒤 첫 IP, 없으면 'unknown'). */
-export function clientIp(headers: Headers): string {
-  const fwd = headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0]!.trim().slice(0, 64) || 'unknown';
-  return headers.get('x-real-ip')?.slice(0, 64) || 'unknown';
-}
+/**
+ * 요청자를 가리는 열쇠는 **의존성 없는 모듈**에 있다 (DS 51-1) — 이 파일은 `next/server` 를
+ * 끌어오므로 런타임 테스트가 닿지 못한다. 종전에는 그 안에 「요청자가 고칠 수 있는 값을
+ * 그대로 쓴다」는 결함이 들어 있었고, 검사는 소스 텍스트 대조 두 줄뿐이었다.
+ */
+export { clientKey, looksLikeIp, UNKNOWN_CLIENT } from '@/lib/clientKey';
 
-/** 라우트용 헬퍼: scope별 IP 기준 제한. 기본 60회/분. */
+/** 라우트용 헬퍼: scope별 요청자 기준 제한. 기본 60회/분. */
 export function checkRate(scope: string, headers: Headers, limit = 60, windowMs = 60_000): RateResult {
   const now = Date.now();
   sweep(buckets, now);
-  return rateCheck(buckets, `${scope}:${clientIp(headers)}`, limit, windowMs, now);
+  return rateCheck(buckets, `${scope}:${clientKey(headers)}`, limit, windowMs, now);
 }
 
 /** 표준 429 응답 본문 — lib/http 표준 오류 포맷(code/error/message) 사용. */

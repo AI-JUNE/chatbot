@@ -5,6 +5,7 @@ import { logTurn } from '@/lib/convlog';
 import { intentLabel, intentLabelMap } from '@/lib/intents';
 import { listCustomRules } from '@/lib/adminStore';
 import { resolvedTenantId } from '@/lib/tenants';
+import { isSharedSessionKey, newVisitorSessionId } from '@/lib/session';
 import { rateGuard } from '@/lib/ratelimit';
 import { MAX_MESSAGE_LEN } from '@/lib/limits';
 import { ok, readJson, optStr, withRequestId } from '@/lib/http';
@@ -40,7 +41,7 @@ export async function POST(req: NextRequest) {
     rl.end({ status: 400, code: 'invalid_input' });
     return withRequestId(msg.res, rl.requestId);
   }
-  const sid = optStr(parsed.data.sessionId, 'sessionId', 60, 'anon');
+  const sid = optStr(parsed.data.sessionId, 'sessionId', 60, '');
   if (!sid.ok) {
     rl.end({ status: 400, code: 'invalid_input' });
     return withRequestId(sid.res, rl.requestId);
@@ -55,7 +56,17 @@ export async function POST(req: NextRequest) {
 
   const message = msg.value;
   const tenantId = ten.value || null;
-  const sessionId = sid.value || 'anon';
+  /**
+   * 세션을 들고 오지 않은 요청에는 **한 번 쓰는 식별자**를 발급한다 (DS 51-2).
+   *
+   * 종전 기본값은 `'anon'` 이었다 — 세션을 보내지 않은 모든 요청이 그 한 칸을 함께 썼으므로
+   * 서로 모르는 두 손님이 **같은 사람**이 됐다(최근 12턴·수집한 연락처·진행 중인 접수가
+   * 한 바구니다). 관리 콘솔 「응답 테스트」도 세션 없이 이 창구를 불렀고, 그래서 운영자의
+   * 시험 대화와 밖에서 온 요청이 섞였다. 게다가 그 값은 코드에 적혀 있는 글자라, 접수 주인
+   * 확인(DS 49-1)이 `sessionId=anon` 한 줄로 열렸다.
+   * 발급한 값은 응답에 그대로 실려 나가므로, 이어서 쓰려는 호출자는 받아서 다시 보내면 된다.
+   */
+  const sessionId = isSharedSessionKey(sid.value) ? newVisitorSessionId('web') : sid.value;
   const sessionHash = hashId(sessionId);
 
   // 응답 시간 측정 — 답을 만드는 데 걸린 서버 처리 시간만 잰다(네트워크 왕복 제외).

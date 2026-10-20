@@ -2644,7 +2644,8 @@ test('접수 API 가 연락처를 묻는 상태를 거둔다 (DS 35-3)', () => {
   assert.match(post, /awaitingContact: false,/, '카드가 끝낸 질문을 대화창이 다시 묻는다');
   // 연락처를 남긴 경우에만 거두면, 「연락처 없이 접수」를 누른 사람의 다음 질문이 그대로 삼켜진다.
   assert.equal(/contact\.value \? \{ awaitingContact/.test(post), false, '선택에 따라 거두는 쪽이 갈린다');
-  const upd = post.slice(post.indexOf('updateSession(sessionId.value, {'));
+  // 세션 식별자는 창구가 발급할 수도 있는 값이 되었다(DS 51-2) — 변수 이름만 옮겨 적는다.
+  const upd = post.slice(post.indexOf('updateSession(sessionId, {'));
   assert.match(upd.slice(0, upd.indexOf('});')), /ticketId: ticket\.id/, '세션 갱신이 한자리에 모여 있지 않다');
 });
 
@@ -2728,11 +2729,10 @@ test('접수 안내가 조건 없이 연락처를 묻지 않는다 (DS 37-1)', (
  */
 test('카카오 어댑터가 접수 사실을 받고 상한을 규격대로 다룬다 (DS 37-2·37-3)', () => {
   const route = read('src/app/api/kakao/webhook/route.ts');
-  assert.match(
-    route,
-    /toKakaoResponse\(result, \{ filedTicket: getSession\(sessionId\)\.ticketId \?\? null \}\)/,
-    '라우트가 접수한 사실을 어댑터에 전하지 않는다',
-  );
+  // 번호만이 아니라 **지금 모습**을 전한다(DS 51-3) — 가리키는 식만 옮겼고 뜻은 그대로다.
+  assert.match(route, /const filedId = getSession\(sessionId\)\.ticketId;/, '라우트가 접수한 사실을 어댑터에 전하지 않는다');
+  assert.match(route, /closed: isClosedStatus\(filedTicket\.status\)/, '끝난 접수인지를 전하지 않는다');
+  assert.match(route, /contactOnFile: Boolean\(filedTicket\.contact\)/, '회신할 곳이 있는지를 전하지 않는다');
 
   const s = read('src/lib/kakao.ts');
   assert.equal(/body\.slice\(0, 1000\)/.test(s), false, '답변을 말 중간에서 자르는 자리가 남았다');
@@ -3109,7 +3109,8 @@ test('접수 조회가 주인 확인과 횟수 제한을 지난다 (DS 49-1)', (
   const lib = read('src/lib/escalation.ts');
   const fn = lib.slice(lib.indexOf('export function getTicketForSession('));
   assert.match(fn, /safeEqual\(t\.sessionId, sid\)/, '세션을 글자 단위로 견준다');
-  assert.match(fn, /if \(!sid\) return undefined;/, '빈 세션이 통과한다');
+  // 빈 세션과 **공용 세션 값**을 같은 자리에서 거절한다(DS 51-2) — 뜻은 그대로, 범위가 늘었다.
+  assert.match(fn, /if \(!sid \|\| isSharedSessionKey\(sid\)\) return undefined;/, '빈 세션·공용 세션이 통과한다');
 });
 
 /**
@@ -3243,4 +3244,124 @@ test('접수번호를 알리는 자리가 모두 바뀐 사실을 말한다 (DS 
   assert.match(grammar, /: `연락처를 \$\{masked\}로 바꿨어요\. 접수번호 \$\{ticket\.id\} 그대로/, '번호가 그대로인 경우의 말까지 바꿨다');
   // `created` 를 버리는 자리가 남아 있지 않다(그 값이 곧 「번호가 새로 발급됐다」다).
   assert.equal(/const \{ ticket \} = createTicket\(\{ sessionId, tenant: tenantOf\(sessionId\), contact,/.test(s), false, 'created 를 버리는 접수 자리가 남아 있다');
+});
+
+/* ══════════ 디자인 스프린트 — 48차 재감사 (DS 51-1·51-2·51-3) ══════════ */
+
+/**
+ * DS 51-1 — 제한을 세는 열쇠가 **돌려 볼 수 있는 자리**에 있고, 요청자가 고를 수 없는 값인가.
+ *
+ * 「정말 그렇게 가르는가」는 `tests/runtime.test.mjs` 가 돌려서 본다(그러려고 의존성 없는
+ * 모듈로 내렸다 — 종전 자리는 `next/server` 를 끌어와 런타임 테스트가 닿지 못했다).
+ * 여기서는 ① 그 자리가 다시 라우트·`next` 의존 모듈로 올라가지 않았는지 ② 요청자가 적는
+ * 칸을 먼저 보는 식이 되살아나지 않았는지 ③ 세는 자리들이 모두 그 한 벌을 쓰는지를 고정한다.
+ */
+test('제한·잠금이 같은 한 벌의 열쇠를 쓴다 (DS 51-1)', () => {
+  const key = read('src/lib/clientKey.ts');
+  // ① 의존성이 없다 — 이 모듈이 무엇이든 import 하면 다시 돌려 볼 수 없는 자리가 된다.
+  assert.equal(/^\s*import\s/m.test(key), false, '열쇠를 만드는 모듈이 다른 모듈을 끌어온다');
+  assert.match(key, /export function clientKey\(headers: Headers\): string/, '열쇠를 만드는 자가 없다');
+  assert.match(key, /export const UNKNOWN_CLIENT = 'unknown';/, '「모른다」를 가리키는 값이 없다');
+
+  // ② 플랫폼이 적는 헤더를 먼저 보고, `x-forwarded-for` 는 맨 뒤를 쓴다.
+  assert.match(key, /const TRUSTED_HEADERS = \['x-vercel-forwarded-for', 'x-real-ip'\] as const;/, '믿는 헤더가 한 곳에 적혀 있지 않다');
+  assert.ok(key.indexOf('TRUSTED_HEADERS') < key.indexOf("headers.get('x-forwarded-for')"), '요청자가 적는 칸을 먼저 본다');
+  assert.match(key, /parts\[parts\.length - 1\]/, '맨 앞(요청자가 적는 칸)을 쓴다');
+  assert.equal(/split\(','\)\[0\]/.test(key), false, '맨 앞을 쓰는 식이 되살아났다');
+  // 모양을 보지 않고 쓰는 길이 없다 — 세 자리 모두 `looksLikeIp` 를 지난다.
+  assert.equal((key.match(/looksLikeIp\(/g) || []).length, 3, '모양을 보지 않고 열쇠로 쓰는 자리가 있다');
+
+  // ③ 세는 자리들이 모두 그 한 벌을 쓴다(제한·잠금이 다른 기준으로 갈리면 한쪽이 무력해진다).
+  const rate = read('src/lib/ratelimit.ts');
+  assert.match(rate, /import \{ clientKey \} from '@\/lib\/clientKey';/, '제한이 자기 열쇠를 따로 만든다');
+  assert.match(rate, /`\$\{scope\}:\$\{clientKey\(headers\)\}`/, '제한이 공용 열쇠를 쓰지 않는다');
+  assert.equal(/x-forwarded-for/.test(rate), false, '제한 모듈에 헤더를 읽는 자리가 남아 있다');
+  const auth = read('src/app/api/admin/auth/route.ts');
+  assert.match(auth, /const key = clientKey\(req\.headers\);/, '잠금이 공용 열쇠를 쓰지 않는다');
+
+  // ④ 잠금 자리는 **잠긴 것을 마지막에** 지운다(자리를 밀어 잠금을 푸는 길을 열지 않는다).
+  const lock = read('src/lib/adminAuth.ts');
+  const fn = lock.slice(lock.indexOf('function sweep('), lock.indexOf('export interface LockoutStatus'));
+  assert.equal(/attempts\.keys\(\)\.next\(\)\.value/.test(fn), false, '맨 앞을 그대로 지우는 식이 남아 있다');
+  assert.match(fn, /if \(now >= v\.lockedUntil\)/, '잠긴 자리를 가리지 않는다');
+});
+
+/**
+ * DS 51-2 — 세션을 보내지 않은 요청에 **창구가 한 번 쓰는 식별자를 발급하는가.**
+ *
+ * 공용 값을 거절하는 쪽(`escalation.getTicketForSession`)과 값을 만드는 쪽(`lib/session`)은
+ * 런타임 테스트가 돌려서 본다. 라우트는 돌려 볼 수 없는 자리이므로(★ 안전 원칙 — 메서드 외
+ * export 금지) 창구 넷이 모두 그 발급을 지나는지를 여기서 고정한다. 한 곳이라도 빠지면
+ * 그 창구로 들어온 손님들이 다시 **한 사람**이 된다.
+ */
+test('세션을 들고 오지 않은 요청에 창구가 식별자를 발급한다 (DS 51-2)', () => {
+  const session = read('src/lib/session.ts');
+  assert.match(session, /export function isSharedSessionKey\(id: unknown\): boolean/, '공용 세션 값을 가리는 자가 없다');
+  assert.match(session, /export function newVisitorSessionId\(prefix = 'web'\): string/, '발급하는 자가 없다');
+  // 난수원을 **먼저** 본다(마지막 그물이 앞에 서면 암호학적 난수를 쓰지 않는다 · DS 49-3).
+  assert.ok(session.indexOf('randomUUID') < session.indexOf('fallbackHex(16)'), '마지막 그물을 먼저 본다');
+  assert.match(session, /for \(let i = 0; i < bytes \* 2; i \+= 1\)/, '마지막 그물이 자릿수를 채우지 않는다');
+
+  // ① 대화·접수 창구가 공용 값을 받으면 발급으로 바꾼다(기본값으로 공용 값을 쓰지 않는다).
+  for (const p of ['src/app/api/chat/route.ts', 'src/app/api/escalation/route.ts']) {
+    const s = read(p);
+    assert.match(s, /optStr\(parsed\.data\.sessionId, 'sessionId', 60, ''\)/, `${p} 가 공용 값을 기본값으로 쓴다`);
+    assert.match(
+      s,
+      /isSharedSessionKey\(sid\.value\) \? newVisitorSessionId\('web'\) : sid\.value/,
+      `${p} 가 세션 없는 요청을 한 칸에 몰아넣는다`,
+    );
+    // 공용 값을 **쓰는** 자리가 없다(주석에 적힌 종전 식 설명은 센다고 보지 않는다).
+    assert.equal(/, 'anon'\)/.test(s), false, `${p} 가 공용 값을 기본값으로 넘긴다`);
+    assert.equal(/\|\| 'anon'/.test(s), false, `${p} 가 공용 값으로 되돌린다`);
+  }
+
+  // ② 카카오는 사용자 id 가 없을 때만 발급한다 — 중복 전달 키는 페이로드 값을 그대로 쓴다.
+  const kko = read('src/app/api/kakao/webhook/route.ts');
+  assert.match(kko, /const sessionId = parsed\.userId \? `kakao:\$\{parsed\.userId\}` : newVisitorSessionId\('kakao'\);/, '카카오가 모르는 사용자를 한 칸에 몰아넣는다');
+  assert.match(kko, /kakaoEventKey\(req\.headers, parsed\.userId, parsed\.utterance\)/, '중복 전달 키가 발급값으로 흔들린다');
+  // 지어내는 **식**이 남아 있지 않다(주석에 적힌 종전 식 설명은 센다고 보지 않는다).
+  assert.match(read('src/lib/kakao.ts'), /const userId = \(p\.userRequest\?\.user\?\.id \?\? ''\)\.trim\(\)\.slice\(0, 60\);/, '카카오가 모르는 사용자를 지어낸다');
+
+  // ③ 관리 콘솔 「응답 테스트」가 자기 세션을 들고 보낸다(두 운영자·밖의 요청과 섞이지 않게).
+  const admin = read('src/app/admin/page.tsx');
+  assert.match(admin, /function newConsoleSessionId\(\): string/, '콘솔이 자기 세션을 만들지 않는다');
+  assert.match(admin, /const testSessionRef = useRef\(''\);/, '세션이 턴마다 새로 만들어진다');
+  assert.match(admin, /if \(!testSessionRef\.current\) testSessionRef\.current = newConsoleSessionId\(\);/, '콘솔 세션을 한 번만 만들지 않는다');
+  assert.match(admin, /sessionId: testSessionRef\.current,/, '응답 테스트가 세션을 보내지 않는다');
+  // 접두사 + 16진수 32자 = 41자 — 서버 입력 상한(60자) 안이다.
+  assert.match(admin, /`console_\$\{c\.randomUUID\(\)\.replace\(\/-\/g, ''\)\}`/, '콘솔 세션이 추측 가능한 값에서 나온다');
+
+  // ④ 가리는 자는 저장소 **한 벌**이다 — 라우트가 따로 적으면 조회 자리가 늘 때 한쪽이 빠진다.
+  const esc = read('src/lib/escalation.ts');
+  assert.match(esc, /import \{ isSharedSessionKey \} from '@\/lib\/session';/, '접수 저장소가 공용 값을 가리지 않는다');
+});
+
+/**
+ * DS 51-3 — 카카오가 **지금 모습**을 받고, 웹과 같은 판정을 하는가.
+ *
+ * 「정말 그렇게 말하는가」는 런타임 테스트가 돌려서 본다. 여기서는 ① 끝난 접수를 가리는 어휘가
+ * 한 곳에서 오는지 ② 위젯이 들고 있는 사본이 그 어휘와 어긋나지 않는지를 고정한다 —
+ * 위젯은 클라이언트 묶음이라 접수 저장소를 import 할 수 없어 **두 벌**이 될 수밖에 없는 자리다.
+ */
+test('끝난 접수를 가리는 어휘가 창구마다 어긋나지 않는다 (DS 51-3)', () => {
+  const esc = read('src/lib/escalation.ts');
+  assert.match(esc, /export const CLOSED_STATUSES: EscalationStatus\[\] = \['resolved', 'canceled'\];/, '끝난 상태 코드가 한 곳에 없다');
+  assert.match(esc, /export function isClosedStatus\(status: string \| undefined\): boolean/, '끝났는지 가리는 자가 없다');
+
+  // 위젯의 사본이 같은 두 코드를 본다 — 한쪽만 늘면 그 창구가 끝난 접수를 현재형으로 말한다.
+  const widget = read('src/components/ChatWidget.tsx');
+  const copy = widget.slice(widget.indexOf('export function ticketClosed('), widget.indexOf('/** 접수 완료 카드가 들고 있는 값'));
+  for (const code of ['resolved', 'canceled']) {
+    assert.ok(copy.includes(`'${code}'`), `위젯의 사본이 ${code} 를 끝난 상태로 보지 않는다`);
+  }
+  assert.equal((copy.match(/status === '/g) || []).length, 2, '위젯의 사본이 저장소와 다른 수의 코드를 본다');
+
+  // 카카오 어댑터는 상태 코드를 **해석하지 않는다**(두 벌이 세 벌이 되지 않게).
+  const kakao = read('src/lib/kakao.ts');
+  assert.equal(/resolved|canceled/.test(kakao), false, '어댑터가 상태 코드를 스스로 해석한다');
+  assert.match(kakao, /const filed = opts\.filedTicket && !opts\.filedTicket\.closed \? opts\.filedTicket : null;/, '끝난 접수를 들고 있다');
+  // 연락처가 없는 접수의 문장은 엔진과 한 벌이다(DS 45-1).
+  assert.match(kakao, /import \{ noContactLine, type ChatReply \} from '@\/lib\/chat';/, '회신 불가 안내를 베껴 적었다');
+  assert.match(kakao, /: noContactLine\(\)\)/, '연락처 없는 접수에 회신을 약속한다');
 });

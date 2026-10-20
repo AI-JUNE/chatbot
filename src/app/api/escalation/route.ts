@@ -6,7 +6,7 @@ import { buildHandoffSummary } from '@/lib/handoff';
 import { intentLabelMap } from '@/lib/intents';
 import { tenantLabel } from '@/lib/tenants';
 import { listCustomRules } from '@/lib/adminStore';
-import { getSession, updateSession } from '@/lib/session';
+import { getSession, updateSession, isSharedSessionKey, newVisitorSessionId } from '@/lib/session';
 import { rateGuard } from '@/lib/ratelimit';
 import { ok, fail, readJson, optStr, reqQuery, withRequestId } from '@/lib/http';
 import { startRequest, hashId } from '@/lib/logger';
@@ -29,11 +29,19 @@ export async function POST(req: NextRequest) {
     return withRequestId(parsed.res, rl.requestId);
   }
 
-  const sessionId = optStr(parsed.data.sessionId, 'sessionId', 60, 'anon');
-  if (!sessionId.ok) {
+  const sid = optStr(parsed.data.sessionId, 'sessionId', 60, '');
+  if (!sid.ok) {
     rl.end({ status: 400, code: 'invalid_input' });
-    return withRequestId(sessionId.res, rl.requestId);
+    return withRequestId(sid.res, rl.requestId);
   }
+  /**
+   * 세션을 들고 오지 않은 접수에는 **한 번 쓰는 식별자**를 발급한다 (DS 51-2).
+   *
+   * 종전 기본값은 `'anon'` 이었다 — 그 값으로 만든 접수는 세션당 재사용 규칙(`createTicket`)에
+   * 걸려 **서로 모르는 사람의 접수가 한 건으로 합쳐지고**(뒤에 온 사람의 본문·요약·연락처가
+   * 앞사람의 접수를 덮어쓴다), 그 접수는 `?id=ESC-0001&sessionId=anon` 으로 누구에게나 열렸다.
+   */
+  const sessionId = isSharedSessionKey(sid.value) ? newVisitorSessionId('web') : sid.value;
   const reason = optStr(parsed.data.reason, 'reason', 60, 'user_request');
   if (!reason.ok) {
     rl.end({ status: 400, code: 'invalid_input' });
@@ -52,7 +60,7 @@ export async function POST(req: NextRequest) {
 
   // 이관 요약은 세션 문맥(최근 대화·수집 슬롯)에서 규칙 기반으로 생성한다. 본문은 마스킹을 통과한다.
   const reasonCode = toReasonCode(reason.value);
-  const ctx = getSession(sessionId.value);
+  const ctx = getSession(sessionId);
   /**
    * 어느 고객사의 접수인가 — **세션이 말하는 대로** 적는다 (DS 36-2).
    *
@@ -64,7 +72,7 @@ export async function POST(req: NextRequest) {
   const tenant = ctx.tenantId ?? null;
   const slots = { ...(ctx.slots ?? {}), ...(contact.value ? { contact: contact.value } : {}) };
   const summary = buildHandoffSummary({
-    sessionId: sessionId.value,
+    sessionId: sessionId,
     ...(tenant ? { tenantLabel: tenantLabel(tenant) } : {}),
     // 이 API 는 웹 위젯 전용이지만 채널은 세션이 말하는 대로 적는다(요약이 회신 창구를 지어내지 않게).
     channel: ctx.channel ?? 'web',
@@ -77,14 +85,14 @@ export async function POST(req: NextRequest) {
   }).text;
 
   const { ticket, created } = createTicket({
-    sessionId: sessionId.value,
+    sessionId: sessionId,
     tenant,
     reason: reason.value,
     message: message.value,
     contact: contact.value || undefined,
     summary,
   });
-  updateSession(sessionId.value, {
+  updateSession(sessionId, {
     ticketId: ticket.id,
     handoffReason: reasonCode,
     /**
@@ -109,7 +117,7 @@ export async function POST(req: NextRequest) {
   rl.end({
     status: created ? 201 : 200,
     channel: 'web',
-    sessionHash: hashId(sessionId.value),
+    sessionHash: hashId(sessionId),
     ticketId: ticket.id,
     code: reasonCode,
   });

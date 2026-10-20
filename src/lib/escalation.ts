@@ -8,6 +8,7 @@ import { isHandoffReason, type HandoffReason } from '@/lib/handoff';
 import { maskPii, mergeKinds } from '@/lib/pii';
 import { SUMMARY_TEXT_LEN, TICKET_MESSAGE_LEN, TICKET_NOTE_LEN, clip } from '@/lib/limits';
 import { loadJson, scheduleSave } from '@/lib/storage';
+import { isSharedSessionKey } from '@/lib/session';
 import { revOf } from '@/lib/rev';
 import { safeEqual } from '@/lib/webhookAuth';
 import { BAD_STATUS_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE, changedStatusMessage } from '@/lib/refusal';
@@ -22,6 +23,20 @@ export const STATUS_LABELS: Record<EscalationStatus, string> = {
   resolved: '완료',
   canceled: '취소',
 };
+
+/**
+ * **끝난 접수인가** — 더 진행되지 않고, 연락처는 이미 파기된 상태다 (DS 50-1·51-3).
+ *
+ * 상태 **코드**로 가른다(라벨은 사람에게 보여 주는 말이라 바뀔 수 있다). 위젯은 서버가 내려준
+ * 상태 문자열만 들고 있어 같은 판정을 자기 쪽에 한 벌 더 두는데(`ChatWidget.ticketClosed` —
+ * 클라이언트 묶음에 이 모듈을 넣을 수 없다), **어느 코드가 끝인가**는 여기서 정하고 두 벌이
+ * 어긋나지 않는지는 테스트가 고정한다.
+ */
+export const CLOSED_STATUSES: EscalationStatus[] = ['resolved', 'canceled'];
+
+export function isClosedStatus(status: string | undefined): boolean {
+  return CLOSED_STATUSES.includes(status as EscalationStatus);
+}
 
 export interface EscalationTicket {
   id: string;
@@ -254,10 +269,18 @@ export function getTicket(id: string): EscalationTicket | undefined {
  * 따로 적으면 조회 자리가 늘어날 때 한쪽이 빠진다. 없는 번호와 남의 번호는 **같은 답**
  * (`undefined`)으로 돌려준다: 다르게 거절하면 그 차이가 곧 「있다/없다」를 알려 주는 자다.
  * 비교는 상수 시간으로 한다(`safeEqual` — 세션 식별자도 이 대화의 열쇠다 · DS 49-3).
+ *
+ * **공용 세션 값으로는 열리지 않는다** (DS 51-2). 세션을 보내지 않은 요청은 종전에 전부
+ * `'anon'` 한 칸을 썼고(카카오는 `kakao:kakao-anon`), 그 값은 코드에 적혀 있는 글자다 —
+ * 그래서 이 문이 `?id=ESC-0001&sessionId=anon` 한 줄로 열렸다. 접수번호는 연번이므로
+ * 1번부터 훑으면 「세션 없이 들어온 접수」가 모두 읽힌다(관리 콘솔 「응답 테스트」가 만든
+ * 접수가 바로 그 자리에 있었다). 창구는 이제 그 값을 쓰지 않지만(라우트가 한 번 쓰는
+ * 식별자를 발급한다), 옛 저장분·복원된 스냅샷에는 그 주인으로 적힌 접수가 남아 있다 —
+ * **가리는 자리에서** 거절해야 그 접수들까지 함께 닫힌다.
  */
 export function getTicketForSession(id: string, sessionId: string): EscalationTicket | undefined {
   const sid = String(sessionId || '').trim();
-  if (!sid) return undefined;
+  if (!sid || isSharedSessionKey(sid)) return undefined;
   const t = tickets.find((x) => x.id === id);
   if (!t || !safeEqual(t.sessionId, sid)) return undefined;
   return { ...t };

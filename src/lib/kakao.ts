@@ -1,7 +1,7 @@
 // 카카오 i 오픈빌더 스킬 서버 어댑터(순수 함수) — 스텁.
 // [승인 필요] 카카오 비즈니스 채널 등록·오픈빌더 스킬 URL 실연동 — 전까지 KAKAO_CHANNEL_LIVE=false 유지.
 // 시크릿(KAKAO_SKILL_TOKEN)은 Vercel 환경변수로만 관리(코드 하드코딩 금지).
-import type { ChatReply } from '@/lib/chat';
+import { noContactLine, type ChatReply } from '@/lib/chat';
 import { MAX_MESSAGE_LEN } from '@/lib/limits';
 import { dedupeCheck, dedupeRemember, eventKey, safeEqual, verifySignature, type SignatureFailure } from '@/lib/webhookAuth';
 
@@ -53,7 +53,17 @@ export function parseKakaoPayload(body: unknown): KakaoParsed {
   const utterance = (p.userRequest?.utterance ?? '').trim();
   if (!utterance) return { ok: false, reason: 'empty' };
   if (utterance.length > KAKAO_UTTERANCE_LIMIT) return { ok: false, reason: 'too_long' };
-  const userId = (p.userRequest?.user?.id ?? 'kakao-anon').trim().slice(0, 60) || 'kakao-anon';
+  /**
+   * 사용자 id 가 없으면 **비워 둔다** (DS 51-2).
+   *
+   * 종전에는 `'kakao-anon'` 을 지어냈다 — 그 값은 세션 식별자가 되어(`kakao:kakao-anon`)
+   * id 를 보내지 않은 **모든 요청이 한 대화**가 됐다: 최근 12턴·수집한 연락처·진행 중인 접수가
+   * 한 바구니이고, 세션당 접수 재사용 규칙에 걸려 서로 모르는 사람의 접수가 한 건으로 합쳐진다.
+   * 모르는 것을 지어내지 않고 비워 두면, 창구가 **한 번 쓰는 식별자**를 발급한다(이어지지
+   * 않는 것이 사실이다). 중복 전달 판정 키는 이 값(빈 문자열)을 그대로 쓰므로 재전달에도
+   * 변하지 않는다 — 그 자리에 난수를 넣으면 재시도마다 접수·대화 기록이 하나씩 더 생긴다.
+   */
+  const userId = (p.userRequest?.user?.id ?? '').trim().slice(0, 60);
   return { ok: true, utterance, userId };
 }
 
@@ -135,20 +145,45 @@ export function splitKakaoText(
   return { parts, cut: Boolean(rest) };
 }
 
+/**
+ * 이 대화가 들고 있는 접수의 **지금 모습** (DS 51-3).
+ *
+ * 종전에는 접수번호 한 글자만 받았다(`filedTicket?: string`). 그 값은 세션에 적혀 **끝까지
+ * 남는** 번호라, 운영자가 그 접수를 완료·취소한 뒤에도 카카오는 「이미 접수번호 ESC-0007로
+ * 접수돼 있어요. 다시 접수하지 않으셔도 상담원이 순서대로 연락드릴게요」라고 **현재형으로**
+ * 말했고(완료·취소 시 연락처는 그 자리에서 파기된다 — 방침 4조), 같은 판정으로 「상담원 연결」
+ * 버튼까지 감췄다. 웹에서는 47차에 고친 자리다(DS 50-1·45-1) — 같은 사실을 창구 하나만 고쳤다.
+ * 그래서 「번호」가 아니라 **번호와 지금 상태**를 받는다. 쓰는 쪽은 상태 코드를 해석하지 않는다
+ * (`lib/escalation.isClosedStatus` 가 어느 코드가 끝인가를 정한다).
+ */
+export interface KakaoFiledTicket {
+  id: string;
+  /** 끝난 접수(완료·취소)인가 — 더 진행되지 않고 연락처도 남아 있지 않다. */
+  closed: boolean;
+  /** 회신할 곳이 남아 있는가(`Boolean(ticket.contact)`). */
+  contactOnFile: boolean;
+}
+
 export interface KakaoRenderOptions {
   /**
-   * 이 대화에 **이미 확정된 접수번호**(`getSession(sessionId).ticketId`) (DS 37-2).
+   * 이 대화에 **이미 접수돼 있고 아직 진행 중인** 접수 (DS 37-2·51-3).
    * 이번 턴에 생긴 접수가 아니라 「이 사람은 이미 접수했는가」다 — 카카오에는 버튼을 숨기는
    * 위젯 화면이 없으므로, 이 값이 있으면 접수를 다시 권하지 않고 접수번호를 글자로 알린다.
    */
-  filedTicket?: string | null;
+  filedTicket?: KakaoFiledTicket | null;
 }
 
 /** 대화엔진 결과를 오픈빌더 v2 simpleText 응답으로 변환.
  *  연관 FAQ 제안(suggestions)은 quickReplies로, escalate 시 상담원 연결 quickReply 추가(최대 10개).
  *  KB 답변이면 출처(근거) 한 줄을 덧붙인다 — 카카오는 말풍선 서식이 없어 텍스트로만 표기. */
 export function toKakaoResponse(result: ChatReply, opts: KakaoRenderOptions = {}): KakaoSkillResponse {
-  const filed = (opts.filedTicket ?? '') || '';
+  /**
+   * **끝난 접수는 들고 있지 않다** (DS 51-3) — 위젯이 같은 자리에서 하는 판정과 같은 식이다
+   * (`ChatWidget`: `handoff?.ticket && !ticketClosed(...) ? handoff.ticket : null`).
+   * 끝난 접수를 그대로 들고 있으면 ① 「상담원이 순서대로 연락드릴게요」가 지킬 길 없는 약속이
+   * 되고 ② 그 접수 하나가 이 대화에서 상담원을 다시 부를 유일한 버튼을 가린다.
+   */
+  const filed = opts.filedTicket && !opts.filedTicket.closed ? opts.filedTicket : null;
   /**
    * 접수한 뒤에는 접수를 다시 권하지 않는다 (DS 37-2 — 위젯이 DS 35-2 로 고친 것과 같은 판정).
    * 열린 접수는 세션당 재사용되므로 중복 접수가 생기지는 않지만, 버튼을 그대로 두면 고객은
@@ -156,7 +191,13 @@ export function toKakaoResponse(result: ChatReply, opts: KakaoRenderOptions = {}
    * 이번 턴에 접수된 경우(`result.ticketId`)는 답변 본문이 이미 접수번호를 말한다.
    */
   const already = Boolean(filed) && result.escalate && !result.ticketId;
-  const notice = already ? `\n\n이미 접수번호 ${filed}로 접수돼 있어요. 다시 접수하지 않으셔도 상담원이 순서대로 연락드릴게요.` : '';
+  const notice = already
+    ? `\n\n이미 접수번호 ${filed!.id}로 접수돼 있어요.` +
+      (filed!.contactOnFile
+        ? ' 다시 접수하지 않으셔도 상담원이 순서대로 연락드릴게요.'
+        // 연락처가 없는 접수에 회신을 약속하지 않는다 (DS 45-1) — 문장은 엔진과 **한 벌**이다.
+        : noContactLine())
+    : '';
   const cite = result.citation ? `\n\n근거: ${result.citation.source}` : '';
   const body = `${result.reply}${notice}`;
 
