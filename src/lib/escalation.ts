@@ -136,8 +136,23 @@ export function importTickets(input: unknown): { ok: true; count: number } | { o
     if (typeof c.id !== 'string' || !c.id.trim()) continue;
     if (typeof c.sessionId !== 'string' || !c.sessionId.trim()) continue;
     if (!ESCALATION_STATUSES.includes(c.status)) continue;
-    // 파기된 연락처는 복원하지 않는다 — 파기 이전에 뜬 백업을 되돌리면 되살아나던 자리다.
-    const purgedAt = typeof c.contactPurgedAt === 'string' && c.contactPurgedAt ? c.contactPurgedAt : undefined;
+    /**
+     * 파기된 연락처는 복원하지 않는다 — 파기 이전에 뜬 백업을 되돌리면 되살아나던 자리다.
+     *
+     * **끝난 접수에 적혀 있는 연락처도 되살리지 않는다** (DS 52-3). 파기 경로가 생긴 것은
+     * 나중이라(`updateTicket`), 그보다 앞서 뜬 저장분에는 **완료·취소인데 연락처가 그대로**
+     * 적힌 접수가 있다. 그 접수에는 파기 시각도 없으므로 종전 판정은 아무 일도 하지 않고
+     * 번호를 되살렸고, 파기는 **상태가 바뀌는 순간에만** 일어나므로 이미 끝난 접수의 번호는
+     * 그 뒤로 **지워질 길이 없다** — 운영자 화면·백업·CSV 에 영구히 남는다(방침 4조가 약속한
+     * 「상담 완료 후 지체 없이 파기」가 복원 한 번으로 뒤집힌다).
+     *
+     * 파기 시각은 **지금**이다 — 언제 끝난 상담인지는 알 수 있지만 그 번호를 언제까지 들고
+     * 있었는지는 저장분이 말하지 않는다. 처음부터 연락처가 없던 접수는 그대로 둔다(화면이
+     * 「연락처 없음」과 「연락처 파기됨」을 다르게 적는다).
+     */
+    const recorded = typeof c.contactPurgedAt === 'string' && c.contactPurgedAt ? c.contactPurgedAt : undefined;
+    const hadContact = typeof c.contact === 'string' && c.contact.trim() !== '';
+    const purgedAt = recorded || (isClosedStatus(c.status) && hadContact ? now() : undefined);
     // 복원 경로도 같은 관문을 지난다 (DS 39-2) — 마스킹 이전에 뜬 스냅샷에는 본문 원문이 있다.
     const body = maskPii(String(c.message ?? ''));
     const kinds = mergeKinds(Array.isArray(c.piiKinds) ? c.piiKinds : [], body.hits);
@@ -367,7 +382,9 @@ export function updateTicket(id: string, patch: { status?: EscalationStatus; not
   // 상담이 끝났으면(완료·취소) 연락처를 그 자리에서 파기한다 — 방침 4조가 약속한 「지체 없이」다.
   // 되돌릴 수 없다: 다시 열어도 연락처는 돌아오지 않는다(고객이 새로 남기면 그때 다시 채워진다).
   // 이관 근거(사유·요약·대화)는 그대로 둔다 — 파기 대상은 개인정보인 연락처뿐이다.
-  if ((t.status === 'resolved' || t.status === 'canceled') && t.contact) {
+  // 「어느 상태가 끝인가」는 한 곳에서 정한다(`isClosedStatus` · DS 51-3) — 복원 경로도 같은
+  // 자를 쓴다(DS 52-3). 두 자리가 따로 적혀 있으면 상태가 늘 때 한쪽이 빠진다.
+  if (isClosedStatus(t.status) && t.contact) {
     delete t.contact;
     t.contactPurgedAt = now();
   }

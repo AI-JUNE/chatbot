@@ -4278,3 +4278,196 @@ test('카카오가 끝난 접수를 현재형으로 말하지 않는다 (DS 51-3
   assert.equal(agentReply(K.toKakaoResponse(base, { filedTicket: null })), true);
   assert.equal(agentReply(K.toKakaoResponse(base)), true);
 });
+
+/* ══════════ 52순위 — 백로그 소진 후 49차 재감사 (DS 52-1·52-2·52-3) ══════════ */
+
+/**
+ * DS 52-1 — 연락처를 **받아 적는 자**와 **가리는 자**가 서로 다른 모양을 보고 있었다.
+ *
+ * 36차(DS 39-3)가 「마스킹 규칙은 한 벌」을 세웠지만 그 한 벌은 `@/lib/pii` 안에서만 한 벌이었다.
+ * 연락처를 받아 적는 쪽(`chat.extractContact`)은 자기 패턴을 따로 들고 있었고 거기에는 점이
+ * 들어 있었다(`[-\s.]`) — 가리는 쪽은 하이픈·공백만 알았다(`[-\s]`). 그래서 `010.1234.5678` 은
+ * **고객의 연락처로 저장되는데 어느 자리에서도 가려지지 않는** 값이었다: 답변이 그 번호를
+ * 그대로 되읽고(`contactTail`), 그 답변이 대화 기록·이관 요약·CSV·백업에 원문으로 남고,
+ * 같은 규칙을 쓰는 `scrub` 를 지나 **서버 로그·오류 리포트·외부 LLM 호출 본문**까지 갔다.
+ */
+test('받아 적을 수 있는 전화번호 모양은 모두 가린다 (DS 52-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  delete process.env.CHAT_LLM_LIVE;
+  const { maskPii, PHONE_PATTERN } = await pickPii('pii');
+  const { scrub } = await pickPii('monitoring');
+  const { logTurn, resetLogs, listTurns } = await pickPii('convlog');
+  const { extractContact, isOnlyContact, replyTo } = await pickPii('chat');
+
+  // ── ① 종전 재현: 받아 적는 쪽은 점을 받아들였고, 가리는 쪽은 그 모양을 몰랐다.
+  const dotted = '010.1234.5678';
+  assert.equal(extractContact(dotted), dotted, '받아 적는 쪽이 이 모양을 받지 않는다 — 재현이 깨졌다');
+  assert.equal(isOnlyContact(dotted), true, '연락처만 보낸 것으로 보지 않는다 — 재현이 깨졌다');
+  assert.equal(/\b01[0-9][-\s]?\d{3,4}[-\s]?\d{4}\b/.test(dotted), false, '종전 가리는 규칙이 이 번호를 잡는다 — 재현 실패');
+
+  // ── ② 이제 가린다 — 구분자가 무엇이든 **같은 모양**으로 적는다(화면·CSV 가 한 모양만 읽는다).
+  for (const s of ['010-1234-5678', '010 1234 5678', '010.1234.5678', '01012345678']) {
+    assert.equal(maskPii(s).text, '010-****-5678', `구분자에 따라 가린 모양이 달라진다: ${s}`);
+    assert.deepEqual(maskPii(s).hits, ['phone'], s);
+    assert.equal(maskPii(s, 'opaque').text, '01*-****-****', s);
+  }
+  // 지역번호도 받아 적는 모양이다(`0\d{1,2}…`) — 점 표기까지 함께 가린다.
+  assert.equal(maskPii('02.123.4567').text, '02-****-4567');
+  assert.equal(maskPii('02-123-4567').text, '02-****-4567');
+  assert.equal(maskPii('031-123-4567').text, '031-****-4567');
+  assert.equal(maskPii('02.123.4567', 'opaque').text, '0**-****-****');
+
+  // ── ③ 받아 적는 쪽과 가리는 쪽이 **같은 글**을 쓴다 — 한 쪽만 넓어지는 일이 다시 없게.
+  const shared = new RegExp(PHONE_PATTERN);
+  for (const s of ['010-1234-5678', '010 1234 5678', '010.1234.5678', '01012345678', '02-123-4567', '02.123.4567', '031-123-4567']) {
+    assert.ok(shared.test(s), `공통 패턴이 받아 적는 모양을 놓친다: ${s}`);
+    assert.equal(maskPii(s).masked, true, `받아 적을 수는 있는데 가리지 못한다: ${s}`);
+  }
+
+  // ── ④ 울타리를 넘는 자리 — 서버 로그·오류 리포트·외부 LLM 호출 본문이 같은 규칙을 쓴다.
+  const outbound = scrub('연락처 010.1234.5678 / 매장 02.123.4567');
+  assert.equal(outbound.includes('1234.5678'), false, '외부로 나가는 글에 번호가 그대로 실린다');
+  assert.equal(outbound.includes('123.4567'), false, '외부로 나가는 글에 매장 번호가 그대로 실린다');
+
+  // ── ⑤ 대화 기록도 같은 관문을 지난다(DS 39-1) — 저장된 글에 원문이 없다.
+  resetLogs();
+  logTurn({
+    sessionId: 'rt-ds52-1', channel: 'web', tenant: null,
+    message: '연락처는 010.1234.5678 이에요', reply: '네, 010.1234.5678 로 연락드릴게요',
+    intent: 'agent', source: 'rule', escalate: false,
+  });
+  const kept = listTurns(1)[0];
+  assert.equal(kept.message.includes('010.1234.5678'), false, '대화 기록에 고객의 번호가 원문으로 남는다');
+  assert.equal(kept.reply.includes('010.1234.5678'), false, '챗봇 답변에 번호가 원문으로 남는다');
+  assert.deepEqual(kept.piiKinds, ['phone'], '가린 종류가 남지 않으면 운영자는 누가 그렇게 쓴 것인지 모른다');
+  resetLogs();
+
+  // ── ⑥ 숫자로 시작하는 메일 주소를 반쪽으로 가르지 않는다(이메일 규칙에 넘긴다).
+  assert.equal(maskPii('0212345678@example.com').text, '02***@example.com');
+  assert.deepEqual(maskPii('0212345678@example.com').hits, ['email']);
+
+  // ── ⑦ 끝단: 고객에게 **되읽는 문장**과 이관 요약에 원문이 없다.
+  const sess = await pickPii('session');
+  const esc = await pickPii('escalation');
+  sess.resetSessions();
+  esc.resetTickets();
+  const sid = 'rt-ds52-dot';
+  replyTo('상담원 연결해주세요', sid);
+  replyTo(dotted, sid);
+  const filed = esc.getTicket(sess.getSession(sid).ticketId);
+  assert.equal(filed.contact, dotted, '연락처 칸은 가리지 않는다(상담원이 전화할 대상) — 전제가 깨졌다');
+  assert.ok(filed.summary.includes('010-****-5678'), '이관 요약이 번호를 가리지 않는다');
+  const again = replyTo('상담원', sid);
+  assert.ok(again.reply.includes('010-****-5678'), '되읽는 문장이 번호를 가리지 않는다');
+  assert.equal(again.reply.includes(dotted), false, '고객에게 되읽는 문장에 번호가 원문으로 나간다');
+  esc.resetTickets();
+  sess.resetSessions();
+});
+
+/**
+ * DS 52-2 — 가린 글이 **규칙이 약속한 모양**이 아니었다.
+ *
+ * 가린다는 말은 ① 남겨야 하는 것만 남고 ② 받는 사람이 읽을 수 있는 한 가지 모양이라는 뜻이다.
+ * 두 자리가 그 둘을 모두 어겼다. 이메일은 `m.slice(0, 2)` 가 `@` 까지 삼켜 `a@b.co` 를
+ * `a@***@b.co` 로 적었고(`@` 가 두 번 찍힌 글), 아이디가 두 글자인 주소는 **한 글자도 가려지지
+ * 않았다**. 계좌는 묶음이 넷인 번호를 앞 세 묶음만 보아 끝 두 자리를 남겼고(농협
+ * `352-0123-4567-89`), 첫 묶음이 네 자리인 번호(신한 `1002-123-456789`)는 두 조각으로 갈려
+ * 자리표시자가 두 벌 찍혔다 — 운영자는 계좌가 **둘** 적혀 있던 것으로 읽는다.
+ */
+test('가린 글이 규칙이 약속한 모양이다 (DS 52-2)', opts, async () => {
+  const { maskPii } = await pickPii('pii');
+
+  // ── ① 이메일: 종전 식 재현 — 앞 두 글자를 떼면 `@` 가 함께 떨어져 나온다.
+  assert.equal('a@b.co'.slice(0, 2), 'a@', '종전 식이 재현되지 않는다');
+  assert.equal(maskPii('a@b.co').text, '***@b.co', '아이디가 한 글자면 남길 것이 없다');
+  assert.equal(maskPii('ab@b.co').text, 'a***@b.co', '아이디 두 글자가 통째로 남는다');
+  // 멀쩡한 자리의 모양은 **한 글자도 바뀌지 않는다**.
+  assert.equal(maskPii('abc@b.co').text, 'ab***@b.co');
+  assert.equal(maskPii('hong.gildong@gowon.co.kr').text, 'ho***@gowon.co.kr');
+  for (const s of ['a@b.co', 'ab@b.co', 'abc@b.co', 'hong.gildong@gowon.co.kr']) {
+    const r = maskPii(s);
+    assert.equal(r.text.split('@').length, 2, `가린 글에 @ 가 두 번 찍혔다: ${r.text}`);
+    assert.ok(r.text.endsWith(`@${s.slice(s.lastIndexOf('@') + 1)}`), '도메인이 사라졌다 — 어디로 회신할지 알 수 없다');
+    assert.deepEqual(r.hits, ['email'], s);
+    // 아이디가 통째로 남지 않는다(남는 글자는 아이디보다 짧다).
+    assert.ok(r.text.indexOf('***') < s.indexOf('@'), `아이디가 그대로 남았다: ${r.text}`);
+  }
+
+  // ── ② 계좌: 한 번호가 **한 벌로** 가려지고 끝자리가 남지 않는다.
+  assert.equal(maskPii('1002-123-456789').text, '***-****-****', '한 계좌가 두 벌로 가려진다');
+  assert.equal(maskPii('352-0123-4567-89').text, '***-****-****', '끝 두 자리가 그대로 남는다');
+  // 멀쩡한 자리는 종전 그대로다(DS 39-3 이 세운 하이픈 없는 계좌 포함).
+  for (const s of ['110-234-567890', '110-123-456789', '110212345678']) {
+    assert.equal(maskPii(s).text, '***-****-****', s);
+    assert.deepEqual(maskPii(s).hits, ['account'], s);
+  }
+
+  // ── ③ 날짜를 계좌로 읽지 않는다(DS 39-3 회귀) — 넓힌 규칙이 예약 일시를 삼키면 안 된다.
+  const d = maskPii('예약 일시 2026-09-04 14:00, 연락처 010-1234-5678');
+  assert.match(d.text, /2026-09-04 14:00/, '날짜는 원문 그대로 남아야 상담원이 일정을 안다');
+  assert.equal(d.hits.includes('account'), false, '날짜를 계좌로 집계하면 통계가 틀어진다');
+  assert.deepEqual(d.hits, ['phone']);
+});
+
+/**
+ * DS 52-3 — 복원이 **끝난 접수의 연락처를 되살렸다.**
+ *
+ * 개인정보처리방침 4조는 「상담원 연결을 위한 연락처는 상담 완료 후 지체 없이 파기합니다」라고
+ * 약속하고, 그 파기는 **상태가 바뀌는 순간에만** 일어난다(`updateTicket`). 파기 경로가 생긴
+ * 것은 나중이라 그보다 앞서 뜬 저장분에는 **완료·취소인데 연락처가 그대로** 적힌 접수가 있고,
+ * 그 접수에는 파기 시각도 없다 — 종전 복원 판정은 파기 시각이 적힌 접수만 보았으므로 아무 일도
+ * 하지 않고 번호를 되살렸다. 되살아난 뒤에는 지울 길이 없다: 끝난 접수에 콘솔이 내주는 버튼은
+ * 「다시 열기」뿐이고 그 길은 파기하지 않는다(운영자가 다시 열어 또 완료로 옮기지 않는 한).
+ */
+test('복원이 끝난 접수의 연락처를 되살리지 않는다 (DS 52-3)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const esc = await pickPii('escalation');
+  esc.resetTickets();
+  const at = '2026-10-01T01:00:00.000Z';
+  const row = (over) => ({
+    sessionId: 'web_0123456789abcdef0123456789abcdef',
+    reason: 'user_request', reasonCode: 'customer_request', message: '문의드려요',
+    createdAt: '2026-10-01T00:00:00.000Z', updatedAt: at, ...over,
+  });
+
+  const r = esc.importTickets({
+    version: 1, savedAt: at, seq: 4,
+    tickets: [
+      row({ id: 'ESC-0004', status: 'resolved', contact: '010-1111-2222' }),
+      row({ id: 'ESC-0003', status: 'canceled', contact: '010-3333-4444' }),
+      row({ id: 'ESC-0002', status: 'open', contact: '010-5555-6666' }),
+      row({ id: 'ESC-0001', status: 'resolved' }),
+    ],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.count, 4, '저장분을 건너뛰었다');
+
+  // ── ① 끝난 접수의 연락처는 되살아나지 않고, **지웠다는 사실**이 남는다.
+  for (const id of ['ESC-0004', 'ESC-0003']) {
+    const t = esc.getTicket(id);
+    assert.equal(t.contact, undefined, `${id}: 저장분을 읽어 들이자 끝난 접수의 연락처가 되살아났다`);
+    assert.ok(t.contactPurgedAt, `${id}: 파기한 사실이 없어 화면이 「연락처 없음」이라 적는다`);
+  }
+  // ── ② 진행 중인 접수의 연락처는 그대로다 — 상담원이 전화할 곳을 지우지 않는다.
+  assert.equal(esc.getTicket('ESC-0002').contact, '010-5555-6666', '진행 중인 접수의 연락처를 지웠다');
+  assert.equal(esc.getTicket('ESC-0002').contactPurgedAt, undefined);
+  // ── ③ 처음부터 연락처가 없던 접수는 「파기됨」이 아니다 — 다른 사실이라 화면이 달리 적는다.
+  assert.equal(esc.getTicket('ESC-0001').contact, undefined);
+  assert.equal(esc.getTicket('ESC-0001').contactPurgedAt, undefined, '받은 적 없는 번호를 파기했다고 말한다');
+
+  // ── ④ 이미 파기 시각이 적힌 저장분은 **그 시각을 그대로** 들고 온다(지어내지 않는다).
+  esc.resetTickets();
+  const marked = '2026-09-30T05:00:00.000Z';
+  esc.importTickets({
+    version: 1, savedAt: at, seq: 1,
+    tickets: [row({ id: 'ESC-0001', status: 'resolved', contact: '010-1111-2222', contactPurgedAt: marked })],
+  });
+  assert.equal(esc.getTicket('ESC-0001').contact, undefined, '파기 시각이 적혀 있는데 번호가 되살아났다');
+  assert.equal(esc.getTicket('ESC-0001').contactPurgedAt, marked, '적혀 있던 파기 시각을 지금으로 덮었다');
+
+  // ── ⑤ 「어느 상태가 끝인가」는 한 곳에서 정한다(DS 51-3) — 복원도 같은 자를 쓴다.
+  assert.deepEqual(esc.CLOSED_STATUSES, ['resolved', 'canceled']);
+  assert.equal(esc.isClosedStatus('open'), false);
+  assert.equal(esc.isClosedStatus('in_progress'), false);
+  esc.resetTickets();
+});

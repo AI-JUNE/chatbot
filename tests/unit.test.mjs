@@ -3365,3 +3365,68 @@ test('끝난 접수를 가리는 어휘가 창구마다 어긋나지 않는다 (
   assert.match(kakao, /import \{ noContactLine, type ChatReply \} from '@\/lib\/chat';/, '회신 불가 안내를 베껴 적었다');
   assert.match(kakao, /: noContactLine\(\)\)/, '연락처 없는 접수에 회신을 약속한다');
 });
+
+/* ══════════ 디자인 스프린트 — 49차 재감사 (DS 52-1·52-2·52-3) ══════════ */
+
+/**
+ * DS 52-1 — 전화번호 모양이 **한 곳**에 적혀 있는가.
+ *
+ * 「정말 가리는가」는 `tests/runtime.test.mjs` 가 돌려서 본다. 여기서 고정하는 것은 **패턴이
+ * 두 벌로 돌아가지 않는 것**이다 — 받아 적는 쪽이 자기 패턴을 다시 손으로 적으면, 한쪽만
+ * 넓어져 「받아 적을 수는 있는데 가릴 수는 없는 모양」이 또 생긴다(점으로 적은 번호가 그랬다).
+ * 마스킹(DS 39-3)·상한(DS 38-x)·감사 어휘(DS 40-3)에서 세운 것과 같은 규칙이다.
+ */
+test('전화번호 모양은 받아 적는 쪽과 가리는 쪽이 한 벌로 쓴다 (DS 52-1)', () => {
+  const pii = read('src/lib/pii.ts');
+  // ① 구분자 집합과 패턴 원문이 **여기 한 곳**에 있다.
+  assert.match(pii, /export const PHONE_SEP = '\[-\\\\s\.\]';/, '구분자 집합이 한 곳에 적혀 있지 않다');
+  assert.match(pii, /export const PHONE_PATTERN = `0\\\\d\{1,2\}\$\{PHONE_SEP\}\?\\\\d\{3,4\}\$\{PHONE_SEP\}\?\\\\d\{4\}`;/, '패턴 원문이 없다');
+  // ② 가리는 규칙이 그 원문을 쓴다 — 하이픈·공백만 아는 식이 되살아나지 않았다.
+  assert.match(pii, /re: new RegExp\(`\\\\b\$\{PHONE_PATTERN\}\\\\b\(\?!\[\\\\w\.\+-\]\*@\)`, 'g'\)/, '가리는 규칙이 공통 패턴을 쓰지 않는다');
+  assert.equal(/\[-\\s\]\?\\d\{3,4\}/.test(pii), false, '하이픈·공백만 아는 식이 남아 있다');
+
+  // ③ 받아 적는 쪽은 패턴을 **직접 적지 않는다**.
+  const chat = read('src/lib/chat.ts');
+  assert.match(chat, /import \{ PHONE_PATTERN \} from '@\/lib\/pii';/, '받아 적는 쪽이 패턴을 끌어오지 않는다');
+  assert.match(chat, /const PHONE_RE = new RegExp\(PHONE_PATTERN\);/, '받아 적는 쪽이 자기 패턴을 들고 있다');
+  assert.equal(/01\[016789\]/.test(chat), false, '손으로 적은 전화번호 패턴이 남아 있다');
+});
+
+/**
+ * DS 52-2 — 가린 글의 **모양을 만드는 식**이 종전으로 돌아가지 않았는가.
+ *
+ * 돌려서 보는 것은 런타임 테스트의 몫이고(실제 결과 문자열), 여기서는 두 식이 되살아나지
+ * 않는 것만 고정한다: ① 이메일에서 `@` 까지 삼키던 `slice(0, 2)` ② 묶음 셋만 보던 계좌 패턴.
+ */
+test('가린 글의 모양을 만드는 식이 종전으로 돌아가지 않는다 (DS 52-2)', () => {
+  const pii = read('src/lib/pii.ts');
+  // ① 이메일은 `@` 자리를 찾아 아이디와 도메인을 **따로** 다룬다.
+  assert.equal(/\$\{m\.slice\(0, 2\)\}\*\*\*@/.test(pii), false, '`@` 까지 삼키던 식이 남아 있다');
+  assert.equal(/m\.split\('@'\)\[1\]/.test(pii), false, '마지막 `@` 를 보지 않는 식이 남아 있다');
+  assert.match(pii, /const at = m\.lastIndexOf\('@'\);/, '아이디와 도메인을 가르는 자리가 없다');
+  assert.match(pii, /const keep = local\.length > 2 \? 2 : local\.length > 1 \? 1 : 0;/, '아이디보다 긴 글자를 남긴다');
+  // ② 계좌는 묶음 넷까지 본다.
+  assert.match(pii, /re: \/\\b\\d\{2,4\}-\?\\d\{2,6\}-\?\\d\{2,6\}\(\?:-\?\\d\{2,6\}\)\?\\b\/g,/, '계좌 규칙이 묶음 넷을 보지 않는다');
+  assert.equal(/\/\\b\\d\{2,3\}-\?\\d\{2,6\}-\?\\d\{2,6\}\\b\/g/.test(pii), false, '묶음 셋만 보던 식이 남아 있다');
+  // ③ 예약 일시 보호는 그대로다 — 넓힌 규칙이 날짜를 삼키지 않게 하는 자리다.
+  assert.match(pii, /const PROTECT_RULES: RegExp\[\] = \[\/\\b20\\d\{2\}\[-\.\/\]\\d\{1,2\}\[-\.\/\]\\d\{1,2\}\\b\/g\];/, '날짜 보호가 사라졌다');
+});
+
+/**
+ * DS 52-3 — 복원 경로가 **끝난 접수의 연락처를 들고 오지 않는가.**
+ *
+ * 저장분을 읽어 들이는 자리는 하나(`escalation.importTickets`)이고, 「어느 상태가 끝인가」를
+ * 정하는 자도 하나다(`isClosedStatus` · DS 51-3). 두 자리가 상태 코드를 각자 늘어놓으면
+ * 상태가 늘 때 한쪽이 빠진다 — 그 한쪽이 **파기 약속을 지키는 쪽**이면 번호가 남는다.
+ */
+test('복원·파기가 같은 자로 「끝난 접수」를 가른다 (DS 52-3)', () => {
+  const esc = read('src/lib/escalation.ts');
+  // ① 복원이 끝난 접수의 연락처를 파기 대상으로 본다.
+  assert.match(esc, /const hadContact = typeof c\.contact === 'string' && c\.contact\.trim\(\) !== '';/, '저장분에 연락처가 있었는지 보지 않는다');
+  assert.match(esc, /const purgedAt = recorded \|\| \(isClosedStatus\(c\.status\) && hadContact \? now\(\) : undefined\);/, '끝난 접수의 연락처를 되살리는 식이다');
+  // ② 파기하는 자리도 같은 자를 쓴다 — 상태 코드를 손으로 늘어놓지 않는다.
+  assert.match(esc, /if \(isClosedStatus\(t\.status\) && t\.contact\) \{/, '파기 판정이 상태 코드를 직접 늘어놓는다');
+  assert.equal(/\(t\.status === 'resolved' \|\| t\.status === 'canceled'\) && t\.contact/.test(esc), false, '손으로 늘어놓은 판정이 남아 있다');
+  // ③ 「처음부터 없던 접수」와 「받았다가 파기한 접수」를 구분하는 칸은 그대로다.
+  assert.match(esc, /contactPurgedAt\?: string;/, '파기 사실을 남기는 칸이 사라졌다');
+});

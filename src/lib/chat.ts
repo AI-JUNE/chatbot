@@ -16,6 +16,7 @@ import { josa } from '@/lib/refusal';
 import { appendTurn, getSession, setSlot, updateSession } from '@/lib/session';
 import { createTicket, queuePosition } from '@/lib/escalation';
 import { buildHandoffSummary, maskPii, type HandoffReason } from '@/lib/handoff';
+import { PHONE_PATTERN } from '@/lib/pii';
 import { generateGroundedAnswer, type CompleteOptions, type GroundingDoc, type LLMFailureReason, type LLMMessage } from '@/lib/llm';
 import {
   AGENT_REQUEST_RE,
@@ -209,7 +210,16 @@ export function shadowOfRule(keywords: readonly string[], selfIntent = ''): Rule
 }
 
 // ---- 연락처 수집(에스컬레이션 후속 턴) ----
-const PHONE_RE = /(01[016789][-\s.]?\d{3,4}[-\s.]?\d{4}|0\d{1,2}[-\s.]?\d{3,4}[-\s.]?\d{4})/;
+/**
+ * 받아 적는 전화번호 모양 — **가리는 쪽과 같은 글을 쓴다** (`@/lib/pii` · DS 52-1).
+ *
+ * 종전에는 이 자리에 패턴이 손으로 한 번 더 적혀 있었다(휴대폰·지역번호 두 갈래). 그래서
+ * 가리는 쪽이 모르는 구분자(점)를 이쪽만 받아들였고, `010.1234.5678` 은 **연락처로 저장되는데
+ * 가려지지 않는** 값이 됐다 — 답변이 그 번호를 그대로 되읽고(`contactTail`), 그 답변이 대화
+ * 기록·이관 요약·CSV·백업에 원문으로 남고, `scrub` 를 지나 외부 LLM 호출 본문까지 갔다.
+ * 「규칙은 한 곳에」는 마스킹(DS 39-3)·상한(DS 38-x)·감사 어휘(DS 40-3)에서 세운 규칙이다.
+ */
+const PHONE_RE = new RegExp(PHONE_PATTERN);
 const EMAIL_RE = /[\w.+-]+@[\w-]+(\.[\w-]+)+/;
 const SKIP_RE = /(건너뛰|괜찮|없어요|없습니다|아니요|아니오|나중에|스킵|skip)/i;
 
