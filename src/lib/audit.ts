@@ -5,7 +5,7 @@
 // 토큰 값 등 시크릿은 절대 기록하지 않는다(인증 사용 여부만 boolean으로 기록).
 import { loadJson, saveJson, savedInfo, scheduleSave, SavedInfo } from '@/lib/storage';
 import { csvCell, csvRow } from '@/lib/csv';
-import { KST_CSV_NOTE, kstDateTime } from '@/lib/kst';
+import { KST_CSV_NOTE, kstDateTime, readInstant } from '@/lib/kst';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 import { RetentionInfo, retentionNotes } from '@/lib/retention';
 
@@ -204,7 +204,15 @@ function readEvents(input: unknown): AuditEvent[] | null {
     if (typeof e.action !== 'string' || !ACTIONS.has(e.action)) continue;
     out.push({
       id: e.id,
-      at: typeof e.at === 'string' && e.at ? e.at : new Date().toISOString(),
+      /**
+       * 시각 칸은 **읽을 수 있을 때만** 들고 온다 (DS 54-3).
+       *
+       * 이 값이 걸려 있는 자리가 셋이다: 보관 경계(`knownFrom` → 내려받기 꼬리 주석), 파일의
+       * 「시각」 칸(`kstDateTime` 은 읽을 수 없으면 **빈 칸**을 돌려준다 — 지어내지 않는다),
+       * 그리고 합칠 때 줄을 세우는 자리(`mergeAudit` 는 글자 비교로 앞뒤를 가린다). 시각인 척하는
+       * 글자가 한 줄 들어오면 셋이 함께 어긋나는데, 어긋났다고 말하는 화면은 어디에도 없다.
+       */
+      at: readInstant(e.at, new Date().toISOString()),
       action: e.action as AuditAction,
       target: String(e.target ?? '').slice(0, 100),
       detail: String(e.detail ?? '').slice(0, 300),

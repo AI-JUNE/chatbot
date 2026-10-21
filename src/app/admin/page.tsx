@@ -707,7 +707,7 @@ function ConversationDrawer({
                 <p>{t.reply}</p>
                 <div className="ac-bubble-tags">
                   <span className="ac-pill">{t.intentLabel || UNNAMED_TOPIC}</span>
-                  <span className="ac-pill">{SOURCE_VIEW_LABELS[t.source] || t.source}</span>
+                  <span className="ac-pill">{sourceView(t.source)}</span>
                   {t.escalate && <span className="ac-pill" style={TONE.warn}>상담원 제안</span>}
                   <span style={{ fontSize: 11, color: 'var(--mut)', marginLeft: 'auto' }}>{timeLabel(t.at)}</span>
                 </div>
@@ -1389,7 +1389,21 @@ const SOURCE_VIEW_LABELS: Record<string, string> = {
   fallback: '기본 안내',
   empty: '내용 없음',
   error: '연결 오류',
+  unknown: '알 수 없음',
 };
+
+/**
+ * 응답 근거 한 칸 — **어떤 값에도 코드를 그대로 그리지 않는다** (DS 54-2).
+ *
+ * 종전에는 이 사전을 네 자리에서 각각 `SOURCE_VIEW_LABELS[x] || x` 로 읽었다. 그래서 사전에
+ * 없는 코드가 최근 대화 표·상세 서랍·응답 테스트 서랍·대시보드 「근거별」 묶음에 **글자째** 떴다
+ * (저장분을 되돌린 뒤의 대화 기록이 그런 코드를 들고 올 수 있었다 — 서버 쪽은 이제 어휘를
+ * 지키지만, 코드를 그리지 않는 책임은 그리는 자리에도 있다). 주제 이름이 `intentLabel` 한
+ * 곳에서 나오는 것과 같은 규칙이다.
+ */
+function sourceView(source: string): string {
+  return SOURCE_VIEW_LABELS[(source || '').trim()] || SOURCE_VIEW_LABELS.unknown;
+}
 
 const CHANNEL_LABELS: Record<string, string> = {
   web: '홈페이지',
@@ -4577,7 +4591,7 @@ export default function AdminPage() {
               )}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
                 {Object.entries(stats.conversation.bySource).map(([k, v]) => (
-                  <span key={k} className="ac-pill">{SOURCE_VIEW_LABELS[k] || k} {v}건</span>
+                  <span key={k} className="ac-pill">{sourceView(k)} {v}건</span>
                 ))}
                 {Object.entries(stats.conversation.byChannel).map(([k, v]) => (
                   <span key={k} className="ac-pill">{CHANNEL_LABELS[k] || k} {v}건</span>
@@ -4776,7 +4790,7 @@ export default function AdminPage() {
                       {/* 어느 고객사 손님의 말인가 — 주제·근거보다 먼저 거르는 값이다(DS 36-1). */}
                       <span className="ac-pill">{t.tenantLabel || UNNAMED_TENANT}</span>
                       <span className="ac-pill">{t.intentLabel || UNNAMED_TOPIC}</span>
-                      <span className="ac-pill">{SOURCE_VIEW_LABELS[t.source] || t.source}</span>
+                      <span className="ac-pill">{sourceView(t.source)}</span>
                       {t.escalate && <span className="ac-pill" style={TONE.warn}>상담원 제안</span>}
                     </span>
                   </button>
@@ -6544,7 +6558,7 @@ export default function AdminPage() {
                       {/* 보낼 때 고른 기준 — 지금 고른 것이 아니라 그때 보낸 것이다(DS 36-3). */}
                       <dt>기준</dt><dd>{t.basis || DEFAULT_TENANT_VIEW_LABEL}</dd>
                       <dt>주제</dt><dd>{t.intentLabel || UNNAMED_TOPIC}</dd>
-                      <dt>근거</dt><dd>{SOURCE_VIEW_LABELS[t.source] || t.source}{t.citation ? ` · ${t.citation.source}` : ''}</dd>
+                      <dt>근거</dt><dd>{sourceView(t.source)}{t.citation ? ` · ${t.citation.source}` : ''}</dd>
                       {t.citation && (<><dt>인용</dt><dd style={{ color: 'var(--sub)' }}>“{t.citation.snippet}”</dd></>)}
                       {t.confidence !== undefined && (<><dt>확신도</dt><dd>{Math.round(t.confidence * 100)}% <span style={{ color: 'var(--mut)' }}>(엔진 판정값)</span></dd></>)}
                     </dl>

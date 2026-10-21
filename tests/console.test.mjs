@@ -326,7 +326,8 @@ test('응답 테스트가 좌 입력·근거 / 우 상담창 미리보기로 분
   assert.match(t, /gw-dot/, '타이핑 인디케이터(위젯과 같은 것)');
   // 주제는 서버가 붙여 준 이름을 그린다 — 화면이 사전을 따로 들고 코드를 폴백하지 않는다(DS 22-2).
   assert.match(t, /\{t\.intentLabel \|\| UNNAMED_TOPIC\}/, '주제는 서버가 준 이름으로');
-  assert.match(t, /SOURCE_VIEW_LABELS\[t\.source\]/, '근거는 사람 말로');
+  // 근거 이름을 붙이는 자도 한 벌이다 — 사전에 없는 코드를 글자째 그리지 않는다(DS 54-2).
+  assert.match(t, /\{sourceView\(t\.source\)\}/, '근거는 사람 말로');
   assert.equal(/intent: \{|source: \{/.test(t), false, '내부 코드 라벨을 그대로 보여주면 안 된다');
   assert.match(t, /실제 고객 정보는 넣지 마세요/, '개인정보 주의 안내');
   assert.match(src, /catch \{\n      data = \{ reply: '연결이 원활하지 않습니다/, '네트워크 실패 안내');

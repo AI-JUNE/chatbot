@@ -6,7 +6,8 @@
 // 이관 사유 코드(reasonCode)와 요약(summary)은 AICC-Core `src/core/handoffSummary.ts` 어휘를 따른다.
 import { isHandoffReason, type HandoffReason } from '@/lib/handoff';
 import { maskPii, mergeKinds } from '@/lib/pii';
-import { SUMMARY_TEXT_LEN, TICKET_MESSAGE_LEN, TICKET_NOTE_LEN, clip } from '@/lib/limits';
+import { SUMMARY_TEXT_LEN, TICKET_CONTACT_LEN, TICKET_MESSAGE_LEN, TICKET_NOTE_LEN, clip } from '@/lib/limits';
+import { isReadableInstant, readInstant } from '@/lib/kst';
 import { loadJson, scheduleSave } from '@/lib/storage';
 import { isSharedSessionKey } from '@/lib/session';
 import { revOf } from '@/lib/rev';
@@ -69,7 +70,13 @@ export interface EscalationTicket {
    * 「저장할 때 가린다」와 「받아서 쓰되 보여줄 때 가린다」는 다른 칸에 쓰는 다른 규칙이다.
    */
   contact?: string;
-  /** 접수 본문에서 가린 개인정보의 종류(`@/lib/pii` 코드). 없으면 칸도 없다 (DS 39-2). */
+  /**
+   * **이 접수에 적어 둔 글에서 가린** 개인정보의 종류(`@/lib/pii` 코드). 없으면 칸도 없다 (DS 39-2).
+   *
+   * 적어 둔 글은 둘이다 — 접수 본문(`message`)과 이관 요약(`summary`). 만들 때는 요약이 이미
+   * 가려진 글로 들어오므로(`buildHandoffSummary`) 요약에서 더해지는 종류가 없고, 저장분을
+   * 읽어 들일 때만 더해진다(가리는 관문이 생기기 전에 뜬 요약이다 · DS 54-1).
+   */
   piiKinds?: string[];
   /**
    * 연락처를 파기한 시각(ISO). 개인정보처리방침 4조가 「상담원 연결을 위한 연락처는 상담 완료 후
@@ -150,26 +157,58 @@ export function importTickets(input: unknown): { ok: true; count: number } | { o
      * 있었는지는 저장분이 말하지 않는다. 처음부터 연락처가 없던 접수는 그대로 둔다(화면이
      * 「연락처 없음」과 「연락처 파기됨」을 다르게 적는다).
      */
-    const recorded = typeof c.contactPurgedAt === 'string' && c.contactPurgedAt ? c.contactPurgedAt : undefined;
-    const hadContact = typeof c.contact === 'string' && c.contact.trim() !== '';
-    const purgedAt = recorded || (isClosedStatus(c.status) && hadContact ? now() : undefined);
+    /**
+     * 연락처는 **글자로 읽어 두고** 판정한다 (DS 54-1).
+     *
+     * 종전 판정은 `typeof c.contact === 'string'` 이었다. 그런데 이 칸은 저장분이 적어 오는
+     * 값이라 글자가 아닐 수 있고, 그때 「연락처가 있다」가 거짓이 되어 **끝난 접수의 연락처가
+     * 파기 대상에서 빠졌다** — 숫자로 적힌 번호(`contact: 1012345678`)는 완료·취소 접수에
+     * 그대로 남아 큐·상세·백업으로 계속 나갔다(DS 52-3 이 막은 그 자리의 뒷문이다).
+     * 길이도 여기서 지킨다 — 접수를 만드는 쪽과 **같은 수**를 쓴다(`TICKET_CONTACT_LEN`).
+     */
+    const contact = c.contact === undefined || c.contact === null ? '' : String(c.contact).trim();
+    const recorded = isReadableInstant(c.contactPurgedAt) ? readInstant(c.contactPurgedAt, now()) : undefined;
+    const purgedAt = recorded || (isClosedStatus(c.status) && contact ? now() : undefined);
     // 복원 경로도 같은 관문을 지난다 (DS 39-2) — 마스킹 이전에 뜬 스냅샷에는 본문 원문이 있다.
     const body = maskPii(String(c.message ?? ''));
-    const kinds = mergeKinds(Array.isArray(c.piiKinds) ? c.piiKinds : [], body.hits);
+    /**
+     * **이관 요약도 같은 관문을 지난다** (DS 54-1).
+     *
+     * 종전에는 본문만 지났다. 그런데 상담원이 전화를 걸기 전에 **실제로 읽는 칸**은 요약이고
+     * (`.ac-summary` — 서랍에서 가장 큰 글 묶음이다), 그 글에는 직전 대화 여섯 마디와 수집한
+     * 슬롯이 그대로 들어 있다. 가리는 관문이 생기기 전에 뜬 저장분을 되돌리면 번호가 원문째
+     * 되살아나고, 그 요약은 제 꼬리에 「개인정보 마스킹: 해당 없음」이라고 적고 있다 —
+     * **가려졌다고 말하면서 가리지 않은 글**이다. 길이 상한(DS 38-2)도 여기에는 없었다.
+     *
+     * 가린 종류는 **우리가 센 값**이므로 접수의 `piiKinds` 에 더한다. 만드는 쪽에서는 요약이
+     * 이미 가려진 글로 들어오므로 더해지는 것이 없다 — 두 길이 어긋나지 않는다.
+     */
+    const brief = maskPii(String(c.summary ?? ''));
+    const kinds = mergeKinds(Array.isArray(c.piiKinds) ? c.piiKinds : [], body.hits, brief.hits);
+    /**
+     * 칸을 **하나씩 적는다** — 저장분을 통째로 펼치지 않는다 (DS 54-1).
+     *
+     * 종전에는 `...c` 로 펼친 뒤 몇 칸만 덮었다. 그래서 덮지 않은 칸(요약·메모·연락처)은 관문을
+     * 지나지 않았고, 접수가 알지도 못하는 칸까지 그대로 들어와 조회 응답·백업으로 되나갔다.
+     * 칸을 적어 두면 접수에 칸이 하나 늘 때 **타입 검사가 이 자리를 가리킨다**.
+     */
     const entry: EscalationTicket = {
-      ...c,
-      ...(purgedAt ? { contact: undefined, contactPurgedAt: purgedAt } : {}),
+      id: c.id,
+      sessionId: c.sessionId,
       // 옛 스냅샷에는 고객사가 없다 — 지어내지 않고 비워 둔다(화면이 「기본」이라 말한다).
-      ...(typeof c.tenant === 'string' && c.tenant ? { tenant: c.tenant } : { tenant: undefined }),
+      ...(typeof c.tenant === 'string' && c.tenant ? { tenant: c.tenant } : {}),
       reason: typeof c.reason === 'string' && c.reason ? c.reason : 'user_request',
       reasonCode: isHandoffReason(c.reasonCode) ? c.reasonCode : toReasonCode(c.reason),
       message: clip(body.text, TICKET_MESSAGE_LEN),
-      createdAt: typeof c.createdAt === 'string' ? c.createdAt : now(),
-      updatedAt: typeof c.updatedAt === 'string' ? c.updatedAt : now(),
+      ...(kinds.length ? { piiKinds: kinds } : {}),
+      ...(purgedAt ? { contactPurgedAt: purgedAt } : contact ? { contact: contact.slice(0, TICKET_CONTACT_LEN) } : {}),
+      status: c.status,
+      ...(typeof c.note === 'string' && c.note.trim() ? { note: clip(c.note.trim(), TICKET_NOTE_LEN) } : {}),
+      ...(brief.text ? { summary: clip(brief.text, SUMMARY_TEXT_LEN) } : {}),
+      // 시각 칸은 **읽을 수 있을 때만** 들고 온다 (DS 54-3) — 접수 큐·상세 서랍이 그대로 그린다.
+      createdAt: readInstant(c.createdAt, now()),
+      updatedAt: readInstant(c.updatedAt, now()),
     };
-    // 가린 종류는 우리가 센 값이다 — 옛 스냅샷의 알 수 없는 코드는 그대로 들고 오지 않는다.
-    if (kinds.length) entry.piiKinds = kinds;
-    else delete entry.piiKinds;
     restored.push(entry);
   }
   tickets = restored;
@@ -229,7 +268,7 @@ export function createTicket(input: {
       else delete existing.piiKinds;
     }
     if (input.contact) {
-      existing.contact = String(input.contact).trim().slice(0, 100);
+      existing.contact = String(input.contact).trim().slice(0, TICKET_CONTACT_LEN);
       // 다시 받은 연락처는 「파기됨」이 아니다(다시 열린 접수에 새로 남긴 경우).
       delete existing.contactPurgedAt;
     }
@@ -257,7 +296,7 @@ export function createTicket(input: {
     message: clip(body.text, TICKET_MESSAGE_LEN),
     ...(body.hits.length ? { piiKinds: body.hits } : {}),
     summary: input.summary ? clip(input.summary, SUMMARY_TEXT_LEN) : undefined,
-    contact: input.contact ? String(input.contact).trim().slice(0, 100) : undefined,
+    contact: input.contact ? String(input.contact).trim().slice(0, TICKET_CONTACT_LEN) : undefined,
     status: 'open',
     createdAt: now(),
     updatedAt: now(),

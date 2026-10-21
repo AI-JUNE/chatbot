@@ -2043,7 +2043,7 @@ test('내려받기 파일 이름의 날짜는 한국 날짜다 (DS 21-3)', () =>
 
 test('대화 집계의 날짜 묶음도 같은 한 곳에서 온다 (DS 21-1)', () => {
   const s = read('src/lib/convlog.ts');
-  assert.match(s, /import \{ KST_CSV_NOTE, kstDate, kstDateTime \} from '@\/lib\/kst'/, 'convlog 가 한국 달력 모듈을 쓰지 않는다');
+  assert.match(s, /import \{ KST_CSV_NOTE, kstDate, kstDateTime, readInstant \} from '@\/lib\/kst'/, 'convlog 가 한국 달력 모듈을 쓰지 않는다');
   // Intl 이 없는 환경에서 UTC 로 떨어지던 폴백을 되살리지 않는다(조용히 하루가 어긋나는 자리).
   assert.equal(/Asia\/Seoul/.test(s), false, '시간대 문자열이 두 곳에 있으면 갈라진다');
 });
@@ -2165,7 +2165,9 @@ test('내려받는 CSV 의 열 이름이 받는 사람의 말이다 (DS 22-3)', 
   assert.equal(/'intent', 'source'/.test(logs), false, '대화 기록 CSV 열 이름이 영문이다');
   assert.match(logs, /'주제', '근거'/, '대화 기록 CSV 헤더가 한국어가 아니다');
   assert.match(logs, /intentLabel\(l\.intent, intentLabels\)/, '주제를 이름으로 싣지 않는다');
-  assert.match(logs, /SOURCE_LABELS\[l\.source\]/, '근거를 이름으로 싣지 않는다');
+  // 이름을 붙이는 자는 한 벌이고 **어떤 코드에도 코드를 되돌려주지 않는다** (DS 54-2).
+  assert.match(logs, /sourceLabel\(l\.source\)/, '근거를 이름으로 싣지 않는다');
+  assert.equal(/SOURCE_LABELS\[l\.source\] \?\? l\.source/.test(logs), false, '코드를 폴백으로 싣는 식이 남아 있다');
   assert.match(logs, /'주제코드'/, '다른 시스템으로 옮길 코드 열은 남겨 둔다');
 });
 
@@ -3432,9 +3434,11 @@ test('가린 글의 모양을 만드는 식이 종전으로 돌아가지 않는�
  */
 test('복원·파기가 같은 자로 「끝난 접수」를 가른다 (DS 52-3)', () => {
   const esc = read('src/lib/escalation.ts');
-  // ① 복원이 끝난 접수의 연락처를 파기 대상으로 본다.
-  assert.match(esc, /const hadContact = typeof c\.contact === 'string' && c\.contact\.trim\(\) !== '';/, '저장분에 연락처가 있었는지 보지 않는다');
-  assert.match(esc, /const purgedAt = recorded \|\| \(isClosedStatus\(c\.status\) && hadContact \? now\(\) : undefined\);/, '끝난 접수의 연락처를 되살리는 식이다');
+  // ① 복원이 끝난 접수의 연락처를 파기 대상으로 본다. 「있었는가」는 **글자로 읽은 뒤** 가린다
+  //    — `typeof === 'string'` 으로 보면 숫자로 적힌 번호가 파기 대상에서 빠진다(DS 54-1).
+  assert.match(esc, /const contact = c\.contact === undefined \|\| c\.contact === null \? '' : String\(c\.contact\)\.trim\(\);/, '저장분의 연락처를 글자로 읽지 않는다');
+  assert.match(esc, /const purgedAt = recorded \|\| \(isClosedStatus\(c\.status\) && contact \? now\(\) : undefined\);/, '끝난 접수의 연락처를 되살리는 식이다');
+  assert.equal(/typeof c\.contact === 'string' && c\.contact\.trim\(\) !== ''/.test(esc), false, '글자인지만 보는 판정이 남아 있다');
   // ② 파기하는 자리도 같은 자를 쓴다 — 상태 코드를 손으로 늘어놓지 않는다.
   assert.match(esc, /if \(isClosedStatus\(t\.status\) && t\.contact\) \{/, '파기 판정이 상태 코드를 직접 늘어놓는다');
   assert.equal(/\(t\.status === 'resolved' \|\| t\.status === 'canceled'\) && t\.contact/.test(esc), false, '손으로 늘어놓은 판정이 남아 있다');
@@ -3494,4 +3498,77 @@ test('복원이 매출 귀속을 지우지 않고 그 사실을 적는다 (DS 53
   assert.ok(dash.includes('귀속 파트너가 이 파일에 없어 귀속을 그대로 두었습니다'), '화면이 무엇이 그대로인지 말하지 않는다');
   // 손을 써야 하는 안내는 2.5초 뒤 사라지는 알림으로 띄우지 않는다(닫기 버튼이 있는 쪽이다).
   assert.match(dash, /if \(orphans > 0\) \{[\s\S]{0,700}?'fail',/, '사라지는 알림으로 띄운다');
+});
+
+/* ══════════ 51차 재감사 — 되돌아 들어오는 문 (DS 54-x) ══════════ */
+
+/**
+ * DS 54-1 — 접수 복원이 저장분을 **통째로 펼치지 않는다**(배선 쪽 고정).
+ *
+ * 돌려 볼 수 있는 쪽은 `tests/runtime.test.mjs` 가 본다. 여기서 고정하는 것은 **다시 갈라지지
+ * 않는가**다: `{...c}` 가 되살아나면 그 뒤로 접수에 칸이 하나 늘 때마다 관문을 지나지 않는
+ * 칸이 하나 늘고, 그 사실은 타입 검사에도 테스트에도 걸리지 않는다.
+ */
+test('접수 복원이 칸을 하나씩 적는다 (DS 54-1)', () => {
+  const esc = read('src/lib/escalation.ts');
+  const body = esc.slice(esc.indexOf('export function importTickets'), esc.indexOf('export function createTicket'));
+  assert.equal(/\.\.\.c,/.test(body), false, '저장분을 통째로 펼치는 식이 남아 있다');
+  // 요약도 본문과 같은 관문을 지난다 — 상담원이 실제로 읽는 칸이다.
+  assert.match(body, /const brief = maskPii\(String\(c\.summary \?\? ''\)\);/, '요약이 마스킹을 지나지 않는다');
+  assert.match(body, /summary: clip\(brief\.text, SUMMARY_TEXT_LEN\)/, '요약에 길이 상한이 없다');
+  assert.match(body, /mergeKinds\(Array\.isArray\(c\.piiKinds\) \? c\.piiKinds : \[\], body\.hits, brief\.hits\)/, '요약에서 가린 종류를 세지 않는다');
+  // 메모·연락처의 상한은 접수를 만드는 쪽과 같은 수다(이름 없는 숫자를 다시 적지 않는다).
+  assert.match(body, /note: clip\(c\.note\.trim\(\), TICKET_NOTE_LEN\)/, '메모에 길이 상한이 없다');
+  assert.match(body, /contact\.slice\(0, TICKET_CONTACT_LEN\)/, '연락처에 길이 상한이 없다');
+  assert.equal(/slice\(0, 100\)/.test(esc), false, '이름 없는 숫자가 남아 있다');
+});
+
+/**
+ * DS 54-2 — 응답 근거 이름을 붙이는 자가 **코드를 되돌려주지 않는가**(화면 쪽 고정).
+ *
+ * 콘솔은 클라이언트 묶음이라 돌려 볼 수 없는 자리다. 종전에는 같은 사전을 네 자리에서 각각
+ * `SOURCE_VIEW_LABELS[x] || x` 로 읽어, 사전에 없는 코드가 최근 대화 표·상세 서랍·응답 테스트
+ * 서랍·대시보드 「근거별」 묶음에 글자째 떴다.
+ */
+test('응답 근거 이름을 붙이는 자가 코드를 되돌려주지 않는다 (DS 54-2)', () => {
+  const page = read('src/app/admin/page.tsx');
+  assert.match(page, /function sourceView\(source: string\): string \{\n  return SOURCE_VIEW_LABELS\[\(source \|\| ''\)\.trim\(\)\] \|\| SOURCE_VIEW_LABELS\.unknown;/, '화면이 이름을 한 곳에서 붙이지 않는다');
+  assert.equal(/SOURCE_VIEW_LABELS\[(t\.source|k)\] \|\|/.test(page), false, '코드를 폴백으로 그리는 식이 남아 있다');
+  assert.equal((page.match(/sourceView\(/g) || []).length, 5, '근거를 그리는 자리 수가 달라졌다(선언 1 + 사용 4)');
+
+  const lib = read('src/lib/intents.ts');
+  // 어휘는 표시명 사전에서 끌어온다 — 손으로 적은 사본이 생기면 근거가 늘 때 한쪽이 빠진다(DS 40-3).
+  assert.match(lib, /export const SOURCE_CODES: ReadonlySet<string> = new Set\(Object\.keys\(SOURCE_LABELS\)\);/, '어휘를 손으로 적어 두었다');
+  assert.match(lib, /export const UNKNOWN_SOURCE_LABEL = SOURCE_LABELS\.unknown;/, '이름이 두 벌로 갈라졌다');
+  // 표시명은 사람이 읽는 말이다 — 코드를 그대로 적어 두면 사전이 있어도 화면에 코드가 뜬다.
+  for (const [code, label] of Object.entries(dictOf(lib, 'SOURCE_LABELS'))) {
+    assert.match(label, /[가-힣]/, `${code}: 표시명이 사람 말이 아니다(${label})`);
+    assert.notEqual(label, code, `${code}: 표시명이 코드와 같다`);
+  }
+  // 복원은 어휘 밖의 코드를 **멀쩡한 코드로 바꿔 적지 않는다**(집계가 부풀거나 없던 할 일이 생긴다).
+  const logs = read('src/lib/convlog.ts');
+  assert.match(logs, /source: SOURCE_CODES\.has\(String\(t\.source\)\) \? t\.source : 'unknown',/, '복원이 근거 코드를 확인하지 않는다');
+});
+
+/**
+ * DS 54-3 — 복원이 받아들이는 **시각의 모양**이 한 벌인가.
+ *
+ * 저장소가 넷(대화 기록·변경 이력·평가·접수)인데 시각을 받아 적는 식은 각자 적혀 있었다.
+ * 한 곳에만 관문을 세우면 다음 저장소가 또 종전 식을 복사한다.
+ */
+test('복원이 받아들이는 시각의 모양이 한 벌이다 (DS 54-3)', () => {
+  const kst = read('src/lib/kst.ts');
+  assert.match(kst, /export function isReadableInstant\(v: unknown\): v is string \{/, '읽을 수 있는 시각을 가리는 자가 없다');
+  assert.match(kst, /export function readInstant\(v: unknown, fallback: string\): string \{/, '복원이 쓰는 자가 없다');
+  for (const f of ['src/lib/convlog.ts', 'src/lib/audit.ts', 'src/lib/feedback.ts', 'src/lib/escalation.ts']) {
+    const s = read(f);
+    assert.match(s, /readInstant\(/, `${f}: 복원이 시각 관문을 지나지 않는다`);
+    assert.equal(
+      /at: typeof \w+\.at === 'string' && \w+\.at \? \w+\.at : new Date\(\)\.toISOString\(\)/.test(s),
+      false,
+      `${f}: 「문자열이면 그대로」 식이 남아 있다`,
+    );
+  }
+  // 시각을 읽지 못한다고 기록을 버리지 않는다 — 기록 한 줄은 「누가 무엇을 했는가」의 증거다.
+  assert.equal(/isReadableInstant\([\w.]+\.at\)\) continue/.test(read('src/lib/audit.ts')), false, '시각을 못 읽은 기록을 버린다');
 });

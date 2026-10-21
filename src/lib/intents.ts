@@ -83,6 +83,14 @@ export const CHANNEL_LABELS: Record<string, string> = {
   call: '전화',
 };
 
+/**
+ * `unknown` 은 근거를 **댈 수 없는** 기록의 자리다 (DS 54-2).
+ *
+ * 「기본 안내」(등록 자료에서 답을 찾지 못해 기본 문구로 끝난 대화)와 **다른 사실**이라 말이
+ * 달라야 한다 — 그쪽은 「답하지 못한 질문」 목록이 되어 운영자가 자료를 채우러 가는 줄이고,
+ * 이쪽은 **무엇으로 답했는지 기록이 말하지 못하는** 줄이다. 섞어 적으면 있지도 않은 할 일이
+ * 생긴다(DS 53-2 가 평가에서 「근거 없음」과 「지워진 자료」를 가른 것과 같은 규칙).
+ */
 export const SOURCE_LABELS: Record<string, string> = {
   rule: '시나리오 규칙',
   kb: '등록 자료',
@@ -91,7 +99,32 @@ export const SOURCE_LABELS: Record<string, string> = {
   fallback: '기본 안내',
   empty: '내용 없음',
   error: '연결 오류',
+  unknown: '알 수 없음',
 };
+
+/** 이름을 댈 수 없는 근거의 표시명 — 사전에서 끌어온다(두 벌로 적지 않는다). */
+export const UNKNOWN_SOURCE_LABEL = SOURCE_LABELS.unknown;
+
+/**
+ * 대화 기록이 받아들이는 **응답 근거 코드** — 표시명 사전이 곧 어휘다 (DS 54-2).
+ *
+ * `AUDIT_ACTION_LABELS` 에서 복원 허용 목록을 끌어온 것과 같은 규칙이다(DS 40-3) — 목록을
+ * 손으로 한 벌 더 적으면 근거가 하나 늘 때 한쪽이 빠지고, 빠진 쪽이 **받아들이는 쪽**이면
+ * 멀쩡한 기록이 조용히 「알 수 없음」이 된다.
+ */
+export const SOURCE_CODES: ReadonlySet<string> = new Set(Object.keys(SOURCE_LABELS));
+
+/**
+ * 응답 근거 코드 → 사람이 읽는 이름. **어떤 입력에도 코드를 되돌려주지 않는다** (DS 54-2).
+ *
+ * 종전에는 부르는 쪽마다 `SOURCE_LABELS[code] ?? code` 로 적어, 사전에 없는 코드가 그대로
+ * 운영자 화면 네 자리(최근 대화 표·상세 서랍·「응답 테스트」 서랍·대시보드 근거별 묶음)와
+ * 내려받기 CSV 에 떴다 — 「화면에 영문 코드를 내보내지 않는다」는 `intentLabel` 의 규칙이
+ * 이 칸에만 없었다.
+ */
+export function sourceLabel(source: string): string {
+  return SOURCE_LABELS[(source || '').trim()] ?? UNKNOWN_SOURCE_LABEL;
+}
 
 /** 규칙 목록을 `{인텐트: 이름}` 으로 — 운영자가 만든 규칙의 이름을 주제에 붙이는 데 쓴다. */
 export function intentLabelMap(rules: readonly { intent: string; label: string }[]): Record<string, string> {

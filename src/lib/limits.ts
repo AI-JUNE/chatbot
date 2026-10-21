@@ -21,6 +21,15 @@ export const TICKET_MESSAGE_LEN = 300;
 /** 상담원 메모. */
 export const TICKET_NOTE_LEN = 500;
 
+/**
+ * 접수에 적는 연락처 — 상담원이 전화를 걸 곳이다 (DS 54-1).
+ *
+ * 종전에는 이 수가 접수를 만드는 함수 안에 `slice(0, 100)` 두 번으로 적혀 있었고, **복원 경로
+ * 에는 아예 없었다** — 저장분이 적어 온 글자가 길이째 그대로 들어와 큐 목록·상세 서랍·백업으로
+ * 나갔다. 이름 없는 숫자는 입구마다 갈라진다는 것이 이 파일이 생긴 까닭이다.
+ */
+export const TICKET_CONTACT_LEN = 100;
+
 /** 이관 요약 평문 전체 상한(접수에 저장되는 길이). */
 export const SUMMARY_TEXT_LEN = 4000;
 

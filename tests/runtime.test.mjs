@@ -4700,3 +4700,243 @@ test('복원은 매출 귀속을 지우지 않고, 리포트가 그 사실을 �
   assert.equal(ok.report.totals.partial, false);
   P.resetPartners();
 });
+
+/* ══════════ 디자인 스프린트 — 51차 재감사 (DS 54-1·54-2·54-3) ══════════ */
+
+/**
+ * DS 54-1 — 접수 복원이 **이관 요약·메모·연락처를 관문에 세우지 않았다.**
+ *
+ * 36차(DS 39-2)가 복원 경로에 마스킹 관문을 세웠는데, 그 관문을 지난 칸은 **접수 본문 하나**였다.
+ * 나머지 칸은 `{...c}` 로 펼친 저장분 그대로였다 — 그 중 「이관 요약」은 상담원이 전화를 걸기 전에
+ * **실제로 읽는 칸**이고(직전 대화 여섯 마디·수집한 슬롯이 들어 있다), 저장분이 적어 온 메모·
+ * 연락처에는 길이 상한(DS 38-x)도, 글자인지 보는 자도 없었다.
+ */
+test('접수 복원이 요약·메모·연락처를 같은 관문에 세운다 (DS 54-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const esc = await pickPii('escalation');
+  const L = await importLib('limits');
+  esc.resetTickets();
+  const at = '2026-10-01T01:00:00.000Z';
+  const raw = {
+    id: 'ESC-0001',
+    sessionId: 'web_0123456789abcdef0123456789abcdef',
+    reason: 'user_request',
+    reasonCode: 'customer_request',
+    status: 'open',
+    message: '배송이 안 와요',
+    summary:
+      '[상담원 이관 요약] 접수번호 ESC-0001 · 홈페이지 접수\n이관 사유: 고객이 상담원 연결을 요청\n'
+      + '수집 정보\n  - 연락처: 010-1234-5678\n직전 대화\n  [고객] 010-1234-5678 로 전화주세요\n'
+      + '개인정보 마스킹: 해당 없음',
+    note: '메모'.repeat(400),
+    contact: 'ㄱ'.repeat(400),
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt: at,
+    몰래끼운칸: '저장분이 적어 온 모르는 칸',
+  };
+
+  // ── ⓞ 종전 경로 재현: 저장분을 펼쳐 몇 칸만 덮는 식은 이 셋을 **그대로** 들고 온다.
+  const legacy = { ...raw, message: '가린 본문' };
+  assert.match(legacy.summary, /010-1234-5678/, '재현이 깨졌다 — 저장분의 요약에 원문이 없다');
+  assert.ok(legacy.note.length > L.TICKET_NOTE_LEN, '재현이 깨졌다 — 메모가 상한을 넘지 않는다');
+  assert.ok(legacy.contact.length > L.TICKET_CONTACT_LEN, '재현이 깨졌다 — 연락처가 상한을 넘지 않는다');
+
+  const r = esc.importTickets({ version: 1, savedAt: at, seq: 1, tickets: [raw] });
+  assert.equal(r.ok, true);
+  assert.equal(r.count, 1, '멀쩡한 접수를 건너뛰었다');
+  const t = esc.getTicket('ESC-0001');
+
+  // ── ① 요약도 가려진다 — 상담원이 읽는 칸에 번호가 원문으로 남지 않는다.
+  assert.equal(t.summary.includes('010-1234-5678'), false, '되살린 요약에 연락처 원문이 남았다');
+  assert.match(t.summary, /010-\*\*\*\*-5678/, '가린 모양이 다른 자리와 다르다');
+  assert.match(t.summary, /이관 사유: 고객이 상담원 연결을 요청/, '가리면서 멀쩡한 글까지 지웠다');
+  // ② 가린 종류는 **우리가 센 값**이다 — 화면이 「가린 것이 있다」를 말할 수 있어야 한다.
+  assert.deepEqual(t.piiKinds, ['phone'], '요약에서 가린 종류를 접수가 말하지 않는다');
+  // ③ 길이 상한은 접수를 만드는 쪽과 **같은 수**다.
+  assert.ok(t.note.length <= L.TICKET_NOTE_LEN, `메모가 상한을 넘었다(${t.note.length})`);
+  assert.ok(t.note.endsWith(L.CLIP_MARK), '줄였는데 줄였다고 말하지 않는다');
+  assert.equal(t.contact.length, L.TICKET_CONTACT_LEN, `연락처가 상한을 넘었다(${t.contact.length})`);
+  // ④ 접수가 모르는 칸은 들고 오지 않는다 — 조회 응답·백업으로 되나가던 자리다.
+  assert.deepEqual(Object.keys(t).filter((k) => k === '몰래끼운칸'), [], '저장분의 모르는 칸이 접수에 남았다');
+
+  // ── ⑤ 숫자로 적힌 연락처도 「있다」로 읽는다 — 끝난 접수에서 파기 대상이 되어야 한다(DS 52-3).
+  esc.resetTickets();
+  esc.importTickets({
+    version: 1, savedAt: at, seq: 2,
+    tickets: [
+      { ...raw, id: 'ESC-0002', status: 'resolved', summary: undefined, note: undefined, contact: 1012345678 },
+    ],
+  });
+  const closed = esc.getTicket('ESC-0002');
+  assert.equal(closed.contact, undefined, '숫자로 적힌 번호가 끝난 접수에 남았다');
+  assert.ok(closed.contactPurgedAt, '파기한 사실이 없어 화면이 「연락처 없음」이라 적는다');
+
+  // ── ⑥ 멀쩡한 저장분은 종전 그대로다(이미 가려진 요약·짧은 메모·번호는 한 글자도 바뀌지 않는다).
+  esc.resetTickets();
+  const clean = {
+    ...raw, id: 'ESC-0003', summary: '[상담원 이관 요약] 접수번호 ESC-0003\n개인정보 마스킹: 해당 없음',
+    note: '전화 연결 완료', contact: '010-1111-2222', 몰래끼운칸: undefined,
+  };
+  esc.importTickets({ version: 1, savedAt: at, seq: 3, tickets: [clean] });
+  const good = esc.getTicket('ESC-0003');
+  assert.equal(good.summary, clean.summary, '멀쩡한 요약이 바뀌었다');
+  assert.equal(good.note, clean.note, '멀쩡한 메모가 바뀌었다');
+  assert.equal(good.contact, clean.contact, '진행 중인 접수의 연락처를 건드렸다');
+  assert.equal(good.piiKinds, undefined, '가린 것이 없는데 있다고 말한다');
+  esc.resetTickets();
+});
+
+/**
+ * DS 54-2 — 대화 기록의 **응답 근거 코드**를 아무도 확인하지 않았다.
+ *
+ * 채널(`CHANNELS`)·작업 코드(`audit.ACTIONS`)에는 복원 관문이 있는데 「무엇으로 답했는가」에는
+ * 없었다. 그래서 저장분이 적어 온 아무 글자나 그 칸에 들어왔고, 화면 네 자리와 내려받기 CSV 가
+ * `SOURCE_LABELS[code] ?? code` 로 그려 **그 글자를 운영자에게 그대로 보여 줬다**(DS 22-x 가
+ * 「화면에 영문 코드를 내보내지 않는다」를 세운 그 칸이다).
+ */
+test('대화 기록 복원이 응답 근거를 우리 어휘 안에서만 받는다 (DS 54-2)', opts, async () => {
+  const I = await importLib('intents', ['rules', 'normalize']);
+  const BOGUS = '고객센터 010-1234-5678 로 전화주세요';
+
+  // ── ⓞ 종전 식 재현: 사전에 없으면 **코드를 되돌려준다**.
+  assert.equal(I.SOURCE_LABELS[BOGUS] ?? BOGUS, BOGUS, '재현이 깨졌다 — 사전에 그 코드가 있다');
+  // 이름을 붙이는 자는 한 벌이고, 어떤 입력에도 코드를 되돌려주지 않는다(`intentLabel` 과 같은 규칙).
+  assert.equal(I.sourceLabel(BOGUS), I.UNKNOWN_SOURCE_LABEL);
+  assert.equal(I.sourceLabel(''), I.UNKNOWN_SOURCE_LABEL);
+  assert.equal(I.sourceLabel('kb'), '등록 자료', '멀쩡한 코드의 이름이 바뀌었다');
+  // 어휘는 **표시명 사전에서 끌어온다** — 손으로 적은 사본이 생기면 근거가 늘 때 한쪽이 빠진다.
+  assert.deepEqual([...I.SOURCE_CODES].sort(), Object.keys(I.SOURCE_LABELS).sort());
+  assert.equal(I.SOURCE_CODES.has('unknown'), true, '복원이 붙이는 코드가 어휘에 없다');
+
+  process.env.ADMIN_PERSIST = 'false';
+  const cl = await pickPii('convlog');
+  cl.resetLogs();
+  const now = new Date().toISOString();
+  const turn = (over) => ({
+    id: 'T-000001', sessionId: 's1', channel: 'web', tenant: null,
+    message: '배송 언제 와요', reply: '확인해 드릴게요', intent: 'shipping',
+    source: 'kb', escalate: false, at: now, ...over,
+  });
+  const r = cl.importTurns({
+    version: 1, savedAt: now, seq: 3,
+    turns: [
+      turn({ id: 'T-000001', source: BOGUS }),
+      turn({ id: 'T-000002', source: 'kb' }),
+      turn({ id: 'T-000003', source: undefined }),
+    ],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.count, 3, '근거를 못 읽었다고 대화 기록을 버렸다');
+
+  // ── ① 모르는 코드는 들고 오지 않는다 — 「알 수 없음」 한 자리로 모인다.
+  const all = cl.listAllTurns();
+  assert.equal(all.find((l) => l.id === 'T-000001').source, 'unknown', '저장분의 글자가 그대로 들어왔다');
+  assert.equal(all.find((l) => l.id === 'T-000003').source, 'unknown', '빈 칸을 멀쩡한 코드로 적었다');
+  assert.equal(all.find((l) => l.id === 'T-000002').source, 'kb', '멀쩡한 코드가 바뀌었다');
+
+  // ── ② 내려받기 CSV 의 「근거」 칸에 코드가 뜨지 않는다.
+  const csv = cl.turnsToCsv();
+  assert.deepEqual(csvTable(csv).rows.map((x) => x['근거']).sort(), ['등록 자료', '알 수 없음', '알 수 없음']);
+  assert.equal(csv.includes(BOGUS), false, '저장분의 글자가 파일에 그대로 실렸다');
+
+  // ── ③ 멀쩡한 코드로 **바꿔 적지 않는다** — 집계가 부풀거나 없던 할 일이 생기는 자리다.
+  const st = cl.convStats();
+  assert.deepEqual(Object.keys(st.bySource).sort(), ['kb', 'unknown'], '근거별 묶음에 모르는 코드가 섰다');
+  assert.equal(st.autoHandled, 1, '모르는 근거를 자동 처리로 세었다');
+  assert.equal(cl.unansweredQuestions().groups, 0, '「답하지 못한 질문」에 없던 줄이 섰다');
+  cl.resetLogs();
+});
+
+/**
+ * DS 54-3 — 복원이 **시각인 척하는 글자**를 받아들였다.
+ *
+ * 저장분을 읽어 들이는 문들은 시각 칸을 「문자열이고 비어 있지 않은가」로만 보았다. 그래서
+ * `"어제"` 한 글자가 기록에 박히고, 그 글자를 시각으로 믿는 자들이 함께 어긋났다 — 보관 경계가
+ * 무너져 대시보드가 **이레 전부를 「기록 있음」**으로 보고(그러면서 0건이라 그린다 · DS 43-1),
+ * 내려받은 파일의 「시각」 칸이 빈 칸이 되고, 꼬리 주석은 글자가 빠진 문장으로 나간다.
+ */
+test('복원이 읽을 수 없는 시각을 받아들이지 않는다 (DS 54-3)', opts, async () => {
+  const K = await importLib('kst');
+  // ── ⓞ 종전 식 재현: 「문자열이고 비어 있지 않은가」는 `"어제"` 를 그대로 통과시킨다.
+  const written = '어제';
+  const legacyAt = typeof written === 'string' && written ? written : new Date().toISOString();
+  assert.equal(legacyAt, '어제', '재현이 깨졌다');
+  assert.ok(Number.isNaN(new Date(legacyAt).getTime()), '재현이 깨졌다 — 읽을 수 있는 값이다');
+  assert.equal(K.kstDateTime(legacyAt), '', '읽을 수 없는 값에 시각을 지어낸다');
+  // 관문은 한 벌이다 — 읽을 수 있으면 ISO 한 모양으로, 아니면 대신할 값으로.
+  assert.equal(K.isReadableInstant('어제'), false);
+  assert.equal(K.isReadableInstant(''), false);
+  assert.equal(K.isReadableInstant(12345), false, '글자가 아닌 값을 시각으로 읽는다');
+  assert.equal(K.isReadableInstant('2026-10-01T00:00:00.000Z'), true);
+  assert.equal(K.readInstant('2026-10-01T09:00:00+09:00', 'FB'), '2026-10-01T00:00:00.000Z', '한 모양으로 적지 않는다');
+  assert.equal(K.readInstant('어제', 'FB'), 'FB');
+
+  // ── ① 대화 기록: 보관 경계가 무너지면 「그 날 0건」과 「그 날 기록 없음」이 섞인다(DS 43-1).
+  process.env.ADMIN_PERSIST = 'false';
+  const cl = await pickPii('convlog');
+  cl.resetLogs();
+  const bad = cl.importTurns({
+    version: 1, savedAt: '', seq: 1,
+    turns: [{
+      id: 'T-000001', sessionId: 's1', channel: 'web', tenant: null,
+      message: '안녕', reply: '안녕하세요', intent: 'greeting', source: 'kb', escalate: false, at: '어제',
+    }],
+  });
+  assert.equal(bad.count, 1, '시각을 못 읽었다고 대화 기록을 버렸다');
+  const ret = cl.turnRetention();
+  assert.equal(K.isReadableInstant(ret.knownFrom), true, `보관 경계가 시각이 아니다(${ret.knownFrom})`);
+  const st = cl.convStats();
+  assert.equal(st.daily.every((d) => d.coverage === 'full'), false, '이레 전부를 「기록 있음」으로 본다');
+  assert.equal(st.daily.filter((d) => d.coverage === 'none').length, 6, '경계 앞을 「기록 없음」이라 말하지 않는다');
+  assert.equal(st.today.turns, 1, '보관 중인 턴을 그 날 집계에서 잃었다');
+  assert.equal(st.totalTurns, st.daily.reduce((n, d) => n + d.turns, 0), '총계와 날짜별 합이 어긋난다');
+  // 파일: 「시각」 칸이 비지 않고, 꼬리 주석도 글자가 빠진 문장으로 나가지 않는다.
+  const table = csvTable(cl.turnsToCsv());
+  assert.ok(table.rows[0]['시각'], '내려받은 파일의 시각 칸이 비었다');
+  assert.ok(table.notes.some((n) => /# \d{4}-\d{2}-\d{2} .+ 이후의 기록만/.test(n)), '모수 안내에 시각이 없다');
+  cl.resetLogs();
+
+  // ── ② 변경 이력: 같은 자를 쓴다 — 「시각」 칸·모수 안내·합칠 때 줄을 세우는 자리가 걸려 있다.
+  const au = await importLib('audit', ['storage', 'csv', 'kst', 'refusal', 'retention', 'logger', 'monitoring']);
+  au.resetAudit();
+  const ev = (over) => ({ id: 'A-000001', action: 'kb.upsert', target: 'kb_1', detail: '등록', authed: true, ...over });
+  assert.equal(au.importAudit({
+    version: 1, savedAt: '', seq: 2,
+    events: [ev({ id: 'A-000001', at: '어제' }), ev({ id: 'A-000002', at: '2026-10-01T09:00:00+09:00' })],
+  }).ok, true);
+  const events = au.listAudit();
+  assert.equal(events.length, 2, '시각을 못 읽었다고 변경 이력을 버렸다');
+  for (const e of events) assert.equal(K.isReadableInstant(e.at), true, `시각이 아닌 값이 들어왔다(${e.at})`);
+  // 읽을 수 있으면 **한 모양**으로 적는다 — 글자 비교로 앞뒤를 가리는 자리가 그 모양을 전제로 돈다.
+  assert.equal(events.find((e) => e.id === 'A-000002').at, '2026-10-01T00:00:00.000Z');
+  const auditCsv = csvTable(au.auditToCsv());
+  for (const row of auditCsv.rows) assert.ok(row['시각'], '변경 이력 파일의 시각 칸이 비었다');
+  assert.ok(auditCsv.notes.some((n) => /# \d{4}-\d{2}-\d{2} .+ 이후의 기록만/.test(n)), '모수 안내에 시각이 없다');
+  au.resetAudit();
+
+  // ── ③ 평가도 같은 자를 쓴다 — 복원이 받아들이는 시각의 모양은 저장소마다 갈라지지 않는다.
+  const fb = await importLib('feedback', ['storage', 'refusal', 'kst', 'logger', 'monitoring']);
+  fb.resetFeedback();
+  assert.equal(fb.importFeedback({
+    version: 1, savedAt: '', seq: 1,
+    entries: [{ id: 'F-000001', sessionHash: 'abc', verdict: 'down', citation: '', at: '어제' }],
+  }).count, 1);
+  assert.equal(K.isReadableInstant(fb.listFeedback()[0].at), true, '평가의 시각이 글자째 들어왔다');
+  fb.resetFeedback();
+
+  // ── ④ 접수도 같은 자를 쓴다 — 큐 목록·상세 서랍이 그 값을 그대로 그린다.
+  const esc = await pickPii('escalation');
+  esc.resetTickets();
+  esc.importTickets({
+    version: 1, savedAt: '', seq: 1,
+    tickets: [{
+      id: 'ESC-0001', sessionId: 'web_0123456789abcdef0123456789abcdef', status: 'open',
+      reason: 'user_request', reasonCode: 'customer_request', message: '문의',
+      createdAt: '어제', updatedAt: '어제',
+    }],
+  });
+  const t = esc.getTicket('ESC-0001');
+  assert.equal(K.isReadableInstant(t.createdAt), true, '접수 시각이 글자째 들어왔다');
+  assert.equal(K.isReadableInstant(t.updatedAt), true);
+  esc.resetTickets();
+});

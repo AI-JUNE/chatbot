@@ -12,6 +12,7 @@
 // 통째로 사라졌고**, 「저장소 상태」 카드에도 뜨지 않아 운영자는 사라진 줄도 몰랐다.
 
 import { loadJson, scheduleSave } from '@/lib/storage';
+import { readInstant } from '@/lib/kst';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 
 export type Verdict = 'up' | 'down';
@@ -262,7 +263,8 @@ export function importFeedback(input: unknown): { ok: true; count: number } | { 
       citation: '',
       ...(kbId ? { kbId } : {}),
       channel: typeof e.channel === 'string' && e.channel ? e.channel : 'web',
-      at: typeof e.at === 'string' && e.at ? e.at : new Date().toISOString(),
+      // 시각 칸은 읽을 수 있을 때만 — 복원이 받아들이는 시각의 모양은 한 벌이다 (DS 54-3).
+      at: readInstant(e.at, new Date().toISOString()),
     });
   }
   entries = restored.slice(-MAX_ENTRIES);

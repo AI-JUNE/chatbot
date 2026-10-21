@@ -6,8 +6,8 @@ import type { ReplySource } from '@/lib/chat';
 import { loadJson, scheduleSave } from '@/lib/storage';
 import { maskPii, mergeKinds, piiKindLabels } from '@/lib/pii';
 import { TURN_TEXT_LEN, CLIP_MARK, clip } from '@/lib/limits';
-import { KST_CSV_NOTE, kstDate, kstDateTime } from '@/lib/kst';
-import { CHANNEL_LABELS, SOURCE_LABELS, intentLabel } from '@/lib/intents';
+import { KST_CSV_NOTE, kstDate, kstDateTime, readInstant } from '@/lib/kst';
+import { CHANNEL_LABELS, SOURCE_CODES, intentLabel, sourceLabel } from '@/lib/intents';
 import { compact } from '@/lib/normalize';
 import { tenantLabel } from '@/lib/tenants';
 import { csvCell, csvRow } from '@/lib/csv';
@@ -39,7 +39,16 @@ export interface ChatTurnLog {
    */
   piiKinds?: string[];
   intent: string;
-  source: ReplySource;
+  /**
+   * 무엇으로 답했는가 — 엔진이 내는 값(`ReplySource`)에 **기록 전용 코드**가 더해진다 (DS 54-2).
+   *
+   * `unknown` 은 복원이 붙이는 값이다: 저장분이 적어 온 코드가 우리 어휘(`SOURCE_CODES`)에
+   * 없으면 그 글자를 그대로 들고 오지 않는다. 종전에는 아무 글자나 이 칸에 들어왔고, 화면은
+   * `SOURCE_LABELS[code] ?? code` 로 그려 **그 글자를 운영자에게 그대로 보여 줬다**.
+   * 멀쩡한 코드로 바꿔 적지도 않는다 — `fallback` 으로 적으면 「답하지 못한 질문」 목록에 없던
+   * 줄이 서고, `rule`·`kb` 로 적으면 자동 처리율이 부풀어 오른다(§13 의 「없는 수」다).
+   */
+  source: ReplySource | 'unknown';
   escalate: boolean;
   /** 엔진 내부 신뢰도(0~1). 자동 전환 판정 근거이며 측정된 정확도 지표가 아니다. */
   confidence?: number;
@@ -164,9 +173,14 @@ export function importTurns(input: unknown): { ok: true; count: number } | { ok:
       message: clip(mm.text, TURN_TEXT_LEN),
       reply: clip(rr.text, TURN_TEXT_LEN),
       intent: String(t.intent ?? ''),
+      // 근거 코드도 **우리 어휘만** 들고 온다 (DS 54-2) — 채널(`CHANNELS`)·작업 코드
+      // (`audit.ACTIONS`)와 같은 관문이다. 모르는 코드는 「알 수 없음」 한 자리로 모은다.
+      source: SOURCE_CODES.has(String(t.source)) ? t.source : 'unknown',
       escalate: t.escalate === true,
       latencyMs: sanitizeLatency(t.latencyMs),
-      at: typeof t.at === 'string' && t.at ? t.at : new Date().toISOString(),
+      // 시각 칸은 **읽을 수 있을 때만** 들고 온다 (DS 54-3) — 이 값이 보관 경계가 되고,
+      // 그 경계가 「그 날 0건」과 「그 날 기록 없음」을 가린다(DS 43-1).
+      at: readInstant(t.at, new Date().toISOString()),
     };
     if (kinds.length) entry.piiKinds = kinds;
     else delete entry.piiKinds;
@@ -244,7 +258,8 @@ export function turnsToCsv(intentLabels?: Record<string, string>): string {
       tenantLabel(l.tenant ?? null),
       l.sessionId,
       intentLabel(l.intent, intentLabels),
-      SOURCE_LABELS[l.source] ?? l.source,
+      // 이름을 댈 수 없는 코드도 **코드로 내보내지 않는다** (DS 54-2 · `intentLabel` 과 같은 규칙).
+      sourceLabel(l.source),
       l.escalate ? '예' : '아니오',
       // 가린 것이 없으면 **빈 칸**이다 — 옛 기록에는 이 값이 없고, 그때는 「없다」가 아니라
       // 「모른다」이므로 아무 말도 하지 않는다(화면이 그 줄을 그리지 않는 것과 같다 · DS 39-1).
