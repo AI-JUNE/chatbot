@@ -16,6 +16,7 @@
 //
 // [승인 필요] 관리 콘솔에서 폼을 편집·추가하는 기능, 수집 결과의 외부 업무시스템 전송.
 import { maskPii } from '@/lib/handoff';
+import { findContact } from '@/lib/pii';
 import { compact, keywordHit, prepare } from '@/lib/normalize';
 import { compareYmd, kstTime, kstYmd, normalizeYmd, ymdToString } from '@/lib/kst';
 import { josa } from '@/lib/refusal';
@@ -198,9 +199,6 @@ export function interpretControl(text: string): Control {
 
 // ---- 값 검증 ----
 
-const PHONE_RE = /(01[016789][-\s.]?\d{3,4}[-\s.]?\d{4}|0\d{1,2}[-\s.]?\d{3,4}[-\s.]?\d{4})/;
-const EMAIL_RE = /[\w.+-]+@[\w-]+(\.[\w-]+)+/;
-
 export const MAX_SLOT_VALUE_LEN = 200;
 
 /**
@@ -370,10 +368,16 @@ export function validateSlot(slot: SlotSpec, input: string, now: Date = new Date
   }
 
   if (slot.kind === 'contact') {
-    const phone = raw.match(PHONE_RE)?.[0];
-    if (phone) return { ok: true, value: phone.replace(/\s+/g, '') };
-    const email = raw.match(EMAIL_RE)?.[0];
-    if (email) return { ok: true, value: email };
+    /**
+     * 고르는 자는 **가리는 쪽에 한 벌**로 있다(`pii.findContact` · DS 53-1).
+     *
+     * 종전에는 이 자리에 전화번호·이메일 패턴이 손으로 한 번 더 적혀 있었다 — 엔진의 연락처
+     * 수집(`chat.extractContact`)·가리는 쪽(`pii`)과 함께 **세 벌**이었고, 이쪽 사본에는
+     * 가리는 쪽이 쓰는 경계(`\b`)도 관문(`@` 가 붙으면 전화번호가 아니다)도 없었다. 그래서
+     * 접수 폼의 연락처 칸은 `0212345678@example.com` 을 「전화번호 0212345678」로 받아 적었다.
+     */
+    const found = findContact(raw);
+    if (found) return { ok: true, value: found.value };
     return { ok: false, message: `연락처 형식을 알아보지 못했어요. 전화번호 또는 이메일로 알려주세요. ${slot.hint}` };
   }
 

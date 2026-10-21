@@ -3915,11 +3915,27 @@ export default function AdminPage() {
       // 같은 자리에서 말한다(DS 47-1). 파트너·고객사 복원은 종전에는 디스크에 적히지도 않았다.
       // 변경 이력은 **더한 수**로 말한다(덮은 것이 아니다 · DS 48-3). 더한 것이 없으면 적지 않는다.
       const added = typeof data.auditAdded === 'number' ? data.auditAdded : 0;
-      flashSaved(
-        `복원 완료: 안내 자료 ${data.kb}건 · 규칙 ${data.customRules}건 · 기본 규칙 답변 수정 ${data.overrides}건`
-          + (added > 0 ? ` · 변경 이력 ${added}건 추가` : ''),
-        data.saved as SavedView | undefined,
-      );
+      /**
+       * 귀속이 가리키는 파트너가 **이 파일에 없는** 고객사는 그 자리에서 말한다 (DS 53-3).
+       * 종전에는 그 건들을 직접 계약으로 바꿔 두고 「복원 완료」만 띄웠다 — 정산 리포트는
+       * 그 뒤로 「직접 계약 n건은 파트너 정산 대상이 아니라 제외했습니다」라고 적었다.
+       */
+      const orphans = typeof data.orphanAccounts === 'number' ? data.orphanAccounts : 0;
+      const done = `복원 완료: 안내 자료 ${data.kb}건 · 규칙 ${data.customRules}건 · 기본 규칙 답변 수정 ${data.overrides}건`
+        + (added > 0 ? ` · 변경 이력 ${added}건 추가` : '');
+      if (orphans > 0) {
+        // 운영자가 **읽고 손을 써야 하는** 사실이라 2.5초 뒤 사라지는 알림으로 띄우지 않는다
+        // (저장 실패 안내와 같은 자리 · 닫기 버튼이 있고 스스로 사라지지 않는다).
+        const warn = savedWarning(data.saved as SavedView | undefined);
+        notify(
+          `${done} · 고객사 ${orphans}곳은 귀속 파트너가 이 파일에 없어 귀속을 그대로 두었습니다.`
+            + ' 정산 리포트에서 「수수료율 미설정」으로 합계에서 빠집니다 — 파트너를 다시 등록하거나 귀속을 옮겨 주세요.'
+            + (warn ? ` ${warn}` : ''),
+          'fail',
+        );
+      } else {
+        flashSaved(done, data.saved as SavedView | undefined);
+      }
     } catch {
       failed('복원하지 못했습니다', '연결을 확인한 뒤 다시 시도해 주세요. 기존 자료는 그대로입니다.');
     } finally {

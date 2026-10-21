@@ -69,6 +69,23 @@ export const PHONE_SEP = '[-\\s.]';
  */
 export const PHONE_PATTERN = `0\\d{1,2}${PHONE_SEP}?\\d{3,4}${PHONE_SEP}?\\d{4}`;
 
+/**
+ * **글 안에서 전화번호 한 건을 찾을 때**의 규칙 원문 — 경계와 관문까지 (DS 53-1).
+ *
+ * 49차(DS 52-1)는 패턴 **속**(`PHONE_PATTERN`)만 한 벌로 만들었다. 가리는 쪽이 실제로 쓰는
+ * 식에는 그 속을 감싸는 두 가지가 더 있었고, 그 둘은 가리는 쪽에만 남았다:
+ *  - `\b…\b` **경계** — 번호 모양이 더 긴 숫자에 묻혀 있으면 번호로 읽지 않는다
+ *  - `(?![\w.+-]*@)` **관문** — 뒤에 `@` 가 붙은 숫자 덩이는 전화번호가 아니라 메일 주소다
+ *
+ * 그래서 두 쪽은 **같은 글을 다르게 읽었다**: `0212345678@example.com` 을 받아 적는 쪽은
+ * 「전화번호 0212345678」로, 가리는 쪽은 「이메일」로 읽었고, `01012345678901` 은 받아 적는
+ * 쪽이 세 자리를 버려 「01012345678」로, 가리는 쪽은 「계좌번호」로 읽었다.
+ */
+export const PHONE_MATCH_PATTERN = `\\b${PHONE_PATTERN}\\b(?![\\w.+-]*@)`;
+
+/** 이메일 규칙 원문 — 받아 적는 쪽(엔진의 연락처 수집·접수 폼)이 같은 글을 쓴다 (DS 53-1). */
+export const EMAIL_PATTERN = '[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)+';
+
 // 규칙 순서 = 우선순위. 좁은 패턴(주민·카드·전화)을 먼저, 가장 넓은 계좌 패턴을 마지막에 둔다.
 // 순서를 바꾸면 전화번호가 계좌로 분류되어 마스킹 종류 통계가 틀어진다.
 interface MaskRule {
@@ -98,7 +115,7 @@ const MASK_RULES: MaskRule[] = [
     name: 'phone',
     // 숫자로 시작하는 메일 주소는 **이메일 규칙에 넘긴다** — 뒤에 `@` 가 붙어 있으면 잡지 않는다
     // (`0212345678@example.com` 의 앞부분만 가리면 주소가 반쪽만 남는다).
-    re: new RegExp(`\\b${PHONE_PATTERN}\\b(?![\\w.+-]*@)`, 'g'),
+    re: new RegExp(PHONE_MATCH_PATTERN, 'g'),
     readable: (m) => {
       // 구분자가 무엇이든(하이픈·공백·점·없음) **같은 모양**으로 적는다 — 운영자 화면·CSV·
       // 이관 요약이 한 가지 모양만 읽게 한다.
@@ -110,7 +127,7 @@ const MASK_RULES: MaskRule[] = [
   },
   {
     name: 'email',
-    re: /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g,
+    re: new RegExp(EMAIL_PATTERN, 'g'),
     readable: (m) => {
       const at = m.lastIndexOf('@');
       const local = m.slice(0, at);
@@ -189,6 +206,38 @@ export function maskPii(input: string, strength: MaskStrength = 'readable'): Mas
     return vault[idx] ?? '';
   });
   return { text: out, masked: hits.length > 0, hits };
+}
+
+/** 받아 적은 연락처 한 건 — 무엇으로 읽었는지를 함께 돌려준다. */
+export interface ContactMatch {
+  kind: 'phone' | 'email';
+  value: string;
+}
+
+const PHONE_FIND = new RegExp(PHONE_MATCH_PATTERN);
+const EMAIL_FIND = new RegExp(EMAIL_PATTERN);
+
+/**
+ * 이 글에서 **연락처로 받아 적을 수 있는 것**을 하나 고른다 — 받아 적는 자리가 모두 이 함수
+ * 하나를 쓴다 (DS 53-1).
+ *
+ * 왜 가리는 쪽에 두는가: 받아 적은 값은 접수에 저장되고(`createTicket`), 답변으로 고객에게
+ * 되읽히고(`chat.contactTail`), 그 답변이 대화 기록·이관 요약·CSV·백업으로 퍼지고, 같은
+ * 규칙을 쓰는 `scrub` 를 지나 서버 로그·오류 리포트·외부 LLM 호출 본문까지 간다. 받아 적는
+ * 쪽이 가리는 쪽보다 넓으면 **저장되는데 가려지지 않는 값**이 생기고(DS 52-1), 좁으면 그 반대로
+ * **가릴 줄은 아는데 받지 못하는 값**이 생긴다. 한 함수로 두면 두 폭이 어긋날 자리가 없다.
+ *
+ * 전화번호를 먼저 본다(종전 차례 그대로 — 둘을 함께 보낸 사람에게 전화번호를 고르던 동작을
+ * 바꾸지 않는다). 다만 `@` 가 붙은 숫자 덩이는 전화번호로 읽지 않고(관문), 번호 모양이 더 긴
+ * 숫자에 묻혀 있으면 **잘라 적지 않는다**(경계) — 못 알아듣는 쪽이 틀리게 받아 적는 쪽보다 낫다.
+ */
+export function findContact(text: string): ContactMatch | null {
+  const t = String(text ?? '');
+  const phone = t.match(PHONE_FIND)?.[0];
+  // 공백 구분자는 지운다 — 저장·되읽기·가리기가 한 모양을 본다(`010 1234 5678` → `01012345678`).
+  if (phone) return { kind: 'phone', value: phone.replace(/\s+/g, '') };
+  const email = t.match(EMAIL_FIND)?.[0];
+  return email ? { kind: 'email', value: email } : null;
 }
 
 /** 두 글(고객의 말·답변 등)에서 가린 종류를 합친다 — 중복 없이, 규칙 순서대로. */

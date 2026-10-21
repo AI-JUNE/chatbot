@@ -64,8 +64,12 @@ test('채팅 위젯이 AI임을 밝힌다', () => {
 test('연락처 추출은 전화번호와 이메일을 모두 지원한다', () => {
   const s = read('src/lib/chat.ts');
   assert.match(s, /export function extractContact/);
-  assert.match(s, /PHONE_RE/);
-  assert.match(s, /EMAIL_RE/);
+  // 고르는 자는 **가리는 쪽에 한 벌**로 있다 (DS 53-1) — 전화·이메일 모양을 여기 적지 않는다.
+  assert.match(s, /findContact\(text\)\?\.value \?\? null/);
+  const pii = read('src/lib/pii.ts');
+  assert.match(pii, /export function findContact/);
+  assert.match(pii, /PHONE_FIND = new RegExp\(PHONE_MATCH_PATTERN\)/);
+  assert.match(pii, /EMAIL_FIND = new RegExp\(EMAIL_PATTERN\)/);
 });
 
 test('건너뛰기 의사표현을 인식한다', () => {
@@ -3382,14 +3386,21 @@ test('전화번호 모양은 받아 적는 쪽과 가리는 쪽이 한 벌로 �
   assert.match(pii, /export const PHONE_SEP = '\[-\\\\s\.\]';/, '구분자 집합이 한 곳에 적혀 있지 않다');
   assert.match(pii, /export const PHONE_PATTERN = `0\\\\d\{1,2\}\$\{PHONE_SEP\}\?\\\\d\{3,4\}\$\{PHONE_SEP\}\?\\\\d\{4\}`;/, '패턴 원문이 없다');
   // ② 가리는 규칙이 그 원문을 쓴다 — 하이픈·공백만 아는 식이 되살아나지 않았다.
-  assert.match(pii, /re: new RegExp\(`\\\\b\$\{PHONE_PATTERN\}\\\\b\(\?!\[\\\\w\.\+-\]\*@\)`, 'g'\)/, '가리는 규칙이 공통 패턴을 쓰지 않는다');
+  //    경계·관문까지 담은 식도 **한 곳**에 있다(`PHONE_MATCH_PATTERN` · DS 53-1).
+  assert.match(pii, /export const PHONE_MATCH_PATTERN = `\\\\b\$\{PHONE_PATTERN\}\\\\b\(\?!\[\\\\w\.\+-\]\*@\)`;/, '경계·관문을 담은 식이 한 곳에 없다');
+  assert.match(pii, /re: new RegExp\(PHONE_MATCH_PATTERN, 'g'\)/, '가리는 규칙이 공통 패턴을 쓰지 않는다');
   assert.equal(/\[-\\s\]\?\\d\{3,4\}/.test(pii), false, '하이픈·공백만 아는 식이 남아 있다');
 
-  // ③ 받아 적는 쪽은 패턴을 **직접 적지 않는다**.
+  // ③ 받아 적는 쪽은 패턴을 **직접 적지 않는다** — 셋 모두 `findContact` 하나를 쓴다(DS 53-1).
   const chat = read('src/lib/chat.ts');
-  assert.match(chat, /import \{ PHONE_PATTERN \} from '@\/lib\/pii';/, '받아 적는 쪽이 패턴을 끌어오지 않는다');
-  assert.match(chat, /const PHONE_RE = new RegExp\(PHONE_PATTERN\);/, '받아 적는 쪽이 자기 패턴을 들고 있다');
-  assert.equal(/01\[016789\]/.test(chat), false, '손으로 적은 전화번호 패턴이 남아 있다');
+  const slots = read('src/lib/slots.ts');
+  assert.match(chat, /import \{ findContact \} from '@\/lib\/pii';/, '받아 적는 쪽이 고르는 자를 끌어오지 않는다');
+  assert.match(slots, /import \{ findContact \} from '@\/lib\/pii';/, '접수 폼이 고르는 자를 끌어오지 않는다');
+  for (const [name, src] of [['chat', chat], ['slots', slots]]) {
+    assert.equal(/01\[016789\]/.test(src), false, `손으로 적은 전화번호 패턴이 남아 있다: ${name}`);
+    assert.equal(/\\d\{3,4\}/.test(src), false, `전화번호 패턴 사본이 남아 있다: ${name}`);
+    assert.equal(/\[\\w\.\+-\]\+@/.test(src), false, `이메일 패턴 사본이 남아 있다: ${name}`);
+  }
 });
 
 /**
@@ -3429,4 +3440,58 @@ test('복원·파기가 같은 자로 「끝난 접수」를 가른다 (DS 52-3)
   assert.equal(/\(t\.status === 'resolved' \|\| t\.status === 'canceled'\) && t\.contact/.test(esc), false, '손으로 늘어놓은 판정이 남아 있다');
   // ③ 「처음부터 없던 접수」와 「받았다가 파기한 접수」를 구분하는 칸은 그대로다.
   assert.match(esc, /contactPurgedAt\?: string;/, '파기 사실을 남기는 칸이 사라졌다');
+});
+
+/**
+ * DS 53-2 — 평가의 자료 이름을 **밖에서 적을 수 없는가**(배선 쪽 고정).
+ *
+ * 가리는 판정(`resolveKb`)이 실제로 가리는지는 런타임 테스트가 돌려서 본다. 라우트는
+ * `route.ts` 규칙상 돌려 볼 수 없는 자리이므로(HTTP 메서드·설정 외 export 금지), 「호출자가
+ * 보낸 라벨을 넘기지 않는다」·「이름은 지금 KB 에서 찾는다」를 여기서 소스로 고정한다.
+ */
+test('평가 라우트는 호출자의 라벨을 저장하지 않는다 (DS 53-2)', () => {
+  const route = read('src/app/api/feedback/route.ts');
+  // ① 이름은 지금 KB 에서 찾는다 — 가리는 자는 `resolveKb` 한 벌이다.
+  assert.match(route, /import \{ recordFeedback, resolveKb \} from '@\/lib\/feedback';/, '가리는 자를 끌어오지 않는다');
+  assert.match(route, /import \{ kbLabelMap \} from '@\/lib\/tenantKB';/, '이름을 아는 사전을 끌어오지 않는다');
+  assert.match(route, /const kb = resolveKb\(kbId\.value, kbLabelMap\(\)\);/, '라우트가 자료를 확인하지 않는다');
+  // ② 호출자가 보낸 라벨은 **저장소로 가지 않는다**(길이 검증만 남는다).
+  assert.equal(/citation: citation\.value/.test(route), false, '호출자가 보낸 라벨을 그대로 넘긴다');
+  assert.equal(/citation: parsed\.data\.citation/.test(route), false, '호출자가 보낸 라벨을 그대로 넘긴다');
+  assert.match(route, /\.\.\.\(kb \?\? \{\}\),/, '확인한 자료를 한 쌍으로 넘기지 않는다');
+
+  // ③ 저장소는 그 한 쌍만 적는다 — 복원은 저장분의 이름을 들고 오지 않는다.
+  const lib = read('src/lib/feedback.ts');
+  assert.match(lib, /export function resolveKb\(kbId: unknown, labels: Record<string, string>\)/, '가리는 자가 저장소에 없다');
+  assert.match(lib, /return label \? \{ kbId: id, citation: label\.slice\(0, MAX_CITATION_LEN\) \} : null;/, '모르는 자료 id 를 받아들인다');
+  assert.match(lib, /export const DELETED_KB_LABEL = '지워진 자료';/, '이름을 댈 수 없는 줄의 표기가 없다');
+  assert.equal(/citation: typeof e\.citation === 'string'/.test(lib), false, '복원이 저장분의 이름을 들고 온다');
+});
+
+/**
+ * DS 53-3 — 복원이 **매출 귀속을 지우지 않는가**(배선 쪽 고정).
+ *
+ * 되돌림의 결과는 런타임 테스트가 돌려서 본다. 여기서는 ① 지우던 식이 되살아나지 않는 것
+ * ② 「지금 찾을 수 없는 파트너」의 이름이 한 곳에서 오는 것 ③ 그 사실이 복원 기록과 화면에
+ * 적히는 것(라우트·콘솔은 돌려 볼 수 없는 자리다)을 고정한다.
+ */
+test('복원이 매출 귀속을 지우지 않고 그 사실을 적는다 (DS 53-3)', () => {
+  const p = read('src/lib/partners.ts');
+  // ① 「없는 파트너를 가리키면 직접 계약」으로 되돌리던 식이 남아 있지 않다.
+  assert.equal(/ids\.has\(rawPid\) \? rawPid : null/.test(p), false, '귀속을 지우던 식이 남아 있다');
+  assert.match(p, /if \(partnerId && !ids\.has\(partnerId\)\) orphans \+= 1;/, '찾을 수 없는 귀속을 세지 않는다');
+  // ② 이름은 한 곳에서 온다 — 정산 리포트가 그 함수를 쓴다.
+  assert.match(p, /export function missingPartnerName\(id: string\): string \{/, '이름을 적는 자가 없다');
+  const settle = read('src/lib/settlement.ts');
+  assert.match(settle, /missingPartnerName\(a\.partnerId\)/, '리포트가 이름을 따로 적는다');
+  assert.equal(/`\(삭제된 파트너 \$\{a\.partnerId\}\)`/.test(settle), false, '이름이 두 벌로 갈라졌다');
+  // ③ 복원 기록과 화면이 그 수를 말한다(조용히 넘기지 않는다).
+  const route = read('src/app/api/admin/backup/route.ts');
+  assert.match(route, /귀속 파트너 없음 \$\{partners\.orphans\}/, '복원 기록이 그 사실을 말하지 않는다');
+  assert.match(route, /orphanAccounts: partners\.orphans/, '응답이 그 수를 싣지 않는다');
+  const dash = read('src/app/admin/page.tsx');
+  assert.match(dash, /data\.orphanAccounts/, '화면이 그 사실을 말하지 않는다');
+  assert.ok(dash.includes('귀속 파트너가 이 파일에 없어 귀속을 그대로 두었습니다'), '화면이 무엇이 그대로인지 말하지 않는다');
+  // 손을 써야 하는 안내는 2.5초 뒤 사라지는 알림으로 띄우지 않는다(닫기 버튼이 있는 쪽이다).
+  assert.match(dash, /if \(orphans > 0\) \{[\s\S]{0,700}?'fail',/, '사라지는 알림으로 띄운다');
 });

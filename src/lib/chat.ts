@@ -16,7 +16,7 @@ import { josa } from '@/lib/refusal';
 import { appendTurn, getSession, setSlot, updateSession } from '@/lib/session';
 import { createTicket, queuePosition } from '@/lib/escalation';
 import { buildHandoffSummary, maskPii, type HandoffReason } from '@/lib/handoff';
-import { PHONE_PATTERN } from '@/lib/pii';
+import { findContact } from '@/lib/pii';
 import { generateGroundedAnswer, type CompleteOptions, type GroundingDoc, type LLMFailureReason, type LLMMessage } from '@/lib/llm';
 import {
   AGENT_REQUEST_RE,
@@ -210,25 +210,20 @@ export function shadowOfRule(keywords: readonly string[], selfIntent = ''): Rule
 }
 
 // ---- 연락처 수집(에스컬레이션 후속 턴) ----
-/**
- * 받아 적는 전화번호 모양 — **가리는 쪽과 같은 글을 쓴다** (`@/lib/pii` · DS 52-1).
- *
- * 종전에는 이 자리에 패턴이 손으로 한 번 더 적혀 있었다(휴대폰·지역번호 두 갈래). 그래서
- * 가리는 쪽이 모르는 구분자(점)를 이쪽만 받아들였고, `010.1234.5678` 은 **연락처로 저장되는데
- * 가려지지 않는** 값이 됐다 — 답변이 그 번호를 그대로 되읽고(`contactTail`), 그 답변이 대화
- * 기록·이관 요약·CSV·백업에 원문으로 남고, `scrub` 를 지나 외부 LLM 호출 본문까지 갔다.
- * 「규칙은 한 곳에」는 마스킹(DS 39-3)·상한(DS 38-x)·감사 어휘(DS 40-3)에서 세운 규칙이다.
- */
-const PHONE_RE = new RegExp(PHONE_PATTERN);
-const EMAIL_RE = /[\w.+-]+@[\w-]+(\.[\w-]+)+/;
 const SKIP_RE = /(건너뛰|괜찮|없어요|없습니다|아니요|아니오|나중에|스킵|skip)/i;
 
-/** 메시지에서 전화번호/이메일 추출. 없으면 null. */
+/**
+ * 메시지에서 전화번호/이메일 추출. 없으면 null.
+ *
+ * **고르는 자는 가리는 쪽에 한 벌로 있다**(`pii.findContact` · DS 53-1). 49차(DS 52-1)는
+ * 패턴 **속**만 끌어와(`new RegExp(PHONE_PATTERN)`) 가리는 쪽이 쓰는 경계(`\b`)와 관문
+ * (`@` 가 뒤에 붙으면 전화번호가 아니다)을 빠뜨렸다 — 그래서 두 쪽이 같은 글을 다르게 읽었다:
+ * 고객이 남긴 `0212345678@example.com` 을 이쪽은 「전화번호 0212345678」로 받아 적고,
+ * 가리는 쪽은 「이메일」로 읽었다. 저장된 것은 **고객이 준 적 없는 번호**이고, 이 경로의 답변은
+ * 저장한 값을 되읽지 않아 고칠 기회조차 없었다(상담원은 그 번호로 전화한다 · DS 35-3·§13).
+ */
 export function extractContact(text: string): string | null {
-  const phone = text.match(PHONE_RE)?.[0];
-  if (phone) return phone.replace(/\s+/g, '');
-  const email = text.match(EMAIL_RE)?.[0];
-  return email ?? null;
+  return findContact(text)?.value ?? null;
 }
 
 /**
@@ -563,7 +558,13 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
       const q = queuePosition(ticket.id);
       return {
         reply:
-          `연락처가 접수번호 ${ticket.id}에 등록됐어요.` +
+          /**
+           * **받아 적은 것을 되읽는다** (DS 53-1) — 0-a2(연락처만 보낸 길)가 이미 그렇게 적는
+           * 문장이고, 이 길만 「연락처가」로 뭉뚱그려 **무엇을 저장했는지 말하지 않았다**.
+           * 받아 적는 자가 틀릴 수 있는 자리라면(이메일을 전화번호로 읽던 자리다) 고객이
+           * 그 자리에서 고칠 수 있어야 한다 — 다른 연락처로 받는 길은 바로 아래 0-a2 다.
+           */
+          `연락처 ${maskPii(contact).text}가 접수번호 ${ticket.id}에 등록됐어요.` +
           // 앞 접수가 닫혀 번호가 새로 발급됐으면 그 사실을 먼저 말한다 (DS 50-2).
           renumberedLine(ctx.ticketId, ticket.id, created) +
           ' 상담원이 순서대로 연락드릴게요.' +

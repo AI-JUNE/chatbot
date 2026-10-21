@@ -21,7 +21,15 @@ export interface FeedbackEntry {
   /** 세션 식별자의 해시(원문 복원 불가). */
   sessionHash: string;
   verdict: Verdict;
-  /** 평가 대상 답변의 근거 라벨. 근거 없이 답한 경우 빈 문자열. */
+  /**
+   * 평가 당시 **서버가 KB 에서 찾은** 자료 이름. 근거 없이 답한 경우 빈 문자열.
+   *
+   * 이 칸을 적는 길은 `resolveKb` 하나다 (DS 53-2) — 종전에는 위젯이 보낸 글자가 그대로
+   * 들어왔다. 그 글은 관리 콘솔 「보완이 필요한 자료」 줄에 **그대로 그려지고** 백업 스냅샷으로
+   * 퍼지는데, `/api/feedback` 은 인증 없이 누구나 부르는 창구다: 상담창을 한 번도 열지 않고도
+   * 운영자 화면에 아무 문장(전화번호를 적어 둔 안내문 포함 — 마스킹 관문을 지나지 않는다)을
+   * 띄울 수 있었고, 👎 를 다섯 번 보내 **고쳐야 할 자료 목록(상위 5줄)을 지어낼 수** 있었다.
+   */
   citation: string;
   /**
    * **어느 자료에 대한 평가인가** — 안내 자료 id (DS 43-2).
@@ -77,12 +85,31 @@ export function isVerdict(v: unknown): v is Verdict {
   return v === 'up' || v === 'down';
 }
 
+/**
+ * 이 평가가 **어느 자료에 대한 것인가** — 이름은 서버가 지금 KB 에서 찾는다 (DS 53-2).
+ *
+ * 호출자가 적어 보낸 라벨은 쓰지 않는다. 지금 KB 에 없는 id 도 **적지 않는다** — 지어낸 id
+ * 하나하나가 「보완이 필요한 자료」의 한 줄이 되던 자리다(그 줄은 「지워진 자료」라고 적혀
+ * 나가, 있었던 적도 없는 자료를 운영자가 다시 등록하게 만든다). 진짜로 지워진 자료는 평가
+ * 당시에 적어 둔 이름과 `missing` 으로 드러난다(DS 43-2).
+ *
+ * @param labels 자료 id → 지금 이름. 부르는 쪽(라우트)이 KB 를 아는 자리에서 만들어 넘긴다 —
+ *   이 모듈이 KB 를 import 하면 평가 저장소가 지식 적재에 묶인다.
+ */
+export function resolveKb(kbId: unknown, labels: Record<string, string>): { kbId: string; citation: string } | null {
+  const id = typeof kbId === 'string' ? kbId.trim().slice(0, MAX_KB_ID_LEN) : '';
+  if (!id) return null;
+  const label = labels[id];
+  return label ? { kbId: id, citation: label.slice(0, MAX_CITATION_LEN) } : null;
+}
+
 /** 잘못된 입력은 조용히 버리지 않고 사유를 돌려준다(라우트가 400으로 바꾼다). */
 export function recordFeedback(input: {
   sessionHash: unknown;
   verdict: unknown;
+  /** 평가 당시 **서버가 찾은** 자료 이름. 자료 id 와 한 쌍으로 `resolveKb` 가 만든다 (DS 53-2). */
   citation?: unknown;
-  /** 평가 대상 자료 id — 서버가 근거와 함께 내려보낸 값이 그대로 돌아온 것이다 (DS 43-2). */
+  /** 평가 대상 자료 id — `resolveKb` 가 지금 KB 에서 확인한 값이다 (DS 43-2·53-2). */
   kbId?: unknown;
   channel?: unknown;
 }): { ok: true; entry: FeedbackEntry } | { ok: false; error: string } {
@@ -120,6 +147,15 @@ export function listFeedback(limit = 100): FeedbackEntry[] {
 export const NO_CITATION_LABEL = '근거 없음';
 
 /**
+ * 자료 id 는 있는데 **이름을 댈 수 없는** 줄의 표기 (DS 53-2).
+ *
+ * 복원한 평가가 그렇다 — 저장분에 적혀 있던 이름은 들고 오지 않으므로(`importFeedback`)
+ * 그 자료가 지금 KB 에 없으면 이름을 알 길이 없다. 그때는 지어내지 않고 이렇게 적는다.
+ * 「근거 없음」(등록 자료 없이 답한 답변)과 **다른 사실**이라 화면이 다르게 적는다.
+ */
+export const DELETED_KB_LABEL = '지워진 자료';
+
+/**
  * 평가 집계. 「보완이 필요한 자료」는 **자료 id** 로 묶는다 (DS 43-2).
  *
  * @param labels 자료 id → 지금 이름. 부르는 쪽(라우트)이 KB 를 아는 자리에서 만들어 넘긴다 —
@@ -145,7 +181,13 @@ export function feedbackSummary(labels?: Record<string, string>): FeedbackSummar
       if (e.citation) prev.citation = e.citation;
       continue;
     }
-    downBy.set(key, { ...(e.kbId ? { kbId: e.kbId } : {}), citation: e.citation || NO_CITATION_LABEL, down: 1 });
+    // 이름이 없는 줄은 **왜 없는지**로 가른다 (DS 53-2): 자료 id 가 있으면 그 자료를 지금
+    // 댈 수 없는 것이고(복원된 평가), 없으면 등록 자료 없이 답한 답변이다.
+    downBy.set(key, {
+      ...(e.kbId ? { kbId: e.kbId } : {}),
+      citation: e.citation || (e.kbId ? DELETED_KB_LABEL : NO_CITATION_LABEL),
+      down: 1,
+    });
   }
   const total = up + down;
   const topDown: FeedbackTarget[] = [...downBy.entries()]
@@ -202,11 +244,22 @@ export function importFeedback(input: unknown): { ok: true; count: number } | { 
     if (typeof e.sessionHash !== 'string' || !e.sessionHash) continue;
     // 자료 id 는 있으면 그대로 들고 온다 — 옛 스냅샷에는 없다(그때는 「모른다」 · DS 43-2).
     const kbId = typeof e.kbId === 'string' ? e.kbId.trim().slice(0, MAX_KB_ID_LEN) : '';
+    /**
+     * **저장분에 적혀 있던 이름은 들고 오지 않는다** (DS 53-2).
+     *
+     * 이름은 바뀌는 값이라 집계할 때 지금 KB 에서 붙인다는 것이 DS 43-2 의 규칙이고, 그러면
+     * 저장해 둔 이름이 쓰이는 자리는 **지워진 자료 한 줄**뿐이다. 그 한 줄을 위해 이름을 들고
+     * 오면, 고치기 전 코드가 적어 둔 저장분(위젯이 보낸 글자가 그대로 들어간 것)을 되돌리는
+     * 순간 그 글이 운영자 화면에 되살아난다 — 36차가 마스킹에서(DS 39-2), 49차가 파기한
+     * 연락처에서(DS 52-3) 본 그 복원 경로다. 저장소가 이름을 한 칸도 들고 있지 않으면 그
+     * 경로가 아예 없다. 잃는 것은 **지워진 자료의 이름 한 줄**이고(그때는 「지워진 자료」라고
+     * 적는다), 살아 있는 자료의 이름은 지금 KB 에서 그대로 붙는다.
+     */
     restored.push({
       id: e.id,
       sessionHash: e.sessionHash.slice(0, 32),
       verdict: e.verdict,
-      citation: typeof e.citation === 'string' ? e.citation.slice(0, MAX_CITATION_LEN) : '',
+      citation: '',
       ...(kbId ? { kbId } : {}),
       channel: typeof e.channel === 'string' && e.channel ? e.channel : 'web',
       at: typeof e.at === 'string' && e.at ? e.at : new Date().toISOString(),

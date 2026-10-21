@@ -13,6 +13,7 @@ import {
   queryAccounts,
   effectiveFeeRateBp,
   defaultFeeRateBp,
+  missingPartnerName,
   type Account,
   type AccountQuery,
 } from '@/lib/partners';
@@ -160,7 +161,9 @@ export function buildSettlement(input: SettlementInput): SettlementResult {
     }
 
     const partner = getPartner(a.partnerId);
-    const partnerName = partner ? partner.name : `(삭제된 파트너 ${a.partnerId})`;
+    // 「지금 찾을 수 없는 파트너」의 이름은 한 벌이다(`missingPartnerName` · DS 53-3) —
+    // 파트너별 집계·관리 콘솔이 같은 말을 쓴다.
+    const partnerName = partner ? partner.name : missingPartnerName(a.partnerId);
     const feeRateBp = partner ? effectiveFeeRateBp(partner) : null;
     const baseAmountKrw = typeof a.monthlyFeeKrw === 'number' ? a.monthlyFeeKrw : null;
 

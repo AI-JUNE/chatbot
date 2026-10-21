@@ -143,6 +143,18 @@ export function effectiveFeeRateBp(partner: Pick<Partner, 'feeRateBp'>): number 
   return partner.feeRateBp ?? defaultFeeRateBp();
 }
 
+/**
+ * 귀속이 가리키는 파트너를 **지금 찾을 수 없을 때** 적는 이름 (DS 53-3).
+ *
+ * 화면·정산 리포트·파트너별 집계가 같은 말을 쓴다 — 두 곳이 각자 적으면 같은 사실이 화면마다
+ * 다른 말로 뜬다(DS 36-2·47-3 이 세운 「이름은 아는 쪽이 한 벌로 붙인다」와 같은 규칙).
+ * 「직접 계약」이라고 적지 않는 것이 요점이다: 그것은 **다른 사실**이고, 정산에서 제외되는
+ * 까닭도 다르다(대상이 아님 vs 근거가 모자람).
+ */
+export function missingPartnerName(id: string): string {
+  return `(삭제된 파트너 ${id})`;
+}
+
 // ---- 파트너 ----
 
 export interface PartnerInput {
@@ -416,8 +428,28 @@ export function rollupByPartner(): PartnerRollup[] {
   rows.push({ partnerId: null, partnerName: '직접 계약', feeRateBp: null, total: 0, contracted: 0, prospect: 0, churned: 0 });
 
   for (const a of accounts) {
-    const row = rows.find((r) => r.partnerId === a.partnerId);
-    if (!row) continue; // 파트너가 삭제된 경우 — deletePartner가 막지만 복원 데이터 방어
+    let row = rows.find((r) => r.partnerId === a.partnerId);
+    if (!row) {
+      /**
+       * 가리키는 파트너를 찾을 수 없는 고객사 — **떨어뜨리지 않는다** (DS 53-3).
+       *
+       * 종전에는 `continue` 로 넘겼다. 그래서 그 고객사는 어느 줄에도 들어가지 않고, 파트너별
+       * 집계의 합이 고객사 수와 **조용히 어긋났다**(화면은 어긋난 줄 모른다). `deletePartner`
+       * 가 연결된 고객사가 있는 파트너의 삭제를 막으므로 평소에는 생기지 않지만, 저장분을
+       * 되돌리는 길로는 들어온다 — 그 길에서 귀속을 지우지 않게 되었으므로(`importPartners`)
+       * 여기도 그 사실을 **보여 주는 쪽**으로 둔다.
+       */
+      row = {
+        partnerId: a.partnerId,
+        partnerName: a.partnerId ? missingPartnerName(a.partnerId) : '직접 계약',
+        feeRateBp: null,
+        total: 0,
+        contracted: 0,
+        prospect: 0,
+        churned: 0,
+      };
+      rows.push(row);
+    }
     row.total += 1;
     if (a.status === 'contracted') row.contracted += 1;
     else if (a.status === 'churned') row.churned += 1;
@@ -461,7 +493,18 @@ export function savePartnersNow(): SavedInfo {
 
 export type PartnerImportResult =
   /** `saved` 는 **쓰기를 시도한 복원**에만 있다(기동 때의 읽어 들이기에는 없다). */
-  | { ok: true; partners: number; accounts: number; saved?: SavedInfo }
+  | {
+      ok: true;
+      partners: number;
+      accounts: number;
+      /**
+       * 귀속이 가리키는 파트너를 이 저장분에서 찾을 수 없는 고객사 수 (DS 53-3).
+       * 0 이 아니면 **복원 결과를 그대로 믿을 수 없다**는 뜻이므로 부르는 쪽이 말해야 한다 —
+       * 종전에는 그 건들을 직접 계약으로 바꿔 두고 아무 말도 하지 않았다.
+       */
+      orphans: number;
+      saved?: SavedInfo;
+    }
   | { ok: false; error: string };
 
 /**
@@ -501,13 +544,34 @@ export function importPartners(input: unknown, opts: { persist?: boolean } = {})
 
   const ids = new Set(nextPartners.map((p) => p.id));
   const nextAccounts: Account[] = [];
+  /** 귀속이 가리키는 파트너를 이 저장분에서 찾을 수 없는 고객사 수 — 조용히 넘기지 않는다 (DS 53-3). */
+  let orphans = 0;
   for (const a of snap.accounts) {
     if (!a || typeof a !== 'object') continue;
     const { id, name } = a as Account;
     if (typeof id !== 'string' || !id.trim() || typeof name !== 'string' || !name.trim()) continue;
     const rawPid = (a as Account).partnerId;
-    // 존재하지 않는 파트너를 가리키면 직접 계약으로 되돌린다(고아 귀속 방지).
-    const partnerId = typeof rawPid === 'string' && ids.has(rawPid) ? rawPid : null;
+    /**
+     * **귀속은 지우지 않는다** (DS 53-3). 가리키는 파트너가 이 저장분에 없더라도 그대로 들고 온다.
+     *
+     * 종전에는 「고아 귀속 방지」라며 `null`(직접 계약)로 되돌렸다. 그런데 이 파일의 첫 원칙이
+     * 「귀속 변경은 append-only 이력으로 남긴다 — 값만 바꾸면 근거가 사라진다」이고, 그 되돌림은
+     * 이력을 한 줄도 남기지 않았다. 돌려서 확인했다: 파트너 한 건의 이름이 빈 저장분(그 한 건은
+     * 건너뛴다)을 되돌리면 그 파트너의 고객사가 **직접 계약**이 되고, 정작 그 고객사의
+     * `attribution` 은 여전히 `toPartnerId: 'PTR-0001'` 이라고 적고 있다 — 값과 근거가 서로
+     * 다른 말을 하는 기록이다. 그리고 그 결과는 디스크에 그대로 적힌다(`saveJson`).
+     *
+     * 더 나쁜 것은 **정산 리포트가 그 거짓을 완전한 수로 말한다**는 것이다: 「직접 계약 1건은
+     * 파트너 정산 대상이 아니라 제외했습니다」 + `partial: false`. 파트너의 수수료가 아무 경고
+     * 없이 사라지고, 그 자리에는 사실이 아닌 문장이 남는다(§13 · 정산 분쟁이 생기는 바로 그 칸).
+     *
+     * 귀속을 그대로 두면 아래쪽이 이미 그 사실을 말할 수 있게 적혀 있다 — 리포트는
+     * `(삭제된 파트너 PTR-0001)` 줄을 세우고 「수수료율 미설정」으로 합계에서 빼며 `partial: true`
+     * 를 켠다(운영자가 어느 고객사인지·왜 빠졌는지 본다). `deletePartner` 가 연결된 고객사가
+     * 있는 파트너의 삭제를 막는 것과 같은 판단이다: 근거를 지울 수 있는 길을 열지 않는다.
+     */
+    const partnerId = typeof rawPid === 'string' && rawPid.trim() ? rawPid.trim().slice(0, 40) : null;
+    if (partnerId && !ids.has(partnerId)) orphans += 1;
     const src = (a as Account).source;
     const st = (a as Account).status;
     const ca = (a as Account).contractedAt;
@@ -550,7 +614,7 @@ export function importPartners(input: unknown, opts: { persist?: boolean } = {})
   partnerSeq = Math.max(numTail(snap.partners.map(rawId)), Number(snap.partnerSeq) || 0);
   accountSeq = Math.max(numTail(snap.accounts.map(rawId)), Number(snap.accountSeq) || 0);
   const saved = opts.persist === false ? undefined : savedInfo(saveJson(PARTNERS_NS, exportPartners()));
-  return { ok: true, partners: partners.length, accounts: accounts.length, ...(saved ? { saved } : {}) };
+  return { ok: true, partners: partners.length, accounts: accounts.length, orphans, ...(saved ? { saved } : {}) };
 }
 
 /** 'PTR-0007' 같은 id에서 가장 큰 일련번호를 뽑는다(복원 후 id 충돌 방지). */

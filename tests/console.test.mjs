@@ -2097,11 +2097,12 @@ test('평가가 어느 자료에 대한 것인지 id 로 오간다 (DS 43-2)', o
   const knowledge = readFileSync(new URL('../src/lib/knowledge.ts', import.meta.url), 'utf8');
   const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
 
-  // ① 위젯이 자료 id 를 함께 보낸다(라벨도 계속 보낸다 — 지워진 자료의 이름이 될 값이다).
+  // ① 위젯이 자료 id 를 함께 보낸다.
   assert.match(widget, /kbId: m\.citation\?\.kbId \|\| ''/, '위젯이 자료 id 를 보내지 않는다');
-  // ② 라우트가 받아 넘긴다 — 검증을 거치고(길이 상한) 그대로 저장소로 간다.
+  // ② 라우트가 받아 넘긴다 — 검증을 거치고(길이 상한) 이름과 한 쌍으로 저장소로 간다.
+  //    (50차에 라벨은 서버가 붙이게 되었다 · DS 53-2 — 그 배선은 아래 DS 53-2 테스트가 센다.)
   assert.match(route, /optStr\(parsed\.data\.kbId, 'kbId', 60\)/, '라우트가 자료 id 를 검증 없이 받는다');
-  assert.match(route, /kbId: kbId\.value/, '라우트가 자료 id 를 버린다');
+  assert.match(route, /resolveKb\(kbId\.value, kbLabelMap\(\)\)/, '라우트가 자료 id 를 버린다');
   // ③ 묶음 열쇠가 id 우선이다 — 라벨로만 묶으면 이름을 고칠 때마다 줄이 갈라진다.
   assert.match(lib, /const key = e\.kbId \? `id:\$\{e\.kbId\}` : `label:/, '평가를 라벨로 묶는다');
   // ④ 이름 규칙이 근거 라벨과 같다 — 운영자가 답변 아래에서 본 그 이름이 목록에 떠야 한다.
@@ -2638,7 +2639,11 @@ test('쓰기 응답이 보관 결과를 싣고 화면이 그 사실을 말한다
     /flashSaved\('파트너를 삭제했습니다\.', data\.saved/,
   ]) assert.match(src, sig, `보관 결과를 보지 않는 저장 안내가 있다: ${sig}`);
   // 복원은 「모두 덮어씁니다」라고 말하고 확인까지 받은 자리다 — 그것이 디스크까지 갔는지 말한다.
-  assert.match(src, /flashSaved\(\n\s*`복원 완료:/, '복원이 보관 결과를 보지 않는다');
+  // 귀속 파트너를 찾을 수 없는 고객사가 있으면 **사라지지 않는 쪽**으로 가는데(DS 53-3),
+  // 그 길에도 보관 사실을 덧붙인다(토스트는 한 번에 하나다 · 아래 ⑤ 와 같은 규칙).
+  assert.match(src, /const done = `복원 완료:/, '복원이 결과 문장을 만들지 않는다');
+  assert.match(src, /flashSaved\(done, data\.saved as SavedView \| undefined\);/, '복원이 보관 결과를 보지 않는다');
+  assert.match(src, /const warn = savedWarning\(data\.saved as SavedView \| undefined\);[\s\S]{0,500}?\+ \(warn \? ` \$\{warn\}` : ''\),/, '귀속 안내가 보관 사실을 덮는다');
 
   // ⑤ 이미 머무는 안내(쓰이지 않는 규칙·남는 조각)에는 **덧붙인다** — 토스트는 한 번에 하나다.
   assert.match(src, /목록에서 다음에 할 일을 확인해 주세요\.\$\{savedWarn \? ` \$\{savedWarn\}` : ''\}/, '쓰이지 않는 규칙 안내가 보관 사실을 덮는다');

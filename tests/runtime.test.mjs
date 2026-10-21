@@ -1206,7 +1206,7 @@ test('집계는 건수만 센다(금액·성과 수치를 지어내지 않는다
   assert.equal(Object.keys(row).some((k) => /revenue|amount|매출/.test(k)), false, '금액 필드는 아직 없다');
 });
 
-test('스냅샷 복원: 손상 항목은 건너뛰고 고아 귀속은 직접 계약으로 되돌린다', opts, async () => {
+test('스냅샷 복원: 손상 항목은 건너뛰고 귀속은 지우지 않는다', opts, async () => {
   const P = await partnersLib();
   const bad = P.importPartners({ partners: 'nope' });
   assert.equal(bad.ok, false, '형식이 어긋나면 실패를 알린다');
@@ -1226,7 +1226,10 @@ test('스냅샷 복원: 손상 항목은 건너뛰고 고아 귀속은 직접 �
   assert.equal(r.ok, true);
   assert.equal(r.partners, 1, '무효 파트너는 건너뛴다');
   assert.equal(r.accounts, 2, '무효 고객사는 건너뛴다');
-  assert.equal(P.getAccount('ACC-0008').partnerId, null, '없는 파트너를 가리키면 직접 계약으로 되돌린다');
+  // 가리키는 파트너가 저장분에 없어도 **귀속은 그대로 둔다** (DS 53-3) — 아래 DS 53-3 테스트가
+  // 왜 그래야 하는지를 센다(지우면 정산 리포트가 「직접 계약」이라는 거짓을 완전한 수로 말한다).
+  assert.equal(P.getAccount('ACC-0008').partnerId, 'PTR-9999', '없는 파트너를 가리키면 귀속을 지운다');
+  assert.equal(r.orphans, 1, '귀속 파트너를 찾을 수 없는 고객사 수를 말하지 않는다');
   // 복원 후 새로 만든 id가 기존 id와 충돌하지 않는다
   const next = P.upsertAccount({ name: '신규사' });
   assert.equal(next.account.id, 'ACC-0010');
@@ -2326,7 +2329,9 @@ test('답변 평가는 재시작을 넘겨 남고, 어긋난 스냅샷은 건너
   const sum = F.feedbackSummary();
   assert.equal(sum.total, 2);
   assert.equal(sum.helpfulRate, 50);
-  assert.equal(sum.topDown[0].citation, '이음 FAQ 3. 활동 시간');
+  // 저장분에 적혀 있던 **이름은 들고 오지 않는다** (DS 53-2) — 이름은 지금 KB 에서 붙인다.
+  // 자료 id 없이 남은 평가라 지금은 이름을 댈 수 없다(「근거 없음」 줄로 모인다).
+  assert.equal(sum.topDown[0].citation, F.NO_CITATION_LABEL);
 
   // 평가값이 아닌 항목은 집계를 비뚤게 만든다 — 건너뛴다.
   const dirty = F.importFeedback({
@@ -4294,7 +4299,7 @@ test('카카오가 끝난 접수를 현재형으로 말하지 않는다 (DS 51-3
 test('받아 적을 수 있는 전화번호 모양은 모두 가린다 (DS 52-1)', opts, async () => {
   process.env.ADMIN_PERSIST = 'false';
   delete process.env.CHAT_LLM_LIVE;
-  const { maskPii, PHONE_PATTERN } = await pickPii('pii');
+  const { maskPii, PHONE_MATCH_PATTERN } = await pickPii('pii');
   const { scrub } = await pickPii('monitoring');
   const { logTurn, resetLogs, listTurns } = await pickPii('convlog');
   const { extractContact, isOnlyContact, replyTo } = await pickPii('chat');
@@ -4318,7 +4323,8 @@ test('받아 적을 수 있는 전화번호 모양은 모두 가린다 (DS 52-1)
   assert.equal(maskPii('02.123.4567', 'opaque').text, '0**-****-****');
 
   // ── ③ 받아 적는 쪽과 가리는 쪽이 **같은 글**을 쓴다 — 한 쪽만 넓어지는 일이 다시 없게.
-  const shared = new RegExp(PHONE_PATTERN);
+  // 받아 적는 쪽이 실제로 쓰는 식(경계·관문 포함)으로 견준다 — 50차에 그 둘까지 한 벌이 되었다(DS 53-1).
+  const shared = new RegExp(PHONE_MATCH_PATTERN);
   for (const s of ['010-1234-5678', '010 1234 5678', '010.1234.5678', '01012345678', '02-123-4567', '02.123.4567', '031-123-4567']) {
     assert.ok(shared.test(s), `공통 패턴이 받아 적는 모양을 놓친다: ${s}`);
     assert.equal(maskPii(s).masked, true, `받아 적을 수는 있는데 가리지 못한다: ${s}`);
@@ -4470,4 +4476,227 @@ test('복원이 끝난 접수의 연락처를 되살리지 않는다 (DS 52-3)',
   assert.equal(esc.isClosedStatus('open'), false);
   assert.equal(esc.isClosedStatus('in_progress'), false);
   esc.resetTickets();
+});
+
+/* ══════════ 53순위 — 백로그 소진 후 50차 재감사 (DS 53-1·53-2·53-3) ══════════ */
+
+/**
+ * DS 53-1 — 받아 적는 자와 가리는 자가 **같은 글을 다르게 읽었다**.
+ *
+ * 49차(DS 52-1)는 패턴 **속**(`PHONE_PATTERN`)을 한 벌로 만들었다. 그런데 가리는 쪽이 실제로
+ * 쓰는 식에는 그 속을 감싸는 경계(`\b…\b`)와 관문(`(?![\w.+-]*@)`)이 더 있었고, 그 둘은 가리는
+ * 쪽에만 남았다. 그래서 고객이 남긴 `0212345678@example.com` 을 받아 적는 쪽은 「전화번호
+ * 0212345678」로, 가리는 쪽은 「이메일」로 읽었다 — 접수에 저장된 것은 **고객이 준 적 없는
+ * 번호**이고, 이 경로의 답변은 저장한 값을 되읽지 않아 고칠 기회조차 없었다(상담원은 그
+ * 번호로 전화한다 · DS 35-3 이 세운 「틀리게 적는 것보다 못 알아듣는 쪽이 낫다」 · §13).
+ */
+test('연락처는 가리는 쪽과 같은 자로 받아 적는다 (DS 53-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  delete process.env.CHAT_LLM_LIVE;
+  const { maskPii, findContact, PHONE_MATCH_PATTERN } = await pickPii('pii');
+  const { extractContact, isOnlyContact, replyTo } = await pickPii('chat');
+  const { validateSlot, getForm, slotOf } = await pickPii('slots');
+  const esc = await pickPii('escalation');
+
+  // ── ① 종전 재현: 경계·관문이 없는 식은 메일 주소에서 「전화번호」를 떼어 간다.
+  const legacy = new RegExp('0\\d{1,2}[-\\s.]?\\d{3,4}[-\\s.]?\\d{4}');
+  assert.equal('0212345678@example.com'.match(legacy)?.[0], '0212345678', '종전 식이 재현되지 않는다');
+  assert.equal('01012345678901'.match(legacy)?.[0], '01012345678', '종전 식이 긴 숫자를 자르지 않는다 — 재현 실패');
+  // 같은 글을 가리는 쪽은 **다르게** 읽는다 — 두 쪽이 어긋나 있었다는 증거다.
+  assert.deepEqual(maskPii('0212345678@example.com').hits, ['email'], '가리는 쪽도 전화번호로 읽는다 — 전제가 깨졌다');
+  assert.deepEqual(maskPii('01012345678901').hits, ['account'], '가리는 쪽도 전화번호로 읽는다 — 전제가 깨졌다');
+
+  // ── ② 이제 두 쪽이 같은 글을 쓴다 — 받아 적은 값은 **반드시 가려진다**.
+  for (const s of ['010-1234-5678', '010 1234 5678', '010.1234.5678', '01012345678', '02-123-4567', '02.123.4567', '031-123-4567']) {
+    assert.ok(new RegExp(PHONE_MATCH_PATTERN).test(s), `공통 식이 받아 적는 모양을 놓친다: ${s}`);
+    const got = extractContact(s);
+    assert.ok(got, `멀쩡한 번호를 받지 못한다: ${s}`);
+    assert.equal(maskPii(got).masked, true, `받아 적을 수는 있는데 가리지 못한다: ${s}`);
+    assert.deepEqual(maskPii(got).hits, ['phone'], `가린 종류가 전화번호가 아니다: ${s}`);
+  }
+  // 문장에 섞인 번호·둘을 함께 보낸 경우의 동작은 **한 글자도 바뀌지 않았다**.
+  assert.equal(extractContact('연락처는 010-1234-5678 입니다'), '010-1234-5678');
+  assert.equal(extractContact('010-1234-5678 / hong@gowon.co.kr'), '010-1234-5678', '전화번호를 먼저 고르던 동작이 바뀌었다');
+  assert.equal(extractContact('010 1234 5678'), '01012345678', '공백 구분자를 지우던 동작이 바뀌었다');
+  assert.equal(extractContact('hong@gowon.co.kr'), 'hong@gowon.co.kr');
+  assert.equal(isOnlyContact('010.1234.5678'), true, '점으로 적은 번호를 더 이상 받지 않는다(DS 52-1 회귀)');
+
+  // ── ③ 메일 주소는 **메일 주소로** 받는다 — 앞부분을 떼어 전화번호로 적지 않는다.
+  for (const mail of ['0212345678@example.com', '01012345678@naver.com', '0101234567@naver.com']) {
+    assert.equal(extractContact(mail), mail, `메일 주소에서 번호를 떼어 간다: ${mail}`);
+    assert.equal(findContact(mail).kind, 'email', mail);
+    assert.deepEqual(maskPii(extractContact(mail)).hits, ['email'], mail);
+  }
+  assert.equal(extractContact('제 메일은 0212345678@example.com 이에요'), '0212345678@example.com');
+
+  // ── ④ 번호 모양이 더 긴 숫자에 묻혀 있으면 **잘라 적지 않는다** — 못 알아듣는 쪽이 낫다.
+  for (const blob of ['01012345678901', '1234567890123', 'tel01012345678']) {
+    assert.equal(extractContact(blob), null, `긴 숫자를 잘라 연락처로 적는다: ${blob}`);
+  }
+
+  // ── ⑤ 접수 폼의 연락처 칸도 **같은 자**를 쓴다(종전에는 세 번째 사본을 들고 있었다).
+  const contactSlot = slotOf(getForm('reservation'), 'contact');
+  assert.equal(validateSlot(contactSlot, '0212345678@example.com').value, '0212345678@example.com');
+  assert.equal(validateSlot(contactSlot, '연락처는 010-1234-5678 입니다').value, '010-1234-5678');
+  assert.equal(validateSlot(contactSlot, '01012345678901').ok, false, '폼이 긴 숫자를 잘라 받는다');
+  assert.match(validateSlot(contactSlot, '01012345678901').message, /연락처 형식/, '왜 틀렸는지 말하지 않는다');
+
+  // ── ⑥ 끝단: 서버가 물은 뒤 메일 주소를 보내면 **그 주소가** 접수에 붙고, 저장한 값을 되읽는다.
+  esc.resetTickets();
+  const captured = (() => {
+    const sid = 'rt-ds53-1';
+    replyTo('상담원 연결해 주세요', sid);
+    return replyTo('0212345678@example.com', sid);
+  })();
+  assert.equal(esc.getTicket(captured.ticketId).contact, '0212345678@example.com', '고객이 주지 않은 번호가 접수에 적힌다');
+  assert.ok(captured.reply.includes('02***@example.com'), '저장한 값을 되읽지 않아 고객이 고칠 수 없다');
+  assert.equal(captured.reply.includes('0212345678@'), false, '되읽는 문장에 원문이 그대로 실린다');
+  // 전화번호를 보낸 경우에도 같은 문장이다(0-a2 와 한 벌 · DS 34-2).
+  const phoneTurn = (() => {
+    const sid = 'rt-ds53-1b';
+    replyTo('상담원 연결해 주세요', sid);
+    return replyTo('010-1234-5678', sid);
+  })();
+  assert.ok(phoneTurn.reply.includes('010-****-5678'), '번호를 받아 적고도 무엇을 받았는지 말하지 않는다');
+  assert.equal(esc.getTicket(phoneTurn.ticketId).contact, '010-1234-5678');
+  esc.resetTickets();
+});
+
+/**
+ * DS 53-2 — 「보완이 필요한 자료」의 이름을 **밖에서 적을 수 있었다**.
+ *
+ * 평가 창구(`/api/feedback`)는 인증이 없고, 근거 라벨은 「서버가 만들어 내려준 값이 그대로
+ * 돌아온 것이다(자유 입력 아님)」라고 적혀 있었을 뿐 그것을 확인하는 자가 없었다. 저장된
+ * 글은 관리 콘솔 대시보드 「보완이 필요한 자료」 줄에 **그대로** 그려지고(마스킹 관문도 지나지
+ * 않는다) 백업 스냅샷으로 퍼진다. 게다가 지어낸 자료 id 는 「지워진 자료」 한 줄이 되어,
+ * 있었던 적도 없는 자료를 운영자가 다시 등록하게 만든다 — 그 목록의 순서가 곧 운영자가 다음에
+ * 할 일이다(DS 32-2·43-2).
+ */
+test('평가의 자료 이름은 서버가 지금 KB 에서 붙인다 (DS 53-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const F = await importLib('feedback', ['storage', 'logger', 'monitoring', 'refusal']);
+  const KB = { kb_refund: '환불·교환 규정 안내', eum_3: '이음 FAQ 3. 활동 시간' };
+
+  // ── ① 종전 재현: 호출자가 적어 보낸 글이 그대로 저장되고 그대로 목록에 떴다.
+  F.resetFeedback();
+  const injected = '고객센터 010-1234-5678 로 전화주세요';
+  assert.equal(F.recordFeedback({ sessionHash: 'h1', verdict: 'down', citation: injected }).entry.citation, injected,
+    '저장소가 라벨을 받지 않는다 — 재현이 깨졌다');
+  assert.equal(F.feedbackSummary(KB).topDown[0].citation, injected, '종전 식이 재현되지 않는다');
+
+  // ── ② 가리는 자는 한 벌이다 — 지금 KB 에 있는 id 만 자료로 인정하고, **이름은 KB 에서** 온다.
+  assert.deepEqual(F.resolveKb('kb_refund', KB), { kbId: 'kb_refund', citation: '환불·교환 규정 안내' });
+  assert.deepEqual(F.resolveKb(' eum_3 ', KB), { kbId: 'eum_3', citation: '이음 FAQ 3. 활동 시간' });
+  for (const made of ['kb_없는자료', 'x'.repeat(60), '', '   ', null, 42]) {
+    assert.equal(F.resolveKb(made, KB), null, `지어낸 자료 id 를 받아들인다: ${JSON.stringify(made)}`);
+  }
+
+  // ── ③ 그 자를 지난 평가만 목록에 줄을 만든다 — 지어낸 id 는 「근거 없음」 한 줄로 모인다.
+  F.resetFeedback();
+  const send = (kbId) => {
+    const kb = F.resolveKb(kbId, KB);
+    return F.recordFeedback({ sessionHash: 'h', verdict: 'down', ...(kb ?? {}), channel: 'web' });
+  };
+  send('kb_refund');
+  for (let i = 0; i < 5; i += 1) send(`made_up_${i}`);
+  const s = F.feedbackSummary(KB);
+  assert.equal(s.down, 6, '평가 수는 그대로 센다(버리지 않는다)');
+  assert.equal(s.topDown.length, 2, '지어낸 id 가 목록에 줄을 만든다');
+  assert.equal(s.topDown.filter((t) => t.citation === F.NO_CITATION_LABEL).length, 1, '지어낸 id 들이 한 줄로 모이지 않는다');
+  assert.equal(s.topDown.some((t) => t.kbId && !KB[t.kbId]), false, '지금 KB 에 없는 id 가 저장됐다');
+  assert.equal(s.topDown.find((t) => t.kbId === 'kb_refund').citation, '환불·교환 규정 안내');
+
+  // ── ④ 저장분에 적혀 있던 이름은 **들고 오지 않는다** — 복원이 그 글을 되살리던 자리다.
+  F.resetFeedback();
+  const back = F.importFeedback({
+    version: 1, savedAt: '', seq: 2,
+    entries: [
+      { id: 'F-000001', sessionHash: 'h', verdict: 'down', citation: injected, kbId: 'kb_refund', channel: 'web', at: '2026-10-20T00:00:00.000Z' },
+      { id: 'F-000002', sessionHash: 'h', verdict: 'down', citation: injected, kbId: 'kb_gone', channel: 'web', at: '2026-10-20T00:00:00.000Z' },
+    ],
+  });
+  assert.equal(back.ok, true);
+  assert.equal(back.count, 2, '복원이 평가를 잃었다');
+  assert.equal(F.listFeedback().some((e) => e.citation), false, '복원이 저장분의 이름을 되살린다');
+  assert.equal(F.listFeedback()[0].kbId, 'kb_gone', '복원하면서 자료 id 를 잃는다');
+  const after = F.feedbackSummary(KB);
+  assert.equal(after.topDown.find((t) => t.kbId === 'kb_refund').citation, '환불·교환 규정 안내', '살아 있는 자료의 이름을 잃었다');
+  const gone = after.topDown.find((t) => t.kbId === 'kb_gone');
+  assert.equal(gone.missing, true, '지워진 자료를 지워졌다고 말하지 않는다');
+  assert.equal(gone.citation, F.DELETED_KB_LABEL, '이름을 지어내거나 호출자의 글을 보여 준다');
+  assert.notEqual(F.DELETED_KB_LABEL, F.NO_CITATION_LABEL, '「지워진 자료」와 「근거 없음」을 같은 말로 적는다');
+  F.resetFeedback();
+});
+
+/**
+ * DS 53-3 — 저장분을 되돌리면 **매출 귀속이 말없이 「직접 계약」으로** 바뀌었다.
+ *
+ * `@/lib/partners` 의 첫 원칙은 「귀속 변경은 append-only 이력으로 남긴다 — 값만 바꾸면 근거가
+ * 사라진다」이고, `deletePartner` 는 연결된 고객사가 있는 파트너의 삭제를 거절한다. 그런데 복원
+ * 경로는 「고아 귀속 방지」라며 가리키는 파트너가 저장분에 없는 고객사를 `partnerId: null` 로
+ * 되돌렸다 — 이력은 한 줄도 남지 않고, 그 고객사의 `attribution` 은 여전히 그 파트너를 가리킨다.
+ * 그리고 정산 리포트는 그 거짓을 **완전한 수**로 말했다: 「직접 계약 1건은 파트너 정산 대상이
+ * 아니라 제외했습니다」 + `partial: false`. 파트너의 수수료가 아무 경고 없이 사라진다(§13).
+ */
+test('복원은 매출 귀속을 지우지 않고, 리포트가 그 사실을 말한다 (DS 53-3)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const GROUP = ['settlement', 'partners', 'storage', 'logger', 'monitoring', 'csv', 'kst', 'normalize', 'refusal'];
+  const pick = (name) => importLib(name, GROUP.filter((n) => n !== name));
+  const P = await pick('partners');
+  const S = await pick('settlement');
+  const AT = new Date('2026-10-21T00:00:00Z');
+
+  P.resetPartners();
+  const ptr = P.upsertPartner({ name: '제이투모로우원', feeRateBp: 1500 }).partner;
+  const acc = P.upsertAccount({
+    name: '(주)고원', partnerId: ptr.id, source: 'partner',
+    status: 'contracted', contractedAt: '2026-01-05', monthlyFeeKrw: 1000000,
+  }).account;
+  assert.equal(acc.attribution[acc.attribution.length - 1].toPartnerId, ptr.id);
+
+  // 파트너 한 건의 이름이 빈 저장분 — 그 한 건은 건너뛴다(형식 위반). 고객사는 그대로 들어온다.
+  const snap = P.exportPartners();
+  const broken = { ...snap, partners: [{ ...snap.partners[0], name: '' }] };
+  const r = P.importPartners(broken, { persist: false });
+  assert.equal(r.ok, true);
+  assert.equal(r.partners, 0, '이름 없는 파트너를 받아들인다 — 전제가 깨졌다');
+  assert.equal(r.accounts, 1);
+
+  // ── ① 귀속은 그대로다 — 값과 근거가 서로 다른 말을 하는 기록을 만들지 않는다.
+  const kept = P.getAccount(acc.id);
+  assert.equal(kept.partnerId, ptr.id, '복원이 매출 귀속을 지웠다');
+  assert.equal(kept.source, 'partner', '복원이 유입 경로를 지웠다');
+  assert.equal(kept.attribution.length, 1, '복원이 이력에 줄을 더했다(바뀐 것이 없다)');
+  assert.equal(kept.attribution[0].toPartnerId, ptr.id, '이력과 값이 다른 말을 한다');
+  // ── ② 조용히 넘기지 않는다 — 몇 건인지 말한다(라우트가 감사 로그·화면에 적는다).
+  assert.equal(r.orphans, 1, '귀속 파트너를 찾을 수 없는 고객사 수를 말하지 않는다');
+
+  // ── ③ 파트너별 집계가 그 고객사를 **떨어뜨리지 않는다** — 합이 고객사 수와 어긋나지 않게.
+  const rows = P.rollupByPartner();
+  assert.equal(rows.reduce((n, x) => n + x.total, 0), 1, '집계에서 고객사가 사라졌다');
+  const orphanRow = rows.find((x) => x.partnerId === ptr.id);
+  assert.ok(orphanRow, '찾을 수 없는 파트너의 줄이 없다');
+  assert.equal(orphanRow.partnerName, P.missingPartnerName(ptr.id), '이름을 지어낸다');
+  assert.equal(rows.find((x) => x.partnerId === null).total, 0, '직접 계약으로 세었다');
+
+  // ── ④ 정산 리포트가 **빠진 까닭을 말한다** — 「직접 계약이라 대상이 아니다」가 아니다.
+  const rep = S.buildSettlement({ month: '2026-02', at: AT });
+  assert.equal(rep.ok, true);
+  assert.equal(rep.report.rows.length, 1, '리포트에서 고객사가 사라졌다');
+  assert.equal(rep.report.rows[0].partnerName, P.missingPartnerName(ptr.id));
+  assert.equal(rep.report.rows[0].issue, 'no_fee_rate', '근거가 모자란 줄로 드러나지 않는다');
+  assert.equal(rep.report.totals.incomplete, 1);
+  assert.equal(rep.report.totals.partial, true, '합계가 일부만 반영됐는데 완전하다고 말한다');
+  assert.equal(rep.report.notes.some((n) => n.includes('직접 계약')), false, '사실이 아닌 문장을 적는다');
+  assert.ok(rep.report.notes.some((n) => n.includes('합계에서 제외')), '왜 빠졌는지 말하지 않는다');
+  // 「지금 찾을 수 없는 파트너」의 이름은 한 벌이다 — 집계와 리포트가 같은 말을 쓴다.
+  assert.equal(S.settlementToCsv(rep.report).includes(P.missingPartnerName(ptr.id)), true);
+
+  // ── ⑤ 멀쩡한 저장분은 종전 그대로다(귀속도, 수수료도).
+  const good = P.importPartners(snap, { persist: false });
+  assert.equal(good.orphans, 0, '멀쩡한 저장분에 경고를 붙인다');
+  const ok = S.buildSettlement({ month: '2026-02', at: AT });
+  assert.equal(ok.report.rows[0].feeAmountKrw, 150000, '수수료 산출이 바뀌었다');
+  assert.equal(ok.report.totals.partial, false);
+  P.resetPartners();
 });
