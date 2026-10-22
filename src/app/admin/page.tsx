@@ -383,6 +383,26 @@ function timeLabel(iso: string): string {
 }
 
 /**
+ * **한국 날짜** 'YYYY-MM-DD' — 날짜만 적는 칸(귀속 이력 타임라인)이 쓴다 (DS 55-2).
+ *
+ * 왜 자르면 안 되는가: 기록의 `at` 은 ISO(UTC)다. `at.slice(0, 10)` 은 그 **UTC 날짜**라,
+ * 한국 자정~오전 9시에 일어난 일이 **전날**로 적힌다(`2026-10-21T15:30:00Z` → 「2026-10-21」,
+ * 실제로는 10월 22일 오전 0시 30분). 같은 변경을 변경 이력 표는 `timeLabel` 로 적으므로,
+ * 한 사건이 두 화면에서 **다른 날**에 있었다 — 귀속은 정산 분쟁에서 가장 먼저 꺼내는 근거다.
+ *
+ * 원본은 `src/lib/kst.ts`(`kstDate`)이고, 콘솔은 lib 을 불러오지 않으므로(클라이언트 번들 ·
+ * `kstMonthNow` 와 같은 이유) 계산식을 옮겨 적고 **테스트가 두 결과를 맞춰 고정한다**.
+ * 읽을 수 없는 값에는 날짜를 **지어내지 않는다**(`kstDateTime` 과 같은 규칙 · DS 40-1) —
+ * 종전에는 그 글자를 열 자만 잘라 그대로 화면에 올렸다.
+ */
+function kstDateLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '시각 모름';
+  const v = new Date(d.getTime() + 9 * 60 * 60 * 1000); // KST = UTC+9, 일광절약시간 없음
+  return `${v.getUTCFullYear()}-${String(v.getUTCMonth() + 1).padStart(2, '0')}-${String(v.getUTCDate()).padStart(2, '0')}`;
+}
+
+/**
  * 한국 시간 기준 이번 달 'YYYY-MM' — 정산 기준월의 기본값.
  * 원본은 `src/lib/kst.ts`(kstMonth)이며, 콘솔은 lib 을 불러오지 않으므로(클라이언트 번들 ·
  * MAX_DOC_CHARS 와 같은 이유) 계산식을 여기에 옮겨 적고 **테스트가 두 결과를 맞춰 고정한다**.
@@ -892,7 +912,21 @@ function AccountDrawer({
     if (e.shiftKey && document.activeElement === firstEl) { e.preventDefault(); lastEl.focus(); }
     else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); firstEl.focus(); }
   };
-  const history = a.attribution.slice().sort((x, y) => new Date(y.at).getTime() - new Date(x.at).getTime());
+  /**
+   * 읽을 수 없는 시각이 **줄 세우기를 흔들지 않게** 한다 (DS 55-2).
+   * 종전 비교식은 그런 값에서 `NaN` 을 돌려줬다 — 비교가 일관되지 않으면 정렬 결과는
+   * 엔진이 정하는 대로이고, 멀쩡한 줄들의 앞뒤까지 함께 흔들린다. 읽을 수 없는 줄은
+   * 버리지 않고 맨 뒤에 세운다(그 줄도 「누가 무엇을 바꿨는가」의 근거다).
+   */
+  const instant = (v: string) => {
+    const t = new Date(v).getTime();
+    return Number.isNaN(t) ? -Infinity : t;
+  };
+  const history = a.attribution.slice().sort((x, y) => {
+    const bx = instant(x.at);
+    const by = instant(y.at);
+    return bx === by ? 0 : by - bx;
+  });
 
   return (
     <div className="ac-drawer-root">
@@ -938,7 +972,7 @@ function AccountDrawer({
                   <span className="ac-tl-dot" aria-hidden="true" />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 12, color: 'var(--mut)', fontVariantNumeric: 'tabular-nums' }}>{h.at.slice(0, 10)}</span>
+                      <span style={{ fontSize: 12, color: 'var(--mut)', fontVariantNumeric: 'tabular-nums' }}>{kstDateLabel(h.at)}</span>
                       <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>
                         {partnerName(h.fromPartnerId)} <span aria-hidden="true" style={{ color: 'var(--mut)' }}>→</span><span className="ac-srhide">에서</span> {partnerName(h.toPartnerId)}
                       </span>
@@ -1671,6 +1705,23 @@ interface AccountForm {
 const EMPTY_ACCOUNT_FORM: AccountForm = {
   id: '', name: '', partnerId: '', source: 'unknown', status: 'prospect', contractedAt: '', ownerName: '', monthlyFeeKrw: '', attributionNote: '',
 };
+
+/**
+ * 귀속이 가리키는 파트너를 **지금 찾을 수 없을 때** 적는 이름 (DS 55-1).
+ *
+ * 원본은 `src/lib/partners.ts`(`missingPartnerName`)이고, 콘솔은 lib 을 불러오지 않으므로
+ * (클라이언트 번들 · `kstMonthNow`·`MAX_DOC_CHARS` 와 같은 이유) 문장을 여기에 옮겨 적고
+ * **테스트가 두 결과를 맞춰 고정한다**.
+ *
+ * 왜 「이름 없는 파트너」가 아닌가: 그것은 **없는 사실**이다. 파트너는 이름 없이 등록될 수
+ * 없고(`upsertPartner` 가 이름을 요구한다), 실제로 일어난 일은 그 식별자를 가진 파트너를
+ * 지금 찾을 수 없다는 것이다. 그리고 같은 화면의 파트너별 집계·정산 리포트는 서버가 붙인
+ * 「(삭제된 파트너 PTR-0001)」을 그대로 그리고 있었다 — 같은 고객사의 귀속이 탭마다 다른
+ * 이름으로 뜨면, 정산 분쟁에서 어느 쪽을 근거로 들어야 하는지 알 수 없다(DS 53-3).
+ */
+function missingPartnerName(id: string): string {
+  return `(삭제된 파트너 ${id})`;
+}
 
 /** 베이시스포인트 → 사람이 읽는 수수료율. 미설정이면 임의 수치를 만들지 않는다. */
 function feeLabel(bp: number | null): string {
@@ -3935,18 +3986,32 @@ export default function AdminPage() {
        * 그 뒤로 「직접 계약 n건은 파트너 정산 대상이 아니라 제외했습니다」라고 적었다.
        */
       const orphans = typeof data.orphanAccounts === 'number' ? data.orphanAccounts : 0;
+      /**
+       * 같은 id 가 두 번 적혀 **건너뛴** 항목도 같은 자리에서 말한다 (DS 55-3).
+       * 들어온 파일이 성한 스냅샷이 아니었다는 뜻이라, 「복원 완료: 고객사 3곳」만 띄우면
+       * 파일에 네 줄이 있었다는 사실이 어디에도 남지 않는다.
+       */
+      const dupes = typeof data.duplicateEntries === 'number' ? data.duplicateEntries : 0;
       const done = `복원 완료: 안내 자료 ${data.kb}건 · 규칙 ${data.customRules}건 · 기본 규칙 답변 수정 ${data.overrides}건`
         + (added > 0 ? ` · 변경 이력 ${added}건 추가` : '');
+      const issues: string[] = [];
       if (orphans > 0) {
+        issues.push(
+          `고객사 ${orphans}곳은 귀속 파트너가 이 파일에 없어 귀속을 그대로 두었습니다.`
+            + ' 정산 리포트에서 「수수료율 미설정」으로 합계에서 빠집니다 — 파트너를 다시 등록하거나 귀속을 옮겨 주세요.',
+        );
+      }
+      if (dupes > 0) {
+        issues.push(
+          `같은 식별자가 두 번 이상 적힌 항목 ${dupes}건은 먼저 나온 것만 남기고 건너뛰었습니다.`
+            + ' 파일을 합치는 과정에서 생긴 중복일 수 있으니 고객사·파트너 수를 확인해 주세요.',
+        );
+      }
+      if (issues.length > 0) {
         // 운영자가 **읽고 손을 써야 하는** 사실이라 2.5초 뒤 사라지는 알림으로 띄우지 않는다
         // (저장 실패 안내와 같은 자리 · 닫기 버튼이 있고 스스로 사라지지 않는다).
         const warn = savedWarning(data.saved as SavedView | undefined);
-        notify(
-          `${done} · 고객사 ${orphans}곳은 귀속 파트너가 이 파일에 없어 귀속을 그대로 두었습니다.`
-            + ' 정산 리포트에서 「수수료율 미설정」으로 합계에서 빠집니다 — 파트너를 다시 등록하거나 귀속을 옮겨 주세요.'
-            + (warn ? ` ${warn}` : ''),
-          'fail',
-        );
+        notify(`${done} · ${issues.join(' ')}${warn ? ` ${warn}` : ''}`, 'fail');
       } else {
         flashSaved(done, data.saved as SavedView | undefined);
       }
@@ -4270,7 +4335,7 @@ export default function AdminPage() {
         key: `account:${a.id}`,
         kind: '고객사' as const,
         title: a.name,
-        detail: `${ACCOUNT_STATUS_LABELS[a.status]} · ${a.partnerId ? `${partners.find((p) => p.id === a.partnerId)?.name ?? '이름 없는 파트너'} 귀속` : '직접 계약'}`,
+        detail: `${ACCOUNT_STATUS_LABELS[a.status]} · ${a.partnerId ? `${partners.find((p) => p.id === a.partnerId)?.name ?? missingPartnerName(a.partnerId)} 귀속` : '직접 계약'}`,
         run: () => { goTab('partner'); setAccountQuery(a.name); },
       })), () => { goTab('partner'); setAccountQuery(word); });
 
@@ -5654,7 +5719,8 @@ export default function AdminPage() {
         const counts = { prospect: 0, contracted: 0, churned: 0 } as Record<AccountView['status'], number>;
         for (const a of accounts) counts[a.status] += 1;
         const activePartners = partners.filter((p) => p.status === 'active').length;
-        const partnerName = (id: string | null) => (id ? partners.find((p) => p.id === id)?.name ?? '이름 없는 파트너' : '직접 계약');
+        // 찾을 수 없는 귀속의 이름은 서버·정산 리포트와 **같은 말**을 쓴다 (DS 55-1).
+        const partnerName = (id: string | null) => (id ? partners.find((p) => p.id === id)?.name ?? missingPartnerName(id) : '직접 계약');
         const q = searchNorm(accountQuery);
         const filteredAccounts = accounts
           .filter((a) => !q || searchMatch(q, a.name, partnerName(a.partnerId), a.ownerName ?? '', SOURCE_LABELS[a.source] ?? '', ACCOUNT_STATUS_LABELS[a.status]))
@@ -5662,6 +5728,16 @@ export default function AdminPage() {
           .sort((x, y) => x.name.localeCompare(y.name, 'ko'));
         const rollupOf = (id: string | null) => rollup.find((r) => (r.partnerId ?? null) === id);
         const directRollup = rollupOf(null);
+        /**
+         * 귀속이 가리키는 파트너가 **지금 등록 목록에 없는** 줄 (DS 55-1).
+         *
+         * 서버 집계(`rollupByPartner`)는 DS 53-3 이후 이 줄을 세워 보낸다 — 그 고객사를
+         * 어느 줄에도 넣지 않으면 파트너별 합이 고객사 수와 조용히 어긋나기 때문이다.
+         * 그런데 화면은 **등록된 파트너만** 돌며 표를 그려 그 줄을 그대로 떨어뜨렸다:
+         * 위의 「고객사 n곳」 KPI 와 아래 표의 합이 맞지 않는데 화면은 아무 말도 하지 않았다.
+         * 수정·삭제 단추는 달지 않는다 — 고칠 대상이 지금 없다.
+         */
+        const missingRollups = rollup.filter((r) => r.partnerId !== null && !partners.some((p) => p.id === r.partnerId));
         const accountView = tableView('account', filteredAccounts, {
           name: (a: AccountView) => a.name,
           partner: (a: AccountView) => partnerName(a.partnerId),
@@ -5797,7 +5873,10 @@ export default function AdminPage() {
                 <section style={{ ...S.card, padding: 0 }} aria-labelledby="partner-list-h">
                   <div className="ac-toolbar">
                     <h2 id="partner-list-h" style={{ ...S.h2, marginRight: 4 }}>파트너</h2>
-                    <span style={S.tag}>{partners.length}곳 · 고객사 수는 귀속 기준 건수만 셉니다</span>
+                    <span style={S.tag}>
+                      {partners.length}곳 · 고객사 수는 귀속 기준 건수만 셉니다
+                      {missingRollups.length > 0 ? ` · 등록 목록에 없는 귀속 ${missingRollups.length}곳이 아래에 함께 있습니다` : ''}
+                    </span>
                     {canWrite && partners.length > 0 && (
                       <button type="button" style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={async () => {
                         // 「추가」도 폼을 통째로 비운다 — 수정 중이던 내용을 말없이 버리지 않는다(DS 27-2).
@@ -5806,7 +5885,7 @@ export default function AdminPage() {
                       }}>파트너 추가</button>
                     )}
                   </div>
-                  {partners.length === 0 ? (
+                  {partners.length === 0 && missingRollups.length === 0 ? (
                     <div className="ac-empty">
                       <p style={{ fontSize: 14, fontWeight: 700 }}>등록된 파트너가 없습니다</p>
                       <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>파트너를 등록하면 고객사를 그 파트너에 귀속시키고 수수료를 집계할 수 있습니다.</p>
@@ -5849,6 +5928,17 @@ export default function AdminPage() {
                               </tr>
                             );
                           })}
+                          {/* 등록 목록에 없는 귀속 — 이름은 서버가 붙인 그대로다 (DS 55-1). */}
+                          {missingRollups.map((r) => (
+                            <tr key={`missing-${r.partnerId}`}>
+                              <td style={{ fontWeight: 700, color: 'var(--sub)' }}>{r.partnerName}</td>
+                              <td><span className="ac-pill" style={TONE.warn}>찾을 수 없음</span></td>
+                              <td style={{ color: 'var(--mut)' }}>—</td>
+                              <td className="ac-col-wide" style={{ color: 'var(--mut)' }}>—</td>
+                              <td style={{ whiteSpace: 'nowrap' }}>{r.total}곳<span style={{ ...S.tag, marginLeft: 4 }}>계약 {r.contracted}</span></td>
+                              <td />
+                            </tr>
+                          ))}
                           {directRollup && directRollup.total > 0 && (
                             <tr>
                               <td style={{ fontWeight: 700, color: 'var(--sub)' }}>직접 계약</td>
@@ -5864,6 +5954,11 @@ export default function AdminPage() {
                     </ScrollX>
                   )}
                 </section>
+                {missingRollups.length > 0 && (
+                  <p role="note" style={{ ...S.card, fontSize: 13, padding: '12px 16px' }}>
+                    <b>찾을 수 없는 귀속</b>이 있습니다. 고객사가 가리키는 파트너가 지금 등록 목록에 없어 정산 리포트에서 「수수료율 미설정」으로 합계에서 빠집니다. 같은 식별자로 파트너를 다시 등록하거나, 고객사의 귀속을 옮겨 주세요 — 귀속을 옮기면 그 사유가 이력에 남습니다.
+                  </p>
+                )}
                 <p style={S.tag}>
                   계약 주체는 고원이고 파트너는 유치와 운영을 맡습니다. 여기에는 어느 고객사를 누가 데려왔는지만 기록하며, 담당자는 이름만 저장합니다. 실제 정산·청구는 계약서가 확정된 뒤에 진행합니다.
                 </p>
@@ -6705,7 +6800,7 @@ export default function AdminPage() {
         return (
           <AccountDrawer
             account={a}
-            partnerName={(id) => (id ? partners.find((p) => p.id === id)?.name ?? '이름 없는 파트너' : '직접 계약')}
+            partnerName={(id) => (id ? partners.find((p) => p.id === id)?.name ?? missingPartnerName(id) : '직접 계약')}
             canWrite={canWrite}
             onClose={closeAccount}
             onEdit={() => { closeAccount(); editAccount(a); }}

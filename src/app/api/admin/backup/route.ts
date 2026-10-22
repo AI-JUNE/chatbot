@@ -58,14 +58,14 @@ export async function POST(req: NextRequest) {
   if (!result.ok) return fail('invalid_input', result.error);
 
   // 파트너 스냅샷은 있을 때만 복원한다(없으면 기존 데이터 유지). 실패해도 사유를 응답에 담아 삼키지 않는다.
-  let partners: { partners: number; accounts: number; orphans: number } | null = null;
+  let partners: { partners: number; accounts: number; orphans: number; duplicates: number } | null = null;
   let partnersError: string | null = null;
   let partnersSaved: SavedInfo | null = null;
   const raw = (parsed.data as { partners?: unknown }).partners;
   if (raw && typeof raw === 'object') {
     const r = importPartners(raw);
     if (r.ok) {
-      partners = { partners: r.partners, accounts: r.accounts, orphans: r.orphans };
+      partners = { partners: r.partners, accounts: r.accounts, orphans: r.orphans, duplicates: r.duplicates };
       partnersSaved = r.saved ?? null;
     } else partnersError = r.error;
   }
@@ -108,6 +108,9 @@ export async function POST(req: NextRequest) {
       // 귀속이 가리키는 파트너가 이 파일에 없는 고객사는 **말해야 한다** (DS 53-3) —
       // 종전에는 그 건들을 직접 계약으로 바꿔 두고 복원 기록에도 한 글자 남기지 않았다.
       (partners && partners.orphans ? ` · 귀속 파트너 없음 ${partners.orphans}` : '') +
+      // 같은 id 가 두 번 적혀 건너뛴 항목도 남긴다 (DS 55-3) — 들어온 파일이 성한 스냅샷이
+      // 아니었다는 사실은 나중에 「그때 수가 왜 달랐는가」를 묻게 되는 자리다.
+      (partners && partners.duplicates ? ` · 같은 식별자 중복 ${partners.duplicates}` : '') +
       (auditAdded ? ` · 변경 이력 ${auditAdded} 추가` : '') +
       (partnersError ? ' · 파트너 복원 실패' : '') +
       (saved && !saved.persisted ? ' · 서버 보관 실패' : '') +
@@ -121,6 +124,8 @@ export async function POST(req: NextRequest) {
     ...(partners ? { partners: partners.partners, accounts: partners.accounts } : {}),
     /** 귀속이 가리키는 파트너를 이 파일에서 찾을 수 없는 고객사 수 — 화면이 그 사실을 적는다 (DS 53-3). */
     ...(partners && partners.orphans ? { orphanAccounts: partners.orphans } : {}),
+    /** 같은 id 가 두 번 적혀 건너뛴 항목 수 — 화면이 그 사실을 적는다 (DS 55-3). */
+    ...(partners && partners.duplicates ? { duplicateEntries: partners.duplicates } : {}),
     ...(partnersError ? { partnersError } : {}),
     /** 덮은 것이 아니라 **더한** 수다 — 화면이 그 말로 적는다 (DS 48-3). */
     auditAdded,

@@ -4940,3 +4940,112 @@ test('복원이 읽을 수 없는 시각을 받아들이지 않는다 (DS 54-3)'
   assert.equal(K.isReadableInstant(t.updatedAt), true);
   esc.resetTickets();
 });
+
+/* ══════════ 디자인 스프린트 — 52차 재감사 (DS 55-1·55-2·55-3) ══════════ */
+
+/**
+ * DS 55-3 — 파트너·고객사 복원이 **정산 근거를 바꿔 놓는** 세 가지.
+ *
+ * 51차(DS 54-3)가 복원 문 넷에 「읽을 수 있는 시각인가」 관문을 세웠는데, 이 저장소는 그
+ * 넷에 들지 않았다. 그래서 종전 식(`typeof x === 'string'`)이 그대로 남아 ① `"어제"` 는 물론
+ * **빈 문자열**까지 시각 칸에 박혔고 ② 시각이 글자가 아닌 귀속 이력 줄은 거르개에 걸려
+ * **통째로 사라졌다** — 이 파일의 첫 원칙이 「귀속 변경은 append-only 이력으로 남긴다, 값만
+ * 바꾸면 근거가 사라진다」인데 복원이 그 근거를 지웠다. 그리고 ③ 같은 id 가 두 번 적힌
+ * 저장분을 그대로 들여 **정산 수수료를 두 배로** 적었다(「일부 미산출」 경고도 붙지 않는다 — §13).
+ */
+test('파트너 복원이 시각을 가리고 근거를 지키며 같은 식별자를 두 번 들이지 않는다 (DS 55-3)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const GROUP = ['settlement', 'partners', 'storage', 'logger', 'monitoring', 'csv', 'kst', 'normalize', 'refusal'];
+  const pick = (name) => importLib(name, GROUP.filter((n) => n !== name));
+  const P = await pick('partners');
+  const S = await pick('settlement');
+  const K = await pick('kst');
+  const AT = new Date('2026-10-21T00:00:00Z');
+  const ISO = '2026-10-20T15:30:00.000Z';
+
+  const partner = { id: 'PTR-0001', name: '제이투모로우원', status: 'active', feeRateBp: 1500, createdAt: ISO, updatedAt: ISO };
+  const account = (over = {}) => ({
+    id: 'ACC-0001', name: '(주)고원', partnerId: 'PTR-0001', source: 'partner',
+    status: 'contracted', contractedAt: '2026-01-05', monthlyFeeKrw: 1000000,
+    attribution: [{ at: ISO, fromPartnerId: null, toPartnerId: 'PTR-0001', source: 'partner', note: '최초 등록', authed: true }],
+    createdAt: ISO, updatedAt: ISO, ...over,
+  });
+  const snap = (over = {}) => ({ version: 1, savedAt: ISO, partnerSeq: 1, accountSeq: 1, partners: [partner], accounts: [account()], ...over });
+
+  // ── ① 종전 식 재현: 「문자열인가」만 보면 `"어제"` 도 빈 문자열도 통과한다(재현이 깨지면 결함이 없다).
+  const legacy = (v) => (typeof v === 'string' ? v : '지금');
+  assert.equal(legacy('어제'), '어제', '종전 식이 재현되지 않는다');
+  assert.equal(legacy(''), '', '종전 식이 빈 글자를 거른다 — 재현 실패');
+  assert.equal(K.isReadableInstant('어제'), false);
+  assert.equal(K.isReadableInstant(''), false);
+
+  // ── ② 시각 칸 여섯이 모두 그 관문을 지난다 — 읽을 수 있으면 ISO 한 모양으로 적는다.
+  P.resetPartners();
+  const r = P.importPartners(snap({
+    partners: [{ ...partner, createdAt: '어제', updatedAt: '' }],
+    accounts: [account({
+      createdAt: '어제',
+      updatedAt: '',
+      attribution: [
+        { at: '어제', fromPartnerId: null, toPartnerId: 'PTR-0001', source: 'partner', note: '최초 등록', authed: true },
+        { at: 12345, fromPartnerId: 'PTR-0001', toPartnerId: 'PTR-0002', source: 'referral', note: '소개로 이관', authed: true },
+        { at: '2026-10-21T09:00:00+09:00', fromPartnerId: 'PTR-0002', toPartnerId: 'PTR-0001', source: 'partner', note: '되돌림', authed: false },
+      ],
+    })],
+  }), { persist: false });
+  assert.equal(r.ok, true);
+  const p1 = P.getPartner('PTR-0001');
+  const a1 = P.getAccount('ACC-0001');
+  for (const [what, v] of [['파트너 등록', p1.createdAt], ['파트너 변경', p1.updatedAt], ['고객사 등록', a1.createdAt], ['고객사 변경', a1.updatedAt]]) {
+    assert.equal(K.isReadableInstant(v), true, `${what} 시각이 글자째 들어왔다(${JSON.stringify(v)})`);
+  }
+  // ── ③ 귀속 근거는 **한 줄도 버리지 않는다** — 시각을 읽지 못했다고 증거를 지우지 않는다.
+  assert.equal(a1.attribution.length, 3, '시각을 못 읽었다고 귀속 근거를 버렸다');
+  for (const e of a1.attribution) assert.equal(K.isReadableInstant(e.at), true, `귀속 이력의 시각이 글자다(${JSON.stringify(e.at)})`);
+  assert.equal(a1.attribution[2].at, '2026-10-21T00:00:00.000Z', '읽을 수 있는 시각을 한 모양으로 적지 않는다');
+  assert.equal(a1.attribution[1].note, '소개로 이관', '사라졌던 줄의 근거가 들어오지 않았다');
+
+  // ── ④ 같은 id 는 **먼저 나온 것만** 쓴다 — 정산이 한 고객사를 두 번 세지 않는다.
+  P.resetPartners();
+  const dup = P.importPartners(snap({ partners: [partner, partner], accounts: [account(), account({ monthlyFeeKrw: 9000000 })] }), { persist: false });
+  assert.equal(dup.ok, true);
+  assert.equal(dup.duplicates, 2, '건너뛴 중복 수를 말하지 않는다(라우트가 감사 로그·화면에 적는다)');
+  assert.equal(P.listPartners().length, 1, '같은 파트너가 두 줄이다');
+  assert.equal(P.queryAccounts().length, 1, '같은 고객사가 두 줄이다');
+  assert.equal(P.getAccount('ACC-0001').monthlyFeeKrw, 1000000, '먼저 나온 것을 남기지 않았다');
+  assert.equal(P.rollupByPartner().filter((x) => x.partnerId === 'PTR-0001').length, 1, '집계에 같은 파트너가 두 줄이다');
+  const rep = S.buildSettlement({ month: '2026-02', at: AT });
+  assert.equal(rep.report.totals.accounts, 1, '정산이 한 고객사를 두 번 센다');
+  assert.equal(rep.report.totals.feeAmountKrw, 150000, '수수료를 두 배로 적는다');
+  assert.equal(rep.report.totals.partial, false);
+
+  // ── ⑤ 멀쩡한 저장분은 **한 글자도 바뀌지 않는다**.
+  P.resetPartners();
+  const good = P.importPartners(snap(), { persist: false });
+  assert.equal(good.duplicates, 0, '멀쩡한 저장분에 중복 경고를 붙인다');
+  assert.equal(good.orphans, 0);
+  assert.deepEqual(P.getAccount('ACC-0001').attribution, account().attribution, '멀쩡한 귀속 이력이 바뀌었다');
+  assert.equal(P.getPartner('PTR-0001').createdAt, ISO, '멀쩡한 시각이 바뀌었다');
+  assert.equal(S.buildSettlement({ month: '2026-02', at: AT }).report.totals.feeAmountKrw, 150000, '수수료 산출이 바뀌었다');
+  P.resetPartners();
+});
+
+/**
+ * DS 55-3(곁가지) — 커스텀 규칙 복원도 **같은 자**를 쓴다.
+ * 복원 문마다 시각을 받아 적는 식이 따로 있으면, 다음 저장소가 또 종전 식을 복사한다.
+ */
+test('커스텀 규칙 복원이 시각인 척하는 글자를 받아들이지 않는다 (DS 55-3)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const GROUP = ['adminStore', 'knowledge', 'normalize', 'storage', 'rev', 'refusal', 'kst', 'logger', 'monitoring'];
+  const A = await importLib('adminStore', GROUP.filter((n) => n !== 'adminStore'));
+  const K = await importLib('kst', GROUP.filter((n) => n !== 'kst'));
+  const rule = (over) => ({ intent: 'cr_1', label: '영업시간', keywords: ['시간'], reply: '09시~18시', escalate: false, enabled: true, ...over });
+
+  assert.equal(A.importSnapshot({ version: 1, savedAt: '', kb: [], ruleOverrides: {}, customRules: [rule({ createdAt: '어제' })] }, { persist: false }).ok, true);
+  assert.equal(K.isReadableInstant(A.listCustomRules()[0].createdAt), true, '규칙의 만든 시각이 글자째 들어왔다');
+  // 읽을 수 있는 값은 한 모양으로 적고, 내용은 그대로다.
+  A.importSnapshot({ version: 1, savedAt: '', kb: [], ruleOverrides: {}, customRules: [rule({ createdAt: '2026-10-21T09:00:00+09:00' })] }, { persist: false });
+  const kept = A.listCustomRules()[0];
+  assert.equal(kept.createdAt, '2026-10-21T00:00:00.000Z');
+  assert.equal(kept.reply, '09시~18시', '멀쩡한 규칙이 바뀌었다');
+});

@@ -2644,7 +2644,9 @@ test('쓰기 응답이 보관 결과를 싣고 화면이 그 사실을 말한다
   // 그 길에도 보관 사실을 덧붙인다(토스트는 한 번에 하나다 · 아래 ⑤ 와 같은 규칙).
   assert.match(src, /const done = `복원 완료:/, '복원이 결과 문장을 만들지 않는다');
   assert.match(src, /flashSaved\(done, data\.saved as SavedView \| undefined\);/, '복원이 보관 결과를 보지 않는다');
-  assert.match(src, /const warn = savedWarning\(data\.saved as SavedView \| undefined\);[\s\S]{0,500}?\+ \(warn \? ` \$\{warn\}` : ''\),/, '귀속 안내가 보관 사실을 덮는다');
+  // 55차(DS 55-3)에 「같은 식별자 중복」이 같은 자리에 더해지면서 문장을 모으는 식이 바뀌었다 —
+  // 고정하는 것은 그대로다: 사라지지 않는 그 안내가 보관 사실을 **덮지 않는다**.
+  assert.match(src, /const warn = savedWarning\(data\.saved as SavedView \| undefined\);[\s\S]{0,300}?warn \? ` \$\{warn\}` : ''/, '귀속 안내가 보관 사실을 덮는다');
 
   // ⑤ 이미 머무는 안내(쓰이지 않는 규칙·남는 조각)에는 **덧붙인다** — 토스트는 한 번에 하나다.
   assert.match(src, /목록에서 다음에 할 일을 확인해 주세요\.\$\{savedWarn \? ` \$\{savedWarn\}` : ''\}/, '쓰이지 않는 규칙 안내가 보관 사실을 덮는다');
@@ -2966,4 +2968,93 @@ test('백업이 변경 이력을 들고 나가고, 복원은 덮지 않고 합�
 
   audit.resetAudit();
   delete process.env.STORAGE_DIR;
+});
+
+/* ══════════ 디자인 스프린트 — 52차 재감사 (DS 55-1·55-2) ══════════ */
+
+/** 모듈 안에만 있는(내보내지 않는) 최상위 함수 하나를 컴파일된 JS 에서 떼어내 실행한다. */
+async function loadConsoleFn(name) {
+  await loadConsole();
+  const i = cachedJs.indexOf(`function ${name}(`);
+  assert.ok(i >= 0, `${name} 선언을 찾지 못했다`);
+  const end = cachedJs.indexOf('\n}', i); // 최상위 함수라 닫는 중괄호는 1열에 있다
+  assert.ok(end > i, `${name} 의 끝을 찾지 못했다`);
+  return new Function(`${cachedJs.slice(i, end + 2)}\nreturn ${name};`)();
+}
+
+/**
+ * DS 55-1 — 콘솔이 「지금 찾을 수 없는 파트너」를 **서버와 다른 말로** 적고, 서버가 세운
+ * 그 줄을 파트너 표에서 **떨어뜨렸다**.
+ *
+ * 50차(DS 53-3)는 그 이름을 `partners.missingPartnerName` 한 곳으로 모으고, 파트너별 집계가
+ * 그 고객사를 떨어뜨리지 않게 줄을 세웠다 — 「두 곳이 각자 적으면 같은 사실이 화면마다 다른
+ * 말로 뜬다」가 그때 적어 둔 까닭이다. 그런데 콘솔은 그 규칙 밖에 있었다: 고객사 표·상세
+ * 서랍·검색 결과가 「이름 없는 파트너」라고 적었고(파트너는 이름 없이 등록될 수 없으므로
+ * **없는 사실**이다), 바로 옆 탭의 정산 리포트는 같은 고객사를 「(삭제된 파트너 PTR-0001)」로
+ * 적었다. 그리고 파트너 표는 등록된 파트너만 돌아, 서버가 세운 그 줄과 거기 달린 고객사 수가
+ * 화면에서 사라졌다 — 위의 「고객사 n곳」 KPI 와 표의 합이 어긋나는데 아무도 말하지 않았다.
+ */
+test('찾을 수 없는 귀속을 콘솔이 서버와 같은 말로 적고 표에서 떨어뜨리지 않는다 (DS 55-1)', opts, async () => {
+  const fn = await loadConsoleFn('missingPartnerName');
+  const P = await importLib('partners', ['storage', 'normalize', 'refusal', 'kst', 'logger', 'monitoring']);
+  // ① 두 벌이 **같은 글자**를 낸다 — 갈라지면 같은 고객사의 귀속이 탭마다 다른 이름으로 뜬다.
+  for (const id of ['PTR-0001', 'PTR-9999', 'legacy-id']) {
+    assert.equal(fn(id), P.missingPartnerName(id), `이름이 갈라졌다: ${id}`);
+  }
+  // ② 고치기 전 말은 남아 있지 않다(그 말은 「이름이 비었다」는 **없는 사실**을 가리켰다).
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  assert.equal(src.includes("?? '이름 없는 파트너'"), false, '찾을 수 없는 귀속을 아직 다른 말로 적는다');
+  // 이름을 붙이는 세 자리(고객사 표·상세 서랍·검색 결과)가 모두 그 함수를 지난다.
+  assert.equal((src.match(/\?\? missingPartnerName\(/g) || []).length, 3, '이름을 따로 적는 자리가 남아 있다');
+  assert.match(src, /src\/lib\/partners\.ts/, '옮겨 적은 문장의 원본을 밝히지 않았다');
+
+  // ③ 서버가 세운 줄을 화면이 그린다 — 수정·삭제 단추 없이(고칠 대상이 지금 없다).
+  assert.match(src, /const missingRollups = rollup\.filter\(\(r\) => r\.partnerId !== null && !partners\.some\(\(p\) => p\.id === r\.partnerId\)\);/, '찾을 수 없는 귀속 줄을 고르지 않는다');
+  const row = src.slice(src.indexOf('{missingRollups.map('), src.indexOf('{directRollup && directRollup.total > 0 &&'));
+  assert.ok(row.length > 0 && row.length < 1200, '그 줄을 표에 그리지 않는다');
+  assert.ok(row.includes('{r.partnerName}'), '이름을 서버가 붙인 그대로 쓰지 않는다');
+  assert.ok(row.includes('찾을 수 없음'), '무슨 줄인지 말하지 않는다');
+  assert.ok(row.includes('{r.total}곳'), '그 줄에 달린 고객사 수를 세지 않는다');
+  assert.equal(/>수정<|>삭제</.test(row), false, '없는 파트너에 수정·삭제 단추를 단다');
+  // 파트너가 한 곳도 없어도 그 줄이 있으면 빈 상태로 덮지 않는다.
+  assert.match(src, /\{partners\.length === 0 && missingRollups\.length === 0 \? \(/, '빈 상태가 그 줄을 덮는다');
+  // 운영자가 **할 일**을 말한다(정산에서 왜 빠지는지 · 어떻게 되돌리는지).
+  assert.ok(src.includes('같은 식별자로 파트너를 다시 등록하거나, 고객사의 귀속을 옮겨 주세요'), '다음 길을 주지 않는다');
+});
+
+/**
+ * DS 55-2 — 귀속 이력의 날짜가 **UTC 원문을 잘라** 적혔다.
+ *
+ * 기록의 `at` 은 ISO(UTC)이고 타임라인은 `h.at.slice(0, 10)` 으로 열 자를 떼어 썼다. 그래서
+ * 한국 자정~오전 9시에 바꾼 귀속이 **전날**로 적힌다(`2026-10-21T15:30:00Z` → 「2026-10-21」,
+ * 실제로는 10월 22일 오전 0시 30분). 같은 변경을 변경 이력 표는 `timeLabel` 로 적으므로 한
+ * 사건이 두 화면에서 다른 날에 있었다 — 귀속은 정산 분쟁에서 가장 먼저 꺼내는 근거다.
+ * 읽을 수 없는 값이 들어오면 그 **글자가 그대로** 날짜 칸에 올랐고, 정렬 비교식은 `NaN` 을
+ * 돌려줘 멀쩡한 줄들의 앞뒤까지 흔들었다.
+ */
+test('귀속 이력의 날짜가 한국 날짜이고 읽을 수 없는 값을 지어내지 않는다 (DS 55-2)', opts, async () => {
+  const kstDateLabel = await loadConsoleFn('kstDateLabel');
+  // 대조는 독립 구현(ICU 시간대 데이터)으로 한다 — 같은 식을 두 번 적어 맞다고 하지 않는다.
+  const oracle = (iso) => new Date(iso).toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+  for (const iso of ['2026-10-21T15:30:00.000Z', '2026-10-21T14:59:59.000Z', '2027-01-01T08:59:00+09:00', '2026-06-15T15:00:00Z']) {
+    assert.equal(kstDateLabel(iso), oracle(iso), iso);
+  }
+  // 고치기 전 값과 실제로 달라지는 시각인지 확인한다(이 간극이 결함의 크기다).
+  assert.equal('2026-10-21T15:30:00.000Z'.slice(0, 10), '2026-10-21');
+  assert.equal(kstDateLabel('2026-10-21T15:30:00.000Z'), '2026-10-22');
+  // 읽을 수 없는 값에는 날짜를 **지어내지 않는다**(글자를 잘라 올리지도 않는다 · DS 40-1).
+  for (const bad of ['', '어제', '2026-13-45']) assert.equal(kstDateLabel(bad), '시각 모름', JSON.stringify(bad));
+
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  assert.equal(src.includes('{h.at.slice(0, 10)}'), false, 'UTC 를 잘라 적던 식이 남아 있다');
+  assert.match(src, /\{kstDateLabel\(h\.at\)\}/, '타임라인이 한국 날짜를 쓰지 않는다');
+  // 서버(src/lib/kst.ts)와 같은 오프셋 — 갈라지면 화면과 파일이 다른 날을 가리킨다.
+  const lib = readFileSync(new URL('../src/lib/kst.ts', import.meta.url), 'utf8');
+  assert.match(lib, /9 \* 60 \* 60 \* 1000/, 'lib 의 KST 오프셋 선언이 바뀌었다');
+  assert.match(src.slice(src.indexOf('function kstDateLabel(')), /9 \* 60 \* 60 \* 1000/, '화면의 KST 오프셋 선언이 바뀌었다');
+  // 읽을 수 없는 시각이 **줄 세우기를 흔들지 않는다** — 비교가 일관되지 않으면 멀쩡한 줄도 흔들린다.
+  assert.equal(/sort\(\(x, y\) => new Date\(y\.at\)\.getTime\(\) - new Date\(x\.at\)\.getTime\(\)\)/.test(src), false, '종전 비교식이 남아 있다');
+  const cmp = src.slice(src.indexOf('const instant = (v: string) =>'), src.indexOf('id="ac-account-title"'));
+  assert.match(cmp, /Number\.isNaN\(t\) \? -Infinity : t/, '읽을 수 없는 시각을 걸러내지 않는다');
+  assert.match(cmp, /bx === by \? 0 : by - bx/, '같은 값끼리 비교가 NaN 이 된다');
 });

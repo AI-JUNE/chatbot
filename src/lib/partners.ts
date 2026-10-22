@@ -17,6 +17,7 @@
 // [승인 필요] 실제 정산·청구, 파트너 계정 로그인(partner_admin 권한), 화이트라벨.
 import { loadJson, saveJson, saveNow, savedInfo, scheduleSave, type SavedInfo } from '@/lib/storage';
 import { compact } from '@/lib/normalize';
+import { readInstant } from '@/lib/kst';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 
 export const PARTNERS_NS = 'partners';
@@ -503,6 +504,11 @@ export type PartnerImportResult =
        * 종전에는 그 건들을 직접 계약으로 바꿔 두고 아무 말도 하지 않았다.
        */
       orphans: number;
+      /**
+       * 같은 id 가 두 번 이상 적혀 **건너뛴** 항목 수(파트너 + 고객사) (DS 55-3).
+       * 0 이 아니면 들어온 파일이 성한 스냅샷이 아니라는 뜻이다 — `orphans` 와 같은 이유로 말한다.
+       */
+      duplicates: number;
       saved?: SavedInfo;
     }
   | { ok: false; error: string };
@@ -524,32 +530,54 @@ export function importPartners(input: unknown, opts: { persist?: boolean } = {})
     return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   }
 
+  /**
+   * 같은 id 가 두 번 적힌 저장분에서 **먼저 나온 것만** 쓴다 (DS 55-3).
+   *
+   * 왜 세는가: `id` 는 이 저장소에서 그 항목이 **누구인가**다. 둘을 다 들이면 고치는 자
+   * (`upsertAccount`)는 앞의 것만 고치고 지우는 자는 앞의 것만 지운다 — 뒤의 것은 손이
+   * 닿지 않는 자리에 남아 집계에만 실린다. 돌려서 확인했다: 같은 고객사가 두 번 적힌
+   * 파일을 되돌리면 정산 리포트가 **수수료를 두 배로** 적고(15만 원 → 30만 원)
+   * 「일부 미산출」 경고도 붙지 않는다(`partial: false`) — 근거가 다 갖춰진 행 둘이기
+   * 때문이다. §13 이 금한 「없는 수」가 하필 돈 칸에 선다.
+   * 먼저 나온 것을 남기는 것은 `parsePartnerTokens` 와 같은 규칙이다(설정 실수가 범위를
+   * 넓히지 않게). 건너뛴 수는 **돌려준다** — 말하지 않으면 「복원 완료」가 거짓이 된다.
+   */
+  let duplicates = 0;
   const nextPartners: Partner[] = [];
+  const ids = new Set<string>();
   for (const p of snap.partners) {
     if (!p || typeof p !== 'object') continue;
     const { id, name } = p as Partner;
     if (typeof id !== 'string' || !id.trim() || typeof name !== 'string' || !name.trim()) continue;
+    const pid = id.trim();
+    if (ids.has(pid)) { duplicates += 1; continue; }
+    ids.add(pid);
     const fee = (p as Partner).feeRateBp;
     nextPartners.push({
-      id: id.trim(),
+      id: pid,
       name: name.trim().slice(0, MAX_NAME),
       status: (p as Partner).status === 'paused' ? 'paused' : 'active',
       feeRateBp: typeof fee === 'number' && Number.isFinite(fee) && fee >= 0 && fee <= 10000 ? Math.round(fee) : null,
       managerName: clean((p as Partner).managerName, MAX_NAME) || undefined,
       memo: clean((p as Partner).memo, MAX_MEMO) || undefined,
-      createdAt: typeof (p as Partner).createdAt === 'string' ? (p as Partner).createdAt : now(),
-      updatedAt: typeof (p as Partner).updatedAt === 'string' ? (p as Partner).updatedAt : now(),
+      // 시각은 「읽을 수 있는가」를 한 곳에서 가린 뒤 ISO 한 모양으로 적는다 (DS 54-3·55-3).
+      // 종전 식(`typeof x === 'string'`)은 `"어제"` 는 물론 **빈 문자열**까지 통과시켰다.
+      createdAt: readInstant((p as Partner).createdAt, now()),
+      updatedAt: readInstant((p as Partner).updatedAt, now()),
     });
   }
 
-  const ids = new Set(nextPartners.map((p) => p.id));
   const nextAccounts: Account[] = [];
+  const accountIds = new Set<string>();
   /** 귀속이 가리키는 파트너를 이 저장분에서 찾을 수 없는 고객사 수 — 조용히 넘기지 않는다 (DS 53-3). */
   let orphans = 0;
   for (const a of snap.accounts) {
     if (!a || typeof a !== 'object') continue;
     const { id, name } = a as Account;
     if (typeof id !== 'string' || !id.trim() || typeof name !== 'string' || !name.trim()) continue;
+    const aid = id.trim();
+    if (accountIds.has(aid)) { duplicates += 1; continue; }
+    accountIds.add(aid);
     const rawPid = (a as Account).partnerId;
     /**
      * **귀속은 지우지 않는다** (DS 53-3). 가리키는 파트너가 이 저장분에 없더라도 그대로 들고 온다.
@@ -577,7 +605,7 @@ export function importPartners(input: unknown, opts: { persist?: boolean } = {})
     const ca = (a as Account).contractedAt;
     const history = Array.isArray((a as Account).attribution) ? (a as Account).attribution : [];
     nextAccounts.push({
-      id: id.trim(),
+      id: aid,
       name: name.trim().slice(0, MAX_NAME),
       partnerId,
       source: isLeadSource(src) ? src : partnerId ? 'partner' : 'unknown',
@@ -590,19 +618,29 @@ export function importPartners(input: unknown, opts: { persist?: boolean } = {})
         return f.ok ? f.value : undefined;
       })(),
       memo: clean((a as Account).memo, MAX_MEMO) || undefined,
+      /**
+       * 귀속 근거는 **시각을 읽지 못했다고 버리지 않는다** (DS 54-3·55-3).
+       *
+       * 종전 거르개(`typeof e.at === 'string'`)는 두 쪽으로 틀렸다: 시각이 글자가 아닌 줄
+       * (`at: 12345`)은 **통째로 사라졌고** — 이 파일의 첫 원칙이 「귀속 변경은 append-only
+       * 이력으로 남긴다, 값만 바꾸면 근거가 사라진다」인데 복원이 그 근거를 지웠다 —
+       * 빈 문자열은 그대로 통과해 화면의 날짜 칸을 빈 칸으로 만들고 정렬을 흔들었다.
+       * 지금은 줄을 그대로 들고 오고, 읽을 수 없는 시각에만 「읽어 들인 지금」을 적는다
+       * (적을 수 없는 시각을 지어내지 않는다는 뜻이다 · DS 54-3 과 같은 판단).
+       */
       attribution: history
-        .filter((e) => e && typeof e === 'object' && typeof e.at === 'string')
+        .filter((e) => e && typeof e === 'object')
         .slice(-MAX_ATTRIBUTION)
         .map((e) => ({
-          at: e.at,
+          at: readInstant(e.at, now()),
           fromPartnerId: typeof e.fromPartnerId === 'string' ? e.fromPartnerId : null,
           toPartnerId: typeof e.toPartnerId === 'string' ? e.toPartnerId : null,
           source: isLeadSource(e.source) ? e.source : 'unknown',
           note: clean(e.note, MAX_MEMO),
           authed: e.authed === true,
         })),
-      createdAt: typeof (a as Account).createdAt === 'string' ? (a as Account).createdAt : now(),
-      updatedAt: typeof (a as Account).updatedAt === 'string' ? (a as Account).updatedAt : now(),
+      createdAt: readInstant((a as Account).createdAt, now()),
+      updatedAt: readInstant((a as Account).updatedAt, now()),
     });
   }
 
@@ -614,7 +652,7 @@ export function importPartners(input: unknown, opts: { persist?: boolean } = {})
   partnerSeq = Math.max(numTail(snap.partners.map(rawId)), Number(snap.partnerSeq) || 0);
   accountSeq = Math.max(numTail(snap.accounts.map(rawId)), Number(snap.accountSeq) || 0);
   const saved = opts.persist === false ? undefined : savedInfo(saveJson(PARTNERS_NS, exportPartners()));
-  return { ok: true, partners: partners.length, accounts: accounts.length, orphans, ...(saved ? { saved } : {}) };
+  return { ok: true, partners: partners.length, accounts: accounts.length, orphans, duplicates, ...(saved ? { saved } : {}) };
 }
 
 /** 'PTR-0007' 같은 id에서 가장 큰 일련번호를 뽑는다(복원 후 id 충돌 방지). */

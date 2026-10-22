@@ -3497,7 +3497,9 @@ test('복원이 매출 귀속을 지우지 않고 그 사실을 적는다 (DS 53
   assert.match(dash, /data\.orphanAccounts/, '화면이 그 사실을 말하지 않는다');
   assert.ok(dash.includes('귀속 파트너가 이 파일에 없어 귀속을 그대로 두었습니다'), '화면이 무엇이 그대로인지 말하지 않는다');
   // 손을 써야 하는 안내는 2.5초 뒤 사라지는 알림으로 띄우지 않는다(닫기 버튼이 있는 쪽이다).
-  assert.match(dash, /if \(orphans > 0\) \{[\s\S]{0,700}?'fail',/, '사라지는 알림으로 띄운다');
+  // 55차(DS 55-3)에 「같은 식별자 중복」이 같은 자리에 더해져 문장을 모아 두는 식이 되었다.
+  assert.match(dash, /if \(orphans > 0\) \{\s*issues\.push\(/, '귀속 안내가 머무는 안내로 가지 않는다');
+  assert.match(dash, /if \(issues\.length > 0\) \{[\s\S]{0,400}?'fail'\);/, '사라지는 알림으로 띄운다');
 });
 
 /* ══════════ 51차 재감사 — 되돌아 들어오는 문 (DS 54-x) ══════════ */
@@ -3571,4 +3573,40 @@ test('복원이 받아들이는 시각의 모양이 한 벌이다 (DS 54-3)', ()
   }
   // 시각을 읽지 못한다고 기록을 버리지 않는다 — 기록 한 줄은 「누가 무엇을 했는가」의 증거다.
   assert.equal(/isReadableInstant\([\w.]+\.at\)\) continue/.test(read('src/lib/audit.ts')), false, '시각을 못 읽은 기록을 버린다');
+});
+
+/* ══════════ 52차 재감사 — 귀속의 이름과 날짜 (DS 55-x) ══════════ */
+
+/**
+ * DS 55-3 — 파트너·고객사 복원이 **관문 밖에 있었다**(배선 쪽 고정).
+ *
+ * 되돌림의 결과는 `tests/runtime.test.mjs` 가 돌려서 본다. 여기서 고정하는 것은 **다시 갈라지지
+ * 않는가**다: DS 54-3 이 저장소 넷에 세운 시각 관문의 목록에 이 둘이 빠져 있었고, 그래서
+ * 종전 식(`typeof x === 'string'`)이 그대로 남아 빈 문자열까지 시각 칸에 박혔다.
+ */
+test('남은 복원 문도 같은 시각 관문을 지나고 같은 식별자를 두 번 들이지 않는다 (DS 55-3)', () => {
+  // ① 시각 관문 — 저장소 목록에 빠진 곳이 없다(DS 54-3 의 넷 + 이번의 둘).
+  for (const f of ['src/lib/partners.ts', 'src/lib/adminStore.ts']) {
+    const s = read(f);
+    assert.match(s, /import \{ readInstant \} from '@\/lib\/kst';/, `${f}: 시각 관문을 불러오지 않는다`);
+    assert.equal(/typeof \(?[\w ().]*?\)?\.?createdAt === 'string'/.test(s), false, `${f}: 「문자열이면 그대로」 식이 남아 있다`);
+  }
+  const p = read('src/lib/partners.ts');
+  for (const field of ['createdAt', 'updatedAt']) {
+    assert.ok((p.match(new RegExp(`${field}: readInstant\\(`, 'g')) || []).length >= 2, `${field} 가 관문을 지나지 않는 자리가 있다`);
+  }
+  // ② 귀속 근거는 시각을 읽지 못해도 **버리지 않는다** — 값만 바꾸면 근거가 사라진다는 이 파일의 첫 원칙.
+  assert.equal(/\.filter\(\(e\) => e && typeof e === 'object' && typeof e\.at === 'string'\)/.test(p), false, '시각이 글자가 아닌 귀속 이력 줄을 버린다');
+  assert.match(p, /\.filter\(\(e\) => e && typeof e === 'object'\)/, '귀속 이력 거르개가 없다');
+  assert.match(p, /at: readInstant\(e\.at, now\(\)\),/, '귀속 이력의 시각이 관문을 지나지 않는다');
+  // ③ 같은 id 는 먼저 나온 것만 — 그 수를 돌려주고, 라우트가 기록·응답에 싣는다.
+  assert.match(p, /if \(ids\.has\(pid\)\) \{ duplicates \+= 1; continue; \}/, '같은 파트너 id 를 두 번 들인다');
+  assert.match(p, /if \(accountIds\.has\(aid\)\) \{ duplicates \+= 1; continue; \}/, '같은 고객사 id 를 두 번 들인다');
+  assert.match(p, /orphans, duplicates,/, '건너뛴 수를 돌려주지 않는다');
+  const route = read('src/app/api/admin/backup/route.ts');
+  assert.match(route, /같은 식별자 중복 \$\{partners\.duplicates\}/, '복원 기록이 그 사실을 말하지 않는다');
+  assert.match(route, /duplicateEntries: partners\.duplicates/, '응답이 그 수를 싣지 않는다');
+  const dash = read('src/app/admin/page.tsx');
+  assert.match(dash, /data\.duplicateEntries/, '화면이 그 사실을 말하지 않는다');
+  assert.ok(dash.includes('먼저 나온 것만 남기고 건너뛰었습니다'), '무엇을 건너뛰었는지 말하지 않는다');
 });

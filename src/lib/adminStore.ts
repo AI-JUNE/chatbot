@@ -5,6 +5,7 @@ import { KB, KBEntry } from '@/lib/knowledge';
 import { keywordHit, prepare } from '@/lib/normalize';
 import { flushSaves, loadJson, saveJson, saveNow, savedInfo, scheduleSave, type SavedInfo } from '@/lib/storage';
 import { revOf } from '@/lib/rev';
+import { readInstant } from '@/lib/kst';
 import { CHANGED_TARGET_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE } from '@/lib/refusal';
 
 function cloneEntry(e: KBEntry): KBEntry {
@@ -452,7 +453,9 @@ export function importSnapshot(input: unknown, opts: { persist?: boolean } = {})
       reply: reply.trim(),
       escalate: escalate === true,
       enabled: enabled !== false,
-      createdAt: typeof createdAt === 'string' && createdAt ? createdAt : new Date().toISOString(),
+      // 시각을 받아 적는 자는 저장소마다 갈라지지 않는다 (DS 54-3·55-3) — 종전 식은
+      // `"어제"` 를 그대로 들였다. 읽을 수 없으면 「읽어 들인 지금」을 적는다(버리지 않는다).
+      createdAt: readInstant(createdAt, new Date().toISOString()),
     });
   }
 
