@@ -3491,7 +3491,9 @@ test('복원이 매출 귀속을 지우지 않고 그 사실을 적는다 (DS 53
   // ② 이름은 한 곳에서 온다 — 정산 리포트가 그 함수를 쓴다.
   assert.match(p, /export function missingPartnerName\(id: string\): string \{/, '이름을 적는 자가 없다');
   const settle = read('src/lib/settlement.ts');
-  assert.match(settle, /missingPartnerName\(a\.partnerId\)/, '리포트가 이름을 따로 적는다');
+  // 귀속 식별자는 DS 57-2 에서 한 줄(`partnerId`)로 묶였다 — 쓰는 자는 그대로 그 함수다.
+  assert.match(settle, /const partnerId = a\.partnerId as string;/, '리포트가 귀속 식별자를 집는 자리가 바뀌었다');
+  assert.match(settle, /missingPartnerName\(partnerId\)/, '리포트가 이름을 따로 적는다');
   assert.equal(/`\(삭제된 파트너 \$\{a\.partnerId\}\)`/.test(settle), false, '이름이 두 벌로 갈라졌다');
   // ③ 복원 기록과 화면이 그 수를 말한다(조용히 넘기지 않는다).
   const route = read('src/app/api/admin/backup/route.ts');
@@ -3635,16 +3637,20 @@ test('파트너·고객사도 「내가 본 모습」 관문을 지난다 (DS 56
   const accRev = p.slice(p.indexOf('export function accountRev('), p.indexOf('/** 파트너 한 건의 모습'));
   assert.equal(/createdAt|updatedAt|attribution/.test(accRev), false, '저장이 스스로 바꾸는 값이 모습에 들어 있다');
   // ② 거절 문장은 다른 관문과 **같은 말**이다(DS 46-1 이 한 곳에 모아 둔 문장이다).
-  assert.match(p, /CHANGED_TARGET_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE/, '거절 문장을 따로 적는다');
+  for (const m of ['CHANGED_DELETE_TARGET_MESSAGE', 'CHANGED_TARGET_MESSAGE', 'RESTORE_FORMAT_MESSAGE', 'STALE_TARGET_MESSAGE']) {
+    assert.ok(new RegExp(`^  ${m},$`, 'm').test(p), `거절 문장을 따로 적는다: ${m}`);
+  }
   assert.equal(/'그 사이 다른 화면에서/.test(p), false, '거절 문장이 두 벌로 갈라졌다');
-  // ③ 두 저장 함수가 모두 그 관문을 지난다.
-  assert.ok((p.match(/conflictOf\(input\.baseRev,/g) || []).length === 2, '관문을 지나지 않는 저장 함수가 있다');
+  // ③ 두 저장 함수와 **삭제**가 모두 그 관문을 지난다(DS 57-1 에서 지우는 자리가 합류했다).
+  assert.ok((p.match(/conflictOf\(input\.baseRev,/g) || []).length === 3, '관문을 지나지 않는 쓰기 경로가 있다');
   // ④ 라우트: 목록에 모습을 실어 보내고(견주는 쪽과 같은 함수다), 거절은 **입력 오류와 구분해** 보낸다.
   const route = read('src/app/api/admin/partners/route.ts');
   assert.match(route, /partners: scopePartners\(principal, listPartners\(\)\)\.map\(\(p\) => \(\{ \.\.\.p, rev: partnerRev\(p\) \}\)\)/, '파트너 목록에 모습이 없다');
   assert.match(route, /accounts: queryAccounts\(filter\)\.map\(\(a\) => \(\{ \.\.\.a, rev: accountRev\(a\) \}\)\)/, '고객사 목록에 모습이 없다');
-  assert.ok((route.match(/if \(r\.conflict\) \{/g) || []).length === 2, '거절을 입력 오류와 섞어 보낸다');
-  assert.ok((route.match(/return fail\('conflict', r\.error, \{ conflict: r\.conflict,/g) || []).length === 2, '거절 사유·지금 값을 싣지 않는다');
+  // 쓰기 셋(파트너 저장·고객사 저장·파트너 삭제)이 모두 거절을 **입력 오류와 구분해** 보낸다.
+  assert.ok((route.match(/if \(r\.conflict\) \{/g) || []).length === 3, '거절을 입력 오류와 섞어 보낸다');
+  assert.ok((route.match(/conflict: r\.conflict,/g) || []).length === 3, '거절 사유를 싣지 않는 경로가 있다');
+  assert.ok((route.match(/current: \{ \.\.\.r\.current, rev: (?:partnerRev|accountRev)\(r\.current\) \}/g) || []).length === 3, '지금 저장된 값을 모습과 함께 보내지 않는다');
   // ⑤ route.ts 규칙 — HTTP 메서드·설정 외의 export 가 늘지 않았다.
   const exports = [...route.matchAll(/^export (?:async function|function|const) (\w+)/gm)].map((m) => m[1]);
   assert.deepEqual(exports.sort(), ['DELETE', 'GET', 'POST', 'dynamic'], `route.ts 에 허용되지 않은 export 가 있다: ${exports}`);
@@ -3662,4 +3668,67 @@ test('귀속은 바꿀 때만 파트너의 존재를 확인한다 (DS 56-1)', ()
   assert.match(p, /if \(partnerId && !keepingAttribution && !partners\.some\(\(p\) => p\.id === partnerId\)\) \{/, '귀속을 들고 오기만 해도 거절한다');
   // 종전 식(지금 가진 귀속까지 거절하던 조건)이 남아 있지 않다.
   assert.equal(/if \(partnerId && !partners\.some\(\(p\) => p\.id === partnerId\)\) \{/.test(p), false, '종전 조건이 남아 있다');
+});
+
+/* ══════════ 디자인 스프린트 — 54차 재감사 (DS 57-1·57-2) ══════════ */
+
+/**
+ * DS 57-1 — 지우는 자리의 관문과 **지워진 것의 기록**(배선 쪽 고정).
+ *
+ * 동작은 `tests/runtime.test.mjs` 가 돌려서 본다. 여기서 고정하는 것은 라우트다
+ * (`route.ts` 규칙상 떼어내 돌릴 수 없다): ① 주소에 실려 온 모습을 저장소에 넘기는 것
+ * ② 지워진 파트너의 **이름·수수료율·상태**가 감사 로그에 남는 것 — 지운 뒤에는 그 값이
+ * 어디에도 없고, DS 56-1 이 열어 둔 복구 길(「같은 식별자로 다시 등록하기」)에 필요한 값이
+ * 하필 그 둘이다. 지어내는 값이 아니라 **지우는 순간에 저장되어 있던 값**이다(§13).
+ */
+test('파트너 삭제가 모습을 받고 무엇을 지웠는지 기록한다 (DS 57-1)', () => {
+  const route = read('src/app/api/admin/partners/route.ts');
+  const del = route.slice(route.indexOf('export async function DELETE('));
+  assert.ok(del.length > 0, 'DELETE 를 찾지 못했다');
+  // ① 주소에 실려 온 모습을 그대로 넘긴다(보내지 않으면 종전처럼 지운다 — 옵트인).
+  assert.match(del, /deletePartner\(id\.value, \{ baseRev: req\.nextUrl\.searchParams\.get\('baseRev'\) \}\)/, '삭제가 모습을 받지 않는다');
+  // ② 「무엇을 지웠는가」를 적는다 — 식별자만 남기지 않는다.
+  assert.match(del, /action: 'partner\.delete'/, '감사 기록이 사라졌다');
+  assert.match(del, /detail: `삭제: \$\{r\.partner\.name\.slice\(0, 40\)\} \/ 수수료율 \$\{feeRateWords\(r\.partner\.feeRateBp\)\} \/ \$\{PARTNER_STATUS_LABELS\[r\.partner\.status\]\}`/, '지운 파트너의 이름·수수료율·상태를 적지 않는다');
+  // ③ 사람이 읽는 기록에 내부 단위(bp)·코드 어휘를 적지 않는다(DS 2-12·29-3).
+  assert.equal(/detail: [^\n]*feeRateBp\}/.test(del), false, '기록에 내부 단위가 새어 나간다');
+  // ④ 수수료율을 사람 말로 바꾸는 자는 **저장소 쪽 한 벌**이다(라우트가 따로 적지 않는다).
+  const p = read('src/lib/partners.ts');
+  assert.match(p, /export function feeRateWords\(bp: number \| null \| undefined\): string \{/, '수수료율을 말로 적는 자가 없다');
+  assert.match(route, /import \{[\s\S]*?\bfeeRateWords,/, '라우트가 그 자를 쓰지 않는다');
+  // ⑤ route.ts 규칙 — 허용된 export 넷만 있다.
+  const exports = [...route.matchAll(/^export (?:async function|function|const) (\w+)/gm)].map((m) => m[1]);
+  assert.deepEqual(exports.sort(), ['DELETE', 'GET', 'POST', 'dynamic'], `route.ts 에 허용되지 않은 export 가 있다: ${exports}`);
+});
+
+/**
+ * DS 57-2 — 제외 사유를 재는 자가 **한 벌**인지(계약 쪽 고정).
+ *
+ * 건수는 `tests/runtime.test.mjs` 가 돌려서 본다. 여기서 고정하는 것은 ① 대상 판정과 제외
+ * 사유가 **같은 함수** 하나에서 나오는 것(두 벌로 적으면 「대상이 아닌데 사유도 없는 건」이
+ * 다시 생긴다) ② 사유 문장을 **리포트가** 적는 것(화면이 다시 적으면 표와 주석이 갈라진다).
+ */
+test('정산 제외 사유는 한 자가 재고 리포트가 적는다 (DS 57-2)', () => {
+  const s = read('src/lib/settlement.ts');
+  // ① 판정은 한 곳이다 — 종전의 참/거짓 판정자(`eligible`)는 남아 있지 않다.
+  assert.match(s, /function exclusionOf\(a: Account, periodEnd: string\): SettlementExclusion \| null \{/, '사유를 재는 자가 없다');
+  assert.equal(/function eligible\(/.test(s), false, '종전 판정자가 남아 있다(두 벌이 된다)');
+  assert.ok((s.match(/exclusionOf\(a, periodEnd\)/g) || []).length === 1, '판정을 두 번 한다');
+  // ② 다섯 사유가 모두 세어지고 문장을 가진다(세기만 하고 말하지 않는 사유를 만들지 않는다).
+  const kinds = ['direct', 'churned', 'prospect', 'no_contract_date', 'after_period'];
+  for (const k of kinds) {
+    assert.ok(new RegExp(`^  ${k}: \\(n\\) =>`, 'm').test(s), `사유 문장이 없다: ${k}`);
+    assert.ok(new RegExp(`'${k}'`).test(s), `사유를 재지 않는다: ${k}`);
+  }
+  assert.match(s, /const EXCLUSION_ORDER: SettlementExclusion\[\] = \['direct', 'churned', 'prospect', 'no_contract_date', 'after_period'\];/, '사유 순서가 고정되지 않았다');
+  // ③ 사실이 아닌 한 덩이 문장이 남아 있지 않다(해지를 「아직 계약 상태가 아니」라고 적던 자리).
+  //    주석은 그 문장을 **왜 고쳤는지** 적고 있으므로 떼어내고 본다.
+  const code = s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.equal(/아직 계약 상태가 아니거나/.test(code), false, '종전 문장이 남아 있다');
+  assert.equal(/notYetContracted|directExcluded/.test(code), false, '종전 계수기가 남아 있다');
+  // ④ 「조회 = 대상 + 제외」를 리포트가 적는다 — 화면이 더하거나 빼지 않는다.
+  assert.match(s, /조회한 고객사 \$\{all\.length\}곳 = 정산 대상 \$\{rows\.length\}곳 \+ 제외 \$\{excludedTotal\}곳\./, '수를 맞춰 적지 않는다');
+  const page = read('src/app/admin/page.tsx');
+  const notes = page.slice(page.indexOf('function SettleNotes('), page.indexOf('interface RollupView'));
+  assert.equal(/excluded|churned|prospect/.test(notes), false, '화면이 사유를 다시 센다');
 });

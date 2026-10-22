@@ -3152,3 +3152,61 @@ test('파트너·고객사 편집이 내가 본 모습을 들고 가고 거절�
   assert.ok(resetSites('loadAccountForm(EMPTY_ACCOUNT_FORM)', 'setAEditRev(null)') >= 2, '고객사 폼을 비우는 자리를 찾지 못했다');
   assert.ok(resetSites('loadPartnerForm(EMPTY_PARTNER_FORM)', 'setPEditRev(null)') >= 3, '파트너 폼을 비우는 자리를 찾지 못했다');
 });
+
+/* ══════════ 디자인 스프린트 — 54차 재감사 (DS 57-1·57-3) ══════════ */
+
+/**
+ * DS 57-1(화면 쪽) — **삭제가 「내가 본 모습」을 들고 가지 않았다.**
+ *
+ * DS 56-3 이 이 탭의 저장에 관문을 세웠는데 바로 옆의 「삭제」 단추는 식별자만 보냈다.
+ * 확인 대화상자를 읽는 동안에도 다른 화면은 같은 파트너를 고치고 있을 수 있다 — 그래서
+ * 운영자가 **읽고 승인한 이름**과 실제로 지워지는 것이 다를 수 있었다. 되돌릴 수 없는 동작이다.
+ */
+test('파트너 삭제가 목록에서 본 모습을 들고 가고 거절을 그 자리에서 말한다 (DS 57-1)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const from = src.indexOf('const removePartner = async');
+  // 같은 표지(「정산 리포트」)가 위쪽 타입 묶음에도 있어 **삭제 함수 뒤쪽**에서 찾는다.
+  const fn = src.slice(from, src.indexOf('// ---- 정산 리포트 ----', from));
+  assert.ok(fn.length > 0 && fn.length < 3000, '삭제 함수를 찾지 못했다');
+  // ① 목록 응답에 실려 온 그 값을 그대로 보낸다(화면이 다시 계산하지 않는다 · DS 42-2).
+  assert.match(fn, /if \(p\.rev\) qs\.set\('baseRev', p\.rev\);/, '삭제가 본 모습을 들고 가지 않는다');
+  assert.match(fn, /qs = new URLSearchParams\(\{ partnerId: p\.id \}\)/, '식별자를 싣는 자리가 바뀌었다');
+  assert.ok(fn.includes("method: 'DELETE'"), '삭제 요청이 아니다');
+  // ② 되돌릴 수 없는 동작이므로 확인 절차는 그대로 둔다(그 절차가 무뎌지면 다른 확인도 함께 무뎌진다 · DS 5-4).
+  assert.ok(fn.includes('askConfirm'), '확인 절차가 사라졌다');
+  // ③ 거절당하면 **지금 저장된 내용**을 적어 준다 — 무엇이 그 사이 바뀌었는지 보고 다시 고르게.
+  assert.ok(fn.includes("data.conflict === 'changed' && data.current"), '그 사이 바뀐 경우를 가리지 않는다');
+  assert.match(fn, /지금 저장된 내용: \$\{\(data\.current as PartnerView\)\.name\} \/ 수수료율 \$\{feeLabel\(/, '지금 저장된 이름·수수료율을 보여 주지 않는다');
+  // ④ 목록을 **먼저** 받고 그 뒤에 적는다 — `loadPartners` 가 이 칸을 비우고 시작한다.
+  const idx = fn.indexOf('if (data.conflict) await loadPartners(partnerFilter);');
+  assert.ok(idx > 0, '거절 뒤에 목록을 새로 받지 않는다');
+  assert.ok(fn.indexOf('setPartnerErr(`${data.message', idx) > idx, '목록을 받기 전에 적어 두면 그 글이 지워진다');
+  // ⑤ 그 글이 서 있는 자리는 읽어 주는 영역이다(눌린 버튼만으로는 무슨 일이 났는지 모른다).
+  assert.match(src, /\{partnerErr && \(\s*<p role="alert"/, '파트너 탭의 오류 문단이 alert 가 아니다');
+});
+
+/**
+ * DS 57-3 — 정산 대상이 0건인 달은 **왜 0건인지 한 줄도 말하지 않았다.**
+ *
+ * 「산출 기준·한계」는 고객사별 산출 근거 **표 안에만** 있었다. 그래서 대상이 없는 달에는
+ * 화면이 「정산 대상 고객사가 없습니다」로 끝났고, 제외 사유(해지 n곳·검토 중 n곳·계약일이
+ * 기간 이후 n곳…)는 어디에서도 볼 수 없었다 — 하필 그 달은 CSV 단추도 눌리지 않는다
+ * (내보낼 행이 없다). 파트너가 「우리 고객사는 왜 빠졌습니까」라고 묻는 달이 바로 그 달이다.
+ */
+test('정산 대상이 0건인 달에도 제외 사유를 보여 준다 (DS 57-3)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // ① 두 자리가 **같은 요소**를 쓴다(한쪽만 고쳐 두면 다시 갈라진다).
+  assert.ok(src.includes('function SettleNotes('), '주석을 그리는 요소가 없다');
+  assert.equal((src.match(/<SettleNotes /g) || []).length, 2, '두 자리에서 같은 요소를 쓰지 않는다');
+  // ② 서버가 적어 보낸 문장을 **그대로** 보여 준다(화면이 다시 세거나 다시 적지 않는다 · DS 57-2).
+  const cmp = src.slice(src.indexOf('function SettleNotes('), src.indexOf('interface RollupView'));
+  assert.match(cmp, /notes\.map\(\(n, i\) => <li key=\{i\}[^>]*>\{n\}<\/li>\)/, '주석을 그대로 싣지 않는다');
+  assert.ok(!/\d+곳|제외/.test(cmp.replace(/\*[^\n]*/g, '')), '화면이 사유를 다시 적는다');
+  assert.ok(cmp.includes('if (notes.length === 0) return null;'), '주석이 없을 때 빈 상자를 그린다');
+  // ③ 빈 상태에서는 **펼친 채로** 뜬다 — 접힌 요약 한 줄로는 「왜 없는가」가 보이지 않는다.
+  const empty = src.slice(src.indexOf('에 정산 대상 고객사가 없습니다'), src.indexOf("{r && r.rows.length > 0 && ("));
+  assert.match(empty, /<SettleNotes notes=\{r\.notes\} open \/>/, '빈 상태에서 제외 사유가 펼쳐지지 않는다');
+  assert.ok(empty.includes('파트너·귀속 열기'), '빈 상태의 다음 행동이 사라졌다');
+  // ④ 표가 있는 자리는 종전처럼 접힌 채로 둔다(그 달에는 표가 먼저 읽혀야 한다).
+  assert.match(src, /\{\/\* 표가 있는 자리와 없는 자리가[^\n]*\n\s*<SettleNotes notes=\{r\.notes\} \/>/, '표 아래 주석 자리가 바뀌었다');
+});

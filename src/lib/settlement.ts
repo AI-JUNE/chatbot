@@ -114,15 +114,47 @@ export interface SettlementInput {
 }
 
 /**
- * 기간 내 정산 대상 판정.
- * 대상 = 계약 상태(`contracted`) + 계약일이 있고 기간 말일 이전.
+ * 「이 고객사가 왜 빠졌는가」 — 정산 대상에서 빠진 까닭 (DS 57-2).
+ * 한 건은 반드시 **하나의** 까닭에 들어간다(겹치지도, 새지도 않는다).
+ */
+export type SettlementExclusion = 'direct' | 'churned' | 'prospect' | 'no_contract_date' | 'after_period';
+
+const EXCLUSION_ORDER: SettlementExclusion[] = ['direct', 'churned', 'prospect', 'no_contract_date', 'after_period'];
+
+/**
+ * 제외 사유를 사람이 읽는 문장으로. **리포트가 적는다** — 화면이 다시 적으면 같은 사실이
+ * 화면마다 다른 말로 뜬다(DS 36-2·47-3 이 세운 「이름은 아는 쪽이 한 벌로 붙인다」와 같은 규칙).
+ */
+const EXCLUSION_NOTE: Record<SettlementExclusion, (n: number) => string> = {
+  direct: (n) => `직접 계약 ${n}건은 파트너 정산 대상이 아니라 제외했습니다.`,
+  churned: (n) => `파트너 귀속이지만 지금 해지 상태인 ${n}건은 제외했습니다.`,
+  prospect: (n) => `파트너 귀속이지만 아직 계약 상태가 아닌(검토 중) ${n}건은 제외했습니다.`,
+  no_contract_date: (n) => `파트너 귀속·계약 상태이지만 계약일이 적혀 있지 않아 ${n}건을 제외했습니다.`,
+  after_period: (n) => `파트너 귀속이지만 계약일이 기간 이후인 ${n}건은 제외했습니다.`,
+};
+
+/**
+ * 기간 내 정산 대상 판정 — **빠진 까닭까지 함께** 돌려준다 (DS 57-2).
+ *
+ * 대상 = 파트너 귀속 + 계약 상태(`contracted`) + 계약일이 있고 기간 말일 이전.
  * 해지(`churned`)는 제외한다 — 다만 **해지일을 기록하지 않으므로** 기간 중 해지분은
  * 현재 상태 기준으로 빠진다. 이 한계를 notes에 명시한다(숨기지 않는다).
+ *
+ * 왜 「참/거짓」이 아니라 까닭인가: 종전에는 대상이 아닌 귀속 고객사를 전부 한 수로 모아
+ * 「아직 계약 상태가 아니거나 계약일이 기간 이후인 n건」이라고 적었다. 그 문장은 **해지 고객사에
+ * 대해 사실이 아니다** — 해지는 「아직」이 아니고, 바로 윗줄이 해지를 따로 말하고 있어 같은
+ * 건이 두 문장에 걸쳐 있는 것처럼도 읽힌다. 게다가 대상이 아닌 **직접 계약 고객사**는 「그 밖에는
+ * 멀쩡했을 건」만 세고 있어서, 검토 중인 직접 계약 고객사는 **어느 수에도 들어가지 않았다**:
+ * 조회 4건이 대상 0건 + 제외 2건으로 끝나고 남은 2건이 어디로 갔는지 화면에 없었다.
+ * 「왜 이 고객사가 빠졌는가」는 정산 분쟁에서 가장 먼저 묻는 것이고, 그 답이 이 함수 하나에 있다.
  */
-function eligible(a: Account, periodEnd: string): boolean {
-  if (a.status !== 'contracted') return false;
-  if (!a.contractedAt || !isValidDate(a.contractedAt)) return false;
-  return a.contractedAt <= periodEnd;
+function exclusionOf(a: Account, periodEnd: string): SettlementExclusion | null {
+  if (a.partnerId === null) return 'direct';
+  if (a.status === 'churned') return 'churned';
+  if (a.status !== 'contracted') return 'prospect';
+  if (!a.contractedAt || !isValidDate(a.contractedAt)) return 'no_contract_date';
+  if (a.contractedAt > periodEnd) return 'after_period';
+  return null;
 }
 
 export type SettlementResult = { ok: true; report: SettlementReport } | { ok: false; error: string };
@@ -147,23 +179,28 @@ export function buildSettlement(input: SettlementInput): SettlementResult {
   const rows: SettlementRow[] = [];
   const totalsByPartner = new Map<string, SettlementPartnerTotal>();
 
-  let directExcluded = 0;
-  let notYetContracted = 0;
+  // 제외 사유별 건수 — 조회한 건은 **하나도 빠짐없이** 어느 한 칸에 들어간다 (DS 57-2).
+  const excluded: Record<SettlementExclusion, number> = {
+    direct: 0,
+    churned: 0,
+    prospect: 0,
+    no_contract_date: 0,
+    after_period: 0,
+  };
 
   for (const a of all) {
-    if (a.partnerId === null) {
-      if (eligible(a, periodEnd)) directExcluded += 1;
-      continue;
-    }
-    if (!eligible(a, periodEnd)) {
-      notYetContracted += 1;
+    const why = exclusionOf(a, periodEnd);
+    if (why) {
+      excluded[why] += 1;
       continue;
     }
 
-    const partner = getPartner(a.partnerId);
+    // 여기까지 온 건은 파트너 귀속이다(`exclusionOf` 가 `direct` 를 먼저 걸러낸다).
+    const partnerId = a.partnerId as string;
+    const partner = getPartner(partnerId);
     // 「지금 찾을 수 없는 파트너」의 이름은 한 벌이다(`missingPartnerName` · DS 53-3) —
     // 파트너별 집계·관리 콘솔이 같은 말을 쓴다.
-    const partnerName = partner ? partner.name : missingPartnerName(a.partnerId);
+    const partnerName = partner ? partner.name : missingPartnerName(partnerId);
     const feeRateBp = partner ? effectiveFeeRateBp(partner) : null;
     const baseAmountKrw = typeof a.monthlyFeeKrw === 'number' ? a.monthlyFeeKrw : null;
 
@@ -181,7 +218,7 @@ export function buildSettlement(input: SettlementInput): SettlementResult {
     const feeAmountKrw = issue === 'none' ? Math.floor((baseAmountKrw as number) * (feeRateBp as number) / 10000) : null;
 
     rows.push({
-      partnerId: a.partnerId,
+      partnerId,
       partnerName,
       accountId: a.id,
       accountName: a.name,
@@ -192,8 +229,8 @@ export function buildSettlement(input: SettlementInput): SettlementResult {
       issue,
     });
 
-    const t = totalsByPartner.get(a.partnerId) ?? {
-      partnerId: a.partnerId,
+    const t = totalsByPartner.get(partnerId) ?? {
+      partnerId,
       partnerName,
       accounts: 0,
       billable: 0,
@@ -209,7 +246,7 @@ export function buildSettlement(input: SettlementInput): SettlementResult {
     } else {
       t.incomplete += 1;
     }
-    totalsByPartner.set(a.partnerId, t);
+    totalsByPartner.set(partnerId, t);
   }
 
   rows.sort((x, y) =>
@@ -228,12 +265,15 @@ export function buildSettlement(input: SettlementInput): SettlementResult {
   if (incomplete > 0) {
     notes.push(`${incomplete}개 고객사는 월 이용료 또는 수수료율이 없어 합계에서 제외했습니다(0원으로 계산하지 않았습니다).`);
   }
-  if (directExcluded > 0) {
-    notes.push(`직접 계약 ${directExcluded}건은 파트너 정산 대상이 아니라 제외했습니다.`);
+  // 제외된 건을 **사유별로** 적는다 (DS 57-2). 한 건은 한 사유에만 들어간다.
+  for (const key of EXCLUSION_ORDER) {
+    if (excluded[key] > 0) notes.push(EXCLUSION_NOTE[key](excluded[key]));
   }
-  if (notYetContracted > 0) {
-    notes.push(`파트너 귀속이지만 아직 계약 상태가 아니거나 계약일이 기간 이후인 ${notYetContracted}건은 제외했습니다.`);
-  }
+  // 「조회한 것은 모두 어디로 갔는가」 — 수가 맞는지 운영자가 그 자리에서 확인할 수 있게 적는다.
+  // 종전에는 대상 수와 제외 수를 더해도 조회 건수가 되지 않는 달이 있었고(어느 수에도 없는 건),
+  // 그 사실을 화면 어디에서도 알 수 없었다.
+  const excludedTotal = EXCLUSION_ORDER.reduce((s, k) => s + excluded[k], 0);
+  notes.push(`이 조건으로 조회한 고객사 ${all.length}곳 = 정산 대상 ${rows.length}곳 + 제외 ${excludedTotal}곳.`);
   notes.push('이 리포트는 산출 근거 자료이며 청구서가 아닙니다. 실제 청구·지급은 계약서 확정 후 승인이 필요합니다.');
 
   return {

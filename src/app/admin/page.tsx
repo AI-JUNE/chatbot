@@ -1679,6 +1679,30 @@ const ISSUE_LABELS: Record<SettlementRowView['issue'], string> = {
 function wonLabel(v: number | null | undefined): string {
   return typeof v === 'number' ? `${v.toLocaleString('ko-KR')}원` : '미입력';
 }
+
+/**
+ * 「산출 기준·한계」 — 리포트가 적어 보낸 문장을 **그대로** 보여 준다 (DS 57-3).
+ *
+ * 화면이 다시 세거나 다시 적지 않는다: 제외 사유와 건수는 서버가 세고 문장까지 붙인다
+ * (DS 57-2 · 「이름은 아는 쪽이 한 벌로 붙인다」와 같은 규칙).
+ *
+ * 왜 한 곳에 모았는가: 종전에는 이 자리가 **고객사별 산출 근거 표 안에만** 있었다. 그래서
+ * 대상이 0건인 달에는 화면이 「정산 대상 고객사가 없습니다」 한 줄로 끝났고, 「왜 한 건도
+ * 없는가」(해지 2곳·검토 중 1곳·계약일이 기간 이후 1곳…)는 어디에서도 볼 수 없었다 —
+ * 하필 그 달은 CSV 단추도 눌리지 않는다(내보낼 행이 없다). 파트너가 「우리 고객사는 왜
+ * 빠졌습니까」라고 물어 오는 달이 바로 그 달이다.
+ */
+function SettleNotes({ notes, open = false }: { notes: string[]; open?: boolean }) {
+  if (notes.length === 0) return null;
+  return (
+    <details open={open} style={{ padding: '12px 16px', textAlign: 'left' }}>
+      <summary style={{ fontSize: 12.5, color: 'var(--mut)', cursor: 'pointer' }}>산출 기준·한계 {notes.length}건</summary>
+      <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 12.5, color: 'var(--sub)' }}>
+        {notes.map((n, i) => <li key={i} style={{ marginBottom: 3 }}>{n}</li>)}
+      </ul>
+    </details>
+  );
+}
 interface RollupView {
   partnerId: string | null;
   partnerName: string;
@@ -3108,14 +3132,32 @@ export default function AdminPage() {
     });
     if (!ok) return;
     try {
-      const res = await afetch(`/api/admin/partners?partnerId=${encodeURIComponent(p.id)}`, {
+      /**
+       * **지우는 자리에도 「내가 본 모습」을 들고 간다** (DS 46-1 · DS 57-1).
+       *
+       * 이 표는 30초마다 갱신되지만, 확인 대화상자를 읽는 동안에도 다른 화면은 같은 파트너를
+       * 고치고 있을 수 있다. 종전에는 식별자만 보냈다 — 그러면 운영자가 대화상자에서 **읽고
+       * 승인한 이름**(옛 목록의 이름)과 실제로 지워지는 것이 다를 수 있었고, 그 사이 올라간
+       * 수수료율도 아무 말 없이 함께 사라졌다.
+       */
+      const qs = new URLSearchParams({ partnerId: p.id });
+      if (p.rev) qs.set('baseRev', p.rev);
+      const res = await afetch(`/api/admin/partners?${qs.toString()}`, {
         method: 'DELETE',
         headers: authHeaders(),
       });
       if (on401(res)) return;
       const data = await res.json();
       if (!data.ok) {
-        setPartnerErr(data.message || data.error || '삭제하지 못했습니다.');
+        // 그 사이 바뀐 것은 **입력이 틀린 것이 아니다** — 지금 저장된 내용을 함께 적어 주고
+        // 목록을 새로 받는다(다음 삭제는 새 모습으로 간다). 지워진 것은 하나도 없다.
+        const nowLabel =
+          data.conflict === 'changed' && data.current
+            ? ` 지금 저장된 내용: ${(data.current as PartnerView).name} / 수수료율 ${feeLabel((data.current as PartnerView).feeRateBp)} / ${(data.current as PartnerView).status === 'active' ? '운영 중' : '중지'}`
+            : '';
+        // 목록을 먼저 받고 **그 뒤에** 적는다 — `loadPartners` 가 이 칸을 비우고 시작한다.
+        if (data.conflict) await loadPartners(partnerFilter);
+        setPartnerErr(`${data.message || data.error || '삭제하지 못했습니다.'}${nowLabel}`);
         return;
       }
       if (pForm.id === p.id) { loadPartnerForm(EMPTY_PARTNER_FORM); setPEditRev(null); setPConflict(null); }
@@ -6305,13 +6347,17 @@ export default function AdminPage() {
             )}
 
             {r && r.rows.length === 0 && !settleErr && (
-              <section style={S.card}>
+              // 상자의 여백은 `.ac-empty`(36px 20px)와 아래 주석이 각자 가진다 — 표가 있는
+              // 자리와 같은 모양으로 둔다(그러지 않으면 좁은 화면에서 주석만 두 겹으로 밀린다).
+              <section style={{ ...S.card, padding: 0 }}>
                 <div className="ac-empty">
                   <EmptyArt kind="kb" />
                   <p style={{ fontSize: 14, fontWeight: 700 }}>{monthLabel}에 정산 대상 고객사가 없습니다</p>
                   <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>파트너 귀속 고객사를 「계약」 상태로 두고 계약일을 입력하면 그 달부터 여기에 나타납니다.</p>
                   <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => goTab('partner')}>파트너·귀속 열기</button>
                 </div>
+                {/* 「왜 한 건도 없는가」 — 제외 사유를 펼쳐 둔 채로 보여 준다 (DS 57-3). */}
+                <SettleNotes notes={r.notes} open />
               </section>
             )}
 
@@ -6389,12 +6435,8 @@ export default function AdminPage() {
                     </table>
                   </ScrollX>
                   <Pager info={rowView} label="고객사별 산출 근거" onPage={rowView.onPage} />
-                  <details style={{ padding: '12px 16px' }}>
-                    <summary style={{ fontSize: 12.5, color: 'var(--mut)', cursor: 'pointer' }}>산출 기준·한계 {r.notes.length}건</summary>
-                    <ul style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 12.5, color: 'var(--sub)' }}>
-                      {r.notes.map((n, i) => <li key={i} style={{ marginBottom: 3 }}>{n}</li>)}
-                    </ul>
-                  </details>
+                  {/* 표가 있는 자리와 없는 자리가 **같은 요소**를 쓴다 (DS 57-3). */}
+                  <SettleNotes notes={r.notes} />
                 </section>
               </>
             )}

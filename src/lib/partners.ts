@@ -19,7 +19,12 @@ import { loadJson, saveJson, saveNow, savedInfo, scheduleSave, type SavedInfo } 
 import { compact } from '@/lib/normalize';
 import { readInstant } from '@/lib/kst';
 import { revOf } from '@/lib/rev';
-import { CHANGED_TARGET_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE } from '@/lib/refusal';
+import {
+  CHANGED_DELETE_TARGET_MESSAGE,
+  CHANGED_TARGET_MESSAGE,
+  RESTORE_FORMAT_MESSAGE,
+  STALE_TARGET_MESSAGE,
+} from '@/lib/refusal';
 
 export const PARTNERS_NS = 'partners';
 
@@ -155,6 +160,16 @@ export function effectiveFeeRateBp(partner: Pick<Partner, 'feeRateBp'>): number 
  */
 export function missingPartnerName(id: string): string {
   return `(삭제된 파트너 ${id})`;
+}
+
+/**
+ * 수수료율을 **사람 말로** (DS 2-12 · DS 57-1). 화면은 %로 묻고 받으므로, 사람이 읽는 자리에는
+ * 내부 단위(bp)를 적지 않는다. 미설정은 0%가 아니라 「미설정」이다 — 둘을 섞으면 §13 이 금한
+ * 「없는 수」가 선다. 콘솔의 `feeLabel` 과 같은 말을 쓴다(그 쪽은 화면 묶음이라 따로 적혀 있다).
+ */
+export function feeRateWords(bp: number | null | undefined): string {
+  if (typeof bp !== 'number') return '미설정';
+  return `${(bp / 100).toFixed(2).replace(/\.?0+$/, '')}%`;
 }
 
 /**
@@ -295,20 +310,40 @@ export function getPartner(id: string): Partner | null {
   return p ? { ...p } : null;
 }
 
+export type PartnerDeleteResult =
+  /** 지운 **그 파트너**를 돌려준다 — 부르는 쪽이 「무엇을 지웠는지」를 기록에 적을 수 있게 (DS 57-1). */
+  | { ok: true; partner: Partner }
+  | { ok: false; error: string; conflict?: 'gone' | 'changed'; current?: Partner };
+
 /**
  * 파트너 삭제는 귀속 이력을 잃는 되돌릴 수 없는 동작이므로,
  * 연결된 고객사가 하나라도 있으면 거절한다(먼저 귀속을 옮기게 한다).
+ *
+ * **지우는 자리에도 동시 편집 관문을 세운다** (DS 46-1 · DS 57-1). 종전에는 식별자만 받았다 —
+ * 그래서 A 가 옛 목록에서 「제이투모로우원 / 수수료율 10%」를 지울 때, B 가 그 사이 이름을
+ * 「제이투모로우원(신규계약)」으로 고치고 수수료율을 15%로 올려 두었더라도 **거절 없이** 지워졌다.
+ * A 가 확인 대화상자에서 읽고 승인한 이름조차 지워진 것과 달랐다(옛 목록의 이름이다).
+ * 고객사가 붙은 파트너는 서버가 막지만, 「그 사이 수수료율이 바뀐 파트너」는 그대로 지나갔다.
+ *
+ * `baseRev` 를 보내지 않으면 종전처럼 그대로 지운다 — `upsertPartner`·`upsertKB` 가 세운 규약과
+ * 같다(복원·일괄 처리처럼 겨룰 상대가 없는 자리를 막지 않는다).
  */
-export function deletePartner(id: string): { ok: true } | { ok: false; error: string } {
+export function deletePartner(id: string, input: { baseRev?: unknown } = {}): PartnerDeleteResult {
+  const target = partners.find((p) => p.id === id);
+  const conflict = conflictOf(input.baseRev, target, partnerRev);
+  if (conflict === 'gone') return { ok: false, error: STALE_TARGET_MESSAGE, conflict };
+  if (conflict === 'changed') {
+    return { ok: false, error: CHANGED_DELETE_TARGET_MESSAGE, conflict, current: { ...(target as Partner) } };
+  }
   const idx = partners.findIndex((p) => p.id === id);
   if (idx < 0) return { ok: false, error: '존재하지 않는 파트너입니다.' };
   const linked = accounts.filter((a) => a.partnerId === id).length;
   if (linked > 0) {
     return { ok: false, error: `이 파트너에 연결된 고객사가 ${linked}곳 있습니다. 귀속을 먼저 변경해 주세요.` };
   }
-  partners.splice(idx, 1);
+  const [removed] = partners.splice(idx, 1);
   persist();
-  return { ok: true };
+  return { ok: true, partner: { ...removed } };
 }
 
 // ---- 고객사 계약 ----

@@ -5209,3 +5209,158 @@ test('고객사·파트너 저장이 내가 본 모습 위에서만 갈아 끼�
   assert.equal(P.upsertAccount({ ...fields, monthlyFeeKrw: 7000000 }).ok, true);
   P.resetPartners();
 });
+
+/* ══════════ 디자인 스프린트 — 54차 재감사 (DS 57-1·57-2) ══════════ */
+
+/**
+ * DS 57-1 — **지우는 자리에는 동시 편집 관문이 없었다.**
+ *
+ * DS 56-3 이 파트너·고객사의 저장에 관문을 세웠지만, 같은 탭의 **삭제**는 그 목록에 없었다.
+ * 그래서 A 가 옛 목록에서 「제이투모로우원 / 수수료율 10%」를 지울 때, B 가 그 사이 이름을
+ * 고치고 수수료율을 15%로 올려 두었더라도 **거절 없이** 지워졌다 — A 가 확인 대화상자에서
+ * 읽고 승인한 이름조차 실제로 지워진 것과 달랐다(옛 목록의 이름이다).
+ * 되돌릴 수 없는 동작이라 「다음 달 정산에서 드러난다」가 아니고 **그 자리에서 끝난다**.
+ *
+ * 함께: 지워진 뒤에는 그 파트너의 **이름도 수수료율도** 어디에도 남지 않았다(감사 로그에
+ * 식별자만 적혔다). DS 56-1 이 열어 둔 복구 길(「같은 식별자로 다시 등록하기」)에 필요한
+ * 값이 하필 그 둘이다 — 그 배선은 `tests/unit.test.mjs` 에서 고정한다.
+ */
+test('파트너 삭제가 내가 본 모습 위에서만 지운다 (DS 57-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const P = await pickPartnerLib('partners');
+  const R = await pickPartnerLib('refusal');
+
+  P.resetPartners();
+  const made = P.upsertPartner({ name: '제이투모로우원', feeRateBp: 1000 });
+  assert.equal(made.ok, true);
+  const seen = P.partnerRev(made.partner); // A 가 목록에서 본 모습
+
+  // ── ① 종전 길은 그대로 열어 둔다 — 모습을 보내지 않으면 관문이 없다
+  //      (복원·일괄 처리처럼 겨룰 상대가 없는 자리를 막지 않는다 · `upsertPartner` 와 같은 규약).
+  const other = P.upsertPartner({ name: '지워질 파트너', feeRateBp: 500 });
+  assert.equal(P.deletePartner(other.partner.id).ok, true, '모습 없이 부르는 길이 막혔다 — 종전 계약이 깨졌다');
+
+  // ── ② B 가 그 사이 이름과 수수료율을 고친다. A 의 옛 모습으로는 **지워지지 않는다**.
+  const edited = P.upsertPartner({ id: made.partner.id, name: '제이투모로우원(신규계약)', feeRateBp: 1500, baseRev: seen });
+  assert.equal(edited.ok, true);
+  const stale = P.deletePartner(made.partner.id, { baseRev: seen });
+  assert.equal(stale.ok, false, '그 사이 바뀐 파트너를 말없이 지웠다');
+  assert.equal(stale.conflict, 'changed');
+  assert.equal(stale.error, R.CHANGED_DELETE_TARGET_MESSAGE, '거절 문장이 갈라졌다');
+  assert.ok(!stale.error.includes('다시 저장'), '지우는 자리에서 저장을 권한다');
+  assert.ok(stale.error.includes('지우지 않았습니다'), '아무것도 지워지지 않았다는 사실을 적지 않는다');
+  // 거절은 **아무것도 지우지 않는다** — 그리고 지금 저장된 내용을 돌려준다(무엇을 지울지 보고 고르게).
+  assert.equal(P.listPartners().length, 1, '거절했는데 지워졌다');
+  assert.equal(stale.current.name, '제이투모로우원(신규계약)', '지금 저장된 이름을 돌려주지 않는다');
+  assert.equal(stale.current.feeRateBp, 1500, '지금 저장된 수수료율을 돌려주지 않는다');
+
+  // ── ③ 지금 모습을 들고 오면 지워지고, **지운 그 파트너를 돌려준다**(기록에 적을 값이다).
+  const nowRev = P.partnerRev(P.getPartner(made.partner.id));
+  const done = P.deletePartner(made.partner.id, { baseRev: nowRev });
+  assert.equal(done.ok, true, `지금 모습인데 거절한다: ${done.ok ? '' : done.error}`);
+  assert.equal(done.partner.name, '제이투모로우원(신규계약)', '무엇을 지웠는지 돌려주지 않는다');
+  assert.equal(done.partner.feeRateBp, 1500, '지운 수수료율을 돌려주지 않는다');
+  assert.equal(P.listPartners().length, 0);
+
+  // ── ④ 그 사이 **사라진** 대상에는 다른 말을 한다(저장 쪽과 같은 문장이다).
+  const gone = P.deletePartner(made.partner.id, { baseRev: nowRev });
+  assert.equal(gone.ok, false);
+  assert.equal(gone.conflict, 'gone');
+  assert.equal(gone.error, R.STALE_TARGET_MESSAGE);
+
+  // ── ⑤ 연결된 고객사가 있으면 **모습이 맞아도** 종전처럼 거절한다(관문이 그 판정을 가리지 않는다).
+  const linked = P.upsertPartner({ name: '연결파트너', feeRateBp: 1000 });
+  assert.equal(P.upsertAccount({ name: '붙은고객', partnerId: linked.partner.id, source: 'partner' }).ok, true);
+  const blocked = P.deletePartner(linked.partner.id, { baseRev: P.partnerRev(linked.partner) });
+  assert.equal(blocked.ok, false, '고객사가 붙은 파트너가 지워졌다');
+  assert.equal(blocked.conflict, undefined, '연결 거절은 동시 편집이 아니다');
+  assert.match(blocked.error, /연결된 고객사가 1곳/);
+  assert.equal(P.listPartners().length, 1, '거절했는데 지워졌다');
+
+  // ── ⑥ 수수료율은 **사람 말로** 적는다(기록·화면에 내부 단위를 적지 않는다 · DS 2-12·29-3).
+  assert.equal(P.feeRateWords(1500), '15%');
+  assert.equal(P.feeRateWords(1250), '12.5%');
+  assert.equal(P.feeRateWords(0), '0%', '0%와 미설정은 다른 사실이다');
+  assert.equal(P.feeRateWords(null), '미설정');
+  assert.equal(P.feeRateWords(undefined), '미설정');
+  for (const v of [1500, 1250, 0, null]) assert.ok(!P.feeRateWords(v).includes('bp'), '내부 단위가 새어 나온다');
+  P.resetPartners();
+});
+
+/**
+ * DS 57-2 — 정산 리포트의 **제외 사유가 사실과 달랐고, 어느 수에도 없는 건이 있었다.**
+ *
+ * 종전에는 대상이 아닌 귀속 고객사를 한 수로 모아 「아직 계약 상태가 아니거나 계약일이 기간
+ * 이후인 n건」이라고 적었다. 해지 고객사에 대해 그 문장은 **사실이 아니다**(해지는 「아직」이
+ * 아니다). 그리고 「직접 계약 n건」은 그 밖에는 멀쩡했을 건만 세고 있어서, 검토 중인 직접 계약
+ * 고객사는 **어느 문장에도 들어가지 않았다** — 조회 4곳이 대상 0곳 + 제외 2곳으로 끝나고
+ * 남은 2곳이 어디로 갔는지 화면에 없었다. 「왜 이 고객사가 빠졌는가」는 정산 분쟁에서 가장
+ * 먼저 묻는 것이다.
+ */
+test('정산 리포트가 빠진 까닭을 사유별로 세고 수를 맞춘다 (DS 57-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  delete process.env.PARTNER_DEFAULT_FEE_RATE_BP;
+  const P = await pickPartnerLib('partners');
+  const S = await pickPartnerLib('settlement');
+  const AT = new Date('2026-10-22T10:00:00+09:00');
+
+  P.resetPartners();
+  const ptr = P.upsertPartner({ name: 'A파트너', feeRateBp: 1000 });
+  const mk = (over) => {
+    const r = P.upsertAccount({ source: 'partner', partnerId: ptr.partner.id, ...over });
+    assert.equal(r.ok, true, `전제가 깨졌다: ${r.ok ? '' : r.error}`);
+    return r.account;
+  };
+  const normal = mk({ name: '정상고객', status: 'contracted', contractedAt: '2026-05-01', monthlyFeeKrw: 100000 });
+  const churn = mk({ name: '해지고객', status: 'contracted', contractedAt: '2026-01-01', monthlyFeeKrw: 100000 });
+  mk({ id: churn.id, name: '해지고객', status: 'churned', contractedAt: '2026-01-01', monthlyFeeKrw: 100000 });
+  mk({ name: '검토중고객', status: 'prospect' });
+  mk({ name: '기간후계약', status: 'contracted', contractedAt: '2026-10-01', monthlyFeeKrw: 100000 });
+  mk({ name: '직접검토중', partnerId: '', source: 'direct', status: 'prospect' });
+  mk({ name: '직접계약', partnerId: '', source: 'direct', status: 'contracted', contractedAt: '2026-01-01', monthlyFeeKrw: 100000 });
+  // 계약 상태인데 계약일이 읽히지 않는 저장분 — 복원으로만 들어오는 모양이다(`upsertAccount` 는 막는다).
+  const snap = P.exportPartners();
+  snap.accounts.push({ ...snap.accounts[0], id: 'ACC-0099', name: '날짜없는계약', status: 'contracted', contractedAt: '어제' });
+  assert.equal(P.importPartners(snap, { persist: false }).ok, true);
+  assert.equal(P.getAccount('ACC-0099').contractedAt, undefined, '전제가 깨졌다 — 읽을 수 없는 계약일이 들어왔다');
+
+  const rep = S.buildSettlement({ month: '2026-09', at: AT });
+  assert.equal(rep.ok, true);
+  const notes = rep.report.notes.join('\n');
+
+  // ── ① 종전 문장이 **사라졌다** — 해지를 「아직 계약 상태가 아니」라고 적지 않는다.
+  assert.ok(!notes.includes('아직 계약 상태가 아니거나'), `사실이 아닌 한 덩이 문장이 남아 있다:\n${notes}`);
+
+  // ── ② 사유가 **갈라져** 적힌다. 한 건은 한 사유에만 들어간다.
+  assert.ok(notes.includes('지금 해지 상태인 1건'), `해지를 따로 세지 않는다:\n${notes}`);
+  assert.ok(notes.includes('아직 계약 상태가 아닌(검토 중) 1건'), `검토 중을 따로 세지 않는다:\n${notes}`);
+  assert.ok(notes.includes('계약일이 적혀 있지 않아 1건'), `계약일 없는 건을 따로 세지 않는다:\n${notes}`);
+  assert.ok(notes.includes('계약일이 기간 이후인 1건'), `기간 밖을 따로 세지 않는다:\n${notes}`);
+  // 직접 계약은 **멀쩡한 건만** 세지 않는다 — 검토 중인 직접 계약도 어딘가에 들어가야 한다.
+  assert.ok(notes.includes('직접 계약 2건'), `직접 계약을 덜 센다(검토 중이 빠졌다):\n${notes}`);
+
+  // ── ③ **수가 맞는지** 그 자리에서 확인할 수 있다(조회 = 대상 + 제외).
+  const all = P.queryAccounts().length;
+  assert.equal(all, 7);
+  assert.equal(rep.report.rows.length, 1, '대상이 달라졌다');
+  assert.ok(notes.includes(`조회한 고객사 ${all}곳 = 정산 대상 1곳 + 제외 ${all - 1}곳`), `수를 맞춰 보여 주지 않는다:\n${notes}`);
+
+  // ── ④ 산출 자체는 종전 그대로다(사유를 갈랐을 뿐 대상 판정은 바뀌지 않았다).
+  assert.equal(rep.report.rows[0].accountId, normal.id);
+  assert.equal(rep.report.totals.feeAmountKrw, 10000);
+  assert.equal(rep.report.totals.partial, false);
+  // 한계 문장(해지일을 적지 않는다)은 **없어지지 않는다** — 판정의 한계는 건수와 별개다.
+  assert.ok(notes.includes('해지일을 별도로 기록하지 않으므로'), '판정 한계를 숨겼다');
+  // CSV 도 같은 문장을 싣는다(내보낸 파일만 다른 말을 하지 않게).
+  const csv = S.settlementToCsv(rep.report);
+  for (const n of rep.report.notes) assert.ok(csv.includes(n), `CSV 에 빠진 주석이 있다: ${n}`);
+
+  // ── ⑤ 제외가 하나도 없는 달에도 **수는 맞춰 적는다**(0건을 숨기지 않는다).
+  P.resetPartners();
+  const only = P.upsertPartner({ name: 'B파트너', feeRateBp: 1000 });
+  P.upsertAccount({ name: '정상만', partnerId: only.partner.id, source: 'partner', status: 'contracted', contractedAt: '2026-05-01', monthlyFeeKrw: 100000 });
+  const clean = S.buildSettlement({ month: '2026-09', at: AT }).report.notes.join('\n');
+  assert.ok(clean.includes('조회한 고객사 1곳 = 정산 대상 1곳 + 제외 0곳'), `수를 적지 않는다:\n${clean}`);
+  assert.ok(!clean.includes('제외했습니다'), `없는 제외 사유를 적는다:\n${clean}`);
+  P.resetPartners();
+});

@@ -8,6 +8,7 @@ import { NextRequest } from 'next/server';
 import {
   accountRev,
   deletePartner,
+  feeRateWords,
   listPartners,
   missingPartnerName,
   partnerRev,
@@ -133,7 +134,10 @@ export async function POST(req: NextRequest) {
   return fail('invalid_input');
 }
 
-// 파트너 삭제: DELETE /api/admin/partners?partnerId=PTR-0001
+// 파트너 삭제: DELETE /api/admin/partners?partnerId=PTR-0001&baseRev=<목록에서 본 모습>
+//
+// `baseRev` 는 **목록 응답에 실려 온 그 값**이다(위 GET 의 `partnerRev`) — 지우는 자리에도
+// 동시 편집 관문을 세운다(DS 57-1). 보내지 않으면 종전처럼 그대로 지운다.
 export async function DELETE(req: NextRequest) {
   const auth = requirePrincipal(req);
   if (!auth.ok) return auth.res;
@@ -141,8 +145,25 @@ export async function DELETE(req: NextRequest) {
   if (readOnly) return readOnly;
   const id = reqQuery(req, 'partnerId');
   if (!id.ok) return id.res;
-  const r = deletePartner(id.value);
-  if (!r.ok) return fail('conflict', r.error);
-  logAudit({ action: 'partner.delete', target: id.value, authed: auth.principal.authed });
+  const r = deletePartner(id.value, { baseRev: req.nextUrl.searchParams.get('baseRev') });
+  if (!r.ok) {
+    if (r.conflict) {
+      return fail('conflict', r.error, {
+        conflict: r.conflict,
+        ...(r.current ? { current: { ...r.current, rev: partnerRev(r.current) } } : {}),
+      });
+    }
+    return fail('conflict', r.error);
+  }
+  // 「무엇을 지웠는가」를 적는다 (DS 57-1). 종전에는 식별자(`PTR-0001`)만 남아, 지워진 뒤에는
+  // 그 파트너의 **이름도 수수료율도** 어디에도 없었다 — DS 56-1 이 열어 둔 복구 길(「같은
+  // 식별자로 다시 등록하기」)에 필요한 값이 하필 그 둘이고, 정산 분쟁에서 꺼내는 기록이 이쪽이다.
+  // 지어내는 값이 아니라 **지우는 순간에 저장되어 있던 값**이다(§13).
+  logAudit({
+    action: 'partner.delete',
+    target: id.value,
+    detail: `삭제: ${r.partner.name.slice(0, 40)} / 수수료율 ${feeRateWords(r.partner.feeRateBp)} / ${PARTNER_STATUS_LABELS[r.partner.status]}`,
+    authed: auth.principal.authed,
+  });
   return ok({ saved: savePartnersNow() });
 }
