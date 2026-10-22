@@ -2142,7 +2142,11 @@ test('감사 로그의 「내용」에 상태·경로 코드가 남지 않는다
   assert.equal(/경로 \$\{r\.account\.source\}/.test(par), false, '유입 경로 코드가 그대로 기록된다');
   assert.equal(/귀속 \$\{r\.account\.partnerId/.test(par), false, '파트너 식별자가 이름 대신 기록된다');
   assert.match(par, /LEAD_SOURCE_LABELS\[r\.account\.source\]/, '유입 경로를 이름으로 기록해야 한다');
-  assert.match(par, /\?\.name \?\? '알 수 없는 파트너'/, '귀속은 파트너 이름으로 기록해야 한다');
+  // 찾을 수 없는 귀속의 이름도 **한 벌**이다 (DS 56-1) — 종전에는 이 자리만 「알 수 없는 파트너」라고
+  // 적었다(콘솔·정산·집계는 `missingPartnerName` 을 쓴다). 감사 로그는 영구히 남는 기록이고,
+  // 그 말에는 어느 파트너인지조차 없었다.
+  assert.equal(/'알 수 없는 파트너'/.test(par), false, '감사 로그가 찾을 수 없는 귀속을 다른 말로 적는다');
+  assert.match(par, /\?\.name \?\? missingPartnerName\(r\.account\.partnerId\)/, '귀속은 파트너 이름으로 기록해야 한다');
 });
 
 test('이관 요약이 회신 창구(채널)를 지어내지 않는다 (DS 22-4)', () => {
@@ -3609,4 +3613,53 @@ test('남은 복원 문도 같은 시각 관문을 지나고 같은 식별자를
   const dash = read('src/app/admin/page.tsx');
   assert.match(dash, /data\.duplicateEntries/, '화면이 그 사실을 말하지 않는다');
   assert.ok(dash.includes('먼저 나온 것만 남기고 건너뛰었습니다'), '무엇을 건너뛰었는지 말하지 않는다');
+});
+
+/* ══════════ 디자인 스프린트 — 53차 재감사 (DS 56-1·56-3) ══════════ */
+
+/**
+ * DS 56-3 — 파트너·고객사가 **동시 편집 관문의 적용 목록 밖**에 있었다(배선 쪽 고정).
+ *
+ * 거절·통과의 판정은 `tests/runtime.test.mjs` 가 돌려서 본다. 여기서 고정하는 것은 **두 벌로
+ * 갈라지지 않는가**다(DS 42-2): 목록에 실어 보내는 쪽과 저장 직전에 견주는 쪽이 다른 식을
+ * 쓰면 영영 어긋나거나(저장이 늘 거절된다) 영영 같아진다(경고가 조용히 사라진다).
+ * 라우트는 `route.ts` 규칙상 떼어내 돌릴 수 없어 소스로 고정한다.
+ */
+test('파트너·고객사도 「내가 본 모습」 관문을 지난다 (DS 56-3)', () => {
+  const p = read('src/lib/partners.ts');
+  // ① 재는 자는 저장소 안에 **한 벌**이다 — 다른 저장소와 같은 자(`revOf`)를 쓴다.
+  assert.match(p, /import \{ revOf \} from '@\/lib\/rev';/, '모습을 재는 자를 불러오지 않는다');
+  assert.match(p, /export function accountRev\(a: Account\): string \{/, '고객사의 모습을 재는 자가 없다');
+  assert.match(p, /export function partnerRev\(p: Partner\): string \{/, '파트너의 모습을 재는 자가 없다');
+  // 스스로 바꾸는 값(시각)·따로 쌓이는 값(귀속 이력)은 모습에 들지 않는다 — 들면 영영 어긋난다.
+  const accRev = p.slice(p.indexOf('export function accountRev('), p.indexOf('/** 파트너 한 건의 모습'));
+  assert.equal(/createdAt|updatedAt|attribution/.test(accRev), false, '저장이 스스로 바꾸는 값이 모습에 들어 있다');
+  // ② 거절 문장은 다른 관문과 **같은 말**이다(DS 46-1 이 한 곳에 모아 둔 문장이다).
+  assert.match(p, /CHANGED_TARGET_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE/, '거절 문장을 따로 적는다');
+  assert.equal(/'그 사이 다른 화면에서/.test(p), false, '거절 문장이 두 벌로 갈라졌다');
+  // ③ 두 저장 함수가 모두 그 관문을 지난다.
+  assert.ok((p.match(/conflictOf\(input\.baseRev,/g) || []).length === 2, '관문을 지나지 않는 저장 함수가 있다');
+  // ④ 라우트: 목록에 모습을 실어 보내고(견주는 쪽과 같은 함수다), 거절은 **입력 오류와 구분해** 보낸다.
+  const route = read('src/app/api/admin/partners/route.ts');
+  assert.match(route, /partners: scopePartners\(principal, listPartners\(\)\)\.map\(\(p\) => \(\{ \.\.\.p, rev: partnerRev\(p\) \}\)\)/, '파트너 목록에 모습이 없다');
+  assert.match(route, /accounts: queryAccounts\(filter\)\.map\(\(a\) => \(\{ \.\.\.a, rev: accountRev\(a\) \}\)\)/, '고객사 목록에 모습이 없다');
+  assert.ok((route.match(/if \(r\.conflict\) \{/g) || []).length === 2, '거절을 입력 오류와 섞어 보낸다');
+  assert.ok((route.match(/return fail\('conflict', r\.error, \{ conflict: r\.conflict,/g) || []).length === 2, '거절 사유·지금 값을 싣지 않는다');
+  // ⑤ route.ts 규칙 — HTTP 메서드·설정 외의 export 가 늘지 않았다.
+  const exports = [...route.matchAll(/^export (?:async function|function|const) (\w+)/gm)].map((m) => m[1]);
+  assert.deepEqual(exports.sort(), ['DELETE', 'GET', 'POST', 'dynamic'], `route.ts 에 허용되지 않은 export 가 있다: ${exports}`);
+});
+
+/**
+ * DS 56-1 — 찾을 수 없는 귀속을 **고치는 문**이 그 귀속을 거절했다(계약 쪽 고정).
+ *
+ * 동작은 `tests/runtime.test.mjs` 가 돌려서 본다. 여기서 고정하는 것은 그 판정의 **범위**다:
+ * 지금 가진 귀속을 그대로 들고 오는 것만 통과시키고, 없는 곳으로 **옮기는** 길은 종전처럼 막는다.
+ */
+test('귀속은 바꿀 때만 파트너의 존재를 확인한다 (DS 56-1)', () => {
+  const p = read('src/lib/partners.ts');
+  assert.match(p, /const keepingAttribution = Boolean\(existing && partnerId && existing\.partnerId === partnerId\);/, '지금 가진 귀속인지 보지 않는다');
+  assert.match(p, /if \(partnerId && !keepingAttribution && !partners\.some\(\(p\) => p\.id === partnerId\)\) \{/, '귀속을 들고 오기만 해도 거절한다');
+  // 종전 식(지금 가진 귀속까지 거절하던 조건)이 남아 있지 않다.
+  assert.equal(/if \(partnerId && !partners\.some\(\(p\) => p\.id === partnerId\)\) \{/.test(p), false, '종전 조건이 남아 있다');
 });

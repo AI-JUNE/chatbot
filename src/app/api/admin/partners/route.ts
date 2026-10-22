@@ -6,8 +6,11 @@
 // [승인 필요] 실제 정산·청구, 파트너 계정 활성화(PARTNER_PORTAL_ENABLED).
 import { NextRequest } from 'next/server';
 import {
+  accountRev,
   deletePartner,
   listPartners,
+  missingPartnerName,
+  partnerRev,
   queryAccounts,
   rollupByPartner,
   upsertAccount,
@@ -56,8 +59,10 @@ export async function GET(req: NextRequest) {
     role: principal.role,
     scopePartnerId: principal.partnerId,
     canWrite: principal.role === 'admin',
-    partners: scopePartners(principal, listPartners()),
-    accounts: queryAccounts(filter),
+    // 「내가 본 그때의 모습」을 목록에 실어 보낸다 (DS 46-1 · DS 56-3) — 저장 직전에 견주는
+    // 쪽(`upsertPartner`·`upsertAccount`)과 **같은 식**을 쓴다(두 벌로 계산하면 영영 어긋난다).
+    partners: scopePartners(principal, listPartners()).map((p) => ({ ...p, rev: partnerRev(p) })),
+    accounts: queryAccounts(filter).map((a) => ({ ...a, rev: accountRev(a) })),
     rollup,
     defaultFeeRateBp: defaultFeeRateBp(),
     labels: { source: LEAD_SOURCE_LABELS, accountStatus: ACCOUNT_STATUS_LABELS, partnerStatus: PARTNER_STATUS_LABELS },
@@ -77,7 +82,14 @@ export async function POST(req: NextRequest) {
 
   if (kind === 'partner') {
     const r = upsertPartner(parsed.data as PartnerInput);
-    if (!r.ok) return fail('invalid_input', r.error);
+    if (!r.ok) {
+      // 그 사이 다른 화면에서 바뀐 것은 **입력이 틀린 것이 아니다** (DS 46-1) — 화면이
+      // 적던 글을 버리지 않고 다음 길을 주도록 사유와 지금 저장된 값을 함께 보낸다.
+      if (r.conflict) {
+        return fail('conflict', r.error, { conflict: r.conflict, ...(r.current ? { current: { ...r.current, rev: partnerRev(r.current) } } : {}) });
+      }
+      return fail('invalid_input', r.error);
+    }
     logAudit({
       action: 'partner.upsert',
       target: r.partner.id,
@@ -90,12 +102,22 @@ export async function POST(req: NextRequest) {
 
   if (kind === 'account') {
     const r = upsertAccount({ ...(parsed.data as AccountInput), authed });
-    if (!r.ok) return fail('invalid_input', r.error);
+    if (!r.ok) {
+      if (r.conflict) {
+        return fail('conflict', r.error, { conflict: r.conflict, ...(r.current ? { current: { ...r.current, rev: accountRev(r.current) } } : {}) });
+      }
+      return fail('invalid_input', r.error);
+    }
     const last = r.account.attribution[r.account.attribution.length - 1];
     // 감사 로그의 「대상·내용」은 운영자가 그대로 읽는 칸이다 — 파트너 식별자(`PTR-0001`)와
     // 유입 경로 코드(`referral`)가 아니라 이름으로 남긴다(DS 2-12 가 화면에 세운 원칙과 같은 자리).
+    //
+    // 찾을 수 없는 귀속의 이름은 **한 벌**이다(`missingPartnerName` · DS 55-1 · DS 56-1).
+    // 종전에는 이 자리만 「알 수 없는 파트너」라고 적었다 — 콘솔·정산 리포트·파트너별 집계가
+    // 모두 「(삭제된 파트너 PTR-0001)」을 쓰는데, **영구히 남는 기록**인 감사 로그만 다른 말을
+    // 쓰고 **어느 파트너인지도 적지 않았다**. 정산 분쟁에서 꺼내는 기록이 그쪽이다.
     const ownerName = r.account.partnerId
-      ? listPartners().find((p) => p.id === r.account.partnerId)?.name ?? '알 수 없는 파트너'
+      ? listPartners().find((p) => p.id === r.account.partnerId)?.name ?? missingPartnerName(r.account.partnerId)
       : '직접 계약';
     logAudit({
       action: 'account.upsert',

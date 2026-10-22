@@ -5049,3 +5049,163 @@ test('커스텀 규칙 복원이 시각인 척하는 글자를 받아들이지 �
   assert.equal(kept.createdAt, '2026-10-21T00:00:00.000Z');
   assert.equal(kept.reply, '09시~18시', '멀쩡한 규칙이 바뀌었다');
 });
+
+/* ══════════ 디자인 스프린트 — 53차 재감사 (DS 56-1·56-3) ══════════ */
+
+const P_GROUP = ['settlement', 'partners', 'storage', 'logger', 'monitoring', 'csv', 'kst', 'normalize', 'refusal', 'rev'];
+const pickPartnerLib = (name) => importLib(name, P_GROUP.filter((n) => n !== name));
+
+/**
+ * DS 56-1 — 찾을 수 없는 귀속을 가진 고객사는 **한 글자도 고칠 수 없었다**.
+ *
+ * 50차(DS 53-3)는 「귀속 근거를 지울 수 있는 길을 열지 않는다」며 복원이 고아 귀속을 직접
+ * 계약으로 되돌리던 것을 막았고, 52차(DS 55-1)는 그 고객사를 화면에 보이게 했다. 그런데
+ * **고치는 문**은 그 반대로 서 있었다: 들어온 `partnerId` 가 등록 목록에 없으면 요청 전체를
+ * 거절했으므로, 그 고객사의 이름·월 이용료·계약일·담당자까지 전부 막혔다. 돌아오는 말은
+ * 「파트너를 먼저 등록해 주세요」였고 **어느 파트너인지도 적지 않았다**. 운영자에게 남은 길은
+ * 귀속을 다른 곳으로 옮기거나 직접 계약으로 돌리는 것 — 즉 **고치려면 근거를 버려야** 했다.
+ */
+test('찾을 수 없는 귀속을 그대로 들고 다른 칸을 고칠 수 있다 (DS 56-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const P = await pickPartnerLib('partners');
+  const S = await pickPartnerLib('settlement');
+  const AT = new Date('2026-10-22T00:00:00Z');
+  const ISO = '2026-10-20T15:30:00.000Z';
+
+  const snap = {
+    version: 1, savedAt: ISO, partnerSeq: 1, accountSeq: 1,
+    // 등록된 파트너는 PTR-0001 하나인데, 고객사는 PTR-0009 에 귀속되어 있다(복원으로 들어오는 길).
+    partners: [{ id: 'PTR-0001', name: '제이투모로우원', status: 'active', feeRateBp: 1500, createdAt: ISO, updatedAt: ISO }],
+    accounts: [{
+      id: 'ACC-0001', name: '(주)고원', partnerId: 'PTR-0009', source: 'partner',
+      status: 'contracted', contractedAt: '2026-01-05', monthlyFeeKrw: 1000000,
+      attribution: [{ at: ISO, fromPartnerId: null, toPartnerId: 'PTR-0009', source: 'partner', note: '최초 등록', authed: true }],
+      createdAt: ISO, updatedAt: ISO,
+    }],
+  };
+  const reload = () => { P.resetPartners(); assert.equal(P.importPartners(snap, { persist: false }).orphans, 1, '고아 귀속이 만들어지지 않았다 — 전제가 깨졌다'); };
+  const edit = (over) => P.upsertAccount({
+    id: 'ACC-0001', name: '(주)고원', partnerId: 'PTR-0009', source: 'partner',
+    status: 'contracted', contractedAt: '2026-01-05', monthlyFeeKrw: 1000000, ...over,
+  });
+
+  // ── ① 종전 식 재현: 「등록 목록에 있는가」만 보면 지금 가진 귀속도 거절된다(재현이 깨지면 결함이 없다).
+  reload();
+  const legacy = (pid) => (pid && !P.listPartners().some((p) => p.id === pid) ? '거절' : '통과');
+  assert.equal(legacy('PTR-0009'), '거절', '종전 식이 재현되지 않는다');
+
+  // ── ② 지금 가진 귀속을 **그대로 들고 오면** 다른 칸을 고칠 수 있다.
+  const r1 = edit({ name: '(주)고원의원', monthlyFeeKrw: 2000000, ownerName: '이담당' });
+  assert.equal(r1.ok, true, `고아 귀속 고객사를 아직 고칠 수 없다: ${r1.ok ? '' : r1.error}`);
+  assert.equal(r1.account.name, '(주)고원의원');
+  assert.equal(r1.account.monthlyFeeKrw, 2000000);
+  // 귀속은 **바뀌지 않았다** — 그러므로 이력도 늘지 않는다(값만 바꾸면 근거가 사라진다는 원칙의 반대편).
+  assert.equal(r1.account.partnerId, 'PTR-0009', '귀속이 말없이 바뀌었다');
+  assert.equal(r1.account.attribution.length, 1, '바뀌지 않은 귀속에 이력이 늘었다');
+  assert.equal(r1.account.attribution[0].note, '최초 등록', '귀속 근거가 바뀌었다');
+  // 그 사실이 정산 리포트에 그대로 선다(수수료율을 알 수 없으므로 합계에서 빠지고 경고가 붙는다).
+  const rep = S.buildSettlement({ month: '2026-02', at: AT }).report;
+  assert.equal(rep.rows.length, 1);
+  assert.equal(rep.rows[0].partnerName, P.missingPartnerName('PTR-0009'), '리포트가 다른 이름을 적는다');
+  assert.equal(rep.totals.partial, true, '근거가 모자란 행인데 경고가 붙지 않는다');
+
+  // ── ③ **없는 곳으로 옮기는** 길은 종전처럼 막는다(고아 귀속을 새로 만들 수 있으면 안 된다).
+  reload();
+  const moved = edit({ partnerId: 'PTR-0404' });
+  assert.equal(moved.ok, false, '없는 파트너로 귀속을 옮길 수 있다');
+  assert.match(moved.error, /존재하지 않는 파트너/);
+  assert.equal(P.getAccount('ACC-0001').partnerId, 'PTR-0009', '거절했는데 값이 바뀌었다');
+
+  // ── ④ 등록된 파트너로 옮기는 길·직접 계약으로 돌리는 길은 **이력을 남기고** 열려 있다.
+  reload();
+  const toReal = edit({ partnerId: 'PTR-0001', attributionNote: '귀속 정리(재등록 대신 이관)' });
+  assert.equal(toReal.ok, true);
+  assert.equal(toReal.account.attribution.length, 2, '귀속을 옮겼는데 이력이 남지 않았다');
+  assert.equal(toReal.account.attribution[1].fromPartnerId, 'PTR-0009', '어디서 왔는지 적지 않았다');
+  assert.equal(toReal.account.attribution[1].note, '귀속 정리(재등록 대신 이관)');
+
+  reload();
+  const toDirect = edit({ partnerId: '', source: 'direct' });
+  assert.equal(toDirect.ok, true);
+  assert.equal(toDirect.account.partnerId, null);
+  assert.equal(toDirect.account.attribution.length, 2, '직접 계약으로 돌렸는데 이력이 남지 않았다');
+
+  // ── ⑤ 멀쩡한 고객사는 종전과 똑같이 움직인다(없는 파트너를 새로 붙이는 길은 여전히 막힌다).
+  P.resetPartners();
+  const fresh = P.upsertAccount({ name: '새 고객사', partnerId: 'PTR-0009' });
+  assert.equal(fresh.ok, false, '등록 때 없는 파트너가 통과한다');
+  P.resetPartners();
+});
+
+/**
+ * DS 56-3 — 파트너·고객사 편집에 **동시 편집 관문이 없었다**.
+ *
+ * DS 46-1 이 세운 전제(「쓰기 경로는 전부 덮어쓰기다 — 폼은 칸의 값을 통째로 보내고 서버는
+ * 받은 대로 갈아 끼운다」)가 이 저장소에도 그대로인데, 관문은 안내 자료·규칙·접수에만 세워져
+ * 있었다. 그래서 두 운영자가 같은 고객사를 열어 두면 나중에 저장한 쪽이 이기고, 먼저 고친 값은
+ * 아무 말 없이 사라진다 — 하필 그 칸이 **월 이용료**이고 그 값이 정산 수수료의 기준이다.
+ */
+test('고객사·파트너 저장이 내가 본 모습 위에서만 갈아 끼운다 (DS 56-3)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const P = await pickPartnerLib('partners');
+  const S = await pickPartnerLib('settlement');
+  const R = await pickPartnerLib('refusal');
+  const AT = new Date('2026-10-22T00:00:00Z');
+
+  P.resetPartners();
+  const ptr = P.upsertPartner({ name: '제이투모로우원', feeRateBp: 1500 });
+  assert.equal(ptr.ok, true);
+  const made = P.upsertAccount({ name: '(주)고원', partnerId: ptr.partner.id, source: 'partner', status: 'contracted', contractedAt: '2026-01-05', monthlyFeeKrw: 1000000 });
+  assert.equal(made.ok, true);
+  const base = P.accountRev(made.account);
+
+  // ── ① 종전 동작 재현: 모습을 들고 가지 않으면 **말없이 되돌아간다**(옵트인 경로는 그대로 둔다).
+  const fields = { id: made.account.id, name: '(주)고원', partnerId: ptr.partner.id, source: 'partner', status: 'contracted', contractedAt: '2026-01-05' };
+  assert.equal(P.upsertAccount({ ...fields, monthlyFeeKrw: 5000000 }).ok, true); // B 가 금액을 올린다
+  assert.equal(P.upsertAccount({ ...fields, monthlyFeeKrw: 1000000, ownerName: '이담당' }).ok, true); // A 가 옛 화면으로 저장
+  assert.equal(P.getAccount('ACC-0001').monthlyFeeKrw, 1000000, '종전 동작이 재현되지 않는다');
+  assert.equal(S.buildSettlement({ month: '2026-02', at: AT }).report.totals.feeAmountKrw, 150000);
+
+  // ── ② 모습을 들고 가면 **거절하고 무엇이 달라졌는지 말한다**.
+  const stale = P.upsertAccount({ ...fields, monthlyFeeKrw: 1000000, baseRev: base });
+  assert.equal(stale.ok, false, '그 사이 바뀐 고객사를 덮어썼다');
+  assert.equal(stale.conflict, 'changed');
+  assert.equal(stale.error, R.CHANGED_TARGET_MESSAGE, '거절 문장이 다른 쪽과 갈라졌다');
+  assert.equal(stale.current.monthlyFeeKrw, 1000000, '지금 저장된 값을 돌려주지 않는다');
+  // 거절은 **아무것도 바꾸지 않는다**.
+  assert.equal(P.getAccount('ACC-0001').ownerName, '이담당', '거절했는데 값이 바뀌었다');
+
+  // ── ③ 지금 모습을 들고 오면 지나간다. 그리고 **스스로 바꾸는 값**(변경 시각)은 모습에 들지 않는다
+  //      — 들어 있으면 저장할 때마다 영영 어긋난다.
+  const nowRev = P.accountRev(P.getAccount('ACC-0001'));
+  const okSave = P.upsertAccount({ ...fields, monthlyFeeKrw: 1000000, ownerName: '이담당', baseRev: nowRev });
+  assert.equal(okSave.ok, true, `지금 모습인데 거절한다: ${okSave.ok ? '' : okSave.error}`);
+  assert.equal(P.accountRev(P.getAccount('ACC-0001')), nowRev, '바뀐 것이 없는데 모습이 달라졌다');
+  assert.notEqual(P.getAccount('ACC-0001').updatedAt, undefined);
+
+  // ── ④ 그 사이 **사라진** 대상에는 다른 말을 한다(고객사는 지우지 않지만, 복원이 목록을 갈아 끼운다).
+  const gone = P.upsertAccount({ ...fields, id: 'ACC-9999', baseRev: nowRev });
+  assert.equal(gone.ok, false);
+  assert.equal(gone.conflict, 'gone');
+  assert.equal(gone.error, R.STALE_TARGET_MESSAGE);
+
+  // ── ⑤ 파트너 쪽도 같은 자를 쓴다(수수료율이 그 안에 있다 — 사라지면 정산 전체가 흔들린다).
+  const pBase = P.partnerRev(P.getPartner(ptr.partner.id));
+  assert.equal(P.upsertPartner({ id: ptr.partner.id, name: '제이투모로우원', feeRateBp: 2000 }).ok, true);
+  const pStale = P.upsertPartner({ id: ptr.partner.id, name: '제이투모로우원', feeRateBp: 1500, baseRev: pBase });
+  assert.equal(pStale.ok, false, '그 사이 바뀐 파트너를 덮어썼다');
+  assert.equal(pStale.conflict, 'changed');
+  assert.equal(pStale.current.feeRateBp, 2000, '지금 저장된 수수료율을 돌려주지 않는다');
+  assert.equal(P.getPartner(ptr.partner.id).feeRateBp, 2000, '거절했는데 값이 바뀌었다');
+  assert.equal(P.upsertPartner({ id: ptr.partner.id, name: '제이투모로우원', feeRateBp: 1500, baseRev: P.partnerRev(P.getPartner(ptr.partner.id)) }).ok, true);
+
+  // ── ⑥ 재는 자는 **한 벌**이다 — 한 칸만 달라도 다른 값이 되고, 같은 내용이면 같은 값이다.
+  const a = P.getAccount('ACC-0001');
+  assert.equal(P.accountRev({ ...a }), P.accountRev(a), '같은 내용이 다른 모습으로 나온다');
+  for (const over of [{ name: 'x' }, { partnerId: null }, { status: 'churned' }, { monthlyFeeKrw: 1 }, { memo: 'x' }, { ownerName: 'x' }, { contractedAt: '2026-01-06' }, { source: 'referral' }]) {
+    assert.notEqual(P.accountRev({ ...a, ...over }), P.accountRev(a), `달라진 칸을 보지 않는다: ${JSON.stringify(over)}`);
+  }
+  // 복원·일괄 처리처럼 **겨룰 상대가 없는 자리**는 종전처럼 지나간다(모습을 보내지 않으면 관문이 없다).
+  assert.equal(P.upsertAccount({ ...fields, monthlyFeeKrw: 7000000 }).ok, true);
+  P.resetPartners();
+});

@@ -18,7 +18,8 @@
 import { loadJson, saveJson, saveNow, savedInfo, scheduleSave, type SavedInfo } from '@/lib/storage';
 import { compact } from '@/lib/normalize';
 import { readInstant } from '@/lib/kst';
-import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
+import { revOf } from '@/lib/rev';
+import { CHANGED_TARGET_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE } from '@/lib/refusal';
 
 export const PARTNERS_NS = 'partners';
 
@@ -156,6 +157,57 @@ export function missingPartnerName(id: string): string {
   return `(삭제된 파트너 ${id})`;
 }
 
+/**
+ * 「내가 고치기 시작할 때 본 모습」 한 줄 (DS 46-1 · DS 56-3).
+ *
+ * 왜 이 저장소에도 필요한가: DS 46-1 이 안내 자료·규칙·접수에 세운 관문의 전제가
+ * 「이 제품의 쓰기 경로는 전부 덮어쓰기다 — 콘솔의 편집 폼은 칸의 값을 통째로 보내고
+ * 서버는 받은 대로 갈아 끼운다」인데, **파트너·고객사는 그 적용 목록에 없었다**. 그래서
+ * 두 운영자가 같은 고객사를 열어 두면 나중에 저장한 쪽이 이기고, 먼저 고친 값은 아무
+ * 말 없이 사라진다 — 하필 그 칸이 **월 이용료**이고, 사라진 값이 정산 수수료의 기준이다.
+ *
+ * 재는 자는 **한 벌**이다(DS 42-2): 목록 응답에 싣는 쪽(라우트)과 저장 직전에 견주는
+ * 쪽(아래 `conflictOf`)이 같은 식을 쓴다. 시각(`createdAt`·`updatedAt`)과 귀속 이력은
+ * 빼 둔다 — 그 둘은 저장이 **스스로** 바꾸는 값이라 넣으면 영영 어긋난다.
+ */
+export function accountRev(a: Account): string {
+  return revOf({
+    id: a.id,
+    name: a.name,
+    partnerId: a.partnerId,
+    source: a.source,
+    status: a.status,
+    contractedAt: a.contractedAt ?? '',
+    ownerName: a.ownerName ?? '',
+    monthlyFeeKrw: a.monthlyFeeKrw ?? null,
+    memo: a.memo ?? '',
+  });
+}
+
+/** 파트너 한 건의 모습 — `accountRev` 와 같은 규칙이다(수수료율이 그 안에 있다). */
+export function partnerRev(p: Partner): string {
+  return revOf({
+    id: p.id,
+    name: p.name,
+    status: p.status,
+    managerName: p.managerName ?? '',
+    feeRateBp: p.feeRateBp,
+    memo: p.memo ?? '',
+  });
+}
+
+/**
+ * 저장 직전 관문 — 내가 보던 것이 그 사이 지워졌거나 바뀌었으면 거절한다 (DS 46-1).
+ * `adminStore` 의 같은 이름 함수와 같은 규칙이다: `baseRev` 를 보내지 않으면 종전처럼
+ * 그대로 갈아 끼운다(복원·일괄 처리처럼 겨룰 상대가 없는 자리).
+ */
+function conflictOf<T>(baseRev: unknown, existing: T | undefined, revOfItem: (v: T) => string): 'gone' | 'changed' | null {
+  const base = String(baseRev ?? '').trim();
+  if (!base) return null;
+  if (!existing) return 'gone';
+  return revOfItem(existing) === base ? null : 'changed';
+}
+
 // ---- 파트너 ----
 
 export interface PartnerInput {
@@ -165,11 +217,30 @@ export interface PartnerInput {
   managerName?: unknown;
   feeRateBp?: unknown;
   memo?: unknown;
+  /**
+   * 편집을 **시작할 때 본** 모습 (DS 46-1 · DS 56-3). 보내면 그 사이 바뀐 파트너를 덮어쓰지 않는다.
+   * 보내지 않으면 종전과 같이 그대로 갈아 끼운다.
+   */
+  baseRev?: unknown;
 }
 
-export type PartnerResult = { ok: true; partner: Partner; created: boolean } | { ok: false; error: string };
+export type PartnerResult =
+  | { ok: true; partner: Partner; created: boolean }
+  /** `conflict` 는 **입력이 틀린 것이 아니라** 그 사이 다른 화면에서 바뀐 것이다 (DS 46-1). */
+  | { ok: false; error: string; conflict?: 'gone' | 'changed'; current?: Partner };
 
 export function upsertPartner(input: PartnerInput): PartnerResult {
+  // 내가 보던 모습을 들고 왔으면 **그 모습일 때만** 갈아 끼운다 (DS 46-1 · DS 56-3).
+  // 칸 검사보다 먼저 본다 — 보던 것이 이미 사라졌으면 어느 칸이 틀렸는지는 다음 문제다
+  // (`upsertKB` 가 세운 순서와 같다).
+  const baseId = clean(input.id, 40);
+  const baseTarget = baseId ? partners.find((p) => p.id === baseId) : undefined;
+  const pConflict = conflictOf(input.baseRev, baseTarget, partnerRev);
+  if (pConflict === 'gone') return { ok: false, error: STALE_TARGET_MESSAGE, conflict: pConflict };
+  if (pConflict === 'changed') {
+    return { ok: false, error: CHANGED_TARGET_MESSAGE, conflict: pConflict, current: { ...(baseTarget as Partner) } };
+  }
+
   const name = clean(input.name, MAX_NAME);
   if (!name) return { ok: false, error: '파트너명을 입력해 주세요.' };
 
@@ -184,8 +255,8 @@ export function upsertPartner(input: PartnerInput): PartnerResult {
   }
 
   const status: PartnerStatus = input.status === 'paused' ? 'paused' : 'active';
-  const id = clean(input.id, 40);
-  const existing = id ? partners.find((p) => p.id === id) : undefined;
+  const id = baseId;
+  const existing = baseTarget;
   if (id && !existing) return { ok: false, error: '존재하지 않는 파트너입니다.' };
 
   if (existing) {
@@ -256,9 +327,13 @@ export interface AccountInput {
   attributionNote?: unknown;
   /** 관리자 인증 요청 여부(이력에 기록) */
   authed?: boolean;
+  /** 편집을 **시작할 때 본** 모습 (DS 46-1 · DS 56-3) — `PartnerInput.baseRev` 와 같은 규칙이다. */
+  baseRev?: unknown;
 }
 
-export type AccountResult = { ok: true; account: Account; created: boolean } | { ok: false; error: string };
+export type AccountResult =
+  | { ok: true; account: Account; created: boolean }
+  | { ok: false; error: string; conflict?: 'gone' | 'changed'; current?: Account };
 
 /**
  * 월 이용료 파싱. 빈 값은 "미입력"(undefined)이며 0과 구분한다 —
@@ -273,12 +348,39 @@ export function parseMonthlyFee(v: unknown): { ok: true; value: number | undefin
 }
 
 export function upsertAccount(input: AccountInput): AccountResult {
+  // 「누구를 고치는가」를 먼저 잡는다 — 아래 두 관문(동시 편집·귀속 확인)이 모두 지금
+  // 저장된 그 고객사를 봐야 한다. 거절 문장의 순서는 종전 그대로다(칸 → 귀속 → … → 식별자).
+  const id = clean(input.id, 40);
+  const existing = id ? accounts.find((a) => a.id === id) : undefined;
+
+  // 내가 보던 모습을 들고 왔으면 **그 모습일 때만** 갈아 끼운다 (DS 46-1 · DS 56-3).
+  const aConflict = conflictOf(input.baseRev, existing, accountRev);
+  if (aConflict === 'gone') return { ok: false, error: STALE_TARGET_MESSAGE, conflict: aConflict };
+  if (aConflict === 'changed') {
+    return { ok: false, error: CHANGED_TARGET_MESSAGE, conflict: aConflict, current: cloneAccount(existing as Account) };
+  }
+
   const name = clean(input.name, MAX_NAME);
   if (!name) return { ok: false, error: '고객사명을 입력해 주세요.' };
 
   const rawPartner = clean(input.partnerId, 40);
   const partnerId = rawPartner ? rawPartner : null;
-  if (partnerId && !partners.some((p) => p.id === partnerId)) {
+  /**
+   * 귀속은 **바꿀 때만** 파트너의 존재를 확인한다 (DS 56-1).
+   *
+   * 종전에는 들어온 `partnerId` 가 등록 목록에 없으면 요청 전체를 거절했다. 그래서 가리키는
+   * 파트너를 지금 찾을 수 없는 고객사(복원으로 들어오는 길이 있다 · `orphans`)는 **이름 한 자도
+   * 고칠 수 없었다** — 월 이용료·계약일·담당자까지 전부 막혔고, 돌아오는 말은 「파트너를 먼저
+   * 등록해 주세요」였다(어느 파트너인지도 적지 않는다). 운영자에게 열린 길은 하나뿐이었다:
+   * 귀속을 다른 곳으로 옮기거나 직접 계약으로 돌리는 것 — 즉 **고치려면 귀속을 버려야** 했다.
+   * 이 파일의 첫 원칙(「귀속 근거를 지울 수 있는 길을 열지 않는다」 · DS 53-3)과 정반대다.
+   *
+   * 지금 가지고 있는 귀속을 **그대로 들고 오면** 통과시킨다(바뀌는 것이 없으므로 이력도
+   * 늘지 않는다). 다른 파트너로 **옮기려** 할 때만 그 파트너가 있는지 본다 — 없는 곳으로
+   * 옮기는 길은 종전처럼 막는다.
+   */
+  const keepingAttribution = Boolean(existing && partnerId && existing.partnerId === partnerId);
+  if (partnerId && !keepingAttribution && !partners.some((p) => p.id === partnerId)) {
     return { ok: false, error: '존재하지 않는 파트너입니다. 파트너를 먼저 등록해 주세요.' };
   }
 
@@ -301,8 +403,6 @@ export function upsertAccount(input: AccountInput): AccountResult {
     return { ok: false, error: '계약 상태로 두려면 계약일이 필요합니다(정산 귀속의 기준일).' };
   }
 
-  const id = clean(input.id, 40);
-  const existing = id ? accounts.find((a) => a.id === id) : undefined;
   if (id && !existing) return { ok: false, error: '존재하지 않는 고객사입니다.' };
 
   const note = clean(input.attributionNote, MAX_MEMO);

@@ -1618,6 +1618,8 @@ interface PartnerView {
   managerName?: string;
   feeRateBp: number | null;
   memo?: string;
+  /** 「내가 고치기 시작할 때 본 모습」 (DS 46-1 · DS 56-3) — 서버가 목록에 실어 보낸다. */
+  rev?: string;
 }
 interface AttributionView {
   at: string;
@@ -1638,6 +1640,8 @@ interface AccountView {
   monthlyFeeKrw?: number;
   memo?: string;
   attribution: AttributionView[];
+  /** 「내가 고치기 시작할 때 본 모습」 (DS 46-1 · DS 56-3). */
+  rev?: string;
 }
 
 // ---- 정산 리포트 ----
@@ -2852,6 +2856,15 @@ export default function AdminPage() {
   const [partnerFormKind, setPartnerFormKind] = useState<'account' | 'partner'>('account');
   const [pErr, setPErr] = useState<{ name?: string; feeRatePct?: string }>({});
   const [aErr, setAErr] = useState<{ name?: string; partnerId?: string; contractedAt?: string; monthlyFeeKrw?: string }>({});
+  /**
+   * 파트너·고객사 편집을 **시작할 때 본 모습**과 그 사이 바뀌었다는 사실 (DS 46-1 · DS 56-3).
+   * 안내 자료 쪽(`editingRev`·`kbConflict`)과 같은 규칙이다 — 이 탭만 그 관문 밖에 있었고,
+   * 하필 여기가 **월 이용료**(정산 수수료의 기준)를 고치는 화면이다.
+   */
+  const [pEditRev, setPEditRev] = useState<string | null>(null);
+  const [aEditRev, setAEditRev] = useState<string | null>(null);
+  const [pConflict, setPConflict] = useState<Conflict<PartnerView> | null>(null);
+  const [aConflict, setAConflict] = useState<Conflict<AccountView> | null>(null);
   const [partnerSaving, setPartnerSaving] = useState(false);
   const [accountQuery, setAccountQuery] = useState('');
   const partnerFormRef = useRef<HTMLDivElement | null>(null);
@@ -2920,6 +2933,9 @@ export default function AdminPage() {
   const editPartner = async (p: PartnerView) => {
     if (!(await confirmDiscard(formDirty(pForm, formBase.current.partner), '파트너 등록 폼'))) return;
     loadPartnerForm({ id: p.id, name: p.name, managerName: p.managerName ?? '', feeRatePct: p.feeRateBp === null ? '' : bpToPct(p.feeRateBp), status: p.status, memo: p.memo ?? '' });
+    // 무엇을 보고 고치기 시작했는지 함께 들고 간다 (DS 46-1 · DS 56-3).
+    setPEditRev(p.rev ?? null);
+    setPConflict(null);
     setPErr({});
     focusPartnerForm('partner');
   };
@@ -2930,6 +2946,8 @@ export default function AdminPage() {
       status: a.status, contractedAt: a.contractedAt ?? '', ownerName: a.ownerName ?? '',
       monthlyFeeKrw: typeof a.monthlyFeeKrw === 'number' ? String(a.monthlyFeeKrw) : '', attributionNote: '',
     });
+    setAEditRev(a.rev ?? null);
+    setAConflict(null);
     setAErr({});
     focusPartnerForm('account');
   };
@@ -2957,15 +2975,27 @@ export default function AdminPage() {
         body: JSON.stringify({
           kind: 'partner', id: pForm.id, name: pForm.name, managerName: pForm.managerName, status: pForm.status, memo: pForm.memo,
           feeRateBp: pForm.feeRatePct.trim() === '' ? null : pctToBp(pForm.feeRatePct),
+          // 수정은 **내가 본 모습 위에서만** 한다 (DS 46-1 · DS 56-3). 새 파트너에는 겨룰 상대가 없다.
+          ...(pForm.id && pEditRev ? { baseRev: pEditRev } : {}),
         }),
       });
       if (on401(res)) return;
       const data = await res.json();
       if (!data.ok) {
+        // 그 사이 다른 화면에서 바뀐 것은 적던 글을 버릴 이유가 아니다 — 폼을 그대로 두고
+        // 그 자리에 사유와 길을 띄운다(안내 자료 쪽과 같은 관문이다).
+        if (data.conflict) {
+          setPConflict({ kind: data.conflict, message: data.message || data.error || '', ...(data.current ? { current: data.current as PartnerView } : {}) });
+          await loadPartners(partnerFilter);
+          notify(data.message || data.error || '', 'fail');
+          return;
+        }
         setPartnerErr(data.message || data.error || '저장하지 못했습니다.');
         return;
       }
       loadPartnerForm(EMPTY_PARTNER_FORM);
+      setPEditRev(null);
+      setPConflict(null);
       await loadPartners(partnerFilter);
       flashSaved(data.created ? '파트너를 등록했습니다.' : '파트너를 수정했습니다.', data.saved as SavedView | undefined);
     } catch {
@@ -2998,15 +3028,27 @@ export default function AdminPage() {
       const res = await afetch('/api/admin/partners', {
         method: 'POST',
         headers: authHeaders(true),
-        body: JSON.stringify({ kind: 'account', ...aForm }),
+        body: JSON.stringify({
+          kind: 'account',
+          ...aForm,
+          ...(aForm.id && aEditRev ? { baseRev: aEditRev } : {}),
+        }),
       });
       if (on401(res)) return;
       const data = await res.json();
       if (!data.ok) {
+        if (data.conflict) {
+          setAConflict({ kind: data.conflict, message: data.message || data.error || '', ...(data.current ? { current: data.current as AccountView } : {}) });
+          await loadPartners(partnerFilter);
+          notify(data.message || data.error || '', 'fail');
+          return;
+        }
         setPartnerErr(data.message || data.error || '저장하지 못했습니다.');
         return;
       }
       loadAccountForm(EMPTY_ACCOUNT_FORM);
+      setAEditRev(null);
+      setAConflict(null);
       await loadPartners(partnerFilter);
       flashSaved(data.created ? '고객사를 등록했습니다.' : '고객사를 수정했습니다.', data.saved as SavedView | undefined);
     } catch {
@@ -3014,6 +3056,46 @@ export default function AdminPage() {
     } finally {
       setPartnerSaving(false);
     }
+  };
+
+  /**
+   * 그 사이 바뀐 고객사를 **지금 저장된 내용으로** 다시 연다 (DS 46-1 · DS 56-3).
+   * 내가 적던 글을 버리는 일이므로 확인을 거친다(DS 27-2 와 같은 관문).
+   */
+  const reloadAccountConflict = async () => {
+    const cur = aConflict?.current;
+    if (!cur) return;
+    const ok = await askConfirm({
+      title: '지금 저장된 내용을 불러올까요?',
+      target: cur.name,
+      body: '이 폼에 적던 내용은 사라지고, 다른 화면에서 저장한 내용이 그 자리에 들어옵니다.',
+      confirmLabel: '불러오기',
+    });
+    if (!ok) return;
+    setAEditRev(cur.rev ?? null);
+    setAConflict(null);
+    setAErr({});
+    loadAccountForm({
+      id: cur.id, name: cur.name, partnerId: cur.partnerId ?? '', source: cur.source,
+      status: cur.status, contractedAt: cur.contractedAt ?? '', ownerName: cur.ownerName ?? '',
+      monthlyFeeKrw: typeof cur.monthlyFeeKrw === 'number' ? String(cur.monthlyFeeKrw) : '', attributionNote: '',
+    });
+  };
+
+  const reloadPartnerConflict = async () => {
+    const cur = pConflict?.current;
+    if (!cur) return;
+    const ok = await askConfirm({
+      title: '지금 저장된 내용을 불러올까요?',
+      target: cur.name,
+      body: '이 폼에 적던 내용은 사라지고, 다른 화면에서 저장한 내용이 그 자리에 들어옵니다.',
+      confirmLabel: '불러오기',
+    });
+    if (!ok) return;
+    setPEditRev(cur.rev ?? null);
+    setPConflict(null);
+    setPErr({});
+    loadPartnerForm({ id: cur.id, name: cur.name, managerName: cur.managerName ?? '', feeRatePct: cur.feeRateBp === null ? '' : bpToPct(cur.feeRateBp), status: cur.status, memo: cur.memo ?? '' });
   };
 
   const removePartner = async (p: PartnerView) => {
@@ -3036,7 +3118,7 @@ export default function AdminPage() {
         setPartnerErr(data.message || data.error || '삭제하지 못했습니다.');
         return;
       }
-      if (pForm.id === p.id) loadPartnerForm(EMPTY_PARTNER_FORM);
+      if (pForm.id === p.id) { loadPartnerForm(EMPTY_PARTNER_FORM); setPEditRev(null); setPConflict(null); }
       await loadPartners(partnerFilter);
       flashSaved('파트너를 삭제했습니다.', data.saved as SavedView | undefined);
     } catch {
@@ -5738,6 +5820,8 @@ export default function AdminPage() {
          * 수정·삭제 단추는 달지 않는다 — 고칠 대상이 지금 없다.
          */
         const missingRollups = rollup.filter((r) => r.partnerId !== null && !partners.some((p) => p.id === r.partnerId));
+        /** 편집 중인 고객사가 **고르개에 없는 귀속**을 들고 있는가 (DS 56-1). */
+        const aFormOrphan = Boolean(aForm.partnerId) && !partners.some((p) => p.id === aForm.partnerId);
         const accountView = tableView('account', filteredAccounts, {
           name: (a: AccountView) => a.name,
           partner: (a: AccountView) => partnerName(a.partnerId),
@@ -5799,6 +5883,17 @@ export default function AdminPage() {
                       <option value="">모든 귀속</option>
                       <option value="direct">직접 계약</option>
                       {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      {/**
+                        * 찾을 수 없는 귀속도 **골라 볼 수 있다** (DS 56-2 · DS 55-1 에 적어 둔 다음 차례).
+                        *
+                        * DS 55-1 이 그 줄을 파트너 표에 세워 보이게 했는데, 고르개는 등록된 파트너만
+                        * 돌아서 「그것만 골라 보기」가 되지 않았다 — 고객사가 수백 곳이면 표에서 눈으로
+                        * 찾는 수밖에 없고, 그 몇 곳이 바로 **정산에서 빠지는 고객사**다(리포트의
+                        * `partial: true` 가 가리키는 줄). 거르개는 서버가 그 식별자를 그대로 받으므로
+                        * (`queryAccounts`) 고르개에 세우는 것만으로 동작한다. 이름은 한 벌이다
+                        * (`missingPartnerName` — 서버가 집계에 붙여 보낸 그 이름을 그대로 쓴다).
+                        */}
+                      {missingRollups.map((r) => <option key={r.partnerId} value={r.partnerId ?? ''}>{r.partnerName}</option>)}
                     </select>
                     <span style={{ ...S.tag, marginLeft: 'auto' }} aria-live="polite">{filteredAccounts.length}/{accounts.length}곳</span>
                     <button type="button" {...busyBtn(partnerBusy, partnerBusy)} onClick={() => loadPartners(partnerFilter)}>
@@ -5881,7 +5976,7 @@ export default function AdminPage() {
                       <button type="button" style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={async () => {
                         // 「추가」도 폼을 통째로 비운다 — 수정 중이던 내용을 말없이 버리지 않는다(DS 27-2).
                         if (!(await confirmDiscard(formDirty(pForm, formBase.current.partner), '파트너 등록 폼'))) return;
-                        loadPartnerForm(EMPTY_PARTNER_FORM); setPErr({}); focusPartnerForm('partner');
+                        loadPartnerForm(EMPTY_PARTNER_FORM); setPEditRev(null); setPConflict(null); setPErr({}); focusPartnerForm('partner');
                       }}>파트너 추가</button>
                     )}
                   </div>
@@ -5985,13 +6080,31 @@ export default function AdminPage() {
                         </div>
                         <div className="ac-field">
                           <label htmlFor="a-partner">귀속 파트너</label>
+                          {/**
+                            * 지금 가진 귀속이 **고르개에 없으면** 그 칸은 빈 칸으로 떴다 (DS 56-1).
+                            *
+                            * 고르개는 등록된 파트너만 돌며 그려서, 가리키는 파트너를 찾을 수 없는
+                            * 고객사(복원으로 들어오는 길이 있다)를 열면 귀속이 **아무것도 고르지 않은
+                            * 모양**이 되었다. 화면은 그 고객사의 표 칸에 「(삭제된 파트너 PTR-0001)」이라
+                            * 적고 있는데 편집 폼만 그 사실을 말하지 않았고, 운영자가 손대지 않고 저장하면
+                            * 서버가 요청 전체를 거절했다(이름·월 이용료까지 고칠 수 없었다).
+                            * 지금은 그 귀속을 **골라진 그대로** 세워 보여 준다 — 다른 칸만 고쳐 저장할 수
+                            * 있고(귀속이 바뀌지 않으므로 이력도 늘지 않는다), 옮기려면 목록에서 고르면 된다.
+                            */}
                           <select id="a-partner" className="ac-select" style={{ width: '100%', ...(aErr.partnerId ? { borderColor: 'var(--danger)' } : {}) }} value={aForm.partnerId}
-                            aria-invalid={aErr.partnerId ? 'true' : undefined} aria-describedby={aErr.partnerId ? 'a-partner-err' : undefined}
+                            aria-invalid={aErr.partnerId ? 'true' : undefined}
+                            aria-describedby={[aErr.partnerId ? 'a-partner-err' : '', aFormOrphan ? 'a-partner-missing' : ''].filter(Boolean).join(' ') || undefined}
                             onChange={(e) => { setAForm({ ...aForm, partnerId: e.target.value }); if (aErr.partnerId) setAErr({ ...aErr, partnerId: undefined }); }}>
                             <option value="">직접 계약(파트너 없음)</option>
                             {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            {aFormOrphan && <option value={aForm.partnerId}>{missingPartnerName(aForm.partnerId)}</option>}
                           </select>
                           {aErr.partnerId && <p id="a-partner-err" className="ac-err">{aErr.partnerId}</p>}
+                          {aFormOrphan && (
+                            <p id="a-partner-missing" className="ac-rulehint" style={{ marginTop: 4 }}>
+                              이 귀속이 가리키는 파트너를 지금 찾을 수 없습니다. 다른 칸만 고쳐 저장하면 귀속은 그대로 남습니다. 바로잡으려면 같은 식별자로 파트너를 다시 등록하거나, 위에서 다른 귀속을 고르세요(고르면 그 사유가 이력에 남습니다).
+                            </p>
+                          )}
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                           <div className="ac-field">
@@ -6033,8 +6146,17 @@ export default function AdminPage() {
                           <button type="submit" {...busyBtn(partnerSaving, partnerSaving, S.btn)}>
                             {partnerSaving ? '저장 중…' : aForm.id ? '수정 저장' : '고객사 등록'}
                           </button>
-                          {aForm.id && <button type="button" style={S.btnGhost} onClick={() => { loadAccountForm(EMPTY_ACCOUNT_FORM); setAErr({}); }}>취소</button>}
+                          {aForm.id && <button type="button" style={S.btnGhost} onClick={() => { loadAccountForm(EMPTY_ACCOUNT_FORM); setAEditRev(null); setAConflict(null); setAErr({}); }}>취소</button>}
                         </div>
+                        {aConflict && (
+                          <ConflictNote
+                            notice={aConflict}
+                            {...(aConflict.current ? { nowLabel: `${aConflict.current.name} / 귀속 ${partnerName(aConflict.current.partnerId)} / 월 이용료 ${wonLabel(aConflict.current.monthlyFeeKrw)}` } : {})}
+                            onReload={reloadAccountConflict}
+                            onOverwrite={() => { setAEditRev(aConflict.current?.rev ?? null); setAConflict(null); }}
+                            onRecreate={() => { setAForm({ ...aForm, id: '' }); setAEditRev(null); setAConflict(null); }}
+                          />
+                        )}
                       </form>
                     ) : (
                       <form onSubmit={(e) => { e.preventDefault(); submitPartner(); }} noValidate>
@@ -6074,8 +6196,17 @@ export default function AdminPage() {
                           <button type="submit" {...busyBtn(partnerSaving, partnerSaving, S.btn)}>
                             {partnerSaving ? '저장 중…' : pForm.id ? '수정 저장' : '파트너 등록'}
                           </button>
-                          {pForm.id && <button type="button" style={S.btnGhost} onClick={() => { loadPartnerForm(EMPTY_PARTNER_FORM); setPErr({}); }}>취소</button>}
+                          {pForm.id && <button type="button" style={S.btnGhost} onClick={() => { loadPartnerForm(EMPTY_PARTNER_FORM); setPEditRev(null); setPConflict(null); setPErr({}); }}>취소</button>}
                         </div>
+                        {pConflict && (
+                          <ConflictNote
+                            notice={pConflict}
+                            {...(pConflict.current ? { nowLabel: `${pConflict.current.name} / 수수료율 ${feeLabel(pConflict.current.feeRateBp)} / ${pConflict.current.status === 'active' ? '운영 중' : '중지'}` } : {})}
+                            onReload={reloadPartnerConflict}
+                            onOverwrite={() => { setPEditRev(pConflict.current?.rev ?? null); setPConflict(null); }}
+                            onRecreate={() => { setPForm({ ...pForm, id: '' }); setPEditRev(null); setPConflict(null); }}
+                          />
+                        )}
                       </form>
                     )}
                   </section>

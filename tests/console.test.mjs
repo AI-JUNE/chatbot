@@ -3010,7 +3010,8 @@ test('찾을 수 없는 귀속을 콘솔이 서버와 같은 말로 적고 표�
 
   // ③ 서버가 세운 줄을 화면이 그린다 — 수정·삭제 단추 없이(고칠 대상이 지금 없다).
   assert.match(src, /const missingRollups = rollup\.filter\(\(r\) => r\.partnerId !== null && !partners\.some\(\(p\) => p\.id === r\.partnerId\)\);/, '찾을 수 없는 귀속 줄을 고르지 않는다');
-  const row = src.slice(src.indexOf('{missingRollups.map('), src.indexOf('{directRollup && directRollup.total > 0 &&'));
+  // 두 자리에 그 목록이 쓰인다(거르개 · 파트너 표 · DS 56-2) — 여기서 보는 것은 **표의 줄**이다.
+  const row = src.slice(src.lastIndexOf('{missingRollups.map('), src.indexOf('{directRollup && directRollup.total > 0 &&'));
   assert.ok(row.length > 0 && row.length < 1200, '그 줄을 표에 그리지 않는다');
   assert.ok(row.includes('{r.partnerName}'), '이름을 서버가 붙인 그대로 쓰지 않는다');
   assert.ok(row.includes('찾을 수 없음'), '무슨 줄인지 말하지 않는다');
@@ -3057,4 +3058,97 @@ test('귀속 이력의 날짜가 한국 날짜이고 읽을 수 없는 값을 �
   const cmp = src.slice(src.indexOf('const instant = (v: string) =>'), src.indexOf('id="ac-account-title"'));
   assert.match(cmp, /Number\.isNaN\(t\) \? -Infinity : t/, '읽을 수 없는 시각을 걸러내지 않는다');
   assert.match(cmp, /bx === by \? 0 : by - bx/, '같은 값끼리 비교가 NaN 이 된다');
+});
+
+/* ══════════ 디자인 스프린트 — 53차 재감사 (DS 56-1·56-2) ══════════ */
+
+/**
+ * DS 56-1 — 찾을 수 없는 귀속을 가진 고객사의 **편집 폼이 그 귀속을 말하지 않았다**.
+ *
+ * 52차(DS 55-1)는 그 고객사의 표 칸·상세 서랍·집계 줄을 「(삭제된 파트너 PTR-0001)」로 적게
+ * 했다. 그런데 「수정」을 누르면 들어가는 **고르개**는 등록된 파트너만 돌며 그린다 — 지금 가진
+ * 귀속에 해당하는 항목이 없으므로 그 칸은 **아무것도 고르지 않은 빈 칸**으로 떴다. 화면이 바로
+ * 옆에서 이름을 적고 있는 그 귀속을, 편집 폼만 없는 것처럼 보여 준 것이다. 그리고 손대지 않고
+ * 저장하면 서버가 요청 전체를 거절했다(런타임 쪽 테스트가 그 자리를 본다).
+ */
+test('찾을 수 없는 귀속이 편집 폼의 고르개에 서고 다음 길을 말한다 (DS 56-1)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // ① 「고르개에 없는 귀속인가」를 판단하는 자리가 있다(집계 줄을 고르는 식과 같은 모양이다).
+  assert.match(
+    src,
+    /const aFormOrphan = Boolean\(aForm\.partnerId\) && !partners\.some\(\(p\) => p\.id === aForm\.partnerId\);/,
+    '편집 중인 귀속이 고르개에 있는지 보지 않는다',
+  );
+  // ② 그 귀속이 고르개에 **골라진 그대로** 선다 — 이름은 한 벌(`missingPartnerName`)이다.
+  const sel = src.slice(src.indexOf('<select id="a-partner"'), src.indexOf('<label htmlFor="a-source">'));
+  assert.ok(sel.length > 0 && sel.length < 2600, '귀속 고르개를 찾지 못했다');
+  assert.match(sel, /\{aFormOrphan && <option value=\{aForm\.partnerId\}>\{missingPartnerName\(aForm\.partnerId\)\}<\/option>\}/, '찾을 수 없는 귀속이 고르개에 서지 않는다');
+  // ③ 무슨 일인지·다음에 무엇을 할지 말한다(「다른 칸만 고쳐도 귀속은 남는다」가 요점이다).
+  assert.ok(sel.includes('id="a-partner-missing"'), '그 사실을 적는 안내가 없다');
+  assert.ok(sel.includes('다른 칸만 고쳐 저장하면 귀속은 그대로 남습니다'), '고칠 수 있다는 사실을 말하지 않는다');
+  assert.ok(sel.includes('고르면 그 사유가 이력에 남습니다'), '귀속을 옮기면 이력이 남는다고 말하지 않는다');
+  // ④ 스크린리더가 그 안내를 **그 칸에서** 듣는다(아래 문단을 따로 찾아 읽게 두지 않는다).
+  assert.match(sel, /aria-describedby=\{\[aErr\.partnerId \? 'a-partner-err' : '', aFormOrphan \? 'a-partner-missing' : ''\]\.filter\(Boolean\)\.join\(' '\) \|\| undefined\}/, '안내가 고르개에 묶여 있지 않다');
+});
+
+/**
+ * DS 56-2 — 「귀속으로 거르기」에 **찾을 수 없는 귀속이 없었다** (52차에 적어 둔 다음 차례).
+ *
+ * DS 55-1 이 그 줄을 파트너 표에 세웠지만 고르개는 등록된 파트너만 돌아서, 표에서는 보이는데
+ * 「그것만 골라 보기」가 되지 않았다. 고객사가 수백 곳이면 눈으로 찾는 수밖에 없고, 그 몇 곳이
+ * 바로 정산 리포트가 `partial: true` 로 가리키는 고객사다. 서버 거르개는 그 식별자를 그대로
+ * 받으므로(`queryAccounts`) 고르개에 세우는 것만으로 동작한다.
+ */
+test('귀속 거르개에서 찾을 수 없는 귀속만 골라 볼 수 있다 (DS 56-2)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const sel = src.slice(src.indexOf('<select\n                      id="a-filter"'), src.indexOf('</select>', src.indexOf('id="a-filter"')));
+  assert.ok(sel.length > 0, '귀속 거르개를 찾지 못했다');
+  assert.ok(sel.includes('<option value="">모든 귀속</option>'), '거르개의 기존 항목이 사라졌다');
+  assert.ok(sel.includes('<option value="direct">직접 계약</option>'), '직접 계약 항목이 사라졌다');
+  // 이름은 서버가 집계에 붙여 보낸 그대로 쓴다 — 콘솔이 다시 적으면 표와 고르개가 갈라진다.
+  assert.match(sel, /\{missingRollups\.map\(\(r\) => <option key=\{r\.partnerId\} value=\{r\.partnerId \?\? ''\}>\{r\.partnerName\}<\/option>\)\}/, '찾을 수 없는 귀속을 고를 수 없다');
+  // 고른 값은 서버 조회에 그대로 실린다(거르개는 종전부터 그 값을 `loadPartners` 에 넘긴다).
+  assert.match(src, /onChange=\{\(e\) => \{ setPartnerFilter\(e\.target\.value\); loadPartners\(e\.target\.value\); \}\}/, '고른 귀속으로 다시 조회하지 않는다');
+});
+
+/**
+ * DS 56-3(화면 쪽) — 파트너·고객사 편집이 **동시 편집 관문 밖**에 있었다.
+ *
+ * DS 46-1 이 안내 자료·규칙·접수에 세운 관문(`baseRev` → 거절 → 폼 안에서 다음 길)의 전제가
+ * 「편집 폼은 연 순간의 사진이고 저장은 그 사진을 통째로 덮어쓴다」인데, 이 탭만 그 목록에
+ * 없었다 — 하필 **월 이용료**(정산 수수료의 기준)를 고치는 화면이다.
+ */
+test('파트너·고객사 편집이 내가 본 모습을 들고 가고 거절을 폼 안에서 말한다 (DS 56-3)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // ① 「수정」을 누를 때 그 모습을 들고 간다.
+  assert.match(src, /setAEditRev\(a\.rev \?\? null\);/, '고객사 편집이 본 모습을 들고 가지 않는다');
+  assert.match(src, /setPEditRev\(p\.rev \?\? null\);/, '파트너 편집이 본 모습을 들고 가지 않는다');
+  // ② 저장에 실어 보낸다 — **수정에만**(새 항목에는 겨룰 상대가 없다).
+  assert.match(src, /\.\.\.\(aForm\.id && aEditRev \? \{ baseRev: aEditRev \} : \{\}\)/, '고객사 저장이 baseRev 를 보내지 않는다');
+  assert.match(src, /\.\.\.\(pForm\.id && pEditRev \? \{ baseRev: pEditRev \} : \{\}\)/, '파트너 저장이 baseRev 를 보내지 않는다');
+  // ③ 거절당하면 **적던 글은 그대로 두고** 폼 안에서 다음 길을 준다(사라지는 토스트에 맡기지 않는다).
+  for (const [what, state] of [['고객사', 'aConflict'], ['파트너', 'pConflict']]) {
+    const note = src.slice(src.indexOf(`{${state} && (`), src.indexOf(`{${state} && (`) + 700);
+    assert.ok(note.includes('<ConflictNote'), `${what} 쪽에 그 자리 안내가 없다`);
+    assert.ok(note.includes('nowLabel'), `${what} 쪽이 무엇을 덮게 되는지 보여 주지 않는다`);
+    assert.ok(note.includes('onReload') && note.includes('onOverwrite'), `${what} 쪽에 두 길이 없다`);
+  }
+  // 무엇을 덮는지 보여 주는 줄에 **월 이용료**가 있다(이 화면에서 사라지면 가장 아픈 값이다).
+  assert.match(src, /월 이용료 \$\{wonLabel\(aConflict\.current\.monthlyFeeKrw\)\}/, '덮을 금액을 보여 주지 않는다');
+  // ④ 폼을 비우는 자리들이 그 모습·그 안내도 함께 버린다(남으면 다음 저장이 엉뚱하게 거절된다).
+  const resetSites = (call, rev) => {
+    let from = 0;
+    let n = 0;
+    for (;;) {
+      const i = src.indexOf(call, from);
+      if (i < 0) break;
+      n += 1;
+      const near = src.slice(i, i + 200);
+      assert.ok(near.includes(rev), `폼을 비우면서 본 모습을 남겨 둔다: ${call} (${n}번째)`);
+      from = i + call.length;
+    }
+    return n;
+  };
+  assert.ok(resetSites('loadAccountForm(EMPTY_ACCOUNT_FORM)', 'setAEditRev(null)') >= 2, '고객사 폼을 비우는 자리를 찾지 못했다');
+  assert.ok(resetSites('loadPartnerForm(EMPTY_PARTNER_FORM)', 'setPEditRev(null)') >= 3, '파트너 폼을 비우는 자리를 찾지 못했다');
 });
