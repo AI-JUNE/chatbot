@@ -1251,10 +1251,14 @@ export default function ChatWidget({
   }, [embedded, openPanel]);
 
   // 임베드 모드: 위젯이 그려졌음을 부모(embed.js)에 알린다 → 그때 iframe이 나타난다(첫 로드 깜빡임 제거).
+  // 함께 **무엇으로 떴는지**(적용된 고객사 식별자)를 싣는다 — 형식이 맞아도 등록되지 않은
+  // 식별자로 설치하면 상담창은 멀쩡히 뜨고 기본 구성으로 답한다. 화면만 보고는 알 수 없는
+  // 그 차이를 설치한 사람에게 알리는 쪽은 호스트 문서 뿐이다(embed.js 의 `checkTenant`).
+  // 공개 설정값이라 비밀이 아니고, 받는 쪽은 자기가 요청한 그 값과 견주기만 한다.
   useEffect(() => {
     if (!embedded || typeof window === 'undefined' || window.parent === window) return;
-    window.parent.postMessage({ source: 'gowon-chat', type: 'ready' }, '*');
-  }, [embedded]);
+    window.parent.postMessage({ source: 'gowon-chat', type: 'ready', tenant: tenant ? tenant.id : null }, '*');
+  }, [embedded, tenant]);
 
   // 임베드 모드: 부모(embed.js)에 iframe 크기 변경 요청.
   useEffect(() => {

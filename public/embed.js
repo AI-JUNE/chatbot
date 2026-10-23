@@ -1,7 +1,19 @@
-/* GOWON Chat 임베드 스니펫 (v0.8)
+/* GOWON Chat 임베드 스니펫 (v0.9)
  * 사용법: <script src="https://<배포도메인>/embed.js" async></script>
  * 옵션(선택): data-position="left" | data-offset="24" | data-z="2147483000"
  *            data-tenant="eum"  ← 테넌트 프리셋(문구·색·FAQ 지식)을 바꿔 끼운다
+ *
+ * v0.9 변경점
+ * - 상담창 프레임에 이름을 준다(id="gowon-chat-frame" · data-gowon-chat="frame"). 종전에는
+ *   스크립트가 붙인 이 프레임을 **고객사 CSS 로 고를 이름이 없었다.**
+ * - 고객사 페이지를 인쇄하면 상담창이 종이에 찍히던 것을 멈춘다 — 화면 위에 떠 있는 조작 화면은
+ *   종이에 남을 것이 아니다. 인쇄 전용 규칙 한 줄을 함께 붙이고, 걷어낼 때 같이 거둔다.
+ * - 설치할 때 적는 값을 **버리거나 그대로 싣지 않는다**: 형식에 맞지 않으면 기본값으로 띄우되
+ *   그 사실과 이유를 브라우저 콘솔에 한국어로 적는다(설치하는 사람이 보는 유일한 자리다).
+ *   종전에는 `data-z` 가 검사 없이 style 에 들어가 쌓임 순서가 통째로 사라지거나(`z-index:999px`)
+ *   우리 배치 선언이 덮였고(`data-z="1;position:static"`), 형식이 틀린 `data-tenant` 는 말없이
+ *   버려져 **고객사 안내 자료가 아닌 기본 상담창**이 떴다.
+ * - 요청한 고객사가 실제로 걸렸는지 위젯이 알려 주고(ready 신호의 tenant), 다르면 역시 적는다.
  *
  * v0.8 변경점
  * - 상담창 프레임이 밝은 화면 한 벌임을 선언한다(color-scheme:light). 종전의 `normal` 은
@@ -35,7 +47,27 @@
  * - /widget이 postMessage로 보내는 열림/닫힘 상태에 맞춰 iframe 크기를 조정
  */
 (function () {
-  if (window.__gowonChatLoaded) return;
+  /**
+   * 설치한 사람에게 말하는 유일한 자리.
+   *
+   * 이 스크립트를 붙이는 사람은 고객사 개발자이고, 그가 보는 화면은 브라우저 개발자 도구다.
+   * 방문자 화면에는 한 글자도 적지 않는다 — 상담창은 그대로 뜬다(설정이 틀렸다고 상담창이
+   * 사라지면 설치 사고가 곧 서비스 중단이 된다).
+   */
+  var warnings = [];
+  function warn(msg) {
+    warnings.push(msg);
+    try {
+      if (window.console && window.console.warn) window.console.warn('[GOWON 상담창] ' + msg);
+    } catch (e) { /* noop */ }
+  }
+
+  if (window.__gowonChatLoaded) {
+    // 두 번째 스니펫은 대개 옵션이 붙은 쪽이다(테마에 기본 한 줄이 있는데 담당자가 고객사
+    // 설정을 붙여 한 줄 더 넣는다) — 그 옵션이 통째로 무시된다는 사실을 말해 준다.
+    warn('설치 코드가 이 페이지에 두 번 들어 있습니다 — 먼저 읽은 한 줄만 적용하고, 이 줄에 적은 옵션은 무시합니다.');
+    return;
+  }
   window.__gowonChatLoaded = true;
 
   var script = document.currentScript || document.querySelector('script[src*="embed.js"]');
@@ -49,14 +81,46 @@
     return v === null || v === '' ? fallback : v;
   }
 
-  var side = attr('data-position', 'right') === 'left' ? 'left' : 'right';
-  var offset = parseInt(attr('data-offset', '0'), 10);
-  if (!isFinite(offset) || offset < 0) offset = 0;
-  var zIndex = attr('data-z', '2147483000');
+  /* ── 설치할 때 적는 값 네 가지 ──────────────────────────────────────────────
+   * 네 값 모두 **같은 규약**으로 읽는다: 규격에 맞지 않으면 기본값으로 띄우되, 무엇을 버리고
+   * 무엇으로 대신했는지 적는다. 종전에는 셋은 조용히 버리고 하나(`data-z`)는 검사 없이 style
+   * 문자열에 이어 붙였다 — 단위가 붙은 값은 쌓임 순서 선언을 통째로 날리고(다른 요소에 가린다),
+   * 세미콜론이 든 값은 우리 배치 선언을 덮었다.
+   */
+  var Z_DEFAULT = '2147483000';
+  var OFFSET_MAX = 200;
+
+  var sideRaw = String(attr('data-position', 'right')).trim().toLowerCase();
+  var side = sideRaw === 'left' ? 'left' : 'right';
+  if (sideRaw !== 'left' && sideRaw !== 'right') {
+    warn('data-position="' + sideRaw + '" 은 쓸 수 없는 값입니다(left 또는 right). 오른쪽 아래에 띄웁니다.');
+  }
+
+  var offsetRaw = String(attr('data-offset', '0')).trim();
+  var offset = parseInt(offsetRaw, 10);
+  if (!isFinite(offset) || offset < 0) {
+    if (offsetRaw !== '0') warn('data-offset="' + offsetRaw + '" 은 0 이상의 숫자가 아닙니다. 여백 없이(0px) 띄웁니다.');
+    offset = 0;
+  } else if (offset > OFFSET_MAX) {
+    warn('data-offset="' + offsetRaw + '" 은 너무 커서 상담창이 화면 밖으로 나갑니다. 최대값 ' + OFFSET_MAX + 'px 로 띄웁니다.');
+    offset = OFFSET_MAX;
+  }
+
+  var zRaw = String(attr('data-z', Z_DEFAULT)).trim();
+  var zIndex = /^[0-9]{1,10}$/.test(zRaw) ? zRaw : Z_DEFAULT;
+  if (zIndex !== zRaw) {
+    warn('data-z="' + zRaw + '" 은 정수가 아닙니다 — 이대로 두면 쌓임 순서가 지정되지 않아 상담창이 다른 요소에 가립니다. 기본값 ' + Z_DEFAULT + ' 으로 띄웁니다.');
+  }
 
   // 테넌트 식별자 — 서버도 같은 규칙으로 다시 검증한다(여기 검증은 잘못된 URL 생성 방지용).
-  var tenant = String(attr('data-tenant', '')).trim().toLowerCase();
-  if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(tenant)) tenant = '';
+  var tenantRaw = String(attr('data-tenant', '')).trim();
+  var tenant = tenantRaw.toLowerCase();
+  if (tenant && !/^[a-z0-9][a-z0-9_-]{0,31}$/.test(tenant)) {
+    // 이 한 줄이 틀리면 상담창은 멀쩡히 뜨는데 **고객사 안내 자료가 아닌 기본 구성**으로 답한다.
+    // 방문자도 운영자도 그 차이를 화면에서 알 수 없다 — 설치한 사람에게 지금 말해야 한다.
+    warn('data-tenant="' + tenantRaw + '" 은 고객사 식별자 형식이 아닙니다(영문 소문자·숫자·-·_ 로 32자까지). 고객사 설정 없이 기본 상담창으로 띄웁니다 — 고객사 안내 자료로 답하지 않습니다.');
+    tenant = '';
+  }
 
   var CLOSED = { w: 104, h: 104 };
   var OPEN = { w: 400, h: 660 };
@@ -66,6 +130,32 @@
   iframe.title = '상담 챗봇';
   iframe.setAttribute('allowtransparency', 'true');
   iframe.setAttribute('loading', 'lazy');
+  // 이름(공개 계약) — 고객사 페이지가 자기 CSS 로도 이 프레임을 고를 수 있어야 한다.
+  // 인쇄 규칙은 id 가 아니라 data 속성으로 건다(같은 id 를 쓰는 페이지와 겹치지 않는다).
+  iframe.id = 'gowon-chat-frame';
+  iframe.setAttribute('data-gowon-chat', 'frame');
+
+  /**
+   * 고객사 페이지를 종이로 남길 때 상담창은 거기 없어야 한다.
+   *
+   * 상담창은 화면 위에 떠 있는 **조작 화면**이지 그 페이지의 내용이 아니다. 종전에는 인쇄하면
+   * 닫힌 런처가 본문 위에 찍히고, 열어 둔 채였다면 400×660 패널이 첫 장을 가렸다(전체화면이면
+   * 첫 장이 통째로 상담창이다). 우리 콘솔에는 인쇄 규칙을 세워 두었으면서(globals.css) 정작
+   * **고객사 페이지에는 아무 규칙도 보내지 않았다** — 그 페이지에서 우리를 숨기려 해도 프레임에
+   * 이름이 없어 고객사가 직접 적을 수도 없었다.
+   */
+  var printStyle = null;
+  try {
+    var styleHost = document.head || document.documentElement;
+    if (styleHost) {
+      printStyle = document.createElement('style');
+      printStyle.setAttribute('media', 'print');
+      printStyle.appendChild(document.createTextNode('[data-gowon-chat="frame"]{display:none !important}'));
+      styleHost.appendChild(printStyle);
+    }
+  } catch (e) {
+    printStyle = null; // 규칙을 붙이지 못해도 상담창 자체는 뜬다
+  }
 
   // 위젯 프레임의 실제 출처 — 주고받는 메시지를 이 출처로 한정한다.
   // script.src 를 읽지 못해 origin 이 비어도(상대 경로 /widget → 호스트와 같은 출처)
@@ -164,6 +254,23 @@
     }, frameOrigin);
   }
 
+  /**
+   * 요청한 고객사가 **실제로 걸렸는가**.
+   *
+   * 형식이 맞아도 등록되지 않은 식별자면 서버는 기본 구성으로 띄운다 — 화면만 보고는 알 수 없다
+   * (상담창은 멀쩡히 뜨고 답도 한다. 다만 고객사 안내 자료가 아닌 것으로 답한다).
+   * 위젯이 「무엇으로 떴는지」를 준비 신호에 실어 보내므로, 요청과 다르면 여기서 말한다.
+   * 옛 위젯은 이 칸이 없다 — 그때는 아무 말도 하지 않는다(알 수 없는 것을 단정하지 않는다).
+   */
+  var tenantChecked = false;
+  function checkTenant(applied) {
+    if (tenantChecked || !tenant) return;
+    if (typeof applied === 'undefined') return;
+    tenantChecked = true;
+    if (applied === tenant) return;
+    warn('data-tenant="' + tenant + '" 로 요청했지만 등록되지 않은 고객사라 기본 상담창으로 떴습니다 — 고객사 안내 자료로 답하지 않습니다. 관리 콘솔 「설치」 화면에서 식별자를 확인해 주세요.');
+  }
+
   iframe.addEventListener('load', function () {
     sendViewport();
     // 문서는 떴지만 위젯 신호가 늦는 경우의 2차 안전망.
@@ -177,7 +284,7 @@
     if (frameOrigin !== '*' && ev.origin !== frameOrigin) return;
     var d = ev.data;
     if (!d || d.source !== 'gowon-chat') return;
-    if (d.type === 'ready') { reveal(); sendViewport(); return; }
+    if (d.type === 'ready') { reveal(); sendViewport(); checkTenant(d.tenant); return; }
     if (d.type !== 'resize') return;
     reveal();
     lastOpen = !!d.open;
@@ -205,10 +312,15 @@
 
   window.__gowonChat = {
     tenant: tenant || null,
+    // 실제로 적용된 값 — 설치한 사람이 개발자 도구에서 바로 맞춰 볼 수 있는 자리다
+    // (적어 준 값이 버려졌다면 `warnings` 에 그 이유가 한국어로 들어 있다).
+    options: { tenant: tenant || null, position: side, offset: offset, zIndex: zIndex },
+    warnings: warnings,
     element: function () { return iframe; },
     remove: function () {
       lockHost(false);
       if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+      if (printStyle && printStyle.parentNode) printStyle.parentNode.removeChild(printStyle);
       window.__gowonChatLoaded = false;
     }
   };

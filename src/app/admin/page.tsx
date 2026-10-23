@@ -2416,17 +2416,48 @@ function patternExamples(pattern: string): string[] {
     .slice(0, 6);
 }
 
+/**
+ * 설치 스니펫에 실을 선택값.
+ *
+ * 운영자가 고른 그대로 한 줄을 만들어 준다 — 종전에는 기본 한 줄만 주고 `data-tenant="eum"` 같은
+ * 속성은 **아래 표를 보고 손으로 붙이게** 했다. 그렇게 적은 식별자가 틀리면 상담창은 멀쩡히 뜨고
+ * 고객사 안내 자료가 아닌 기본 구성으로 답한다(그 사실을 화면에서는 알 수 없다 · DS 59-2).
+ */
+interface InstallOpts {
+  /** 빈 문자열이면 기본 구성(지식베이스)으로 답한다. */
+  tenant: string;
+  position: 'right' | 'left';
+  offset: number;
+}
+
+/** 여백 상한 — `public/embed.js` 의 `OFFSET_MAX` 와 같은 값이어야 한다(넘기면 화면 밖으로 간다). */
+const INSTALL_OFFSET_MAX = 200;
+/** 고객사 식별자 형식 — `public/embed.js`·`src/lib/tenants.ts` 와 같은 규칙. */
+const INSTALL_TENANT_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+
+/** 0~200 사이의 정수로 자른다 — 우리가 만들어 주는 한 줄은 embed.js 가 반드시 받는 값이어야 한다. */
+function installOffset(raw: string): number {
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(n, INSTALL_OFFSET_MAX);
+}
+
 /** 고객사에 안내할 설치 스니펫. 배포 주소는 지금 보고 있는 주소를 그대로 쓴다. */
-function installSnippet(origin: string): string {
+function installSnippet(origin: string, opts?: InstallOpts): string {
   const base = origin || 'https://<배포도메인>';
-  return `<script src="${base}/embed.js" async></script>`;
+  const parts = [`<script src="${base}/embed.js"`];
+  if (opts && INSTALL_TENANT_RE.test(opts.tenant)) parts.push(`data-tenant="${opts.tenant}"`);
+  if (opts && opts.position === 'left') parts.push('data-position="left"');
+  if (opts && opts.offset > 0) parts.push(`data-offset="${Math.min(opts.offset, INSTALL_OFFSET_MAX)}"`);
+  parts.push('async></script>');
+  return parts.join(' ');
 }
 
 /** 설치 스니펫에 붙일 수 있는 선택 속성(공개 계약 — embed.js 와 같이 유지한다). */
 const INSTALL_OPTIONS: [string, string][] = [
   ['data-position="left"', '상담창을 화면 왼쪽 아래에 붙입니다(기본값: 오른쪽).'],
-  ['data-offset="24"', '화면 가장자리와의 여백(px).'],
-  ['data-z="2147483000"', '다른 요소에 가려질 때 쌓임 순서를 올립니다.'],
+  ['data-offset="24"', `화면 가장자리와의 여백(px · 0~${INSTALL_OFFSET_MAX}).`],
+  ['data-z="2147483000"', '다른 요소에 가려질 때 쌓임 순서를 올립니다(정수만).'],
   ['data-tenant="eum"', '고객사 전용 문구·색·안내 자료를 적용합니다.'],
 ];
 
@@ -2487,6 +2518,15 @@ export default function AdminPage() {
   useEffect(() => {
     try { setOrigin(window.location.origin); } catch { setOrigin(''); }
   }, []);
+  // 고객사에 보낼 한 줄을 **고른 대로** 만든다(DS 59-3) — 손으로 붙이던 속성들이다.
+  const [installTenant, setInstallTenant] = useState('');
+  const [installSide, setInstallSide] = useState<'right' | 'left'>('right');
+  const [installGap, setInstallGap] = useState('0');
+  const installOpts: InstallOpts = {
+    tenant: installTenant,
+    position: installSide,
+    offset: installOffset(installGap),
+  };
   /**
    * 알림(토스트) — 성공과 실패를 **같은 자리에서 다르게** 말한다(DS 29-2).
    * `seq` 는 같은 문장이 연달아 올 때 다시 읽히게 하려고 둔다(aria-live 는 글자가
@@ -3483,6 +3523,8 @@ export default function AdminPage() {
     if (tab === 'tenant' && !tenantView && !tenantBusy && !tenantErr) loadTenant(tenantId);
     // 「응답 테스트」는 기준(고객사) 선택에 목록만 필요하다 — 상세(FAQ 전문)는 받지 않는다(DS 36-3).
     if (tab === 'test' && tenantList.length === 0) loadTenantList();
+    // 설치 화면도 같은 목록을 쓴다 — 고객사를 고르면 그 식별자가 든 한 줄을 만들어 준다(DS 59-3).
+    if (tab === 'install' && tenantList.length === 0) loadTenantList();
   }, [tab, partnerLoaded, partnerBusy, loadPartners, partnerFilter, settleView, settleBusy, settleErr, loadSettlement, settleMonth, settlePartner, tenantView, tenantBusy, tenantErr, loadTenant, tenantId, tenantList.length, loadTenantList]);
 
   /**
@@ -6989,10 +7031,57 @@ export default function AdminPage() {
           <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: '8px 0 14px' }}>
             아래 한 줄을 홈페이지 <code>&lt;body&gt;</code> 끝에 넣으면 상담창이 나타납니다. 닫혀 있을 때는 버튼만 차지하므로 기존 페이지 클릭을 방해하지 않습니다.
           </p>
+          {/* ── 보낼 한 줄을 고른 대로 만든다 (DS 59-3) ──
+              종전에는 기본 한 줄만 주고 고객사·위치·여백은 아래 표를 보고 손으로 붙이게 했다.
+              식별자를 손으로 적다 틀리면 상담창은 멀쩡히 뜨고 **고객사 안내 자료가 아닌 기본
+              구성**으로 답한다 — 화면에서는 보이지 않는 사고라, 애초에 손으로 적지 않게 한다. */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 12 }}>
+            <label htmlFor="ac-install-tenant" style={{ ...S.tag, fontWeight: 700 }}>고객사</label>
+            <select
+              id="ac-install-tenant"
+              className="ac-select"
+              value={installTenant}
+              onChange={(e) => setInstallTenant(e.target.value)}
+            >
+              <option value="">{DEFAULT_TENANT_VIEW_LABEL}</option>
+              {tenantList.map((t) => (
+                <option key={t.id} value={t.id}>{t.name || t.id}</option>
+              ))}
+            </select>
+            <label htmlFor="ac-install-side" style={{ ...S.tag, fontWeight: 700 }}>위치</label>
+            <select
+              id="ac-install-side"
+              className="ac-select"
+              value={installSide}
+              onChange={(e) => setInstallSide(e.target.value === 'left' ? 'left' : 'right')}
+            >
+              <option value="right">오른쪽 아래</option>
+              <option value="left">왼쪽 아래</option>
+            </select>
+            <label htmlFor="ac-install-gap" style={{ ...S.tag, fontWeight: 700 }}>여백</label>
+            <input
+              id="ac-install-gap"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={INSTALL_OFFSET_MAX}
+              // 한 줄에 라벨·고르개와 나란히 서는 칸이라 공통 입력칸의 아래 여백은 덜어낸다
+              // (그대로 두면 375px 에서 줄이 접힐 때 이 칸만 위로 떠 보인다).
+              style={{ ...S.input, width: 92, marginBottom: 0 }}
+              value={installGap}
+              onChange={(e) => setInstallGap(e.target.value)}
+            />
+            <span style={S.tag}>px · 0~{INSTALL_OFFSET_MAX}</span>
+          </div>
+          <p style={{ ...S.tag, marginBottom: 10 }}>
+            {installTenant
+              ? '고른 고객사의 안내 자료·문구·색으로 답합니다.'
+              : '「지식베이스」에 등록한 안내 자료로 답합니다.'}
+          </p>
           {/* 한 줄짜리 스니펫이라 좁은 화면에서는 반드시 넘친다 — 마우스 휠 없이도 끝까지 볼 수 있어야 한다. */}
           <ScrollX label="설치 코드">
             <pre style={{ background: 'var(--ink)', color: 'var(--line)', fontSize: 12.5, borderRadius: 'var(--r-sm)', padding: '14px 16px', margin: 0, width: 'max-content', minWidth: '100%' }}>
-              <code>{installSnippet(origin)}</code>
+              <code>{installSnippet(origin, installOpts)}</code>
             </pre>
           </ScrollX>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
@@ -7000,7 +7089,8 @@ export default function AdminPage() {
               style={S.btn}
               onClick={async () => {
                 try {
-                  await navigator.clipboard.writeText(installSnippet(origin));
+                  // 복사하는 것은 **화면에 보이는 그 줄**이다(같은 함수·같은 값).
+                  await navigator.clipboard.writeText(installSnippet(origin, installOpts));
                   setCopied('설치 코드를 복사했습니다.');
                 } catch {
                   setCopied('복사에 실패했습니다. 코드를 직접 선택해 복사해 주세요.');
@@ -7035,6 +7125,11 @@ export default function AdminPage() {
               </tbody>
             </table>
           </ScrollX>
+          <p style={{ ...S.tag, marginTop: 10, lineHeight: 1.7 }}>
+            값을 손으로 고쳐 넣을 때 형식이 맞지 않으면 상담창은 그대로 뜨되, 무엇을 어떤 값으로 대신했는지
+            설치한 페이지의 브라우저 개발자 도구 콘솔에 한국어로 적습니다. 인쇄할 때는 상담창이 종이에 찍히지
+            않습니다(필요하면 고객사 CSS 에서 <code>#gowon-chat-frame</code> 으로 고를 수 있습니다).
+          </p>
           <p style={{ ...S.tag, marginTop: 14 }}>
             설치 코드는 운영자용 정보라 홈페이지에는 표시하지 않습니다. 이 화면에서만 확인해 주세요.
           </p>

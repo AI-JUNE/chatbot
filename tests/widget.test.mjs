@@ -1537,3 +1537,217 @@ test('저장된 접수 카드에는 처리 상태가 들어 있지 않다 (DS 50
     assert.equal(m.filedCardView({ ...back.handoff.ticket, created: false, stale: true }).status, '', '되살린 카드가 상태를 아는 척한다');
   });
 });
+
+/* ══════════ 59순위 — 백로그 소진 후 56차 재감사 (DS 59-1·59-2) ══════════ */
+
+/**
+ * `public/embed.js` 를 **실제로 돌린다**.
+ *
+ * 이 파일은 고객사 페이지에서 도는 유일한 우리 코드인데, 지금까지는 소스 텍스트로만 검사해 왔다
+ * (브라우저가 없으면 돌려 볼 수 없다고 보았다). 하지만 이 스니펫이 하는 일은 대부분 **문서에
+ * 무엇을 붙이고 style 문자열에 무엇을 적는가**이고, 그것은 가짜 문서로도 그대로 재현된다 —
+ * 돌려 보지 않았기 때문에 `z-index:999999px` 같은 값이 그대로 실리는 것을 아무도 몰랐다.
+ */
+function runEmbed(attrs = {}, hooks = {}) {
+  const src = readFileSync(new URL('../public/embed.js', import.meta.url), 'utf8');
+  const created = [];
+  const listeners = {};
+  const el = (tag) => {
+    const node = {
+      tag,
+      style: {},
+      attrs: {},
+      children: [],
+      setAttribute(k, v) { this.attrs[k] = String(v); },
+      getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
+      appendChild(c) { this.children.push(c); c.parentNode = this; return c; },
+      removeChild(c) { this.children = this.children.filter((x) => x !== c); c.parentNode = null; return c; },
+      addEventListener() {},
+      contentWindow: { postMessage() {} },
+      parentNode: null,
+      text() { return this.children.map((c) => c.textContent || '').join(''); },
+    };
+    created.push(node);
+    return node;
+  };
+
+  const script = el('script');
+  script.src = 'https://chatbot-gowon.vercel.app/embed.js';
+  for (const [k, v] of Object.entries(attrs)) script.setAttribute(k, v);
+
+  const body = el('body');
+  const head = hooks.noHead ? null : el('head');
+  const root = el('html');
+  const doc = {
+    currentScript: script,
+    body,
+    head,
+    documentElement: root,
+    createElement: hooks.breakStyle ? (tag) => { if (tag === 'style') throw new Error('CSP'); return el(tag); } : el,
+    createTextNode: (t) => ({ tag: '#text', textContent: t }),
+    querySelector: () => script,
+    addEventListener() {},
+  };
+  const warnings = [];
+  const win = {
+    location: { href: 'https://shop.example.co.kr/products/1' },
+    innerWidth: 1280,
+    innerHeight: 900,
+    scrollY: 0,
+    addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+    removeEventListener() {},
+    matchMedia: () => ({ matches: false }),
+    console: { warn: (m) => warnings.push(String(m)) },
+    scrollTo() {},
+  };
+  if (hooks.preloaded) win.__gowonChatLoaded = true;
+  win.window = win;
+
+  new Function('window', 'document', 'URL', 'setTimeout', 'clearTimeout', src)(
+    win, doc, URL, () => 0, () => {},
+  );
+
+  const iframe = created.find((n) => n.tag === 'iframe');
+  const styles = () => (head || root).children.filter((n) => n.tag === 'style');
+  return {
+    iframe,
+    styles,
+    warnings,
+    api: win.__gowonChat,
+    /** 위젯이 보낸 메시지를 흉내 낸다 — 보낸 창까지 같아야 통과하는 그 문을 지난다(DS 13-1). */
+    send(data, from) {
+      for (const fn of listeners.message || []) {
+        fn({ source: from === undefined ? iframe.contentWindow : from, origin: 'https://chatbot-gowon.vercel.app', data });
+      }
+    },
+  };
+}
+
+/**
+ * DS 59-1 — 고객사 페이지를 인쇄하면 상담창이 그 종이에 찍혔다.
+ *
+ * 상담창은 화면 위에 떠 있는 조작 화면이지 그 페이지의 내용이 아니다. 우리 콘솔에는 인쇄 규칙을
+ * 세워 두었으면서(globals.css) 고객사 페이지에는 아무 규칙도 보내지 않았고, 프레임에 **이름이
+ * 없어** 고객사가 자기 CSS 로 숨길 수도 없었다.
+ */
+test('고객사 페이지를 인쇄할 때 상담창이 종이에 찍히지 않는다 (DS 59-1)', () => {
+  const r = runEmbed();
+  // ① 프레임에 이름이 있다 — 고객사 CSS 도 고를 수 있어야 한다(공개 계약).
+  assert.equal(r.iframe.id, 'gowon-chat-frame', '프레임에 id 가 없다');
+  assert.equal(r.iframe.getAttribute('data-gowon-chat'), 'frame', '프레임에 식별 속성이 없다');
+
+  // ② 인쇄 전용 규칙 한 장이 호스트 문서에 붙는다.
+  const sheets = r.styles();
+  assert.equal(sheets.length, 1, `인쇄 규칙이 ${sheets.length}장 붙었다`);
+  assert.equal(sheets[0].getAttribute('media'), 'print', '화면에도 적용되는 규칙을 붙였다');
+  assert.match(sheets[0].text(), /\[data-gowon-chat="frame"\]\{display:none !important\}/, '프레임을 숨기지 않는다');
+  // id 가 아니라 속성으로 건다 — 같은 id 를 쓰는 호스트 페이지와 겹치지 않는다.
+  assert.equal(/#gowon-chat-frame\{/.test(sheets[0].text()), false, 'id 선택자로 걸면 호스트와 겹친다');
+
+  // ③ 걷어내면 프레임과 그 규칙이 **함께** 사라진다(남의 문서에 흔적을 남기지 않는다).
+  r.api.remove();
+  assert.equal(r.iframe.parentNode, null, '프레임이 남는다');
+  assert.equal(r.styles().length, 0, '인쇄 규칙만 남는다');
+});
+
+test('인쇄 규칙을 붙이지 못해도 상담창은 뜬다 (DS 59-1)', () => {
+  // head 가 아직 없는 문서 — 뿌리에 붙인다.
+  const noHead = runEmbed({}, { noHead: true });
+  assert.equal(noHead.styles().length, 1, 'head 가 없으면 규칙을 포기한다');
+  assert.ok(noHead.iframe, '상담창이 뜨지 않는다');
+
+  // 호스트 CSP 등으로 style 요소를 만들 수 없는 경우 — 규칙은 없지만 상담창은 그대로다.
+  const blocked = runEmbed({}, { breakStyle: true });
+  assert.ok(blocked.iframe, '규칙을 붙이지 못하면 상담창까지 사라진다');
+  assert.equal(blocked.iframe.id, 'gowon-chat-frame', '이름은 남아야 한다 — 고객사가 직접 숨길 수 있다');
+  blocked.api.remove(); // 규칙이 없어도 걷어내기가 터지지 않는다
+  assert.equal(blocked.iframe.parentNode, null);
+});
+
+/**
+ * DS 59-2 — 설치할 때 적는 값을 **말없이 버리거나 검사 없이 실었다**.
+ *
+ * 네 값 중 셋은 조용히 기본값으로 돌아갔고(설치한 사람은 자기가 적은 값이 안 먹은 줄 모른다),
+ * `data-z` 하나는 검사 없이 style 문자열에 이어 붙었다 — 단위가 붙으면 쌓임 순서 선언이 통째로
+ * 날아가 상담창이 호스트 요소에 가리고, 세미콜론이 들어가면 우리 배치 선언이 덮인다.
+ */
+test('설치할 때 적은 값이 규격을 벗어나면 기본값으로 띄우고 그 사실을 적는다 (DS 59-2)', () => {
+  // ① 쌓임 순서 — 세 가지 어긋난 모양 모두 기본값으로 가고, 한 줄로 이유를 말한다.
+  for (const bad of ['999999px', 'top', '1;position:static']) {
+    const r = runEmbed({ 'data-z': bad });
+    assert.match(r.iframe.style.cssText, /z-index:2147483000;color-scheme/, `data-z="${bad}" 가 그대로 실렸다`);
+    assert.equal(/position:static/.test(r.iframe.style.cssText), false, '적어 준 값이 우리 배치 선언을 덮는다');
+    assert.equal(r.warnings.length, 1, `버린 사실을 말하지 않는다(${bad})`);
+    assert.match(r.warnings[0], /data-z/, '무엇을 버렸는지 말하지 않는다');
+    assert.match(r.warnings[0], /2147483000/, '무엇으로 대신했는지 말하지 않는다');
+    assert.match(r.warnings[0], /GOWON 상담창/, '어느 스크립트가 적은 말인지 알 수 없다');
+  }
+
+  // ② 여백 — 화면 밖으로 나가는 값은 상한에서 멈추고 그 사실을 말한다.
+  const far = runEmbed({ 'data-offset': '9999' });
+  assert.match(far.iframe.style.cssText, /right:200px/, '상담창이 화면 밖에 붙는다');
+  assert.match(far.warnings[0] || '', /data-offset/, '여백을 잘랐다고 말하지 않는다');
+  const neg = runEmbed({ 'data-offset': '-10' });
+  assert.match(neg.iframe.style.cssText, /right:0px/, '음수 여백이 그대로 간다');
+  assert.equal(neg.warnings.length, 1, '음수를 말없이 0 으로 바꾼다');
+
+  // ③ 위치 — 대소문자는 받아 주고(사람이 적는 값이다), 모르는 값은 말한다.
+  const upper = runEmbed({ 'data-position': 'Left' });
+  assert.match(upper.iframe.style.cssText, /left:0px/, '대문자로 적으면 말없이 오른쪽으로 간다');
+  assert.deepEqual(upper.warnings, [], '맞게 적었는데 경고가 떴다');
+  const odd = runEmbed({ 'data-position': 'bottom' });
+  assert.match(odd.warnings[0] || '', /data-position/, '모르는 위치를 말없이 바꾼다');
+
+  // ④ 고객사 — 형식이 틀리면 **기본 상담창**이 뜬다. 그 차이는 화면에 보이지 않는다.
+  const bad = runEmbed({ 'data-tenant': 'eum!' });
+  assert.equal(/tenant=/.test(bad.iframe.src), false, '잘못된 식별자가 주소에 실렸다');
+  assert.match(bad.warnings[0] || '', /data-tenant/, '고객사 설정이 빠진 사실을 말하지 않는다');
+  assert.match(bad.warnings[0] || '', /고객사 안내 자료로 답하지 않습니다/, '무엇이 달라지는지 말하지 않는다');
+
+  // ⑤ 맞게 적은 값에는 한 마디도 하지 않는다(대문자 식별자는 소문자로 받아 준다).
+  const good = runEmbed({ 'data-tenant': 'EUM', 'data-position': 'left', 'data-offset': '24', 'data-z': '900' });
+  assert.match(good.iframe.src, /\/widget\?tenant=eum$/, '고객사 설정이 주소에 실리지 않는다');
+  assert.match(good.iframe.style.cssText, /left:24px;bottom:24px/);
+  assert.match(good.iframe.style.cssText, /z-index:900/);
+  assert.deepEqual(good.warnings, [], '맞게 적었는데 경고가 떴다');
+  assert.deepEqual(good.api.options, { tenant: 'eum', position: 'left', offset: 24, zIndex: '900' }, '적용된 값을 들고 있지 않다');
+
+  // ⑥ 스니펫이 두 번 들어 있으면 뒤엣것은 통째로 무시된다 — 그 사실도 말한다(옵션은 대개 뒤에 붙는다).
+  const second = runEmbed({ 'data-tenant': 'eum' }, { preloaded: true });
+  assert.equal(second.iframe, undefined, '두 번째 스니펫이 상담창을 하나 더 붙인다');
+  assert.match(second.warnings[0] || '', /두 번/, '뒤에 적은 옵션이 무시된다는 사실을 말하지 않는다');
+});
+
+/**
+ * DS 59-2 — 형식이 맞아도 **등록되지 않은** 고객사면 기본 구성으로 뜬다.
+ * 그 차이는 화면 어디에도 없다(상담창은 멀쩡히 뜨고 답도 한다). 위젯이 준비 신호에 실어 보내는
+ * 「무엇으로 떴는가」를 요청한 값과 견주는 것이 설치한 사람이 알 수 있는 유일한 길이다.
+ */
+test('요청한 고객사가 걸리지 않으면 설치한 사람에게 말한다 (DS 59-2)', () => {
+  const miss = runEmbed({ 'data-tenant': 'gowon' });
+  miss.send({ source: 'gowon-chat', type: 'ready', tenant: null });
+  assert.equal(miss.warnings.length, 1, '기본 구성으로 떴는데 아무 말이 없다');
+  assert.match(miss.warnings[0], /등록되지 않은 고객사/);
+  // 같은 말을 되풀이하지 않는다.
+  miss.send({ source: 'gowon-chat', type: 'ready', tenant: null });
+  assert.equal(miss.warnings.length, 1, '같은 말을 되풀이한다');
+
+  const hit = runEmbed({ 'data-tenant': 'eum' });
+  hit.send({ source: 'gowon-chat', type: 'ready', tenant: 'eum' });
+  assert.deepEqual(hit.warnings, [], '제대로 걸렸는데 경고가 떴다');
+
+  // 옛 위젯(이 칸이 없는 배포본)에는 아무 말도 하지 않는다 — 모르는 것을 단정하지 않는다.
+  const old = runEmbed({ 'data-tenant': 'eum' });
+  old.send({ source: 'gowon-chat', type: 'ready' });
+  assert.deepEqual(old.warnings, [], '알 수 없는 것을 틀렸다고 말한다');
+
+  // 고객사를 고르지 않은 기본 설치에는 견줄 것이 없다.
+  const plain = runEmbed();
+  plain.send({ source: 'gowon-chat', type: 'ready', tenant: null });
+  assert.deepEqual(plain.warnings, [], '고르지도 않은 고객사를 두고 말한다');
+
+  // 남의 창이 흉내 낸 신호는 애초에 이 문을 지나지 못한다(DS 13-1 의 경계는 그대로다).
+  const spoof = runEmbed({ 'data-tenant': 'eum' });
+  spoof.send({ source: 'gowon-chat', type: 'ready', tenant: null }, { other: true });
+  assert.deepEqual(spoof.warnings, [], '보낸 창을 보지 않고 받아들인다');
+});

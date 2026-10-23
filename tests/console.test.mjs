@@ -599,7 +599,8 @@ test('가로로 넘치는 표·코드 블록이 키보드로 닿는 스크롤 �
   assert.match(comp, /ro = null;/, '관찰을 걸지 못해도 예외가 새지 않는다');
 
   // ④ 설치 스니펫은 한 줄이라 좁은 화면에서 반드시 넘친다.
-  assert.match(src, /<ScrollX label="설치 코드">[\s\S]{0,400}<code>\{installSnippet\(origin\)\}<\/code>/, '설치 코드 블록이 스크롤 영역 밖에 있다');
+  //    (DS 59-3 이후 그 한 줄에 고른 옵션이 실린다 — 더 길어졌을 뿐 이 자리의 요구는 같다.)
+  assert.match(src, /<ScrollX label="설치 코드">[\s\S]{0,400}<code>\{installSnippet\(origin[^)]*\)\}<\/code>/, '설치 코드 블록이 스크롤 영역 밖에 있다');
   assert.match(src, /width: 'max-content', minWidth: '100%'/, '스크롤해도 코드 블록 배경이 끊기지 않아야 한다');
 });
 
@@ -3322,4 +3323,106 @@ test('업로드 미리보기가 등록되지 않는 조각을 말한다 (DS 58-3
   // ④ 겪기 전에는 말하지 않는다(첫 렌더에 경고가 없다).
   const html = await render();
   assert.equal(html.includes('은 등록되지 않습니다'), false, '겪기도 전에 경고한다');
+});
+
+/* ══════════ 59순위 — 백로그 소진 후 56차 재감사 (DS 59-3) ══════════ */
+
+/** 설치 스니펫을 만드는 자를 떼어내 실제로 돌린다(상수까지 함께 — 상한·형식이 그 안에 있다). */
+async function loadInstall() {
+  await loadConsole();
+  const konst = [/const INSTALL_OFFSET_MAX = \d+;/, /const INSTALL_TENANT_RE = \/.+\/;/].map((re) => {
+    const m = re.exec(cachedJs);
+    assert.ok(m, `${re} 선언을 찾지 못했다`);
+    return m[0];
+  });
+  const fns = ['installOffset', 'installSnippet'].map((n) => {
+    const i = cachedJs.indexOf(`function ${n}(`);
+    assert.ok(i >= 0, `${n} 선언을 찾지 못했다`);
+    const end = cachedJs.indexOf('\n}', i);
+    assert.ok(end > i, `${n} 의 끝을 찾지 못했다`);
+    return cachedJs.slice(i, end + 2);
+  });
+  return new Function(`${konst.join('\n')}\n${fns.join('\n')}\nreturn { installOffset, installSnippet };`)();
+}
+
+/**
+ * DS 59-3 — 고객사에 보낼 한 줄을 운영자가 **손으로 조립**했다.
+ *
+ * 화면은 기본 한 줄만 주고 `data-tenant="eum"` 같은 속성은 아래 표를 보고 직접 붙이게 했다.
+ * 그렇게 적은 식별자가 틀리면 상담창은 멀쩡히 뜨고 **고객사 안내 자료가 아닌 기본 구성**으로
+ * 답한다 — 화면에서는 보이지 않는 사고다(DS 59-2 가 설치한 사람에게 말해 주기로 한 그 자리).
+ * 그러니 애초에 손으로 적지 않게 한다: 고른 그대로의 한 줄을 만들어 주고, 그 줄은 반드시
+ * `public/embed.js` 가 받는 값이어야 한다.
+ */
+test('설치 코드가 고른 고객사·위치·여백 그대로 만들어진다 (DS 59-3)', opts, async () => {
+  const { installSnippet, installOffset } = await loadInstall();
+  const base = 'https://chatbot-gowon.vercel.app';
+
+  // ① 아무것도 고르지 않으면 종전과 같은 한 줄이다(기존 안내를 바꾸지 않는다).
+  const plain = { tenant: '', position: 'right', offset: 0 };
+  assert.equal(installSnippet(base, plain), `<script src="${base}/embed.js" async></script>`);
+  assert.equal(installSnippet(base), `<script src="${base}/embed.js" async></script>`, '옵션 없이 부르던 자리가 깨졌다');
+
+  // ② 고른 것만 실린다 — 기본값은 적지 않는다(설치 코드가 길어질수록 틀릴 자리가 는다).
+  assert.equal(
+    installSnippet(base, { tenant: 'eum', position: 'left', offset: 24 }),
+    `<script src="${base}/embed.js" data-tenant="eum" data-position="left" data-offset="24" async></script>`,
+  );
+  assert.equal(
+    installSnippet(base, { tenant: 'eum', position: 'right', offset: 0 }),
+    `<script src="${base}/embed.js" data-tenant="eum" async></script>`,
+  );
+
+  // ③ 주소를 아직 읽지 못했어도 사람이 채울 자리를 남긴다(하드코딩 금지).
+  assert.match(installSnippet('', plain), /^<script src="https:\/\/<배포도메인>\/embed\.js"/);
+
+  // ④ 만들어 주는 한 줄은 embed.js 가 **반드시 받는** 값이다 — 형식을 벗어나면 싣지 않는다.
+  assert.equal(
+    installSnippet(base, { tenant: 'eum"><script>', position: 'right', offset: 0 }),
+    `<script src="${base}/embed.js" async></script>`,
+    '식별자 형식을 보지 않고 그대로 싣는다',
+  );
+  assert.equal(
+    /data-offset="\d+"/.exec(installSnippet(base, { tenant: '', position: 'right', offset: 9999 }))[0],
+    'data-offset="200"',
+    '화면 밖으로 나가는 여백을 그대로 적는다',
+  );
+
+  // ⑤ 여백 칸은 사람이 치는 칸이다 — 무엇을 쳐도 0~상한의 정수가 된다.
+  assert.equal(installOffset(''), 0);
+  assert.equal(installOffset('abc'), 0);
+  assert.equal(installOffset('-5'), 0);
+  assert.equal(installOffset('24'), 24);
+  assert.equal(installOffset('24.6'), 25);
+  assert.equal(installOffset('9999'), 200);
+
+  // ⑥ 상한·형식은 embed.js 와 **같은 값**이어야 한다(어긋나면 우리가 만든 줄을 우리가 거절한다).
+  const embed = readFileSync(new URL('../public/embed.js', import.meta.url), 'utf8');
+  assert.match(embed, /var OFFSET_MAX = 200;/, '여백 상한이 두 곳에서 갈라졌다');
+  assert.match(embed, /\/\^\[a-z0-9\]\[a-z0-9_-\]\{0,31\}\$\//, '식별자 형식이 두 곳에서 갈라졌다');
+  const page = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /const INSTALL_OFFSET_MAX = 200;/, '화면의 여백 상한이 바뀌었다');
+  assert.match(page, /const INSTALL_TENANT_RE = \/\^\[a-z0-9\]\[a-z0-9_-\]\{0,31\}\$\/;/, '화면의 식별자 형식이 바뀌었다');
+});
+
+/** DS 59-3 — 고르는 자리가 실제로 화면에 있고, 복사하는 것이 보이는 그 줄인가. */
+test('설치 화면에 고객사·위치·여백 고르개가 있고 복사가 보이는 줄을 준다 (DS 59-3)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // 목록은 「응답 테스트」와 같은 출처다(DS 36-3) — 설치 화면에서도 불러온다.
+  assert.match(src, /tab === 'install' && tenantList\.length === 0\) loadTenantList\(\);/, '설치 화면이 고객사 목록을 불러오지 않는다');
+  const tab = src.slice(src.indexOf("{tab === 'install' && ("), src.indexOf('설치 코드는 운영자용 정보라'));
+  for (const [id, label] of [['ac-install-tenant', '고객사'], ['ac-install-side', '위치'], ['ac-install-gap', '여백']]) {
+    assert.ok(tab.includes(`htmlFor="${id}"`), `${label} 고르개에 라벨이 없다`);
+    assert.ok(tab.includes(`id="${id}"`), `${label} 고르개가 없다`);
+  }
+  // 코드가 아니라 이름으로 고른다(운영자 화면에 내부 식별자를 적지 않는다 · DS 36-3 과 같은 규칙).
+  assert.match(tab, /<option key=\{t\.id\} value=\{t\.id\}>\{t\.name \|\| t\.id\}<\/option>/, '고객사를 식별자로 고르게 한다');
+  assert.ok(tab.includes('{DEFAULT_TENANT_VIEW_LABEL}'), '기본 구성을 고를 자리가 없다');
+  // 보이는 줄과 복사되는 줄이 **같은 함수·같은 값**이다.
+  assert.equal((tab.match(/installSnippet\(origin, installOpts\)/g) || []).length, 2, '복사되는 줄이 화면의 줄과 다르다');
+  // 여백 칸은 상한을 화면에서도 말한다(치고 나서 거절당하지 않게).
+  assert.ok(tab.includes('max={INSTALL_OFFSET_MAX}'), '여백 칸에 상한이 없다');
+  // 인쇄·형식 안내는 설치하는 사람이 알아야 하는 사실이다(DS 59-1·59-2 의 결과).
+  assert.ok(tab.includes('#gowon-chat-frame'), '고객사가 고를 이름을 알려 주지 않는다');
+  assert.ok(tab.includes('인쇄할 때는 상담창이 종이에 찍히지'), '인쇄에서 빠진다는 사실을 말하지 않는다');
 });

@@ -3829,3 +3829,40 @@ test('문서 업로드에서 거르는 자와 세는 자가 한 벌이다 (DS 58
   const exports = [...route.matchAll(/^export (?:async function|function|const) (\w+)/gm)].map((m) => m[1]);
   assert.deepEqual(exports.sort(), ['POST', 'dynamic'], `route.ts 에 허용되지 않은 export 가 있다: ${exports}`);
 });
+
+/* ══════════ 59순위 — 백로그 소진 후 56차 재감사 (DS 59-x) ══════════ */
+
+/**
+ * DS 59-1·59-2 — 고객사 페이지 위에서의 배선.
+ * 「정말 그렇게 도는가」는 `tests/widget.test.mjs`(DS 59-1·59-2)가 embed.js 를 실제로 돌려 본다.
+ * 여기서는 **두 쪽이 맞물리는 자리**만 고정한다 — 한쪽만 고치면 조용히 어긋나는 것들이다.
+ */
+test('고객사 페이지에 붙는 쪽의 배선이 한 벌로 맞물린다 (DS 59-1·59-2)', () => {
+  const e = read('public/embed.js');
+  // ① 인쇄에서 빠지는 이름과 그 이름을 거는 규칙이 같은 글자다.
+  assert.match(e, /iframe\.setAttribute\('data-gowon-chat', 'frame'\);/, '프레임에 식별 속성이 없다');
+  assert.match(e, /\[data-gowon-chat="frame"\]\{display:none !important\}/, '인쇄 규칙이 그 속성을 걸지 않는다');
+  assert.match(e, /printStyle\.setAttribute\('media', 'print'\);/, '화면에도 적용되는 규칙을 붙인다');
+  // 우리 화면의 인쇄 규칙(globals.css)은 콘솔만 덮는다 — 고객사 페이지는 이쪽이 유일한 자리다.
+  assert.equal(/gowon-chat/.test(read('src/app/globals.css')), false, '고객사 페이지 규칙이 우리 CSS 에 섞였다');
+
+  // ② 검사하지 않은 값이 style 문자열에 실리지 않는다(세미콜론 한 글자가 배치를 덮던 자리).
+  assert.match(e, /var zIndex = \/\^\[0-9\]\{1,10\}\$\/\.test\(zRaw\) \? zRaw : Z_DEFAULT;/, '쌓임 순서를 검사하지 않는다');
+  assert.equal(/attr\('data-z'[^\n]*\n\s*(var|iframe)\.?style/.test(e), false, '적어 준 값이 곧바로 style 로 간다');
+
+  // ③ 버린 값은 **설치한 사람이 보는 자리**에만 적는다(방문자 화면에는 한 글자도 적지 않는다).
+  assert.match(e, /function warn\(msg\) \{/, '버린 사실을 적는 자리가 없다');
+  assert.match(e, /window\.console\.warn\('\[GOWON 상담창\] ' \+ msg\)/, '어느 스크립트가 적은 말인지 알 수 없다');
+  assert.equal(/document\.body\.appendChild\(document\.createTextNode/.test(e), false, '방문자 화면에 글자를 적는다');
+
+  // ④ 위젯은 **무엇으로 떴는지**를 준비 신호에 싣는다 — embed.js 가 요청한 값과 견주는 유일한 단서다.
+  const w = read('src/components/ChatWidget.tsx');
+  assert.match(w, /\{ source: 'gowon-chat', type: 'ready', tenant: tenant \? tenant\.id : null \}/, '적용된 고객사를 알리지 않는다');
+  assert.match(e, /checkTenant\(d\.tenant\)/, '호스트가 그 값을 보지 않는다');
+  assert.match(e, /if \(typeof applied === 'undefined'\) return;/, '옛 위젯을 틀렸다고 말한다');
+
+  // ⑤ 공개 계약(data-tenant·data-position)은 그대로다.
+  assert.match(e, /attr\('data-position', 'right'\)/, 'data-position 옵션 계약이 깨졌다');
+  assert.match(e, /data-tenant/, 'data-tenant 옵션 계약이 깨졌다');
+  assert.match(e, /tenant: tenant \|\| null,/, '__gowonChat.tenant 계약이 깨졌다');
+});
