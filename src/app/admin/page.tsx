@@ -399,9 +399,59 @@ const TICKET_STATUS_TONE: Record<TicketView['status'], { background: string; col
   canceled: TONE.mute,
 };
 
+/**
+ * **화면에 적는 시각** 'YYYY-MM-DD HH:MM'(한국 시간) — 이 화면의 모든 시각 칸 (DS 60-1).
+ *
+ * 종전에는 `d.toLocaleString('ko-KR', { month, day, hour, minute })` 였다. 세 가지가 어긋났다:
+ *  ① **브라우저가 켜 둔 시간대**로 적혔다 — 파일은 `kstDateTime`, 바로 아래 귀속 타임라인은
+ *     `kstDateLabel`, 대시보드의 「오늘」은 서버의 `kstDate` 로 세는데 화면의 시각만 그랬다.
+ *     돌려서 본 값(TZ=UTC): `2026-10-22T16:00Z` → 화면 「10. 22. PM 04:00」 / 타임라인
+ *     「2026-10-23」 / 파일 「2026-10-23 01:00:00」. 같은 한 건이 세 자리에서 다른 날이다
+ *     (DS 55-2 가 `at.slice(0,10)` 에서 닫은 갈라짐이 이 함수에 그대로 남아 있었다).
+ *  ② **연도가 없었다** — 보관 한도는 500건이고 DS 58-1 이 다룬 복원된 백업은 1월 기록을 데려온다.
+ *     「1. 1. AM 12:00」이 올해인지 지난해인지 화면에 없고, 12월 줄과 1월 줄은 순서가 거꾸로 보인다.
+ *     연락처 파기 시각(개인정보처리방침 4조)·보관 경계처럼 **근거로 꺼내는 시각**도 같은 모양이었다.
+ *  ③ **「오전/오후」를 런타임이 적었다** — ICU 78 의 ko 축약형은 「AM」·「PM」이다(돌려서 확인했다).
+ *     한국어 화면 한가운데에 영문이 섞이고, 어느 글자가 될지는 브라우저 판본에 달려 있었다.
+ *
+ * 원본은 `src/lib/kst.ts`(`kstMinute` = `kstDateTime` 에서 초만 뗀 것)이고, 콘솔은 lib 을
+ * 불러오지 않으므로(클라이언트 번들 · `kstMonthNow`·`kstDateLabel` 과 같은 이유) 계산식을 옮겨
+ * 적고 **테스트가 두 결과를 글자까지 맞춰 고정한다**. 읽을 수 없는 값에는 빈 문자열을 돌려준다
+ * (종전 그대로 — 부르는 쪽이 아무것도 그리지 않는다).
+ */
 function timeLabel(iso: string): string {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  if (Number.isNaN(d.getTime())) return '';
+  const v = new Date(d.getTime() + 9 * 60 * 60 * 1000); // KST = UTC+9, 일광절약시간 없음
+  const p = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${v.getUTCFullYear()}-${p(v.getUTCMonth() + 1)}-${p(v.getUTCDate())}` +
+    ` ${p(v.getUTCHours())}:${p(v.getUTCMinutes())}`
+  );
+}
+
+/**
+ * 화면이 제 시각 기준을 말하는 한 줄 — 원본은 `src/lib/kst.ts`(`KST_SCREEN_NOTE`)이고
+ * 파일 꼬리의 `KST_CSV_NOTE` 와 같은 자리의 일이다(테스트가 두 글자를 대조한다).
+ */
+const KST_SCREEN_NOTE = '시각은 한국 시간(KST, UTC+9) 기준입니다.';
+
+/**
+ * 사람이 읽는 **수** — 원본은 `src/lib/num.ts`(`comma`)다 (DS 60-3).
+ * 콘솔은 lib 을 불러오지 않으므로 계산식을 옮겨 적고 테스트가 두 결과를 맞춰 고정한다.
+ * 이 화면은 클라이언트 컴포넌트지만 첫 그림은 **서버가** 그리므로(정적으로 적는 상한 문장 등),
+ * `toLocaleString` 을 쓰면 ICU 가 작은 런타임에서 서버와 브라우저가 다른 글자를 내 수화(hydration)가
+ * 어긋난다 — 그 자리를 Intl 에 맡기지 않는 까닭이다.
+ */
+function comma(n: number): string {
+  if (!Number.isFinite(n)) return String(n);
+  const s = String(n);
+  const dot = s.indexOf('.');
+  const head = dot < 0 ? s : s.slice(0, dot);
+  const tail = dot < 0 ? '' : s.slice(dot);
+  const sign = head.startsWith('-') ? '-' : '';
+  const digits = sign ? head.slice(1) : head;
+  return `${sign}${digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${tail}`;
 }
 
 /**
@@ -1167,7 +1217,10 @@ function Pager({ info, label, unit = '건', onPage }: { info: PageInfo; label: s
   return (
     <nav className="ac-pager" aria-label={`${label} 페이지 이동`}>
       <span className="ac-pager-cnt" role="status" aria-live="polite">
-        총 {info.total.toLocaleString('ko-KR')}{unit} 중 {info.from}–{info.to}번째 · {info.page}/{info.pages} 페이지
+        {/* 한 문장 안에서 자가 갈리지 않게 한다 (DS 60-3) — 종전에는 총계만 천 단위로 끊어
+          * 「총 1,234건 중 1001–1050번째」였다. 쪽수(`page/pages`)는 세 자리를 넘지 않는 작은 수라
+          * 끊어도 달라지지 않지만 같은 자를 쓴다. */}
+        총 {comma(info.total)}{unit} 중 {comma(info.from)}–{comma(info.to)}번째 · {comma(info.page)}/{comma(info.pages)} 페이지
       </span>
       <button
         type="button"
@@ -1263,7 +1316,11 @@ function SyncStatus({ at, onRefresh }: { at: number; onRefresh: () => void }) {
   return (
     <>
       <span style={{ ...S.tag, whiteSpace: 'nowrap' }}>
-        {at > 0 ? `${new Date(at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 기준` : '확인 전'}
+        {/* 시·분만 적는 자리라 `timeLabel` 의 날짜까지 쓰지 않지만, **시계는 같은 것**을 쓴다
+          * (DS 60-1) — 종전에는 이 한 줄만 브라우저 시간대였고, 바로 옆 표의 시각은 한국 시간이라
+          * 「09:11 기준」 아래에 「2026-10-23 18:11」 이 적히는 화면이 됐다. 「AM/PM」도 같은 까닭으로
+          * 런타임에 맡기지 않는다(ICU 판본에 따라 영문이 섞인다). */}
+        {at > 0 ? `${timeLabel(new Date(at).toISOString()).slice(11)} 기준` : '확인 전'}
         {` · ${Math.round(OPS_POLL_MS / 1000)}초마다 자동 확인`}
       </span>
       <button type="button" style={S.btnGhost} onClick={onRefresh}>새로고침</button>
@@ -1704,7 +1761,7 @@ const ISSUE_LABELS: Record<SettlementRowView['issue'], string> = {
 };
 /** 금액 표시 — 값이 없으면 임의로 0을 쓰지 않고 "미입력"이라고 밝힌다. */
 function wonLabel(v: number | null | undefined): string {
-  return typeof v === 'number' ? `${v.toLocaleString('ko-KR')}원` : '미입력';
+  return typeof v === 'number' ? `${comma(v)}원` : '미입력';
 }
 
 /**
@@ -2725,7 +2782,7 @@ export default function AdminPage() {
     const errs: typeof impErr = {};
     if (!imp.title.trim()) errs.title = '문서명을 입력해 주세요. 답변에 출처로 표시됩니다.';
     if (!imp.text.trim()) errs.text = '문서 본문을 붙여넣어 주세요.';
-    else if (docLen(imp.text) > MAX_DOC_CHARS) errs.text = `본문이 ${MAX_DOC_CHARS.toLocaleString('ko-KR')}자를 넘습니다. 장을 나눠 올려주세요.`;
+    else if (docLen(imp.text) > MAX_DOC_CHARS) errs.text = `본문이 ${comma(MAX_DOC_CHARS)}자를 넘습니다. 장을 나눠 올려주세요.`;
     const chunk = Number(imp.maxChars);
     if (imp.maxChars.trim() === '' || !Number.isFinite(chunk) || chunk < MIN_CHUNK_CHARS || chunk > MAX_CHUNK_CHARS) {
       errs.maxChars = `${MIN_CHUNK_CHARS}~${MAX_CHUNK_CHARS} 사이 숫자로 적어주세요.`;
@@ -4715,12 +4772,12 @@ export default function AdminPage() {
             <div className="ac-kpi" style={{ marginBottom: 16 }}>
               <KpiCard
                 label="오늘 대화"
-                value={`${(stats.conversation.today?.turns ?? 0).toLocaleString('ko-KR')}건`}
+                value={`${comma(stats.conversation.today?.turns ?? 0)}건`}
                 /* 이 수의 **모수**를 함께 적는다 (DS 43-1) — 보관 경계가 오늘 안에 있으면 오늘 수도
                    그날 전부가 아니다(새 인스턴스는 올라온 시각 이후만 안다). 종전에는 그 사실이
                    어디에도 없어 운영자는 이 수를 그날 전부로 읽었다. */
                 note={
-                  `대화 상대 ${(stats.conversation.today?.sessions ?? 0).toLocaleString('ko-KR')}명 · 보관 중 ${stats.conversation.totalTurns.toLocaleString('ko-KR')}건`
+                  `대화 상대 ${comma(stats.conversation.today?.sessions ?? 0)}명 · 보관 중 ${comma(stats.conversation.totalTurns)}건`
                   + (stats.conversation.today?.coverage === 'partial' && stats.conversation.retention
                     ? ` · ${timeLabel(stats.conversation.retention.knownFrom)} 이후만 집계`
                     : '')
@@ -4732,14 +4789,14 @@ export default function AdminPage() {
                 empty={stats.conversation.totalTurns === 0}
                 note={
                   stats.conversation.totalTurns > 0
-                    ? `등록된 안내 자료·규칙으로 바로 답한 비율 (${stats.conversation.autoHandled.toLocaleString('ko-KR')}/${stats.conversation.totalTurns.toLocaleString('ko-KR')})`
+                    ? `등록된 안내 자료·규칙으로 바로 답한 비율 (${comma(stats.conversation.autoHandled)}/${comma(stats.conversation.totalTurns)})`
                     : '대화가 쌓이면 계산됩니다.'
                 }
               />
               <KpiCard
                 label="상담원 전환"
-                value={`${(stats.conversation.today?.escalated ?? 0).toLocaleString('ko-KR')}건`}
-                note={`접수 대기 ${stats.escalation.open.toLocaleString('ko-KR')}건 · 누적 접수 ${stats.escalation.total.toLocaleString('ko-KR')}건`}
+                value={`${comma(stats.conversation.today?.escalated ?? 0)}건`}
+                note={`접수 대기 ${comma(stats.escalation.open)}건 · 누적 접수 ${comma(stats.escalation.total)}건`}
               />
               <KpiCard
                 label="평균 응답 시간"
@@ -4747,7 +4804,7 @@ export default function AdminPage() {
                 empty={typeof stats.conversation.avgLatencyMs !== 'number'}
                 note={
                   typeof stats.conversation.avgLatencyMs === 'number'
-                    ? `서버가 답을 만드는 데 걸린 시간 · 최근 ${(stats.conversation.latencySamples ?? 0).toLocaleString('ko-KR')}건 평균`
+                    ? `서버가 답을 만드는 데 걸린 시간 · 최근 ${comma(stats.conversation.latencySamples ?? 0)}건 평균`
                     : '대화가 쌓이면 서버 처리 시간 기준으로 계산됩니다.'
                 }
               />
@@ -4788,7 +4845,7 @@ export default function AdminPage() {
                     어느 날이 빠졌는지 알 수 없다. 옛 응답(retention 없음)에는 종전 문구를 쓴다. */}
                 <span style={S.tag}>
                   {stats.conversation.retention
-                    ? `${timeLabel(stats.conversation.retention.knownFrom)} 이후 보관된 기록 기준 · 최대 ${stats.conversation.retention.limit.toLocaleString('ko-KR')}건`
+                    ? `${timeLabel(stats.conversation.retention.knownFrom)} 이후 보관된 기록 기준 · 최대 ${comma(stats.conversation.retention.limit)}건 · ${KST_SCREEN_NOTE}`
                     : '보관 중인 기록 기준'}
                 </span>
               </div>
@@ -4830,9 +4887,9 @@ export default function AdminPage() {
                     {(stats.conversation.byTenant ?? []).map((t) => (
                       <tr key={t.tenant ?? ''}>
                         <th scope="row" style={{ fontWeight: 700 }}>{t.label || UNNAMED_TENANT}</th>
-                        <td style={{ fontVariantNumeric: 'tabular-nums' }}>{t.turns.toLocaleString('ko-KR')}건</td>
-                        <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--sub)' }}>{t.sessions.toLocaleString('ko-KR')}</td>
-                        <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--sub)' }}>{t.escalated.toLocaleString('ko-KR')}건</td>
+                        <td style={{ fontVariantNumeric: 'tabular-nums' }}>{comma(t.turns)}건</td>
+                        <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--sub)' }}>{comma(t.sessions)}</td>
+                        <td style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--sub)' }}>{comma(t.escalated)}건</td>
                       </tr>
                     ))}
                   </tbody>
@@ -4889,8 +4946,8 @@ export default function AdminPage() {
                 <h2 style={S.h2}>자료에 없어 답하지 못한 질문</h2>
                 <span style={S.tag} role="status">
                   {unanswered.groups > unanswered.items.length
-                    ? `${unanswered.groups.toLocaleString('ko-KR')}가지 중 ${unanswered.items.length}가지 · 모두 ${unanswered.turns.toLocaleString('ko-KR')}번`
-                    : `${unanswered.groups.toLocaleString('ko-KR')}가지 · 모두 ${unanswered.turns.toLocaleString('ko-KR')}번`}
+                    ? `${comma(unanswered.groups)}가지 중 ${comma(unanswered.items.length)}가지 · 모두 ${comma(unanswered.turns)}번`
+                    : `${comma(unanswered.groups)}가지 · 모두 ${comma(unanswered.turns)}번`}
                 </span>
               </div>
               <p style={{ fontSize: 13, color: 'var(--sub)', marginBottom: 12 }}>
@@ -4966,8 +5023,8 @@ export default function AdminPage() {
                       {stats.feedback.helpfulRate === null ? MEASURING : `${stats.feedback.helpfulRate}%`}
                     </span>
                     <span style={{ fontSize: 13, color: 'var(--sub)' }}>도움이 됐다는 응답</span>
-                    <span className="ac-pill" style={TONE.ok}>도움됐어요 {stats.feedback.up.toLocaleString('ko-KR')}건</span>
-                    <span className="ac-pill" style={TONE.warn}>아쉬워요 {stats.feedback.down.toLocaleString('ko-KR')}건</span>
+                    <span className="ac-pill" style={TONE.ok}>도움됐어요 {comma(stats.feedback.up)}건</span>
+                    <span className="ac-pill" style={TONE.warn}>아쉬워요 {comma(stats.feedback.down)}건</span>
                   </div>
                   {stats.feedback.topDown.length > 0 && (
                     <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
@@ -5265,7 +5322,7 @@ export default function AdminPage() {
                 id="kb-imp-count"
                 style={{ ...S.tag, marginLeft: 'auto', ...(docLen(imp.text) > MAX_DOC_CHARS ? { color: 'var(--danger)', fontWeight: 700 } : {}) }}
               >
-                {docLen(imp.text).toLocaleString('ko-KR')} / {MAX_DOC_CHARS.toLocaleString('ko-KR')}자
+                {comma(docLen(imp.text))} / {comma(MAX_DOC_CHARS)}자
               </span>
             </div>
             {/* 등록하면 지식베이스에서 무엇이 바뀌는가 — 미리보기에도, 등록한 뒤에도 같은 자리에서 말한다(DS 44-1). */}
@@ -5314,7 +5371,7 @@ export default function AdminPage() {
                 <ul className="ac-rulehint" style={{ margin: '4px 0 0 18px' }}>
                   {impDropped.slice(0, 5).map((d) => (
                     <li key={d.index}>
-                      #{d.index} · {d.heading || '제목 없음(문서 맨 앞)'} · {d.chars.toLocaleString('ko-KR')}자
+                      #{d.index} · {d.heading || '제목 없음(문서 맨 앞)'} · {comma(d.chars)}자
                       {d.head ? ` · 「${d.head}」` : ''}
                     </li>
                   ))}
@@ -5850,7 +5907,7 @@ export default function AdminPage() {
                     따로 적는다. 검색칸도 **불러온 범위**만 뒤진다(추가 요청을 보내지 않는다). */}
                 <span style={S.tag} aria-live="polite">
                   {filtered.length}/{tickets.length}건
-                  {ticketPage?.truncated ? ` · 전체 ${ticketTotal.toLocaleString('ko-KR')}건 중 최근 ${tickets.length.toLocaleString('ko-KR')}건만 불러왔습니다` : ''}
+                  {ticketPage?.truncated ? ` · 전체 ${comma(ticketTotal)}건 중 최근 ${comma(tickets.length)}건만 불러왔습니다` : ''}
                 </span>
                 {ticketPage?.truncated && ticketLimit < TICKET_PAGE_MAX && (
                   <button
@@ -5877,7 +5934,7 @@ export default function AdminPage() {
                 <p className="ac-rulehint" style={{ margin: '0 16px 12px' }}>
                   대기·상담 중 요청은 모두 들어 있고, 완료·취소는 최신 것부터 채웁니다.
                   {ticketLimit >= TICKET_PAGE_MAX
-                    ? ` 한 번에 불러오는 상한(${TICKET_PAGE_MAX.toLocaleString('ko-KR')}건)에 닿았습니다 — 그보다 오래된 완료·취소 요청은 이 화면에서 볼 수 없습니다.`
+                    ? ` 한 번에 불러오는 상한(${comma(TICKET_PAGE_MAX)}건)에 닿았습니다 — 그보다 오래된 완료·취소 요청은 이 화면에서 볼 수 없습니다.`
                     : ' 더 오래된 완료·취소 요청은 「더 불러오기」를 눌러 주세요.'}
                 </p>
               )}
@@ -5939,7 +5996,9 @@ export default function AdminPage() {
                                   : null}
                             </td>
                             <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{t.reasonCode ? (HANDOFF_REASON_LABELS[t.reasonCode] ?? t.reasonCode) : t.reason}</td>
-                            <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{timeLabel(t.createdAt)}</td>
+                            {/* 시각은 자릿수가 고정된 글자다 — 숫자 폭을 고정해 열이 흔들리지 않게 한다
+                                (대화량 표의 수가 쓰는 `tabular-nums` 와 같은 규격 · DS 60-1). */}
+                            <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{timeLabel(t.createdAt)}</td>
                             <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
                               <button
                                 type="button"
@@ -6391,7 +6450,7 @@ export default function AdminPage() {
 
       {tab === 'settle' && (() => {
         const r = settleView;
-        const won = (v: number) => `${v.toLocaleString('ko-KR')}원`;
+        const won = (v: number) => `${comma(v)}원`;
         const feeTotal = !r ? MEASURING : r.rows.length === 0 ? '대상 없음' : r.totals.billable === 0 ? '산출 불가' : won(r.totals.feeAmountKrw);
         const feeEmpty = !r || r.rows.length === 0 || r.totals.billable === 0;
         const monthLabel = r ? `${r.month.slice(0, 4)}년 ${Number(r.month.slice(5, 7))}월` : '';
@@ -6742,7 +6801,7 @@ export default function AdminPage() {
                       서버가 든 것도 한도까지뿐이다. 옛 응답(모수 없음)에는 종전 문구를 쓴다. */}
                   <p style={{ ...S.tag, marginTop: 2 }}>
                     {auditRange
-                      ? `보관 중인 ${auditRange.kept.toLocaleString('ko-KR')}건 중 최근 ${auditEvents.length.toLocaleString('ko-KR')}건 · ${timeLabel(auditRange.knownFrom)} 이후 · 보관 한도 ${auditRange.limit.toLocaleString('ko-KR')}건`
+                      ? `보관 중인 ${comma(auditRange.kept)}건 중 최근 ${comma(auditEvents.length)}건 · ${timeLabel(auditRange.knownFrom)} 이후 · 보관 한도 ${comma(auditRange.limit)}건 · ${KST_SCREEN_NOTE}`
                       : '최근 100건'}
                     {auditRange?.dropped && ' · 한도를 넘어선 더 오래된 기록은 서버에도 남아 있지 않습니다'}
                   </p>
@@ -6803,7 +6862,7 @@ export default function AdminPage() {
                         // 번호는 인스턴스마다 1번부터 다시 매겨진다 — 백업을 합치면(DS 48-3)
                         // 같은 번호가 둘일 수 있으므로 시각까지 합쳐 줄을 가른다.
                         <tr key={`${e.id}\u0000${e.at}`}>
-                          <td style={{ whiteSpace: 'nowrap', color: 'var(--sub)' }}>{timeLabel(e.at)}</td>
+                          <td style={{ whiteSpace: 'nowrap', color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>{timeLabel(e.at)}</td>
                           <td style={{ whiteSpace: 'nowrap' }}><span className="ac-pill">{e.actionLabel || UNNAMED_AUDIT_ACTION}</span></td>
                           <td style={{ minWidth: 160 }}>
                             {e.target && <span style={{ fontWeight: 700 }}>{e.target}</span>}

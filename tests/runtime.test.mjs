@@ -5598,3 +5598,99 @@ test('업로드한 문서에서 빠진 조각을 세어 돌려준다 (DS 58-3)',
   assert.ok(long.dropped[0].head.endsWith('…'), '줄였으면 줄였다고 말하지 않는다');
   assert.ok(long.dropped[0].chars > 41, '재현 조건이 성립하지 않는다 — 본문이 짧다');
 });
+
+/* ══════════ 60순위 — 백로그 소진 후 57차 재감사 (DS 60-1·60-3) ══════════ */
+
+/**
+ * DS 60-1 — **화면에 적는 시각**은 파일·타임라인과 같은 시계·같은 글자여야 한다.
+ *
+ * 종전 모습: 콘솔의 `timeLabel` 은 `toLocaleString('ko-KR', …)` 이라 **브라우저가 켜 둔
+ * 시간대**로 적었고, 연도가 없었고, 「오전/오후」를 런타임의 CLDR 판본에 맡겼다(돌려서 본 값:
+ * `2026-10-22T16:00Z` → 화면 「10. 22. PM 04:00」 / 타임라인 「2026-10-23」 / 파일
+ * 「2026-10-23 01:00:00」). 여기서는 그 자리를 대신할 lib 쪽 단일 출처(`kstMinute`)가
+ * **초만 뗀 `kstDateTime`** 인지 본다 — 화면 쪽 사본과의 대조는 `tests/console.test.mjs` 다.
+ */
+test('화면에 적는 시각이 파일의 시각과 같은 글자다 (DS 60-1)', opts, async () => {
+  const K = await importLib('kst', []);
+
+  // ── ① 한국 시간이다 — 프로세스 시간대와 무관하다.
+  assert.equal(K.kstMinute('2026-10-22T16:00:00.000Z'), '2026-10-23 01:00');
+  assert.equal(K.kstMinute('2026-01-01T00:00:00.000Z'), '2026-01-01 09:00');
+  // 해를 넘기는 자리 — 연도를 적지 않으면 「12. 31.」과 「1. 1.」이 순서가 거꾸로 보인다.
+  assert.equal(K.kstMinute('2025-12-31T16:30:00.000Z'), '2026-01-01 01:30');
+
+  // ── ② 파일의 시각 칸과 **초만 다르다**(같은 건인지 나란히 두고 가릴 수 있어야 한다).
+  for (const iso of ['2026-10-22T16:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-07-04T23:59:59.000Z']) {
+    assert.equal(K.kstMinute(iso), K.kstDateTime(iso).slice(0, 16), `파일과 글자가 다르다: ${iso}`);
+    assert.equal(K.kstMinute(iso).length, 16);
+  }
+
+  // ── ③ 영문이 섞이지 않는다(런타임 CLDR 에 맡기지 않는다 — ICU 78 의 ko 축약형은 「AM」이다).
+  for (let h = 0; h < 24; h += 1) {
+    const s = K.kstMinute(new Date(Date.UTC(2026, 2, 1, h, 7)));
+    assert.equal(/[A-Za-z]/.test(s), false, `영문이 섞였다: ${s}`);
+    assert.match(s, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/, `모양이 다르다: ${s}`);
+  }
+
+  // ── ④ 읽을 수 없는 값에는 **지어내지 않는다**(`kstDateTime` 과 같은 규칙).
+  for (const bad of ['', '어제', 'not-a-date', undefined, {}]) {
+    assert.equal(K.kstMinute(bad), '', `읽을 수 없는 값에 시각을 지어냈다: ${String(bad)}`);
+  }
+  // 받아들이는 값의 경계는 **파일 쪽과 한 벌**이다 — 어느 한쪽만 받아 주면 둘이 또 갈라진다.
+  // (`new Date(null)` 은 유효한 값이어서 둘 다 1970년을 적는다 — 종전 `kstDateTime` 의 계약 그대로다.)
+  for (const v of ['', '어제', 'not-a-date', undefined, {}, null, 0, '2026-10-22T16:00:00.000Z']) {
+    assert.equal(K.kstMinute(v), K.kstDateTime(v).slice(0, 16), `받아들이는 경계가 파일과 다르다: ${String(v)}`);
+  }
+
+  // ── ⑤ 화면이 제 시각 기준을 말하는 한 줄이 있고, 파일 꼬리와 **같은 기준**을 말한다.
+  assert.equal(K.KST_SCREEN_NOTE, '시각은 한국 시간(KST, UTC+9) 기준입니다.');
+  assert.ok(K.KST_CSV_NOTE.startsWith('시각은 한국 시간(KST, UTC+9) 기준입니다.'), '파일과 화면이 다른 기준을 말한다');
+});
+
+/**
+ * DS 60-3 — 같은 수를 **창구마다 다른 자**로 적지 않는다.
+ *
+ * 종전 모습: 카카오는 천 단위 쉼표를 손으로 넣으면서 「`toLocaleString` 은 런타임의 ICU 설치에
+ * 따라 「2000」이 되기도 한다」고 적어 두었는데, 같은 상한을 알리는 웹 거절 문장과 파트너
+ * 월 이용료 검증은 `toLocaleString('ko-KR')` 을 그대로 썼다 — 둘은 같은 서버 런타임에서 돈다.
+ */
+test('수를 끊어 적는 자가 한 벌이다 (DS 60-3)', opts, async () => {
+  const N = await importLib('num', []);
+
+  assert.equal(N.comma(0), '0');
+  assert.equal(N.comma(999), '999');
+  assert.equal(N.comma(1000), '1,000');
+  assert.equal(N.comma(2000), '2,000');
+  assert.equal(N.comma(100000), '100,000');
+  assert.equal(N.comma(1234567), '1,234,567');
+  // 금액 열의 음수까지 지키고(정산 CSV 의 규약), 소수점 뒤는 끊지 않는다.
+  assert.equal(N.comma(-1200), '-1,200');
+  assert.equal(N.comma(1234.5), '1,234.5');
+  assert.equal(N.comma(-0.25), '-0.25');
+  // 수가 아닌 값에는 **지어내지 않는다**(받은 그대로 글자로).
+  assert.equal(N.comma(NaN), 'NaN');
+  assert.equal(N.comma(Infinity), 'Infinity');
+});
+
+test('같은 상한을 웹과 카카오가 같은 자로 적는다 (DS 60-3)', opts, async () => {
+  const [R, K, limits] = await Promise.all([
+    importLib('refusal', []),
+    importLib('kakao', ['chat', 'webhookAuth']),
+    importLib('limits', []),
+  ]);
+
+  // 두 창구가 말하는 상한은 **같은 값**이다(`KAKAO_UTTERANCE_LIMIT = MAX_MESSAGE_LEN` · DS 38-1).
+  assert.equal(K.KAKAO_UTTERANCE_LIMIT, limits.MAX_MESSAGE_LEN);
+  assert.equal(limits.MAX_MESSAGE_LEN, 2000, '재현 조건이 바뀌었다 — 상한 값이 다르다');
+  assert.ok(K.KAKAO_TOO_LONG_TEXT.includes('2,000자 이내로'), `카카오 문장이 끊어 적지 않는다: ${K.KAKAO_TOO_LONG_TEXT}`);
+  assert.equal(R.tooLongMessage('message', limits.MAX_MESSAGE_LEN), '메시지는 2,000자까지 적을 수 있습니다.');
+  // 이름 없는 키로 떨어지는 문장도 같은 자를 쓴다.
+  assert.ok(R.tooLongMessage('sessionId', 100000).startsWith('100,000자까지'), '이름 없는 문장이 다른 자를 쓴다');
+});
+
+test('파트너 월 이용료 거절 문장도 같은 자로 적는다 (DS 60-3)', opts, async () => {
+  const P = await importLib('partners', ['storage', 'logger', 'monitoring']);
+  const r = P.parseMonthlyFee(999_999_999_999);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /^월 이용료는 \d{1,3}(,\d{3})*원 이하여야 합니다\.$/, `끊어 적지 않는다: ${r.error}`);
+});

@@ -1751,3 +1751,52 @@ test('요청한 고객사가 걸리지 않으면 설치한 사람에게 말한�
   spoof.send({ source: 'gowon-chat', type: 'ready', tenant: null }, { other: true });
   assert.deepEqual(spoof.warnings, [], '보낸 창을 보지 않고 받아들인다');
 });
+
+/* ══════════ 60순위 — 백로그 소진 후 57차 재감사 (DS 60-2) ══════════ */
+
+/**
+ * DS 60-2 — 말풍선의 시각에 **영문이 섞였다**.
+ *
+ * 종전에는 `toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' })` 였다.
+ * 그 자리의 「오전/오후」는 런타임의 CLDR 판본이 적는다 — 돌려서 본 값(Node 24 · ICU 78):
+ * `오전 1:00` 이 아니라 **`AM 1:00`** 이다(ko 의 축약형 dayPeriod 가 영문이다). 즉 한국어
+ * 상담창의 말풍선마다 영문이 붙고, 어느 글자가 될지는 손님의 브라우저 판본에 달려 있었다.
+ *
+ * **시계는 손님의 것 그대로** 둔다(콘솔을 한국 시간으로 고정한 DS 60-1 과 다른 판단이다) —
+ * 이 시각은 「내가 몇 시에 보냈나」이고 손님은 그것을 자기 벽시계와 맞춰 읽는다. 그래서 여기서는
+ * 프로세스 시간대와 무관하게 **그 지역 시각으로** 만든 `Date` 로 확인한다.
+ */
+test('말풍선의 시각을 우리가 한국어로 적는다 (DS 60-2)', opts, async () => {
+  const m = await loadModule();
+  assert.equal(typeof m.clock, 'function', 'clock 을 내보내야 한다');
+
+  // 종전 식이 영문을 적던 바로 그 자리들 — 지금은 우리가 적는다.
+  assert.equal(m.clock(new Date(2026, 9, 23, 1, 0).getTime()), '오전 1:00');
+  assert.equal(m.clock(new Date(2026, 9, 23, 16, 5).getTime()), '오후 4:05');
+  // 12시간 표기의 관례: 자정은 「오전 12:00」, 정오는 「오후 12:00」(0시·24시로 적지 않는다).
+  assert.equal(m.clock(new Date(2026, 9, 23, 0, 0).getTime()), '오전 12:00');
+  assert.equal(m.clock(new Date(2026, 9, 23, 12, 0).getTime()), '오후 12:00');
+  assert.equal(m.clock(new Date(2026, 9, 23, 23, 59).getTime()), '오후 11:59');
+
+  // 하루 어디서도 영문이 섞이지 않고, 분은 두 자리로 적는다.
+  for (let h = 0; h < 24; h += 1) {
+    for (const mi of [0, 7, 59]) {
+      const s = m.clock(new Date(2026, 2, 1, h, mi).getTime());
+      assert.equal(/[A-Za-z]/.test(s), false, `영문이 섞였다: ${s}`);
+      assert.match(s, /^(오전|오후) ([1-9]|1[0-2]):[0-5]\d$/, `모양이 다르다: ${s}`);
+    }
+  }
+
+  // 읽을 수 없는 값에는 **지어내지 않는다**(종전 그대로 — 부르는 쪽이 아무것도 그리지 않는다).
+  for (const bad of [NaN, Number.POSITIVE_INFINITY, undefined]) assert.equal(m.clock(bad), '');
+});
+
+/** DS 60-2 — 위젯 코드에 Intl 서식이 남지 않았는가(남으면 또 런타임이 적는다). */
+test('위젯이 시각·수를 Intl 서식에 맡기지 않는다 (DS 60-2)', opts, () => {
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  // 주석의 설명 문장은 센 자리가 아니다 — 호출만 센다.
+  const calls = src.replace(/`[^`]*`/g, '``').match(/\.toLocale(String|TimeString|DateString)\(/g) || [];
+  assert.deepEqual(calls, [], `Intl 서식이 남아 있다: ${calls.join(', ')}`);
+  // 시각을 적는 자리는 한 곳(clock)이다 — 두 벌이 되면 또 갈라진다.
+  assert.equal((src.match(/\{mounted && m\.at \? clock\(m\.at\) : ''\}/g) || []).length, 1, '말풍선 시각을 적는 자리가 바뀌었다');
+});

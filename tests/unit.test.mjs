@@ -3866,3 +3866,61 @@ test('고객사 페이지에 붙는 쪽의 배선이 한 벌로 맞물린다 (DS
   assert.match(e, /data-tenant/, 'data-tenant 옵션 계약이 깨졌다');
   assert.match(e, /tenant: tenant \|\| null,/, '__gowonChat.tenant 계약이 깨졌다');
 });
+
+/* ══════════ 60순위 — 백로그 소진 후 57차 재감사 (DS 60-1·60-2·60-3) ══════════ */
+
+/**
+ * DS 60-1·60-2·60-3 — 사람이 읽는 **시각·수**를 런타임의 Intl 에 맡긴 자리가 남지 않았는가.
+ *
+ * 이 저장소는 그 판단을 이미 한 자리에서 내려 두었다(`lib/kakao.ts` — 천 단위 쉼표를 손으로
+ * 넣는다). 그런데 나머지 자리는 전부 `toLocale*` 이었다: 콘솔의 시각(브라우저 시간대 · 연도 없음 ·
+ * 영문 AM/PM), 위젯 말풍선의 시각, 서버가 만들어 보내는 거절 문장의 자릿수. 어느 글자가 될지
+ * 배포 환경에 달려 있는 상태를 다시 만들지 않도록 **호출 0건**을 고정한다.
+ */
+test('사람이 읽는 시각·수를 Intl 서식에 맡기지 않는다 (DS 60-1·60-2·60-3)', () => {
+  const FILES = [
+    'src/app/admin/page.tsx',
+    'src/components/ChatWidget.tsx',
+    'src/lib/kakao.ts',
+    'src/lib/refusal.ts',
+    'src/lib/partners.ts',
+    'src/lib/kst.ts',
+    'src/lib/num.ts',
+    'src/lib/retention.ts',
+    'src/lib/audit.ts',
+    'src/lib/convlog.ts',
+    'src/lib/settlement.ts',
+    'src/app/page.tsx',
+    'public/embed.js',
+  ];
+  for (const f of FILES) {
+    // 주석·문서의 설명 문장은 센 자리가 아니다 — 호출만 센다(템플릿 문자열 안의 설명도 비운다).
+    const calls = read(f).replace(/`[^`]*`/g, '``').match(/\.toLocale(String|TimeString|DateString)\(/g) || [];
+    assert.deepEqual(calls, [], `${f} 에 Intl 서식이 남아 있다: ${calls.join(', ')}`);
+  }
+});
+
+/** DS 60-1 — 화면의 시각은 파일의 시각에서 **초만 뗀 것**이다(식을 두 벌로 적지 않는다). */
+test('화면에 적는 시각이 파일의 식에서 나온다 (DS 60-1)', () => {
+  const k = read('src/lib/kst.ts');
+  // `kstMinute` 는 자기 계산을 하지 않는다 — `kstDateTime` 하나를 지나간다.
+  const i = k.indexOf('export function kstMinute(');
+  assert.ok(i > 0, 'kstMinute 가 없다');
+  const body = k.slice(i, k.indexOf('\n}', i));
+  assert.match(body, /kstDateTime\(at\)/, '시각 계산을 두 벌로 적었다');
+  assert.equal(/KST_OFFSET_MS/.test(body), false, '오프셋 계산을 또 적었다');
+  assert.match(k, /export const KST_SCREEN_NOTE = /, '화면이 말할 시각 기준 문장이 없다');
+});
+
+/** DS 60-3 — 수를 끊어 적는 자는 `lib/num` 하나이고, 쓰는 쪽이 그것을 불러온다. */
+test('수를 끊어 적는 자가 lib/num 하나다 (DS 60-3)', () => {
+  const n = read('src/lib/num.ts');
+  assert.match(n, /export function comma\(n: number\): string/, 'comma 를 내보내지 않는다');
+  // Intl 을 쓰지 않으므로 서버·브라우저·테스트가 같은 글자를 낸다.
+  assert.equal(/Intl|toLocale/.test(n.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), false, 'lib/num 이 Intl 에 기댄다');
+  for (const f of ['src/lib/kakao.ts', 'src/lib/refusal.ts', 'src/lib/partners.ts']) {
+    assert.match(read(f), /import \{ comma \} from '@\/lib\/num';/, `${f} 가 수를 제 식으로 적는다`);
+  }
+  // 콘솔은 lib 을 불러오지 않는 규약이라 사본을 들고 있다(값 대조는 tests/console.test.mjs).
+  assert.match(read('src/app/admin/page.tsx'), /^function comma\(n: number\): string \{$/m, '콘솔에 사본이 없다');
+});

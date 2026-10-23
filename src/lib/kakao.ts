@@ -3,6 +3,7 @@
 // 시크릿(KAKAO_SKILL_TOKEN)은 Vercel 환경변수로만 관리(코드 하드코딩 금지).
 import { noContactLine, type ChatReply } from '@/lib/chat';
 import { MAX_MESSAGE_LEN } from '@/lib/limits';
+import { comma } from '@/lib/num';
 import { dedupeCheck, dedupeRemember, eventKey, safeEqual, verifySignature, type SignatureFailure } from '@/lib/webhookAuth';
 
 export const KAKAO_LIVE = process.env.KAKAO_CHANNEL_LIVE === 'true';
@@ -34,8 +35,10 @@ export const KAKAO_UTTERANCE_LIMIT = MAX_MESSAGE_LEN;
  * 이 창구에는 글자 수 표시가 없으므로 상한을 문장으로 알린다(DS 29-x — 거절은 화면의 일이다).
  */
 export const KAKAO_TOO_LONG_TEXT =
-  `보내 주신 말씀이 너무 길어 한 번에 받지 못했어요. ${String(KAKAO_UTTERANCE_LIMIT).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}자 이내로 나눠 보내 주시면 바로 답해 드릴게요.`;
-// 천 단위 쉼표를 손으로 넣는다 — `toLocaleString` 은 런타임의 ICU 설치에 따라 「2000」이 되기도 한다.
+  `보내 주신 말씀이 너무 길어 한 번에 받지 못했어요. ${comma(KAKAO_UTTERANCE_LIMIT)}자 이내로 나눠 보내 주시면 바로 답해 드릴게요.`;
+// 천 단위 쉼표를 넣는 자는 `lib/num.comma` 하나다 (DS 60-3) — `toLocaleString` 은 런타임의 ICU
+// 설치에 따라 「2000」이 되기도 한다. 종전에는 그 판단을 이 한 줄에서만 내려, 같은 상한을 알리는
+// 웹 창구의 문장(`lib/refusal.tooLongMessage`)은 `toLocaleString` 을 그대로 쓰고 있었다.
 
 /**
  * 요청 페이로드에서 발화·사용자 id 추출.

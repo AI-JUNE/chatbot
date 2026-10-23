@@ -12,7 +12,9 @@
  * - 이름이 없는 키는 **이름을 말하지 않는 문장**으로 떨어진다 — 코드 키를 그대로 보여 주는
  *   폴백은 두지 않는다(DS 22 의 「기타」와 같은 원칙). 고객이 적은 적도 없는 `sessionId`·
  *   `citation` 같은 자리는 이름을 말해도 도움이 되지 않는다.
+ * - 문장에 들어가는 **수는 `lib/num.comma` 로 적는다**(DS 60-3) — 런타임의 ICU 에 맡기지 않는다.
  */
+import { comma } from '@/lib/num';
 
 /** 받침이 있으면 true. 한글 음절이 아니면(영문·숫자·기호) 판정하지 않는다(null). */
 function hasBatchim(word: string): boolean | null {
@@ -58,9 +60,14 @@ export function requiredMessage(field: string): string {
   return name ? `${josa(name, '을', '를')} 입력해 주세요.` : '빠진 항목이 있습니다. 다시 확인해 주세요.';
 }
 
-/** 「…은 n자까지 적을 수 있습니다」 — 길이 상한. 자릿수는 천 단위로 끊어 읽기 쉽게 적는다. */
+/**
+ * 「…은 n자까지 적을 수 있습니다」 — 길이 상한. 자릿수는 천 단위로 끊어 읽기 쉽게 적는다.
+ * 끊는 자는 `lib/num.comma` 하나다 (DS 60-3) — 종전에는 `toLocaleString('ko-KR')` 이라
+ * ICU 가 작은 런타임에서 「2000자」가 됐고, 같은 상한을 알리는 카카오 쪽 문장은 쉼표를 손으로
+ * 넣어 「2,000자」였다. 같은 수를 창구에 따라 다르게 적지 않는다.
+ */
 export function tooLongMessage(field: string, max: number): string {
-  const limit = `${max.toLocaleString('ko-KR')}자까지 적을 수 있습니다.`;
+  const limit = `${comma(max)}자까지 적을 수 있습니다.`;
   const name = fieldLabel(field);
   return name ? `${josa(name, '은', '는')} ${limit}` : `${limit} 길이를 줄여 다시 시도해 주세요.`;
 }

@@ -1540,7 +1540,8 @@ test('표가 길어지면 장을 나누고 「몇 건 중 어디인가」를 말
   // 한 장에 들어가면 조작을 보이지 않는다.
   assert.match(comp, /if \(info\.pages <= 1\) return null;/, '장이 하나면 페이저를 그리지 않는다');
   // 총 건수·보고 있는 범위·장 번호를 모두 말한다(「n건」만 말하면 어디까지 보여 주는지 알 수 없다).
-  assert.match(comp, /총 \{info\.total\.toLocaleString\('ko-KR'\)\}\{unit\} 중 \{info\.from\}–\{info\.to\}번째 · \{info\.page\}\/\{info\.pages\} 페이지/, '페이저 문구');
+  // 끊어 적는 자는 한 벌이다 — 종전에는 총계만 `toLocaleString` 이라 한 문장 안에서 갈렸다(DS 60-3).
+  assert.match(comp, /총 \{comma\(info\.total\)\}\{unit\} 중 \{comma\(info\.from\)\}–\{comma\(info\.to\)\}번째 · \{comma\(info\.page\)\}\/\{comma\(info\.pages\)\} 페이지/, '페이저 문구');
   assert.match(comp, /role="status" aria-live="polite"/, '장을 넘기면 바뀐 범위를 읽어 준다');
   assert.match(comp, /<nav className="ac-pager" aria-label=\{`\$\{label\} 페이지 이동`\}/, '페이저에 이름이 있어야 어느 표의 것인지 안다');
   // 끝에서 `disabled` 를 쓰지 않는다(DS 8-1) — 누른 버튼이 비활성이 되면 초점이 본문 밖으로 떨어진다.
@@ -1709,7 +1710,7 @@ test('답하지 못한 질문 목록이 뜨고 그 질문으로 자료를 만들
   assert.ok(dash.includes('<h2 style={S.h2}>자료에 없어 답하지 못한 질문</h2>'), '답하지 못한 질문 카드가 없다');
   // 보여 준 수를 찾은 수라 말하지 않는다(DS 31-3 과 같은 규칙) — 묶음 수·총 횟수를 함께 적는다.
   assert.match(dash, /unanswered\.groups > unanswered\.items\.length/, '자른 수를 전체라고 말한다');
-  assert.match(dash, /가지 중 \$\{unanswered\.items\.length\}가지/, '몇 가지 중 몇 가지인지 말하지 않는다');
+  assert.match(dash, /가지 중 \$\{comma\(unanswered\.items\.length\)\}가지/, '몇 가지 중 몇 가지인지 말하지 않는다');
   assert.match(dash, /<span style=\{S\.tag\} role="status">/, '건수가 바뀌어도 스크린리더가 모른다');
   // 아직 받지 못한 것과 0건을 구분한다 — null 이면 카드 자체를 그리지 않는다.
   assert.match(dash, /\{unanswered && unanswered\.items\.length > 0 && \(/, '불러오기 전에 0건을 단정한다');
@@ -2044,7 +2045,7 @@ test('붙여 넣은 본문의 글자 수를 사람이 보는 글자로 센다 (D
   // 화면에 적히는 수와 거절 판정이 **같은 함수**를 지난다 — 둘이 갈라지면 「통과인데 거절」이 된다.
   await loadConsole();
   assert.ok(cachedJs.includes('docLen(imp.text) > MAX_DOC_CHARS'), '거절 판정이 제 수로 센다');
-  assert.ok(cachedJs.includes('docLen(imp.text).toLocaleString'), '화면에 적히는 수가 제 수로 센다');
+  assert.ok(cachedJs.includes('comma(docLen(imp.text))'), '화면에 적히는 수가 제 수로 센다');
   assert.equal(/imp\.text\.length/.test(cachedJs), false, '본문 길이를 코드 단위로 세는 자리가 남아 있다');
 });
 
@@ -2824,7 +2825,7 @@ test('변경 이력이 「무엇까지 들고 있는가」를 말한다 (DS 48-1
   assert.match(route, /retention: auditRetention\(\)/, '응답이 모수를 싣지 않는다');
   const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
   assert.match(src, /setAuditRange\(\(data\.retention as RetentionView \| undefined\) \|\| null\)/, '화면이 모수를 받지 않는다');
-  assert.ok(src.includes('보관 중인 ${auditRange.kept.toLocaleString(\'ko-KR\')}건 중 최근'), '보여 준 수의 모수를 적지 않는다');
+  assert.ok(src.includes('보관 중인 ${comma(auditRange.kept)}건 중 최근'), '보여 준 수의 모수를 적지 않는다');
   assert.ok(src.includes('한도를 넘어선 더 오래된 기록은 서버에도 남아 있지 않습니다'), '버린 사실을 화면이 말하지 않는다');
   assert.equal(src.includes('백업 복원 이력(최근 100건)'), false, '보여 준 수를 전부라 말하던 문장이 남아 있다');
 
@@ -3425,4 +3426,88 @@ test('설치 화면에 고객사·위치·여백 고르개가 있고 복사가 �
   // 인쇄·형식 안내는 설치하는 사람이 알아야 하는 사실이다(DS 59-1·59-2 의 결과).
   assert.ok(tab.includes('#gowon-chat-frame'), '고객사가 고를 이름을 알려 주지 않는다');
   assert.ok(tab.includes('인쇄할 때는 상담창이 종이에 찍히지'), '인쇄에서 빠진다는 사실을 말하지 않는다');
+});
+
+/* ══════════ 60순위 — 백로그 소진 후 57차 재감사 (DS 60-1·60-3) ══════════ */
+
+/**
+ * DS 60-1 — 화면의 시각이 **파일·타임라인과 같은 시계·같은 글자**인가.
+ *
+ * 콘솔은 lib 을 불러오지 않으므로(클라이언트 번들 · `kstMonthNow`·`kstDateLabel` 과 같은 규약)
+ * `timeLabel` 은 `lib/kst.kstMinute` 의 **사본**이다. 두 쪽이 갈라지는 날 화면과 내려받은 파일이
+ * 같은 한 건을 다른 시각으로 적는다 — 그래서 떼어내 **실제로 돌려** 글자까지 대조한다.
+ */
+test('화면의 시각이 한국 시간이고 파일과 같은 글자다 (DS 60-1)', opts, async () => {
+  const { timeLabel, kstDateLabel } = await loadFns(['timeLabel', 'kstDateLabel']);
+  const K = await importLib('kst');
+
+  const CASES = [
+    '2026-10-22T16:00:00.000Z', // KST 10/23 01:00 — 대시보드는 이 건을 「오늘(23일)」로 센다
+    '2026-01-01T00:00:00.000Z', // DS 58-1 이 다룬 복원된 1월 백업의 경계
+    '2025-12-31T16:30:00.000Z', // 해를 넘긴다 — 연도가 없으면 1월 줄이 12월 줄보다 위에 선다
+    '2026-07-04T23:59:59.000Z',
+  ];
+  for (const iso of CASES) {
+    // ① lib 의 단일 출처와 **같은 글자**다(사본이 갈라지지 않았다).
+    assert.equal(timeLabel(iso), K.kstMinute(iso), `lib 과 다른 시각을 적는다: ${iso}`);
+    // ② 내려받은 파일의 시각 칸과 **초만 다르다**.
+    assert.equal(timeLabel(iso), K.kstDateTime(iso).slice(0, 16), `파일과 다른 시각을 적는다: ${iso}`);
+    // ③ 바로 아래 귀속 타임라인의 날짜와 **같은 날**이다(DS 55-2 가 닫은 갈라짐).
+    assert.equal(timeLabel(iso).slice(0, 10), kstDateLabel(iso), `타임라인과 다른 날을 적는다: ${iso}`);
+    // ④ 연도를 적고, 영문(AM/PM)이 섞이지 않는다.
+    assert.match(timeLabel(iso), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/, `모양이 다르다: ${timeLabel(iso)}`);
+  }
+  // 하루 24시간 어디서도 영문이 섞이지 않는다(런타임 CLDR 판본에 맡기지 않는다).
+  for (let h = 0; h < 24; h += 1) {
+    const s = timeLabel(new Date(Date.UTC(2026, 2, 1, h, 7)).toISOString());
+    assert.equal(/[A-Za-z]/.test(s), false, `영문이 섞였다: ${s}`);
+  }
+  // 읽을 수 없는 값에는 **지어내지 않는다**(부르는 쪽이 아무것도 그리지 않는다 — 종전 그대로).
+  for (const bad of ['', '어제', 'not-a-date']) assert.equal(timeLabel(bad), '');
+});
+
+/** DS 60-1 — 화면이 제 시각 기준을 말하고, 그 문장이 파일 꼬리와 같은 기준인가. */
+test('화면이 시각 기준(KST)을 말한다 (DS 60-1)', opts, async () => {
+  await loadConsole();
+  const K = await importLib('kst');
+  const note = (cachedJs.match(/const KST_SCREEN_NOTE = '([^']+)'/) || [])[1];
+  assert.equal(note, K.KST_SCREEN_NOTE, '화면의 시각 기준 문장이 lib 과 다르다');
+
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // 「무엇이 빠졌는가」를 말하는 두 자리 — 보관 경계를 적는 문장은 기준 시계를 함께 말한다.
+  assert.ok(src.includes('보관 한도 ${comma(auditRange.limit)}건 · ${KST_SCREEN_NOTE}'), '변경 이력의 보관 경계가 시각 기준을 말하지 않는다');
+  assert.ok(src.includes('최대 ${comma(stats.conversation.retention.limit)}건 · ${KST_SCREEN_NOTE}'), '대화 보관 경계가 시각 기준을 말하지 않는다');
+  // 시각 열은 자릿수 폭을 고정한다 — 고정 길이 글자가 열마다 흔들리지 않게(DS 60-1).
+  assert.equal(
+    (src.match(/whiteSpace: 'nowrap', color: 'var\(--sub\)', fontVariantNumeric: 'tabular-nums' \}\}>\{timeLabel/g) || []).length,
+    1,
+    '변경 이력의 시각 열이 숫자 폭을 고정하지 않는다',
+  );
+});
+
+/**
+ * DS 60-3 — 화면의 **수**가 한 자로 적히는가.
+ *
+ * 종전에는 `toLocaleString('ko-KR')` 이 28곳에 흩어져 있었다. 이 화면은 클라이언트 컴포넌트지만
+ * 첫 그림은 서버가 그리므로, ICU 가 작은 런타임에서는 서버와 브라우저가 다른 글자를 내
+ * 수화(hydration)가 어긋난다 — 그리고 쪽수 줄은 **한 문장 안에서** 자가 갈려 있었다
+ * (「총 1,234건 중 1001–1050번째」).
+ */
+test('화면의 수가 lib 과 같은 자로 끊긴다 (DS 60-3)', opts, async () => {
+  const { comma } = await loadFns(['comma']);
+  const N = await importLib('num');
+
+  for (const v of [0, 7, 999, 1000, 2000, 100000, 1234567, -1200, 1234.5, -0.25, NaN, Infinity]) {
+    assert.equal(comma(v), N.comma(v), `lib 과 다른 자로 끊는다: ${String(v)}`);
+  }
+
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // 화면 코드에 Intl 서식이 **한 곳도** 남지 않았다(주석의 설명 문장은 센 자리가 아니다).
+  const calls = src.replace(/`[^`]*`/g, '``').match(/\.toLocale(String|TimeString|DateString)\(/g) || [];
+  assert.deepEqual(calls, [], `Intl 서식이 남아 있다: ${calls.join(', ')}`);
+  // 쪽수 줄은 한 문장 안에서 자가 갈리지 않는다.
+  assert.ok(
+    src.includes('총 {comma(info.total)}{unit} 중 {comma(info.from)}–{comma(info.to)}번째'),
+    '쪽수 줄이 총계만 끊어 적는다',
+  );
 });

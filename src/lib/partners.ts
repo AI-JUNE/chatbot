@@ -18,6 +18,7 @@
 import { loadJson, saveJson, saveNow, savedInfo, scheduleSave, type SavedInfo } from '@/lib/storage';
 import { compact } from '@/lib/normalize';
 import { readInstant } from '@/lib/kst';
+import { comma } from '@/lib/num';
 import { revOf } from '@/lib/rev';
 import {
   CHANGED_DELETE_TARGET_MESSAGE,
@@ -378,7 +379,8 @@ export function parseMonthlyFee(v: unknown): { ok: true; value: number | undefin
   if (v === undefined || v === null || v === '') return { ok: true, value: undefined };
   const n = typeof v === 'string' ? Number(v.replace(/[,\s]/g, '')) : Number(v);
   if (!Number.isFinite(n) || n < 0) return { ok: false, error: '월 이용료는 0 이상의 숫자(원)여야 합니다.' };
-  if (n > MAX_MONTHLY_FEE) return { ok: false, error: `월 이용료는 ${MAX_MONTHLY_FEE.toLocaleString('ko-KR')}원 이하여야 합니다.` };
+  // 수를 끊는 자는 `lib/num.comma` 하나다 (DS 60-3) — 런타임의 ICU 에 맡기지 않는다.
+  if (n > MAX_MONTHLY_FEE) return { ok: false, error: `월 이용료는 ${comma(MAX_MONTHLY_FEE)}원 이하여야 합니다.` };
   return { ok: true, value: Math.round(n) };
 }
 

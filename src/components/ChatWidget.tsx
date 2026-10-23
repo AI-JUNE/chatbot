@@ -408,13 +408,30 @@ export function lastUserText(list: Msg[]): string {
   return '';
 }
 
-/** 표시 시각 — 오전/오후 h:mm. 마운트 이후에만 호출한다. */
-function clock(ms: number): string {
-  try {
-    return new Date(ms).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' });
-  } catch {
-    return '';
-  }
+/**
+ * 말풍선에 적는 시각 — 「오전/오후 h:mm」. 마운트 이후에만 호출한다 (DS 60-2).
+ *
+ * 종전에는 `toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' })` 였다.
+ * 그 자리의 「오전/오후」는 **런타임의 CLDR 판본**이 적는다 — 돌려서 본 값(ICU 78):
+ * `오전 1:00` 이 아니라 **`AM 1:00`** 이다(ko 의 축약형 dayPeriod 가 영문이다). 즉 한국어
+ * 상담창의 말풍선마다 영문이 붙고, 어느 글자가 될지는 손님의 브라우저 판본에 달려 있었다.
+ * 이 저장소는 이미 같은 판단을 내려 두었다(`lib/kakao.ts` — 천 단위 쉼표를 손으로 넣는다).
+ * **고객에게 보이는 한국어 글자는 우리가 적는다.**
+ *
+ * 시계는 **손님의 것 그대로** 둔다(콘솔을 한국 시간으로 고정한 DS 60-1 과 다른 판단이다):
+ * 이 시각은 「내가 몇 시에 보냈나」이고, 손님은 그것을 자기 벽시계와 맞춰 읽는다. 운영 콘솔의
+ * 시각은 집계·파일과 맞춰야 하는 값이라 기준 시계가 하나여야 하지만, 여기서는 손님의 시계가 기준이다.
+ *
+ * 자정의 12시는 「오전 12:00」, 정오는 「오후 12:00」으로 적는다(12시간 표기의 관례 — `0시`·`24시`로
+ * 적지 않는다). 읽을 수 없는 값에는 빈 문자열을 돌려준다(종전 그대로 — 부르는 쪽이 아무것도 그리지 않는다).
+ */
+export function clock(ms: number): string {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return '';
+  const h = d.getHours();
+  const period = h < 12 ? '오전' : '오후';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${period} ${h12}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 /**
