@@ -2330,8 +2330,11 @@ test('답변 평가는 재시작을 넘겨 남고, 어긋난 스냅샷은 건너
   assert.equal(sum.total, 2);
   assert.equal(sum.helpfulRate, 50);
   // 저장분에 적혀 있던 **이름은 들고 오지 않는다** (DS 53-2) — 이름은 지금 KB 에서 붙인다.
-  // 자료 id 없이 남은 평가라 지금은 이름을 댈 수 없다(「근거 없음」 줄로 모인다).
-  assert.equal(sum.topDown[0].citation, F.NO_CITATION_LABEL);
+  // 자료 id 없이 남은 평가라 지금은 이름을 댈 수 없다. 그렇다고 「근거 없음」(등록 자료 없이
+  // 답한 답변)으로 세지는 않는다 (DS 58-2) — 근거는 있었고, 어느 자료인지만 모른다.
+  assert.equal(sum.topDown[0].citation, F.UNKNOWN_KB_LABEL);
+  assert.equal(sum.topDown[0].citationLost, true);
+  assert.notEqual(F.UNKNOWN_KB_LABEL, F.NO_CITATION_LABEL, '두 사실이 같은 말로 적힌다');
 
   // 평가값이 아닌 항목은 집계를 비뚤게 만든다 — 건너뛴다.
   const dirty = F.importFeedback({
@@ -5363,4 +5366,235 @@ test('정산 리포트가 빠진 까닭을 사유별로 세고 수를 맞춘다 
   assert.ok(clean.includes('조회한 고객사 1곳 = 정산 대상 1곳 + 제외 0곳'), `수를 적지 않는다:\n${clean}`);
   assert.ok(!clean.includes('제외했습니다'), `없는 제외 사유를 적는다:\n${clean}`);
   P.resetPartners();
+});
+
+/* ══════════ 디자인 스프린트 — 55차 재감사 (DS 58-1·58-2·58-3) ══════════ */
+
+/**
+ * DS 58-1 — **백업을 합치면 보관 경계가 뒤로 물러, 그 사이 구멍이 「빠진 것 없음」으로 읽혔다.**
+ *
+ * 48차(DS 48-3)가 복원을 「덮어쓰기」에서 **더하기**로 바꿨다. 그 뒤로 변경 이력은 두 시기를
+ * 한꺼번에 들고 있을 수 있다 — 1월에 뜬 백업을 10월에 올리면 「1월 몇 줄 + 10월 몇 줄」이고,
+ * 그 사이는 **한 줄도 없다**(그 인스턴스는 그때 돌지 않았거나 콜드 스타트로 비었다).
+ * 그런데 합치는 문은 경계(`knownFrom`)를 합친 결과의 가장 오래된 줄로 적었다. 그래서
+ *  - 화면: 「보관 중인 5건 중 최근 5건 · **2026-01-01 09:00 이후** · 보관 한도 500건」
+ *  - 내려받은 파일: 「2026-01-01 09:00 이후의 기록만 담겨 있습니다 — **그보다 앞선 날**이
+ *    비어 있는 것은 기록 없음입니다」
+ * 즉 1월부터 10월까지가 **성한 기록**으로 읽혔다. 이 목록은 「누가 무엇을 바꿨는가」의 증거이고,
+ * 그 열 달을 「아무 변경이 없었다」로 읽게 두는 것은 §13 의 「없는 수」와 같은 거짓이다.
+ */
+test('백업을 합쳐도 보관 경계가 뒤로 물러나지 않는다 (DS 58-1)', opts, async () => {
+  delete process.env.ADMIN_PERSIST;
+  const A = await importLib('audit', ['storage', 'csv', 'kst', 'refusal', 'retention', 'logger', 'monitoring']);
+  const notes = (csv) => csv.split('\r\n').filter((l) => l.startsWith('# ') || l.startsWith('"# ')).join('\n');
+
+  // ── ① 지금 들고 있는 것은 10월 한 줄뿐이다(그 앞은 **모른다**).
+  A.resetAudit();
+  A.logAudit({ action: 'kb.upsert', target: 'KB-새', detail: '수정: 환불 기간', authed: true });
+  const boundary = A.auditRetention().knownFrom;
+  assert.equal(A.auditRetention().mergedFrom, undefined, '섞인 것이 없는데 섞였다고 말한다');
+
+  // ── ② 1월에 뜬 백업을 올린다 — 더해지지만 **경계는 그대로**다.
+  const old = {
+    version: 1, savedAt: '2026-01-05T00:00:00.000Z', seq: 2,
+    events: [
+      { id: 'A-000001', at: '2026-01-01T00:00:00.000Z', action: 'kb.delete', target: 'KB-옛1', detail: '', authed: true },
+      { id: 'A-000002', at: '2026-01-05T00:00:00.000Z', action: 'partner.delete', target: 'PTR-0001', detail: '', authed: false },
+    ],
+  };
+  const merged = A.mergeAudit(old);
+  assert.equal(merged.added, 2, '합치기가 더하지 않았다(재현 조건이 성립하지 않는다)');
+  const span = A.auditRetention();
+  assert.equal(span.kept, 3);
+  assert.equal(span.knownFrom, boundary, '경계가 뒤로 물러났다 — 그 사이 구멍이 성한 기록으로 읽힌다');
+  assert.equal(span.mergedFrom, '2026-01-01T00:00:00.000Z', '경계보다 앞선 줄을 들고 있다는 사실이 없다');
+
+  // ── ③ 내려받은 파일이 **두 사실을 갈라** 말한다(한 문장으로 뭉치면 둘 중 하나가 거짓이 된다).
+  const n = notes(A.auditToCsv());
+  assert.ok(n.includes('이후의 기록은 빠진 것이 없습니다'), `경계 이후를 말하지 않는다:\n${n}`);
+  assert.equal(n.includes('이후의 기록만 담겨 있습니다'), false, `더 오래된 줄을 들고 있는데 「이후만」이라 적는다:\n${n}`);
+  assert.ok(n.includes('올린 백업에 적혀 있던 관리 작업만 담겨 있습니다'), `섞인 구간을 말하지 않는다:\n${n}`);
+  assert.ok(n.includes('「관리 작업 0건」이 아니라 「기록 없음」'), '빈 구간을 0건으로 읽게 둔다');
+  assert.equal(notes(A.auditToCsv()).split('\n').length, 4, '주석 수가 다르다(시각 + 건수 + 경계 + 섞인 구간)');
+
+  // ── ④ **콜드 스타트를 넘겨도** 그 사실이 남는다 — 보관 파일이 경계를 함께 적는다.
+  //      (적지 않으면 다음 기동의 `importAudit` 이 가장 오래된 줄을 경계로 짐작해 거짓이 되살아난다.)
+  const snap = A.exportAudit();
+  assert.equal(snap.knownFrom, boundary, '보관 파일이 경계를 적지 않는다');
+  A.importAudit(snap);
+  assert.equal(A.auditRetention().knownFrom, boundary, '다시 읽으면 경계가 뒤로 물러난다');
+  assert.equal(A.auditRetention().mergedFrom, '2026-01-01T00:00:00.000Z', '다시 읽으면 섞인 사실이 사라진다');
+
+  // ── ⑤ 경계 칸이 없는 **옛 파일**은 종전 그대로다(가장 오래된 줄을 경계로 본다).
+  const { knownFrom: _old, ...legacy } = snap;
+  A.importAudit(legacy);
+  assert.equal(A.auditRetention().knownFrom, '2026-01-01T00:00:00.000Z', '옛 파일의 읽는 방식이 바뀌었다');
+  assert.equal(A.auditRetention().mergedFrom, undefined, '한 벌로 들어온 기록을 섞였다고 말한다');
+
+  // ── ⑥ 한도에 걸려 옛 줄이 **버려지면** 그 표시도 함께 사라진다(없는 것을 있다고 말하지 않는다).
+  A.resetAudit();
+  const after = A.auditRetention().knownFrom;
+  A.logAudit({ action: 'kb.upsert', target: 'KB-지금', detail: '', authed: true });
+  A.mergeAudit({
+    version: 1, savedAt: '2026-01-05T00:00:00.000Z', seq: 600,
+    events: Array.from({ length: 520 }, (_, i) => ({
+      id: `A-${String(i).padStart(6, '0')}`, at: new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString(),
+      action: 'kb.upsert', target: `K-${i}`, detail: '', authed: true,
+    })),
+  });
+  const trimmed = A.auditRetention();
+  assert.equal(trimmed.kept, 500, '한도를 넘겨 들고 있다');
+  assert.equal(trimmed.dropped, true, '버린 사실이 남지 않는다');
+  assert.ok(trimmed.knownFrom >= after, '경계가 뒤로 물러났다');
+  assert.equal(trimmed.mergedFrom, '2026-01-01T00:00:21.000Z', '남아 있는 옛 줄의 자리를 가리키지 않는다');
+  A.resetAudit();
+  // 섞인 것이 없으면 꼬리 주석은 **종전 두 줄**이다(DS 48-1 이 세운 문장이 그대로다).
+  A.logAudit({ action: 'kb.upsert', target: 'KB-1', detail: '', authed: true });
+  const plain = notes(A.auditToCsv());
+  assert.ok(plain.includes('이후의 기록만 담겨 있습니다'), `섞인 것이 없는데 문장이 바뀌었다:\n${plain}`);
+  assert.equal(plain.split('\n').length, 3, '섞인 것이 없는데 주석이 늘었다');
+  A.resetAudit();
+});
+
+/**
+ * DS 58-2 — **복원된 평가가 「근거 없음」으로 세어졌다.**
+ *
+ * 50차(DS 53-2)는 저장분에 적혀 있던 근거 이름을 복원하지 않기로 했다(그 글이 운영자 화면으로
+ * 되살아나는 길을 닫았다 — 그 판단은 그대로 둔다). 자료 id 칸은 43차(DS 43-2)에 생겼으므로,
+ * 그보다 앞서 뜬 백업의 평가는 복원 뒤에 **id 도 이름도 없는 모양**이 된다. 집계는 그 모양을
+ * 「등록 자료 없이 답한 답변」(`NO_CITATION_LABEL`)으로 읽었고, 대시보드는 그 줄에
+ * 「등록된 자료 없이 답한 답변입니다. 위의 「답하지 못한 질문」부터 채워 주세요」라고 적었다 —
+ * **근거를 들고 답한 평가**를 근거 없는 답변으로 세고, 운영자를 엉뚱한 일로 보냈다.
+ */
+test('이름을 되돌리지 못한 평가를 「근거 없음」으로 세지 않는다 (DS 58-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const F = await importLib('feedback', ['storage', 'kst', 'refusal', 'logger', 'monitoring']);
+  F.resetFeedback();
+
+  // ── ① 43-2 이전에 뜬 저장분 — 근거 이름은 있고 자료 id 는 없다.
+  const snap = {
+    version: 1, savedAt: '2026-01-05T00:00:00.000Z', seq: 4,
+    entries: [
+      { id: 'F-000001', sessionHash: 'h1', verdict: 'down', citation: '이음 FAQ 3. 활동 시간', channel: 'web', at: '2026-01-01T00:00:00.000Z' },
+      { id: 'F-000002', sessionHash: 'h2', verdict: 'down', citation: '환불 규정', channel: 'web', at: '2026-01-02T00:00:00.000Z' },
+      // 근거 없이 답한 평가 — 이쪽은 **정말로** 「근거 없음」이다.
+      { id: 'F-000003', sessionHash: 'h3', verdict: 'down', citation: '', channel: 'web', at: '2026-01-03T00:00:00.000Z' },
+      // 자료 id 가 있는 평가 — 이름은 지금 KB 에서 붙는다(DS 43-2 그대로).
+      { id: 'F-000004', sessionHash: 'h4', verdict: 'down', citation: '배송 안내', kbId: 'kb-3', channel: 'web', at: '2026-01-04T00:00:00.000Z' },
+    ],
+  };
+  assert.equal(F.importFeedback(snap).count, 4);
+
+  // ── ② 세 사실이 **세 줄**로 갈라진다(종전에는 앞의 셋이 「근거 없음」 한 줄이었다).
+  const rows = F.feedbackSummary({ 'kb-3': '배송 안내(지금 이름)' }).topDown;
+  const by = (c) => rows.find((r) => r.citation === c);
+  assert.equal(rows.length, 3, `줄이 갈라지지 않았다: ${JSON.stringify(rows)}`);
+  const lost = by(F.UNKNOWN_KB_LABEL);
+  assert.ok(lost, `이름을 되돌리지 못한 줄이 없다: ${JSON.stringify(rows)}`);
+  assert.equal(lost.down, 2, '근거가 있었던 두 평가를 한 줄로 모으지 않았다');
+  assert.equal(lost.citationLost, true, '화면이 「근거 없음」과 가릴 수 있는 표시가 없다');
+  assert.equal(lost.kbId, undefined, '없는 자료 id 를 지어낸다');
+  assert.equal(by(F.NO_CITATION_LABEL)?.down, 1, '정말로 근거가 없던 평가가 섞였다');
+  assert.equal(by('배송 안내(지금 이름)')?.down, 1, '자료 id 로 묶는 길이 바뀌었다');
+  assert.notEqual(F.UNKNOWN_KB_LABEL, F.NO_CITATION_LABEL, '두 사실을 같은 말로 적는다');
+  assert.notEqual(F.UNKNOWN_KB_LABEL, F.DELETED_KB_LABEL, '지워진 자료와 같은 말로 적는다');
+
+  // ── ③ **이름은 여전히 들고 오지 않는다** (DS 53-2 의 판단을 뒤집지 않는다) —
+  //      저장분의 글자가 집계·화면 어디에도 되살아나지 않는다.
+  const all = JSON.stringify(F.exportFeedback());
+  assert.equal(all.includes('이음 FAQ 3. 활동 시간'), false, '저장분의 글자를 들고 왔다');
+  assert.equal(all.includes('환불 규정'), false, '저장분의 글자를 들고 왔다');
+  assert.equal(JSON.stringify(rows).includes('환불 규정'), false, '집계가 저장분의 글자를 되살린다');
+
+  // ── ④ 다시 떠서 **다시 복원해도** 그 사실은 남는다(두 번째부터는 이름 없이 표시만 있다).
+  F.importFeedback(F.exportFeedback());
+  const again = F.feedbackSummary({}).topDown;
+  assert.equal(again.find((r) => r.citationLost)?.down, 2, '두 번째 복원에서 사실이 사라진다');
+  assert.equal(again.find((r) => r.citation === F.NO_CITATION_LABEL)?.down, 1, '두 번째 복원에서 줄이 섞인다');
+
+  // ── ⑤ 새로 들어오는 평가에는 이 표시가 붙지 않는다 — 창구는 이름과 id 를 **한 쌍으로만** 적는다.
+  F.resetFeedback();
+  const kb = F.resolveKb('kb-9', { 'kb-9': '요금 안내' });
+  const made = F.recordFeedback({ sessionHash: 'h9', verdict: 'down', ...kb });
+  assert.equal(made.ok, true);
+  assert.equal(made.entry.citationLost, undefined, '지금 들어온 평가에 「되돌리지 못함」을 적는다');
+  assert.equal(F.feedbackSummary({ 'kb-9': '요금 안내' }).topDown[0].citationLost, undefined);
+  F.resetFeedback();
+});
+
+/**
+ * DS 58-3 — **업로드한 문서에서 빠진 조각을 세지도 말하지도 않았다.**
+ *
+ * 검색어를 하나도 뽑지 못한 조각은 후보에서 걸러진다(검색어가 없으면 어떤 질문에도 걸리지
+ * 않으므로 거르는 것 자체는 맞다). 그런데 **걸렀다고 말하는 자리가 없었다** — 화면은
+ * 「후보 N개」라고만 적고, 운영자는 올린 문서가 통째로 들어간 줄 알았다. 실제로 빠지는 대목은
+ * 숫자·기호·한 글자만 있는 표나 첫 제목 앞의 머리글처럼 문서 안에서 눈에 잘 띄는 묶음이고,
+ * 그 자리를 물어 온 손님은 영원히 기본 안내를 받는다. 미리보기 번호(`#n`)에 난 구멍이 유일한
+ * 단서였고, 그 구멍이 무엇인지는 어디에도 적혀 있지 않았다.
+ *
+ * 42차(DS 42-3)가 같은 필터 뒤에서 본 것은 **전부 빠진 경우**였다(분해형 한글 — 그때는 거절
+ * 문장이 떴고, 그 문장이 사실과 달랐다). 일부만 빠지면 거절 문장조차 뜨지 않는다.
+ */
+test('업로드한 문서에서 빠진 조각을 세어 돌려준다 (DS 58-3)', opts, async () => {
+  const ingest = await importLib('ingest', ['knowledge', 'normalize']);
+  const doc = [
+    '# 요금 안내',
+    '',
+    '기본 요금은 월 10만 원입니다. 결제일로부터 30일 단위로 청구됩니다.',
+    '',
+    '# 표',
+    '',
+    'A 1',
+    'B 2',
+    'C 3',
+    '',
+    '# 환불 규정',
+    '',
+    '해지 신청일 기준으로 남은 기간을 일 단위로 계산해 환불합니다.',
+  ].join('\n');
+
+  // ── ① 종전 식 재현 — 세 조각 중 하나가 **말없이** 사라진다(번호에 구멍만 남는다).
+  const plain = ingest.documentToCandidates(doc, { title: '요금 안내', category: '요금' });
+  assert.equal(ingest.chunkDocument(doc, {}).length, 3, '재현 조건이 성립하지 않는다 — 조각이 셋이 아니다');
+  assert.equal(plain.length, 2, '재현 조건이 성립하지 않는다 — 빠진 조각이 없다');
+  assert.deepEqual(plain.map((c) => c.chunkIndex), [1, 3], '빠진 번호가 2번이 아니다');
+
+  // ── ② 이제 **빠진 것을 세어 돌려준다** — 무엇이 빠졌는지 찾을 단서까지.
+  const r = ingest.ingestDocument(doc, { title: '요금 안내', category: '요금' });
+  assert.equal(r.chunks, 3, '나눈 조각 수를 말하지 않는다');
+  assert.deepEqual(r.candidates.map((c) => c.chunkIndex), [1, 3], '후보가 달라졌다');
+  assert.equal(r.dropped.length, 1, '빠진 조각을 세지 않는다');
+  assert.equal(r.dropped[0].index, 2, '빠진 번호가 미리보기 번호와 다르다');
+  assert.equal(r.dropped[0].heading, '표', '어느 대목인지 말하지 않는다');
+  assert.equal(r.dropped[0].chars, 11);
+  assert.equal(r.dropped[0].head, 'A 1 B 2 C 3', '제목 없는 조각의 단서가 될 글자를 싣지 않는다');
+  // 거르는 규칙은 **한 벌**이다 — 세는 수와 거르는 수가 어긋나면 안 된다.
+  assert.deepEqual(ingest.documentToCandidates(doc, { title: '요금 안내', category: '요금' }), r.candidates);
+  assert.equal(r.candidates.length + r.dropped.length, r.chunks, '센 수가 나눈 조각 수와 맞지 않는다');
+
+  // ── ③ **첫 제목 앞의 머리글**도 같은 자리에서 빠진다(제목이 없어 단서가 본문뿐이다).
+  const lead = ingest.ingestDocument(['A 1', 'B 2', '', '# 요금 안내', '', '기본 요금은 월 10만 원입니다.'].join('\n'), {
+    title: '요금 안내', category: '요금',
+  });
+  assert.equal(lead.dropped.length, 1);
+  assert.equal(lead.dropped[0].heading, '', '없는 제목을 지어낸다');
+  assert.equal(lead.dropped[0].head, 'A 1 B 2');
+  assert.equal(lead.candidates.length, 1);
+
+  // ── ④ 빠진 것이 없으면 **빈 목록**이다(없는 경고를 띄우지 않는다).
+  const clean = ingest.ingestDocument(['# 요금 안내', '', '기본 요금은 월 10만 원입니다. 결제일로부터 청구됩니다.'].join('\n'), {
+    title: '요금 안내', category: '요금',
+  });
+  assert.deepEqual(clean.dropped, []);
+  assert.equal(clean.chunks, 1);
+  assert.equal(clean.candidates.length, 1);
+
+  // ── ⑤ 본문 전체를 싣지는 않는다 — 찾는 데 필요한 만큼(40자)만이다.
+  const long = ingest.ingestDocument(`# 표\n\n${Array.from({ length: 60 }, (_, i) => String(i % 10)).join(' ')}`, {
+    title: '표', category: '문서',
+  });
+  assert.equal(long.dropped.length, 1, '재현 조건이 성립하지 않는다');
+  assert.equal(long.dropped[0].head.length, 41, '꼬리 표시까지 41자가 아니다');
+  assert.ok(long.dropped[0].head.endsWith('…'), '줄였으면 줄였다고 말하지 않는다');
+  assert.ok(long.dropped[0].chars > 41, '재현 조건이 성립하지 않는다 — 본문이 짧다');
 });

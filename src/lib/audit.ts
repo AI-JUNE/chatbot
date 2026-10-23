@@ -5,7 +5,7 @@
 // 토큰 값 등 시크릿은 절대 기록하지 않는다(인증 사용 여부만 boolean으로 기록).
 import { loadJson, saveJson, savedInfo, scheduleSave, SavedInfo } from '@/lib/storage';
 import { csvCell, csvRow } from '@/lib/csv';
-import { KST_CSV_NOTE, kstDateTime, readInstant } from '@/lib/kst';
+import { KST_CSV_NOTE, isReadableInstant, kstDateTime, readInstant } from '@/lib/kst';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 import { RetentionInfo, retentionNotes } from '@/lib/retention';
 
@@ -82,18 +82,44 @@ let seq = 0;
  *
  *  - 기동·초기화 직후: 지금(그 전의 일은 **모른다** — 재기동으로 통째로 비었을 수 있다)
  *  - 한도에 걸려 버린 순간: 남아 있는 가장 오래된 기록의 시각
- *  - 보관된 기록을 읽어 들인 직후·백업을 합친 직후: 남은 가장 오래된 기록의 시각
+ *  - 보관된 기록을 읽어 들인 직후: 그 파일이 적어 둔 경계(없는 옛 파일이면 남은 가장 오래된 기록)
+ *  - 백업을 합친 직후: **그대로다** (DS 58-1) — 더하기만 하므로 경계 이후가 성한 것은 변하지
+ *    않고, 경계보다 앞선 줄은 `mergedFrom` 으로 따로 적는다(뒤로 물리면 그 사이 구멍이
+ *    「빠진 것이 없다」로 읽힌다)
  */
 let knownFrom = new Date().toISOString();
 /** 한도에 걸려 **버린 적이 있는가**. 화면이 사유를 달리 적는다. */
 let droppedAny = false;
+/**
+ * 경계보다 **앞선 기록도 들고 있는가**(ISO, 없으면 null) — 합친 백업이 들고 온 것이다 (DS 58-1).
+ * 경계와 이 시각 사이는 「빠진 것이 없다」가 아니라 **파일에 적혀 있던 것만** 있는 구간이다.
+ */
+let mergedFrom: string | null = null;
+
+/**
+ * 경계는 **앞으로만 간다** (DS 58-1).
+ *
+ * 뒤로 물리면 「이 시각 이후는 빠진 것이 없다」가 거짓이 된다 — 합치는 문은 더하기만 하므로
+ * 파일이 들고 온 옛 기록과 지금 들고 있는 기록 사이에 빈 구간이 있을 수 있다.
+ */
+function advanceKnownFrom(at: string | undefined): void {
+  if (at && at > knownFrom) knownFrom = at;
+}
+
+/** 경계보다 앞선 줄을 지금도 들고 있는가를 다시 센다 — 한도에 걸려 버려지면 사라진다. */
+function syncMergedFrom(): void {
+  const oldest = events[0]?.at;
+  mergedFrom = oldest && oldest < knownFrom ? oldest : null;
+}
 
 /** 한도를 넘긴 만큼 가장 오래된 것을 버리고, 버렸으면 경계를 그 자리로 옮긴다. */
 function trimToLimit(): void {
-  if (events.length <= MAX_EVENTS) return;
-  events = events.slice(-MAX_EVENTS);
-  knownFrom = events[0]?.at || knownFrom;
-  droppedAny = true;
+  if (events.length > MAX_EVENTS) {
+    events = events.slice(-MAX_EVENTS);
+    advanceKnownFrom(events[0]?.at);
+    droppedAny = true;
+  }
+  syncMergedFrom();
 }
 
 export function logAudit(input: { action: AuditAction; target?: string; detail?: string; authed?: boolean }): AuditEvent {
@@ -122,7 +148,8 @@ export function auditCount(): number {
  * 대화 기록의 `turnRetention()` 과 **같은 모양**이다(두 화면이 같은 사실을 같은 틀로 말한다).
  */
 export function auditRetention(): RetentionInfo {
-  return { limit: MAX_EVENTS, kept: events.length, knownFrom, dropped: droppedAny };
+  // 평소에는 이 칸이 없다 — 경계가 곧 가장 오래된 기록이다 (DS 58-1).
+  return { limit: MAX_EVENTS, kept: events.length, knownFrom, dropped: droppedAny, ...(mergedFrom ? { mergedFrom } : {}) };
 }
 
 /** 최신순 목록(기본 100건). */
@@ -165,6 +192,7 @@ export function resetAudit(): void {
   seq = 0;
   knownFrom = new Date().toISOString();
   droppedAny = false;
+  mergedFrom = null;
   scheduleSave(AUDIT_NS, exportAudit);
 }
 
@@ -174,11 +202,23 @@ export interface AuditSnapshot {
   version: 1;
   savedAt: string;
   seq: number;
+  /**
+   * 들고 있던 **보관 경계**(ISO) — 「이 시각 이후는 빠진 것이 없다」 (DS 58-1).
+   *
+   * 왜 파일에 적는가: 이 파일에는 기록의 **목록**만 있어서, 읽어 들이는 쪽은 경계를 가장
+   * 오래된 줄에서 미루어 짚는다(DS 48-1). 백업을 합쳐 경계보다 앞선 줄이 섞인 상태에서는
+   * 그 짐작이 틀리고, 콜드 스타트 한 번에 그 사이 구간이 다시 「빠진 것이 없다」로 읽힌다.
+   * 옛 파일에는 이 칸이 없다 — 그때는 종전대로 가장 오래된 줄을 경계로 본다.
+   *
+   * 사람이 올린 백업의 이 값은 **쓰지 않는다**(`mergeAudit` 은 목록만 읽는다) — 남의
+   * 인스턴스가 들고 있던 경계이고, 합친 결과의 경계는 받는 쪽이 제 것으로 셈한다.
+   */
+  knownFrom?: string;
   events: AuditEvent[];
 }
 
 export function exportAudit(): AuditSnapshot {
-  return { version: 1, savedAt: new Date().toISOString(), seq, events: events.map((e) => ({ ...e })) };
+  return { version: 1, savedAt: new Date().toISOString(), seq, knownFrom, events: events.map((e) => ({ ...e })) };
 }
 
 /**
@@ -240,9 +280,15 @@ export function importAudit(input: unknown): { ok: true; count: number } | { ok:
   const restored = readEvents(input);
   if (!restored) return { ok: false, error: RESTORE_FORMAT_MESSAGE };
   events = restored.slice(-MAX_EVENTS);
-  // 남은 가장 오래된 기록이 경계다 — 그 앞은 보관된 기록에도 없다 (DS 48-1).
-  knownFrom = events[0]?.at || new Date().toISOString();
+  /**
+   * 경계는 **파일이 적어 두었으면 그것**이고, 없으면 남은 가장 오래된 기록이다
+   * (DS 48-1 → 58-1). 옛 파일에는 이 칸이 없어 종전처럼 짐작한다.
+   */
+  const saved = (input as Partial<AuditSnapshot>).knownFrom;
+  knownFrom = isReadableInstant(saved) ? readInstant(saved, '') : events[0]?.at || new Date().toISOString();
   droppedAny = restored.length > MAX_EVENTS;
+  // 적어 둔 경계보다 앞선 줄이 섞여 있었다면 그 사실도 함께 되살아난다 (DS 58-1).
+  syncMergedFrom();
   seq = 0;
   syncSeq((input as Partial<AuditSnapshot>).seq);
   return { ok: true, count: events.length };
@@ -294,7 +340,20 @@ export function mergeAudit(input: unknown): MergeAuditResult | { ok: false; erro
   if (added > 0) {
     // 시각순으로 세운다 — 목록·CSV·한도 버리기가 모두 「뒤가 최신」을 전제로 돈다.
     events.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-    knownFrom = events[0]?.at || knownFrom;
+    /**
+     * **경계는 뒤로 물리지 않는다** (DS 58-1).
+     *
+     * 종전에는 합친 뒤 가장 오래된 기록을 그대로 경계로 적었다(`knownFrom = events[0].at`).
+     * 이 문은 **더하기만** 하므로, 1월에 뜬 백업을 10월에 올리면 들고 있는 것은 「1월 두 줄 +
+     * 10월 몇 줄」인데 경계는 1월을 가리켰다 — 화면은 「1월 1일 이후」라고 적고 내려받은 파일은
+     * 「그보다 앞선 날이 비어 있는 것은 기록 없음」이라고 적어, **1월부터 10월까지가 성한
+     * 기록**으로 읽혔다. 그 사이는 한 줄도 들고 있지 않다(그 인스턴스는 그때 돌지 않았거나
+     * 재시작으로 비었다). 「누가 무엇을 바꿨는가」의 증거에서 없는 것을 없다고 말하지 못하면
+     * **그 사이에 아무 변경이 없었다**는 거짓이 남는다(§13 의 「없는 수」와 같은 자리다).
+     *
+     * 그래서 경계는 그대로 두고, 그보다 앞선 줄은 `mergedFrom` 으로 따로 적는다(`trimToLimit`
+     * 이 다시 센다) — 화면·파일이 두 사실을 갈라 말한다.
+     */
     trimToLimit();
     syncSeq((input as Partial<AuditSnapshot>).seq);
   }

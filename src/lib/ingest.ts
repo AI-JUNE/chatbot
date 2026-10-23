@@ -226,16 +226,67 @@ function toQuestion(chunk: DocChunk, title: string): string {
   return short || `${title} 안내`;
 }
 
-/** 문서 텍스트 → KB 후보 목록. 등록 전 관리 콘솔에서 미리보기·수정하는 것을 전제로 한다. */
-export function documentToCandidates(raw: string, opts: IngestOptions): KBCandidate[] {
+/**
+ * 키워드를 뽑지 못해 **등록되지 않는 조각** (DS 58-3).
+ *
+ * 본문은 싣지 않는다 — 운영자가 「어느 대목인가」를 찾는 데 필요한 만큼(제목·순번·길이·첫
+ * 글자)만 돌려준다. 이 값은 보관되지 않고 미리보기·등록 응답에만 실린다.
+ */
+export interface DroppedChunk {
+  /** 문서 내 순번 — 미리보기 목록의 `#n` 과 **같은 수**다(빠진 번호가 곧 이 조각이다). */
+  index: number;
+  /** 그 조각의 제목 경로. 빈 문자열이면 첫 제목보다 앞에 있던 글이다. */
+  heading: string;
+  /** 본문 길이(자) — 「한 줄짜리인가 한 쪽인가」로 운영자가 급한 정도를 가린다. */
+  chars: number;
+  /** 본문 첫머리(40자). 제목이 없는 조각은 이 글자가 유일한 단서다. */
+  head: string;
+}
+
+/** 문서 하나를 후보로 바꾼 결과 — **버린 것까지 센다** (DS 58-3). */
+export interface IngestResult {
+  candidates: KBCandidate[];
+  /** 문서를 나눈 조각 수(버린 것 포함). */
+  chunks: number;
+  /** 키워드가 없어 후보에서 빠진 조각. 비어 있으면 빠진 것이 없다. */
+  dropped: DroppedChunk[];
+}
+
+/**
+ * 문서 텍스트 → KB 후보 + **빠진 조각** (DS 58-3).
+ *
+ * 왜 따로 세는가: 키워드를 하나도 뽑지 못한 조각은 후보에서 걸러진다(검색어가 없으면 그 자료는
+ * 어떤 질문에도 걸리지 않으므로 거르는 것 자체는 맞다). 그런데 **걸렀다고 말하는 자리가 없었다** —
+ * 화면은 「후보 N개」라고만 적고, 운영자는 올린 문서가 통째로 들어간 줄 알았다. 실제로 빠지는
+ * 대목은 숫자·기호·한 글자만 있는 표나 첫 제목 앞의 머리글처럼 **문서 안에서 눈에 잘 띄는
+ * 묶음**이고, 그 자리를 물어 온 손님은 영원히 기본 안내를 받는다. 미리보기 목록의 `#n` 에
+ * 구멍이 나 있는 것이 유일한 단서였다(그 구멍이 무엇인지는 어디에도 적혀 있지 않았다).
+ *
+ * 42차가 같은 필터 뒤에서 본 것은 **전부 빠진 경우**였고(DS 42-3 — 분해형 한글), 그때
+ * 고친 것은 토큰 경계였다. 이번에 보는 것은 **일부만 빠지는 경우**다 — 그때는 거절 문장조차
+ * 뜨지 않는다.
+ */
+export function ingestDocument(raw: string, opts: IngestOptions): IngestResult {
   const title = (opts.title || '').trim() || '업로드 문서';
   const category = (opts.category || '').trim() || '문서';
   const prefix = (opts.idPrefix || '').trim() || docIdPrefix(title);
   const chunks = chunkDocument(raw, opts);
 
-  return chunks.map((chunk) => {
+  const candidates: KBCandidate[] = [];
+  const dropped: DroppedChunk[] = [];
+  for (const chunk of chunks) {
     const keywords = extractKeywords(`${chunk.heading} ${chunk.text}`, opts.keywordLimit ?? 8);
-    return {
+    if (keywords.length === 0) {
+      const flat = chunk.text.replace(/\s+/g, ' ').trim();
+      dropped.push({
+        index: chunk.index,
+        heading: chunk.heading,
+        chars: chunk.text.length,
+        head: flat.length > 40 ? `${flat.slice(0, 40)}…` : flat,
+      });
+      continue;
+    }
+    candidates.push({
       id: `${prefix}_${String(chunk.index).padStart(3, '0')}`,
       category,
       question: toQuestion(chunk, title),
@@ -243,6 +294,16 @@ export function documentToCandidates(raw: string, opts: IngestOptions): KBCandid
       answer: chunk.text,
       source: chunk.heading ? `${title} — ${chunk.heading}` : title,
       chunkIndex: chunk.index,
-    };
-  }).filter((c) => c.keywords.length > 0);
+    });
+  }
+  return { candidates, chunks: chunks.length, dropped };
+}
+
+/**
+ * 문서 텍스트 → KB 후보 목록. 등록 전 관리 콘솔에서 미리보기·수정하는 것을 전제로 한다.
+ * 「무엇이 빠졌는가」까지 필요한 자리는 `ingestDocument` 를 쓴다 (DS 58-3) — 거르는 규칙은
+ * 한 곳이다(두 벌로 적으면 세는 수와 거르는 수가 어긋난다).
+ */
+export function documentToCandidates(raw: string, opts: IngestOptions): KBCandidate[] {
+  return ingestDocument(raw, opts).candidates;
 }

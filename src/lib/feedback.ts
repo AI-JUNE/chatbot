@@ -47,6 +47,20 @@ export interface FeedbackEntry {
    * 옛 기록에는 이 값이 없다 — 그때는 「어느 자료인지 모른다」이므로 라벨로 묶은 채 둔다.
    */
   kbId?: string;
+  /**
+   * **근거는 있었는데 그 자료를 댈 수 없다** (DS 58-2) — 복원된 평가에만 붙는 표시다.
+   *
+   * 저장분에 적혀 있던 근거 이름은 들고 오지 않고(`importFeedback` · DS 53-2), 자료 id 는
+   * 그 칸이 생기기 전(DS 43-2) 기록에는 없다. 그래서 복원하면 **둘 다 없는 평가**가 되는데,
+   * 집계는 그 모양을 「등록 자료 없이 답한 답변」(`NO_CITATION_LABEL`)으로 읽었다 — 근거를
+   * 들고 답한 평가가 「근거 없음」으로 세어졌다. 화면은 그 줄에 「등록된 자료 없이 답한
+   * 답변입니다. 위의 「답하지 못한 질문」부터 채워 주세요」라고 적어 **없던 일을 사실로
+   * 말하고** 운영자를 엉뚱한 일로 보냈다.
+   *
+   * 이 칸은 **글이 아니라 사실 하나**다(있었다/없었다) — 이름을 들고 오지 않겠다는 DS 53-2 의
+   * 판단을 그대로 둔 채, 「모른다」와 「없다」만 가른다(DS 39-1 의 `piiKinds` 와 같은 규칙).
+   */
+  citationLost?: true;
   /** 대화 채널 — 현재 web만 사용. */
   channel: string;
   at: string;
@@ -62,6 +76,11 @@ export interface FeedbackTarget {
   kbId?: string;
   /** id 는 있는데 지금 KB 에 없다 — 지워진 자료다. 화면은 검색으로 데려가지 않는다. */
   missing?: boolean;
+  /**
+   * 근거는 있었는데 **어느 자료인지 되돌리지 못했다** (DS 58-2) — 복원된 평가다.
+   * 「근거 없음」(등록 자료 없이 답한 답변)과 **다른 사실**이라 화면이 다르게 적는다.
+   */
+  citationLost?: boolean;
   down: number;
 }
 
@@ -157,6 +176,15 @@ export const NO_CITATION_LABEL = '근거 없음';
 export const DELETED_KB_LABEL = '지워진 자료';
 
 /**
+ * 근거는 있었는데 **그 자료가 어느 것인지 모르는** 줄의 표기 (DS 58-2).
+ *
+ * 자료 id 가 생기기 전(DS 43-2) 기록을 복원하면 id 도 이름도 없다 — 그렇다고 「근거 없음」에
+ * 섞어 셀 수는 없다(그쪽은 **등록 자료 없이 답한 답변**이고, 화면이 「답하지 못한 질문부터
+ * 채우라」고 적는 줄이다). 관리 콘솔도 같은 글자를 들고 있다(lib 을 불러오지 않는다).
+ */
+export const UNKNOWN_KB_LABEL = '어느 자료인지 알 수 없음';
+
+/**
  * 평가 집계. 「보완이 필요한 자료」는 **자료 id** 로 묶는다 (DS 43-2).
  *
  * @param labels 자료 id → 지금 이름. 부르는 쪽(라우트)이 KB 를 아는 자리에서 만들어 넘긴다 —
@@ -166,7 +194,7 @@ export const DELETED_KB_LABEL = '지워진 자료';
 export function feedbackSummary(labels?: Record<string, string>): FeedbackSummary {
   let up = 0;
   let down = 0;
-  const downBy = new Map<string, { kbId?: string; citation: string; down: number }>();
+  const downBy = new Map<string, { kbId?: string; citation: string; citationLost?: true; down: number }>();
   for (const e of entries) {
     if (e.verdict === 'up') {
       up += 1;
@@ -174,7 +202,13 @@ export function feedbackSummary(labels?: Record<string, string>): FeedbackSummar
     }
     down += 1;
     // 열쇠는 id 가 먼저다 — 라벨은 바뀌고, 한 문서에서 나온 여러 항목이 같은 라벨을 공유한다.
-    const key = e.kbId ? `id:${e.kbId}` : `label:${e.citation || NO_CITATION_LABEL}`;
+    // 이름을 되돌리지 못한 복원분은 **따로 모은다** (DS 58-2) — 「근거 없음」과 섞으면 근거를
+    // 들고 답한 평가가 「등록 자료 없이 답한 답변」으로 세어진다(묶을 이름이 없으니 한 줄이다).
+    const key = e.kbId
+      ? `id:${e.kbId}`
+      : e.citationLost && !e.citation
+        ? 'lost:'
+        : `label:${e.citation || NO_CITATION_LABEL}`;
     const prev = downBy.get(key);
     if (prev) {
       prev.down += 1;
@@ -182,11 +216,14 @@ export function feedbackSummary(labels?: Record<string, string>): FeedbackSummar
       if (e.citation) prev.citation = e.citation;
       continue;
     }
-    // 이름이 없는 줄은 **왜 없는지**로 가른다 (DS 53-2): 자료 id 가 있으면 그 자료를 지금
-    // 댈 수 없는 것이고(복원된 평가), 없으면 등록 자료 없이 답한 답변이다.
+    // 이름이 없는 줄은 **왜 없는지**로 가른다 (DS 53-2·58-2): 자료 id 가 있으면 그 자료를
+    // 지금 댈 수 없는 것이고(지워진 자료), id 도 이름도 없지만 근거는 있었다면 되돌리지 못한
+    // 것이고(복원된 평가), 애초에 근거가 없었으면 등록 자료 없이 답한 답변이다.
+    const lost = key === 'lost:';
     downBy.set(key, {
       ...(e.kbId ? { kbId: e.kbId } : {}),
-      citation: e.citation || (e.kbId ? DELETED_KB_LABEL : NO_CITATION_LABEL),
+      citation: e.citation || (e.kbId ? DELETED_KB_LABEL : lost ? UNKNOWN_KB_LABEL : NO_CITATION_LABEL),
+      ...(lost ? { citationLost: true as const } : {}),
       down: 1,
     });
   }
@@ -201,6 +238,8 @@ export function feedbackSummary(labels?: Record<string, string>): FeedbackSummar
         citation: current || v.citation,
         ...(v.kbId ? { kbId: v.kbId } : {}),
         ...(v.kbId && labels && !current ? { missing: true } : {}),
+        // 데려갈 곳이 없는 세 번째 사유 — 화면이 「근거 없음」과 다르게 적는다 (DS 58-2).
+        ...(v.citationLost ? { citationLost: true } : {}),
         down: v.down,
       };
     })
@@ -256,12 +295,24 @@ export function importFeedback(input: unknown): { ok: true; count: number } | { 
      * 경로가 아예 없다. 잃는 것은 **지워진 자료의 이름 한 줄**이고(그때는 「지워진 자료」라고
      * 적는다), 살아 있는 자료의 이름은 지금 KB 에서 그대로 붙는다.
      */
+    /**
+     * 이름은 들고 오지 않지만 **있었다는 사실은 들고 온다** (DS 58-2).
+     *
+     * 자료 id 가 없는 평가는 복원 뒤에 id 도 이름도 없는 모양이 되고, 집계는 그 모양을
+     * 「등록 자료 없이 답한 답변」으로 읽었다 — 근거를 들고 답한 평가가 「근거 없음」으로
+     * 세어졌다. 여기서 사실 하나(있었다/없었다)만 옮겨 적으면 그 둘이 갈라진다. 글을 옮기지
+     * 않으므로 DS 53-2 가 막은 길(저장분의 글자가 운영자 화면으로 되살아나는 길)은 그대로
+     * 닫혀 있다. 한 번 복원한 평가를 다시 떠서 다시 복원해도 이 사실은 남는다(두 번째부터는
+     * 저장분에 이름이 없고 이 칸만 있다).
+     */
+    const citationLost = !kbId && (e.citationLost === true || (typeof e.citation === 'string' && Boolean(e.citation.trim())));
     restored.push({
       id: e.id,
       sessionHash: e.sessionHash.slice(0, 32),
       verdict: e.verdict,
       citation: '',
       ...(kbId ? { kbId } : {}),
+      ...(citationLost ? { citationLost: true as const } : {}),
       channel: typeof e.channel === 'string' && e.channel ? e.channel : 'web',
       // 시각 칸은 읽을 수 있을 때만 — 복원이 받아들이는 시각의 모양은 한 벌이다 (DS 54-3).
       at: readInstant(e.at, new Date().toISOString()),

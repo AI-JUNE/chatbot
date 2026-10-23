@@ -22,10 +22,20 @@ export interface RetentionInfo {
   limit: number;
   /** 지금 보관 중인 건수. */
   kept: number;
-  /** 이 시각 이후만 담겨 있다(ISO). 그 앞은 「0건」이 아니라 **모른다**. */
+  /** **이 시각 이후는 빠진 것이 없다**(ISO). 그 앞은 「0건」이 아니라 **모른다**. */
   knownFrom: string;
   /** 한도에 걸려 이미 버린 기록이 있는가. */
   dropped: boolean;
+  /**
+   * 경계보다 **앞선 기록도 섞여 있다**(ISO) — 올린 백업이 들고 온 것이다 (DS 58-1).
+   *
+   * 평소에는 이 칸이 없다(경계가 곧 가장 오래된 기록이다). 백업을 합치는 문
+   * (`mergeAudit`)은 **더하기만** 하므로, 파일이 들고 온 기록이 지금 들고 있는 것보다
+   * 오래되면 그 사이에 **아무것도 들고 있지 않은 구간**이 생긴다. 경계를 그 자리까지
+   * 뒤로 물리면 그 구간이 「빠진 것이 없다」로 읽힌다 — 그래서 경계는 그대로 두고
+   * 「여기서부터의 기록도 일부 있다」를 따로 적는다.
+   */
+  mergedFrom?: string;
 }
 
 /**
@@ -35,8 +45,21 @@ export interface RetentionInfo {
  *   않는다 — 받침에 맞춰 여기서 고른다(`josa` · 화면에 「은(는)」을 남기지 않는다).
  */
 export function retentionNotes(noun: string, r: RetentionInfo): string[] {
+  const head = `보관 중인 ${noun} ${r.kept}건을 담았습니다(보관 한도 ${r.limit}건). 그보다 오래된 ${josa(noun, '은', '는')} 이 파일에도 없습니다.`;
+  const gap = `그보다 앞선 날이 비어 있는 것은 「${noun} 0건」이 아니라 「기록 없음」입니다.`;
+  // 경계보다 앞선 기록이 섞여 있지 않은 평소 모습 — 두 줄이다(DS 48-1 이 세운 그 문장).
+  const merged = r.mergedFrom && r.mergedFrom < r.knownFrom ? r.mergedFrom : '';
+  if (!merged) return [head, `${kstDateTime(r.knownFrom)} 이후의 기록만 담겨 있습니다 — ${gap}`];
+  /**
+   * 합친 백업이 경계보다 앞선 기록을 들고 왔다 (DS 58-1).
+   *
+   * 「이후의 기록만 담겨 있습니다」는 이때 **거짓**이다(더 오래된 줄이 파일 안에 있다).
+   * 그렇다고 경계를 그 줄까지 내려 적으면 그 사이 구간이 「빠진 것이 없다」로 읽힌다 —
+   * 두 사실을 따로 적는다: 경계 이후는 성한 기록, 그 앞은 **파일에 적혀 있던 것만**이다.
+   */
   return [
-    `보관 중인 ${noun} ${r.kept}건을 담았습니다(보관 한도 ${r.limit}건). 그보다 오래된 ${josa(noun, '은', '는')} 이 파일에도 없습니다.`,
-    `${kstDateTime(r.knownFrom)} 이후의 기록만 담겨 있습니다 — 그보다 앞선 날이 비어 있는 것은 「${noun} 0건」이 아니라 「기록 없음」입니다.`,
+    head,
+    `${kstDateTime(r.knownFrom)} 이후의 기록은 빠진 것이 없습니다 — ${gap}`,
+    `${kstDateTime(merged)}~${kstDateTime(r.knownFrom)} 사이에는 올린 백업에 적혀 있던 ${noun}만 담겨 있습니다 — 그 사이가 비어 있는 것도 「${noun} 0건」이 아니라 「기록 없음」입니다.`,
   ];
 }

@@ -56,6 +56,19 @@ interface DocOverlapView {
 }
 
 /**
+ * 검색어가 없어 **후보에서 빠진 조각** — 서버가 세어 보낸다 (DS 58-3).
+ *
+ * 종전에는 이 수가 응답에 없어 화면이 「후보 N개」만 적었다. 운영자는 올린 문서가 통째로
+ * 들어간 줄 알았고, 미리보기 번호(`#n`)에 난 구멍이 유일한 단서였다. 옛 응답에는 없다.
+ */
+interface DroppedChunkView {
+  index: number;
+  heading: string;
+  chars: number;
+  head: string;
+}
+
+/**
  * 미리보기를 만든 **그때의 입력** (DS 44-2).
  *
  * 「등록」은 화면의 후보가 아니라 **지금 칸에 있는 값**을 다시 보낸다. 그래서 미리보기를 만든
@@ -271,9 +284,11 @@ interface OpsStats {
      * 👎가 많은 근거(=보완 대상) 순 상위 목록.
      * `key` 는 서버가 만든 묶음 열쇠(자료 id 기준 · DS 43-2), `citation` 은 **지금 그 자료의 이름**,
      * `missing` 은 지워진 자료다 — 지워진 자료는 데려갈 곳이 없으므로 버튼으로 만들지 않는다.
-     * 옛 응답에는 `key`·`kbId`·`missing` 이 없다(그때는 라벨이 열쇠였다).
+     * `citationLost` 는 **근거는 있었는데 어느 자료인지 되돌리지 못한** 복원분이다(DS 58-2) —
+     * 「근거 없음」과 다른 사실이라 다르게 적는다. 옛 응답에는 `key`·`kbId`·`missing` 이
+     * 없다(그때는 라벨이 열쇠였다).
      */
-    topDown: { key?: string; citation: string; kbId?: string; missing?: boolean; down: number }[];
+    topDown: { key?: string; citation: string; kbId?: string; missing?: boolean; citationLost?: boolean; down: number }[];
   };
 }
 
@@ -319,6 +334,13 @@ const MEASURING = '측정 중';
  * 이 줄은 자료가 아니므로 「지식베이스에서 찾기」로 데려가지 않는다.
  */
 const NO_CITATION_LABEL = '근거 없음';
+
+/**
+ * 근거는 있었는데 **어느 자료인지 되돌리지 못한** 평가를 묶는 이름 (DS 58-2) —
+ * 서버 `@/lib/feedback` 의 `UNKNOWN_KB_LABEL` 과 같은 문자열이고 테스트가 두 쪽을 대조한다.
+ * 이 줄도 데려갈 곳이 없다(이름이 없으니 검색이 0건이다).
+ */
+const UNKNOWN_KB_LABEL = '어느 자료인지 알 수 없음';
 
 /** 대화 식별자는 화면에 전부 보여주지 않는다(개인 추적 방지) — 앞 6자만. */
 function shortSession(id: string): string {
@@ -1505,6 +1527,11 @@ interface RetentionView {
   kept: number;
   knownFrom: string;
   dropped: boolean;
+  /**
+   * 경계보다 **앞선 기록도 섞여 있다**(올린 백업이 들고 온 것) — 그 사이는 「빠진 것이
+   * 없다」가 아니다 (DS 58-1). 평소에는 이 칸이 없다.
+   */
+  mergedFrom?: string;
 }
 
 interface StorageNsView {
@@ -2635,6 +2662,11 @@ export default function AdminPage() {
   const [impSeen, setImpSeen] = useState('');
   /** 등록하면 무엇이 덮어써지고 무엇이 남는가 — 등록 뒤에도 남겨 둔다(토스트는 사라진다 · DS 44-1). */
   const [impOverlap, setImpOverlap] = useState<DocOverlapView | null>(null);
+  /**
+   * 검색어가 없어 **빠진 조각** — 등록 뒤에도 화면에 남긴다 (DS 58-3 · DS 44-1 과 같은 규칙).
+   * 사라지는 토스트에 맡기면 아무도 보지 못한다(지난 등록분 안내가 같은 이유로 여기 남는다).
+   */
+  const [impDropped, setImpDropped] = useState<DroppedChunkView[]>([]);
   const [staleBusy, setStaleBusy] = useState(false);
   // 어느 버튼이 도는지 구분해야 「미리보기 하는 중…」·「등록하는 중…」을 제자리에 쓸 수 있다.
   const [impBusy, setImpBusy] = useState<'' | 'preview' | 'commit'>('');
@@ -2684,19 +2716,26 @@ export default function AdminPage() {
         return;
       }
       const overlap = (data.overlap as DocOverlapView | undefined) ?? null;
+      // 옛 응답에는 이 칸이 없다 — 없으면 「빠진 것이 없다」가 아니라 **모른다**이므로 비워 둔다.
+      const dropped = (data.dropped as DroppedChunkView[] | undefined) ?? [];
       if (commit) {
         setCandidates(null);
         setImpSeen('');
         // 남는 조각은 폼을 비운 뒤에도 화면에 남긴다 — 사라지는 토스트에 맡기면 아무도 못 본다.
         setImpOverlap(overlap && overlap.stale.length > 0 ? overlap : null);
+        // 빠진 조각도 같은 이유로 남긴다 (DS 58-3) — 등록한 뒤가 오히려 고칠 때다.
+        setImpDropped(dropped);
         loadImpForm(EMPTY_IMPORT);
         await loadKB();
         const done = `문서 등록 완료: 신규 ${data.created} · 갱신 ${data.updated}${data.errors?.length ? ` · 실패 ${data.errors.length}` : ''}`;
         // 보관되지 않았다는 사실은 「남는 조각」 안내와 **함께** 적는다 — 둘 중 하나만 말하면
         // 운영자는 나머지를 영영 못 본다(토스트는 한 번에 하나다 · DS 29-2).
         const warn = savedWarning(data.saved as SavedView | undefined);
-        if (overlap && overlap.stale.length > 0) {
-          notify(`${done} · 지난 등록분 ${overlap.stale.length}건이 남았습니다 — 아래에서 확인해 주세요.${warn ? ` ${warn}` : ''}`, 'fail');
+        // 빠진 조각도 한 문장 안에서 말한다 — 토스트가 하나이므로 셋을 나눠 띄울 수 없다.
+        const left = dropped.length ? ` · 검색어가 없어 ${dropped.length}조각이 등록되지 않았습니다 — 아래에서 확인해 주세요.` : '';
+        if ((overlap && overlap.stale.length > 0) || dropped.length) {
+          const stale = overlap && overlap.stale.length > 0 ? ` · 지난 등록분 ${overlap.stale.length}건이 남았습니다 — 아래에서 확인해 주세요.` : '';
+          notify(`${done}${stale}${left}${warn ? ` ${warn}` : ''}`, 'fail');
         } else {
           flashSaved(done, data.saved as SavedView | undefined);
         }
@@ -2704,7 +2743,14 @@ export default function AdminPage() {
         setCandidates(data.candidates as KBCandidateView[]);
         setImpSeen(impSig(imp));
         setImpOverlap(overlap);
-        flash(`미리보기 ${data.count}개 — 확인한 뒤 「등록」을 누르세요.`);
+        setImpDropped(dropped);
+        // 「후보 N개」만 말하면 올린 문서가 통째로 들어간 줄 안다 (DS 58-3) — 나눈 조각 수를
+        // 함께 적고, 빠진 것이 있으면 그 수를 말한다(목록은 아래에 남는다).
+        flash(
+          dropped.length
+            ? `미리보기 ${data.count}개 — ${data.chunks ?? data.count}조각 중 ${dropped.length}조각은 검색어가 없어 등록되지 않습니다. 아래에서 확인한 뒤 「등록」을 누르세요.`
+            : `미리보기 ${data.count}개 — 확인한 뒤 「등록」을 누르세요.`,
+        );
       }
     } catch {
       // catch 가 없어 오프라인·서버 끊김에서 예외가 조용히 사라졌다 — 사용자는 등록된 줄 알고 떠났다.
@@ -4890,23 +4936,38 @@ export default function AdminPage() {
                           // 열쇠는 서버가 만든 것을 쓴다(DS 43-2) — 라벨을 열쇠로 쓰면 같은 이름을
                           // 공유하는 자료 둘이 한 줄로 합쳐지고, 이름을 고치면 줄이 새로 생긴다.
                           const key = d.key || d.citation;
-                          // 데려갈 곳이 없는 두 가지는 **버튼으로 만들지 않는다**: 근거 없이 답한
-                          // 답변(고칠 자료가 없다)과 지워진 자료(검색해도 0건이다 — 누른 사람을
-                          // 빈 목록 앞에 세우지 않는다).
-                          const dead = d.citation === NO_CITATION_LABEL || d.missing;
+                          // 데려갈 곳이 없는 **세 가지**는 버튼으로 만들지 않는다: 근거 없이 답한
+                          // 답변(고칠 자료가 없다), 지워진 자료(검색해도 0건이다 — 누른 사람을
+                          // 빈 목록 앞에 세우지 않는다), 그리고 이름을 되돌리지 못한 복원분
+                          // (DS 58-2 — 검색할 이름 자체가 없다).
+                          const lost = Boolean(d.citationLost);
+                          const dead = d.citation === NO_CITATION_LABEL || lost || d.missing;
                           if (dead) {
                             const gone = Boolean(d.missing) && d.citation !== NO_CITATION_LABEL;
+                            /**
+                             * 세 줄은 **서로 다른 사실**이라 다르게 적는다 (DS 58-2).
+                             *
+                             * 종전에는 「근거 없음」 한 줄이 둘을 겸했다 — 복원된 평가(근거는
+                             * 있었으나 어느 자료인지 모른다)까지 「등록된 자료 없이 답한
+                             * 답변입니다. 위의 「답하지 못한 질문」부터 채워 주세요」로 적어,
+                             * 없던 일을 사실로 말하고 운영자를 엉뚱한 일로 보냈다.
+                             */
                             return (
                               <li key={key}>
                                 <div className="ac-row" data-static="">
                                   <span className="ac-row-main">
                                     <span className="ac-row-msg" title={d.citation}>
-                                      {gone ? clip(d.citation, 90) : NO_CITATION_LABEL}
+                                      {gone ? clip(d.citation, 90) : lost ? UNKNOWN_KB_LABEL : NO_CITATION_LABEL}
                                     </span>
-                                    <span className="ac-row-reply">
+                                    {/* 데려갈 곳이 없는 줄에서는 **설명이 그 줄의 내용**이다 — 한 줄로 깎아
+                                        말줄임하면(`.ac-row-reply` 의 기본값) 375px 에서 다음에 할 일이
+                                        잘려 보이지 않는다. 누를 수 없는 줄이라 높이가 늘어도 괜찮다. */}
+                                    <span className="ac-row-reply" style={{ whiteSpace: 'normal', overflow: 'visible' }}>
                                       {gone
                                         ? '지금은 없는 자료입니다(지워졌습니다). 같은 질문이 또 오면 새로 등록해 주세요.'
-                                        : '등록된 자료 없이 답한 답변입니다. 위의 「답하지 못한 질문」부터 채워 주세요.'}
+                                        : lost
+                                          ? '백업에서 되살린 평가입니다. 근거를 들고 답한 평가이지만 어느 자료였는지는 남아 있지 않습니다 — 이 수만으로 고칠 자료를 고르지 마세요.'
+                                          : '등록된 자료 없이 답한 답변입니다. 위의 「답하지 못한 질문」부터 채워 주세요.'}
                                     </span>
                                   </span>
                                   <span className="ac-row-side">{pill}</span>
@@ -5147,7 +5208,7 @@ export default function AdminPage() {
                 {impBusy === 'commit' ? '등록하는 중…' : '등록'}
               </button>
               {candidates && (
-                <button type="button" style={S.btnGhost} onClick={() => { setCandidates(null); setImpSeen(''); setImpOverlap(null); }}>미리보기 지우기</button>
+                <button type="button" style={S.btnGhost} onClick={() => { setCandidates(null); setImpSeen(''); setImpOverlap(null); setImpDropped([]); }}>미리보기 지우기</button>
               )}
               {!candidates && impBusy === '' && (
                 <span style={S.tag}>먼저 「미리보기」로 잘린 결과를 확인하세요.</span>
@@ -5199,10 +5260,37 @@ export default function AdminPage() {
                 )}
               </div>
             )}
+            {/* 검색어가 없어 **등록되지 않는 조각**을 적는다 (DS 58-3).
+                종전에는 「후보 N개」만 있었고, 빠진 대목은 목록 번호(`#n`)의 구멍이 유일한
+                단서였다 — 올린 문서가 통째로 들어간 줄 알고 넘어가던 자리다. 등록한 뒤에도
+                남긴다(그때가 고칠 때다 · DS 44-1 의 「남는 조각」과 같은 자리·같은 모양). */}
+            {impDropped.length > 0 && (
+              <div role="status" style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+                <p className="ac-err">
+                  검색어를 찾지 못해 <strong>{impDropped.length}조각</strong>은 등록되지 않습니다 — 그 대목을 물어 오면 챗봇은 기본 안내로 답합니다. 두 글자 이상인 낱말이 하나는 있어야 합니다(숫자·기호·한 글자만 있는 표가 여기 걸립니다).
+                </p>
+                <ul className="ac-rulehint" style={{ margin: '4px 0 0 18px' }}>
+                  {impDropped.slice(0, 5).map((d) => (
+                    <li key={d.index}>
+                      #{d.index} · {d.heading || '제목 없음(문서 맨 앞)'} · {d.chars.toLocaleString('ko-KR')}자
+                      {d.head ? ` · 「${d.head}」` : ''}
+                    </li>
+                  ))}
+                  {impDropped.length > 5 && <li>외 {impDropped.length - 5}조각</li>}
+                </ul>
+                <p className="ac-rulehint" style={{ marginTop: 6 }}>
+                  그 대목이 필요하면 제목이나 본문에 찾을 말을 한 낱말 적어 다시 올리거나, 오른쪽 「새 자료 추가」로 직접 넣어 주세요.
+                </p>
+              </div>
+            )}
             {/* 지난 미리보기는 흐리게 하지 않는다(대비가 떨어진다) — 머리말의 **글자**로 말한다. */}
             {candidates && (
               <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
-                <div style={{ ...S.tag, marginBottom: 6 }}>{impChanged ? '지난 미리보기' : '후보'} {candidates.length}개</div>
+                <div style={{ ...S.tag, marginBottom: 6 }}>
+                  {impChanged ? '지난 미리보기' : '후보'} {candidates.length}개
+                  {/* 번호에 구멍이 났으면 **왜 났는지**가 같은 줄에 있어야 한다 (DS 58-3). */}
+                  {impDropped.length > 0 && ` · 빠진 번호 ${impDropped.length}개는 위에 적은 조각입니다`}
+                </div>
                 {candidates.map((c) => (
                   <div key={c.id} style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-sm)', padding: 10, marginBottom: 8 }}>
                     <div style={S.tag}>#{c.chunkIndex} · {c.id} · 출처: {c.source}</div>
@@ -6616,6 +6704,14 @@ export default function AdminPage() {
                       : '최근 100건'}
                     {auditRange?.dropped && ' · 한도를 넘어선 더 오래된 기록은 서버에도 남아 있지 않습니다'}
                   </p>
+                  {/* 경계보다 앞선 줄이 섞여 있으면 **그 사이를 성한 기록으로 읽히게 두지 않는다**
+                      (DS 58-1). 복원은 덮지 않고 더하므로(DS 48-3) 파일이 들고 온 옛 기록과 지금
+                      들고 있는 기록 사이가 비어 있을 수 있고, 그 구간은 「변경 없음」이 아니다. */}
+                  {auditRange?.mergedFrom && (
+                    <p style={{ ...S.tag, marginTop: 2 }}>
+                      {`${timeLabel(auditRange.mergedFrom)}~${timeLabel(auditRange.knownFrom)} 사이에는 올린 백업에 적혀 있던 기록만 있습니다 — 그 사이가 비어 있는 것은 「변경 없음」이 아니라 「기록 없음」입니다.`}
+                    </p>
+                  )}
                 </div>
                 <label htmlFor="audit-filter" className="ac-srhide">작업 종류로 거르기</label>
                 <select id="audit-filter" className="ac-select" value={auditFilter} onChange={(e) => setAuditFilter(e.target.value)} style={{ marginLeft: 'auto' }}>

@@ -3732,3 +3732,100 @@ test('정산 제외 사유는 한 자가 재고 리포트가 적는다 (DS 57-2)
   const notes = page.slice(page.indexOf('function SettleNotes('), page.indexOf('interface RollupView'));
   assert.equal(/excluded|churned|prospect/.test(notes), false, '화면이 사유를 다시 센다');
 });
+
+/* ══════════ 디자인 스프린트 — 55차 재감사 (DS 58-1·58-2·58-3) ══════════ */
+
+/**
+ * DS 58-1 — 보관 경계를 **앞으로만** 옮기는 자가 한 벌인지(배선 쪽 고정).
+ *
+ * 건수·문장은 `tests/runtime.test.mjs` 가 돌려서 본다. 여기서 고정하는 것은 ① 경계를 뒤로
+ * 물리는 대입이 소스에 **남아 있지 않은** 것 ② 경계보다 앞선 줄을 세는 자리가 한 곳인 것
+ * ③ 두 내려받기 파일의 꼬리 문장이 여전히 **한 벌**(`@/lib/retention`)인 것이다.
+ */
+test('보관 경계는 앞으로만 가고, 섞인 구간을 한 벌로 말한다 (DS 58-1)', () => {
+  const a = read('src/lib/audit.ts');
+  // ① 경계를 옮기는 문은 하나다 — 손으로 대입하는 자리가 남아 있으면 다시 뒤로 물린다.
+  assert.match(a, /function advanceKnownFrom\(at: string \| undefined\): void \{\n\s*if \(at && at > knownFrom\) knownFrom = at;/, '경계를 앞으로만 옮기는 문이 없다');
+  const code = a.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.equal(/knownFrom = events\[0\]\?\.at \|\| knownFrom;/.test(code), false, '경계를 뒤로 물리는 대입이 남아 있다');
+  // 경계를 **직접 적는** 자리는 둘뿐이다: 비우는 문(`resetAudit`)과 통째로 갈아 끼우는 문
+  // (`importAudit` — 파일이 적어 둔 값, 없으면 짐작). 그 밖에서는 앞으로 옮기는 문만 쓴다.
+  assert.equal((code.match(/^\s*knownFrom = /gm) || []).length, 2, '경계를 직접 적는 자리가 늘었다(뒤로 물릴 수 있다)');
+  assert.match(code, /export function resetAudit\(\): void \{[\s\S]{0,200}?knownFrom = new Date\(\)\.toISOString\(\);/, '비우는 문이 경계를 되돌리지 않는다');
+  assert.match(code, /knownFrom = isReadableInstant\(saved\) \? readInstant\(saved, ''\) : events\[0\]\?\.at \|\| new Date\(\)\.toISOString\(\);/, '보관 파일이 적어 둔 경계를 읽지 않는다');
+  assert.match(a, /knownFrom\?: string;/, '보관 파일이 경계를 적지 않는다');
+  assert.match(a, /return \{ version: 1, savedAt: new Date\(\)\.toISOString\(\), seq, knownFrom, events:/, '내보내는 파일에 경계가 없다');
+  // 사람이 올린 백업의 경계는 **쓰지 않는다** — 합치는 문은 목록만 읽는다(남의 경계다).
+  const merge = a.slice(a.indexOf('export function mergeAudit('), a.indexOf('// 기동 시 복원'));
+  assert.equal(/\.knownFrom/.test(merge.replace(/\/\*[\s\S]*?\*\//g, '')), false, '합치기가 남의 경계를 받아 적는다');
+  // ② 섞인 구간을 세는 자리도 하나다 — 한도에 걸려 버려지면 그 표시도 사라져야 한다.
+  assert.match(a, /function syncMergedFrom\(\): void \{\n\s*const oldest = events\[0\]\?\.at;\n\s*mergedFrom = oldest && oldest < knownFrom \? oldest : null;/, '섞인 구간을 세는 자가 없다');
+  assert.match(a, /function trimToLimit\(\): void \{[\s\S]{0,260}?syncMergedFrom\(\);\n\}/, '버린 뒤에 다시 세지 않는다');
+  // ③ 평소에는 그 칸이 **없다** — 「섞이지 않았다」를 빈 값으로 말하지 않는다(모수의 모양이 한 벌이다).
+  assert.match(a, /\.\.\.\(mergedFrom \? \{ mergedFrom \} : \{\}\)/, '섞이지 않았을 때도 칸을 만든다');
+  // ④ 꼬리 문장은 한 벌이다 — 대화 기록 CSV 와 변경 이력 CSV 가 같은 틀을 쓴다(DS 48-1).
+  const r = read('src/lib/retention.ts');
+  assert.match(r, /mergedFrom\?: string;/, '보관 범위에 섞인 구간이 없다');
+  assert.match(r, /const merged = r\.mergedFrom && r\.mergedFrom < r\.knownFrom \? r\.mergedFrom : '';/, '섞인 구간을 가리는 자가 없다');
+  assert.ok(r.includes('이후의 기록만 담겨 있습니다'), '섞이지 않았을 때의 종전 문장이 사라졌다');
+  assert.ok(r.includes('이후의 기록은 빠진 것이 없습니다'), '섞였을 때 경계 이후를 말하지 않는다');
+  for (const f of ['src/lib/audit.ts', 'src/lib/convlog.ts']) {
+    assert.match(read(f), /retentionNotes\(/, `${f}: 모수를 제 손으로 적는다`);
+  }
+  // 대화 기록은 합치는 문이 없다 — 그 쪽에 섞인 구간 계산을 베껴 두지 않는다.
+  assert.equal(/mergedFrom/.test(read('src/lib/convlog.ts')), false, '합치지 않는 저장소가 섞인 구간을 들고 있다');
+});
+
+/**
+ * DS 58-2 — 「근거가 있었다」는 사실만 복원하고 **글은 들고 오지 않는** 배선 고정.
+ *
+ * DS 53-2 의 판단(저장분의 근거 이름을 복원하지 않는다)을 뒤집지 않는 것이 이 항목의 조건이다.
+ * 집계·화면 문장은 `tests/runtime.test.mjs`·`tests/console.test.mjs` 가 본다.
+ */
+test('복원이 근거 이름이 아니라 사실만 들고 온다 (DS 58-2)', () => {
+  const f = read('src/lib/feedback.ts');
+  // ① 복원은 이름 칸을 **빈 글자로** 적는다(종전 그대로) — 그리고 사실 하나만 더 들고 온다.
+  assert.match(f, /citation: '',/, '복원이 저장분의 이름을 들고 온다');
+  assert.match(f, /const citationLost = !kbId && \(e\.citationLost === true \|\| \(typeof e\.citation === 'string' && Boolean\(e\.citation\.trim\(\)\)\)\);/, '근거가 있었다는 사실을 세지 않는다');
+  assert.match(f, /\.\.\.\(citationLost \? \{ citationLost: true as const \} : \{\}\)/, '없을 때도 칸을 만든다');
+  // ② 세 표기가 모두 **서로 다른 글자**다(같으면 화면이 가릴 수 없다).
+  const labels = ['NO_CITATION_LABEL', 'DELETED_KB_LABEL', 'UNKNOWN_KB_LABEL']
+    .map((n) => (f.match(new RegExp(`export const ${n} = '([^']+)'`)) || [])[1]);
+  assert.ok(labels.every(Boolean), `표기가 빠졌다: ${labels}`);
+  assert.equal(new Set(labels).size, 3, `같은 말로 적는 사실이 있다: ${labels}`);
+  // ③ 묶음 열쇠는 세 갈래다 — id · 되돌리지 못한 복원분 · 라벨(근거 없음 포함).
+  assert.match(f, /\? 'lost:'/, '되돌리지 못한 평가를 따로 모으지 않는다');
+  assert.match(f, /const lost = key === 'lost:';/, '줄의 사유를 열쇠에서 읽지 않는다');
+  // ④ 새로 들어오는 평가에는 이 칸이 붙지 않는다 — 창구는 이름과 id 를 한 쌍으로만 적는다.
+  const record = f.slice(f.indexOf('export function recordFeedback('), f.indexOf('export function listFeedback('));
+  assert.equal(/citationLost/.test(record), false, '지금 들어온 평가에 「되돌리지 못함」을 적는다');
+  assert.match(read('src/app/api/feedback/route.ts'), /\.\.\.\(kb \?\? \{\}\)/, '창구가 이름과 id 를 한 쌍으로 적지 않는다');
+});
+
+/**
+ * DS 58-3 — 거르는 규칙과 **세는 규칙**이 한 벌인지(배선 쪽 고정).
+ *
+ * 종전에는 `documentToCandidates` 가 거르면서 아무것도 돌려주지 않았다. 세는 자리를 따로
+ * 적으면 「후보 수 + 빠진 수 ≠ 조각 수」가 되는 날이 온다 — 그때는 화면이 거짓을 적는다.
+ */
+test('문서 업로드에서 거르는 자와 세는 자가 한 벌이다 (DS 58-3)', () => {
+  const i = read('src/lib/ingest.ts');
+  // ① 거르는 곳은 한 곳이다 — 종전의 `.filter(...)` 사본이 남아 있지 않다.
+  assert.match(i, /export function ingestDocument\(raw: string, opts: IngestOptions\): IngestResult \{/, '세어 돌려주는 문이 없다');
+  assert.match(i, /if \(keywords\.length === 0\) \{/, '거르는 자리가 없다');
+  assert.equal(/\.filter\(\(c\) => c\.keywords\.length > 0\)/.test(i), false, '세지 않고 거르는 사본이 남아 있다');
+  // ② 종전 이름은 **그 문을 지난다**(부르는 쪽을 한꺼번에 바꾸지 않아도 수가 어긋나지 않는다).
+  assert.match(i, /export function documentToCandidates\(raw: string, opts: IngestOptions\): KBCandidate\[\] \{\n\s*return ingestDocument\(raw, opts\)\.candidates;\n\}/, '종전 이름이 따로 거른다');
+  // ③ 빠진 조각에는 **본문 전체가 아니라 단서만** 담긴다(찾는 데 필요한 만큼이다).
+  const dropped = i.slice(i.indexOf('export interface DroppedChunk {'), i.indexOf('export interface IngestResult {'));
+  assert.deepEqual(
+    [...dropped.matchAll(/^  (\w+):/gm)].map((m) => m[1]),
+    ['index', 'heading', 'chars', 'head'],
+    '빠진 조각이 담는 칸이 달라졌다',
+  );
+  assert.match(i, /head: flat\.length > 40 \? `\$\{flat\.slice\(0, 40\)\}…` : flat,/, '줄였으면 줄였다고 말하지 않는다');
+  // ④ 라우트에만 export 가 늘지 않았다(★ 안전 원칙 — HTTP 메서드·설정 외 export 금지).
+  const route = read('src/app/api/admin/kb/import/route.ts');
+  const exports = [...route.matchAll(/^export (?:async function|function|const) (\w+)/gm)].map((m) => m[1]);
+  assert.deepEqual(exports.sort(), ['POST', 'dynamic'], `route.ts 에 허용되지 않은 export 가 있다: ${exports}`);
+});

@@ -1677,7 +1677,8 @@ test('고객이 누른 평가가 대시보드에 모이고, 0건을 0%로 단정
   assert.match(dash, /onClick=\{\(\) => \{ goTab\('kb'\); setKbCat\(''\); setKbQuery\(d\.citation\); \}\}/, '자료로 데려가지 않는다');
   // 「근거 없음」은 고칠 자료가 없다 — 데려갈 곳이 없으므로 버튼으로 만들지 않는다.
   // DS 43-2 이후에는 **지워진 자료**도 같은 가지로 간다(검색해도 0건이다).
-  assert.match(dash, /const dead = d\.citation === NO_CITATION_LABEL \|\| d\.missing;/, '근거 없음 행도 자료처럼 누르게 둔다');
+  // DS 58-2 이후에는 **이름을 되돌리지 못한 복원분**도 같은 가지다(검색할 이름 자체가 없다).
+  assert.match(dash, /const dead = d\.citation === NO_CITATION_LABEL \|\| lost \|\| d\.missing;/, '근거 없음 행도 자료처럼 누르게 둔다');
   assert.match(dash, /<div className="ac-row" data-static="">/, '누를 수 없는 행이 누를 수 있어 보인다');
 
   // 4) 「근거 없음」 표기는 서버 사전과 같아야 한다 — 어긋나면 그 행만 영영 자료로 데려간다.
@@ -2105,7 +2106,9 @@ test('평가가 어느 자료에 대한 것인지 id 로 오간다 (DS 43-2)', o
   assert.match(route, /optStr\(parsed\.data\.kbId, 'kbId', 60\)/, '라우트가 자료 id 를 검증 없이 받는다');
   assert.match(route, /resolveKb\(kbId\.value, kbLabelMap\(\)\)/, '라우트가 자료 id 를 버린다');
   // ③ 묶음 열쇠가 id 우선이다 — 라벨로만 묶으면 이름을 고칠 때마다 줄이 갈라진다.
-  assert.match(lib, /const key = e\.kbId \? `id:\$\{e\.kbId\}` : `label:/, '평가를 라벨로 묶는다');
+  //    (DS 58-2 가 이름을 되돌리지 못한 복원분을 `lost:` 한 줄로 가른 뒤에도 id 가 먼저다.)
+  assert.match(lib, /const key = e\.kbId\s*\n?\s*\? `id:\$\{e\.kbId\}`/, '평가를 라벨로 묶는다');
+  assert.match(lib, /: `label:\$\{e\.citation \|\| NO_CITATION_LABEL\}`/, '이름이 있는 평가를 라벨로 묶지 않는다');
   // ④ 이름 규칙이 근거 라벨과 같다 — 운영자가 답변 아래에서 본 그 이름이 목록에 떠야 한다.
   assert.match(knowledge, /source: entry\.source\?\.trim\(\) \|\| entry\.question,/, '근거 라벨 규칙이 바뀌었다');
   assert.match(tenantKB, /const label = \(e\.source \|\| ''\)\.trim\(\) \|\| \(e\.question \|\| ''\)\.trim\(\);/, '목록의 이름 규칙이 근거 라벨과 어긋난다');
@@ -2174,7 +2177,8 @@ test('다시 올린 문서가 덮어쓰는 것·남기는 것을 화면이 말�
   // ① 서버가 **등록 전에** 잰다 — 등록 뒤에 재면 갈아 끼운 것과 남는 것을 구분할 수 없다.
   assert.match(route, /const overlap = docOverlap\(docIdPrefix\(title\.value\), candidates\.map\(\(c\) => c\.id\), title\.value\);/, '라우트가 바뀌는 자리를 재지 않는다');
   assert.ok(route.indexOf('const overlap =') < route.indexOf('const result = bulkUpsertKB('), '등록 뒤에 재고 있다');
-  assert.match(route, /return ok\(\{ committed: false, count: candidates\.length, candidates, overlap \}\)/, '미리보기가 바뀌는 자리를 말하지 않는다');
+  // (DS 58-3 이 같은 응답에 「빠진 조각」을 더했다 — 바뀌는 자리는 그대로 실려야 한다.)
+  assert.match(route, /return ok\(\{ committed: false, count: candidates\.length, candidates, overlap,/, '미리보기가 바뀌는 자리를 말하지 않는다');
   assert.match(route, /지난 등록분 \$\{overlap\.stale\.length\}건 남음/, '남은 조각이 변경 이력에 남지 않는다');
   // id 앞자리는 **한 벌**이다 — 두 벌로 적으면 어긋나는 날 경고가 조용히 사라진다.
   assert.match(store, /export function docOverlap\(prefix: string, candidateIds: readonly string\[\], title: string\): DocOverlap/, '겹치는 자리를 재는 함수가 없다');
@@ -2650,7 +2654,10 @@ test('쓰기 응답이 보관 결과를 싣고 화면이 그 사실을 말한다
 
   // ⑤ 이미 머무는 안내(쓰이지 않는 규칙·남는 조각)에는 **덧붙인다** — 토스트는 한 번에 하나다.
   assert.match(src, /목록에서 다음에 할 일을 확인해 주세요\.\$\{savedWarn \? ` \$\{savedWarn\}` : ''\}/, '쓰이지 않는 규칙 안내가 보관 사실을 덮는다');
-  assert.match(src, /아래에서 확인해 주세요\.\$\{warn \? ` \$\{warn\}` : ''\}/, '남는 조각 안내가 보관 사실을 덮는다');
+  // 58차(DS 58-3)에 「검색어 없어 빠진 조각」이 같은 토스트에 더해지면서 문장을 모으는 식이
+  // 바뀌었다 — 고정하는 것은 그대로다: 머무는 두 안내가 보관 사실을 **덮지 않는다**.
+  assert.match(src, /\$\{done\}\$\{stale\}\$\{left\}\$\{warn \? ` \$\{warn\}` : ''\}/, '남는 조각·빠진 조각 안내가 보관 사실을 덮는다');
+  assert.match(src, /아래에서 확인해 주세요\.` : ''/, '머무는 안내가 「아래」를 가리키지 않는다');
 
   // ⑥ 첫 렌더에는 아무 경고도 없다 — 겪기 전에 말하지 않는다.
   const html = await render();
@@ -3209,4 +3216,110 @@ test('정산 대상이 0건인 달에도 제외 사유를 보여 준다 (DS 57-3
   assert.ok(empty.includes('파트너·귀속 열기'), '빈 상태의 다음 행동이 사라졌다');
   // ④ 표가 있는 자리는 종전처럼 접힌 채로 둔다(그 달에는 표가 먼저 읽혀야 한다).
   assert.match(src, /\{\/\* 표가 있는 자리와 없는 자리가[^\n]*\n\s*<SettleNotes notes=\{r\.notes\} \/>/, '표 아래 주석 자리가 바뀌었다');
+});
+
+/* ══════════ 디자인 스프린트 — 55차 재감사 (DS 58-1·58-2·58-3) ══════════ */
+
+/**
+ * DS 58-1(화면 쪽) — 합친 백업이 경계보다 앞선 기록을 들고 왔으면 **그 사이**를 말해야 한다.
+ * 변경 이력 탭은 「{경계} 이후」 한 줄만 적었고, 그 줄은 합친 뒤 1월을 가리켰다 — 1월부터
+ * 지금까지가 성한 기록으로 읽혔다(그 사이는 한 줄도 들고 있지 않다).
+ */
+test('변경 이력 탭이 합친 백업과 지금 기록 사이의 구멍을 말한다 (DS 58-1)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+
+  // ① 화면이 그 칸을 받는다 — 옛 응답에는 없으므로 optional 이다(없으면 아무 말도 하지 않는다).
+  const view = src.slice(src.indexOf('interface RetentionView {'), src.indexOf('interface StorageNsView {'));
+  assert.match(view, /mergedFrom\?: string;/, '화면이 섞인 구간을 받지 않는다');
+
+  // ② 경계 한 줄과 **따로** 적는다 — 한 문장으로 뭉치면 둘 중 하나가 거짓이 된다.
+  const tab = src.slice(src.indexOf('<h2 id="audit-h"'), src.indexOf('<label htmlFor="audit-filter"'));
+  assert.ok(tab.includes('${timeLabel(auditRange.knownFrom)} 이후'), '경계를 말하지 않는다');
+  assert.match(tab, /auditRange\?\.mergedFrom && \(/, '섞인 구간을 말하지 않는다');
+  assert.ok(tab.includes('올린 백업에 적혀 있던 기록만 있습니다'), '그 사이에 무엇이 있는지 말하지 않는다');
+  assert.ok(tab.includes('「변경 없음」이 아니라 「기록 없음」'), '빈 구간을 「변경 없음」으로 읽게 둔다');
+  // 겪기 전에는 말하지 않는다 — 섞인 것이 없으면 그 줄 자체가 없다.
+  assert.equal(/mergedFrom\s*\?\s*`/.test(tab), false, '섞이지 않았을 때도 글자를 만든다');
+
+  // ③ 첫 렌더에는 없다(모수가 오기 전에 단정하지 않는다).
+  const html = await render();
+  assert.equal(html.includes('올린 백업에 적혀 있던 기록만 있습니다'), false, '겪기도 전에 구멍을 말한다');
+});
+
+/**
+ * DS 58-2(화면 쪽) — 「보완이 필요한 자료」의 **세 사실**이 두 가지로 적혀 있었다.
+ * 이름을 되돌리지 못한 복원분까지 「근거 없음」 줄로 들어가, 화면은 그 줄에 「등록된 자료 없이
+ * 답한 답변입니다. 위의 「답하지 못한 질문」부터 채워 주세요」라고 적었다 — 없던 일을 사실로
+ * 말하고 운영자를 엉뚱한 일로 보냈다.
+ */
+test('이름을 되돌리지 못한 평가를 화면이 다르게 적는다 (DS 58-2)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const lib = readFileSync(new URL('../src/lib/feedback.ts', import.meta.url), 'utf8');
+
+  // ① 표기는 **서버 사전과 같은 글자**여야 한다 — 어긋나면 그 줄만 영영 자료로 데려간다.
+  const label = (src.match(/const UNKNOWN_KB_LABEL = '([^']+)'/) || [])[1];
+  assert.ok(label, '콘솔에 「알 수 없음」 표기가 없다');
+  assert.ok(lib.includes(`export const UNKNOWN_KB_LABEL = '${label}'`), `서버 표기와 어긋난다: ${label}`);
+  const no = (src.match(/const NO_CITATION_LABEL = '([^']+)'/) || [])[1];
+  assert.notEqual(label, no, '두 사실을 같은 말로 적는다');
+
+  // ② 사실은 **서버가 보낸 표시**로 가린다(글자 비교로 가리면 같은 이름의 자료에 걸린다).
+  const dash = src.slice(src.indexOf('보완이 필요한 자료'), src.indexOf('{/* ── 최근 대화 ── */}'));
+  assert.match(dash, /const lost = Boolean\(d\.citationLost\);/, '화면이 서버의 표시를 읽지 않는다');
+  assert.match(dash, /const dead = d\.citation === NO_CITATION_LABEL \|\| lost \|\| d\.missing;/, '데려갈 곳 없는 줄을 누르게 둔다');
+  // ③ 세 줄이 **서로 다른 말**을 한다.
+  assert.ok(dash.includes('등록된 자료 없이 답한 답변입니다'), '근거 없는 답변 문장이 사라졌다');
+  assert.ok(dash.includes('지금은 없는 자료입니다'), '지워진 자료 문장이 사라졌다');
+  assert.ok(dash.includes('백업에서 되살린 평가입니다'), '되돌리지 못한 평가를 말하지 않는다');
+  assert.ok(dash.includes('이 수만으로 고칠 자료를 고르지 마세요'), '그 수를 믿고 일하게 둔다');
+  // 「답하지 못한 질문부터 채우라」는 **근거 없음 줄에만** 붙는다(이쪽은 고칠 자료가 없다).
+  const lostLine = (dash.match(/'백업에서 되살린 평가입니다[^']*'/) || [])[0];
+  assert.ok(lostLine, '되돌리지 못한 평가의 문장을 찾지 못했다');
+  assert.equal(lostLine.includes('답하지 못한 질문'), false, '되돌리지 못한 평가에 엉뚱한 다음 일을 적는다');
+  // ④ 누를 수 없는 줄의 설명은 **깎지 않는다** — 375px 에서 다음에 할 일이 잘려 보이지 않는다
+  //    (`.ac-row-reply` 는 한 줄로 말줄임한다 — 자료 이름 줄에는 맞지만 설명 줄에는 맞지 않는다).
+  assert.match(dash, /<span className="ac-row-reply" style=\{\{ whiteSpace: 'normal', overflow: 'visible' \}\}>/, '설명이 한 줄로 깎인다');
+});
+
+/**
+ * DS 58-3(화면 쪽) — 검색어가 없어 **등록되지 않는 조각**을 화면이 말하지 않았다.
+ * 「후보 N개」만 적혀 있어 운영자는 올린 문서가 통째로 들어간 줄 알았고, 목록 번호(`#n`)에
+ * 난 구멍이 유일한 단서였다(그 구멍이 무엇인지는 어디에도 없었다).
+ */
+test('업로드 미리보기가 등록되지 않는 조각을 말한다 (DS 58-3)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const route = readFileSync(new URL('../src/app/api/admin/kb/import/route.ts', import.meta.url), 'utf8');
+
+  // ① 서버가 세어 보낸다 — 거르는 쪽과 세는 쪽이 **한 벌**이다(`ingestDocument`).
+  assert.match(route, /const ingested = ingestDocument\(text\.value, \{/, '라우트가 빠진 조각을 세지 않는다');
+  assert.equal(/documentToCandidates/.test(route), false, '세지 않는 문이 남아 있다');
+  assert.match(route, /chunks: ingested\.chunks, dropped: ingested\.dropped/, '미리보기가 빠진 조각을 말하지 않는다');
+  assert.ok(route.includes('chunks: ingested.chunks,\n    dropped: ingested.dropped,'), '등록 뒤에는 말하지 않는다');
+  assert.match(route, /검색어 없어 제외 \$\{ingested\.dropped\.length\}조각/, '빠진 조각이 변경 이력에 남지 않는다');
+  // 전부 걸러진 경우에는 **그렇게 말한다**(「본문이 너무 짧다」는 사실이 아니다 · DS 42-3).
+  assert.match(route, /모든 조각에서 검색에 쓸 낱말을 찾지 못했습니다/, '전부 걸러졌을 때 사유가 사실과 다르다');
+
+  // ② 화면이 받아 **등록 뒤에도** 남긴다(사라지는 토스트에 맡기지 않는다 · DS 44-1 과 같은 규칙).
+  assert.match(src, /interface DroppedChunkView \{/, '화면이 빠진 조각을 받지 않는다');
+  assert.match(src, /const dropped = \(data\.dropped as DroppedChunkView\[\] \| undefined\) \?\? \[\];/, '옛 응답을 「빠진 것 없음」으로 읽는다');
+  assert.match(src, /setImpDropped\(dropped\);/, '빠진 조각을 버린다');
+  assert.match(src, /setImpDropped\(\[\]\)/, '미리보기를 지워도 경고가 남는다');
+
+  // ③ 그 목록이 **무엇이 빠졌는지** 가리킨다 — 번호·제목·길이·첫 글자.
+  const imp = src.slice(src.indexOf('aria-labelledby="ac-kb-import"'), src.indexOf('{/* ── 우: 편집 폼(스티키) ── */}'));
+  assert.match(imp, /\{impDropped\.length > 0 && \(/, '빠진 조각 안내가 없다');
+  assert.ok(imp.includes('은 등록되지 않습니다'), '등록되지 않는다는 사실을 말하지 않는다');
+  assert.ok(imp.includes('챗봇은 기본 안내로 답합니다'), '그래서 무슨 일이 벌어지는지 말하지 않는다');
+  assert.ok(imp.includes("'제목 없음(문서 맨 앞)'"), '제목 없는 조각을 빈칸으로 둔다');
+  assert.ok(imp.includes('빠진 번호'), '번호의 구멍이 무엇인지 말하지 않는다');
+  assert.ok(imp.includes('오른쪽 「새 자료 추가」로 직접 넣어 주세요'), '다음 할 일이 없다');
+  // 긴 목록은 다섯 줄까지만 — 나머지는 수로 말한다(남는 조각 안내와 같은 모양).
+  assert.match(imp, /impDropped\.slice\(0, 5\)\.map/, '목록이 끝없이 길어진다');
+  assert.ok(imp.includes('외 {impDropped.length - 5}조각'), '자른 뒤 나머지를 말하지 않는다');
+  // 머무는 안내는 `role="status"` 로 읽힌다(초점을 빼앗지 않는다 · DS 44-1 과 같은 자리).
+  assert.match(imp, /\{impDropped\.length > 0 && \(\n\s*<div role="status"/, '스크린리더가 그 사실을 읽지 못한다');
+
+  // ④ 겪기 전에는 말하지 않는다(첫 렌더에 경고가 없다).
+  const html = await render();
+  assert.equal(html.includes('은 등록되지 않습니다'), false, '겪기도 전에 경고한다');
 });
