@@ -2004,8 +2004,12 @@ test('덮개가 열려 있으면 검색 단축키가 초점을 빼내지 않는�
  * 어느 쪽이 제품의 뜻인지는 분명하다 — 한 자로 모으고, 그 자가 서버의 `compact` 와 같은지 돌려 본다.
  */
 test('콘솔의 모든 검색칸이 서버와 같은 자를 쓴다 (DS 42-1)', opts, async () => {
-  const { searchNorm, searchMatch, probeKeywords } = await loadConsoleFns(['searchNorm', 'searchMatch', 'probeKeywords']);
-  const { compact } = await importLib('normalize', []);
+  // 보이지 않는 글자를 지우는 표(`CONSOLE_INVISIBLE`)를 함께 떼어내야 돈다 (DS 63-2).
+  const { searchNorm, searchMatch, probeKeywords } = await loadConsoleFns(
+    ['searchNorm', 'searchMatch', 'probeKeywords'],
+    ['CONSOLE_INVISIBLE'],
+  );
+  const { compact } = await importLib('normalize', ['text']);
 
   // ① 콘솔 사본과 서버 원본이 **같은 입력에 같은 결과**를 낸다(콘솔은 lib 을 불러올 수 없다).
   const samples = [
@@ -3645,4 +3649,47 @@ test('콘솔이 줄이는 자가 글자를 쪼개지 않고 lib 과 같은 글�
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
   const hits = code.match(/\.length > \w+ \? `?\$?\{?\w+\.slice\(0,[^\n]*…/g) || [];
   assert.deepEqual(hits, [], `손으로 자르는 자리가 남았다: ${hits.join(' / ')}`);
+});
+
+/* ══════════ 63순위 — 60차 재감사 (DS 63-3) ══════════ */
+
+/**
+ * DS 63-3 — 콘솔이 **「비었다」를 서버와 다르게 쟀다**.
+ *
+ * 서버는 `lib/text.cleanText` 로 턴 뒤에 「문서명을 입력해 주세요」를 돌려준다(DS 63-1).
+ * 화면이 `trim()` 으로만 보면 **아무것도 보이지 않는 값을 통과시켜 보내 놓고** 서버의 거절을
+ * 토스트로 받는다 — 어느 칸이 왜 틀렸는지 그 칸 아래에서 밝히기로 한 규약(DS 29-1)이 깨지고,
+ * 운영자는 비어 보이는 칸을 보며 무엇을 고쳐야 할지 모른다.
+ * 콘솔은 lib 을 불러오지 않으므로 사본을 떼어내 **글자까지 대조**한다.
+ */
+test('콘솔이 비었는지 재는 자가 서버와 같다 (DS 63-3)', opts, async () => {
+  const { cleanText, blank } = await loadConsoleFns(['cleanText', 'blank'], ['CONSOLE_INVISIBLE']);
+  const T = await importLib('text');
+
+  const SAMPLES = [
+    '', '   ', '\u{200b}', '\u{ad}', '\u{202e}', '\u{2060}\u{2064}', '\u0001\u001f\u007f', ' \u{200b} \u{ad} ',
+    '환불\u{200b}정책', '가온\u{202e}파트너스', '  환불 정책 안내  ', '010\u{a0}1234\u{a0}5678',
+    '첫 줄\r\n둘째 줄', '표\t칸', '👩‍👩‍👧', '👍🏻', '🇰🇷', '환불﻿정책', '(주)고원 커머스',
+  ];
+  for (const s of SAMPLES) {
+    assert.equal(cleanText(s), T.cleanText(s), `lib 과 다른 결과를 낸다: ${JSON.stringify(s)}`);
+    assert.equal(blank(s), T.isBlank(s), `빈 값 판정이 갈라졌다: ${JSON.stringify(s)}`);
+  }
+  // 종전 식 재현 — `trim()` 은 이 값들을 글자로 세어 통과시켰다(이것이 결함의 크기다).
+  for (const s of ['\u{200b}', '\u{ad}', '\u{202e}']) {
+    assert.ok(s.trim().length > 0, `재현이 깨졌다: ${JSON.stringify(s)}`);
+    assert.equal(blank(s), true, `아무것도 보이지 않는 값을 통과시킨다: ${JSON.stringify(s)}`);
+  }
+
+  // 필수 칸 검사 **여덟 곳이 모두** 그 자를 지난다 — 하나라도 빠지면 그 폼만 다른 제품이 된다.
+  await loadConsole();
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  for (const f of ['imp.title', 'imp.text', 'pForm.name', 'aForm.name', 'form.question', 'form.answer', 'crForm.label', 'crForm.reply']) {
+    assert.ok(src.includes(`if (blank(${f}))`), `${f} 가 공통 자를 지나지 않는다`);
+  }
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  const left = code.match(/if \(![\w.]+\.trim\(\)\) errs\./g) || [];
+  assert.deepEqual(left, [], `필수 칸을 trim 으로 재는 자리가 남았다: ${left.join(' / ')}`);
+  // 사본임을 밝혀 둔다 — 밝히지 않으면 다음 사람이 한쪽만 고친다.
+  assert.ok(src.includes('원본은 `src/lib/text.ts`'), '사본임을 밝히지 않는다(cleanText)');
 });

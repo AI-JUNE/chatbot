@@ -1027,7 +1027,9 @@ test('위젯이 보내기 전에 글자 수 한계를 알린다 (DS 5-5)', () =>
   assert.equal(widgetLimit, limit, '위젯과 서버의 길이 한계가 어긋나면 413 으로 거절된다');
   assert.match(s, /aria-invalid=\{tooLong \|\| undefined\}/, '어느 입력이 틀렸는지 알려야 한다');
   assert.match(s, /aria-describedby=/, '오류 문구를 입력과 연결해야 한다');
-  assert.match(s, /aria-disabled=\{busy \|\| tooLong \|\| !input\.trim\(\) \|\| undefined\}/, '한계를 넘으면 전송을 막는다');
+  // 비었는지 재는 자는 `trim()` 이 아니라 사본 `cleanText` 다 (DS 63-1) — 제로폭 공백뿐인 입력을
+  // `trim()` 은 글자로 세어 전송 버튼을 열어 두었다(빈 말풍선이 올라가고 요청까지 나갔다).
+  assert.match(s, /aria-disabled=\{busy \|\| tooLong \|\| !cleanText\(input\) \|\| undefined\}/, '한계를 넘으면 전송을 막는다');
   assert.match(s, /function send\(\) \{ if \(!tooLong\) sendText\(input\); \}/, '실제 차단은 처리 함수 앞단이 한다');
 });
 
@@ -3338,7 +3340,8 @@ test('세션을 들고 오지 않은 요청에 창구가 식별자를 발급한�
   assert.match(kko, /const sessionId = parsed\.userId \? `kakao:\$\{parsed\.userId\}` : newVisitorSessionId\('kakao'\);/, '카카오가 모르는 사용자를 한 칸에 몰아넣는다');
   assert.match(kko, /kakaoEventKey\(req\.headers, parsed\.userId, parsed\.utterance\)/, '중복 전달 키가 발급값으로 흔들린다');
   // 지어내는 **식**이 남아 있지 않다(주석에 적힌 종전 식 설명은 센다고 보지 않는다).
-  assert.match(read('src/lib/kakao.ts'), /const userId = \(p\.userRequest\?\.user\?\.id \?\? ''\)\.trim\(\)\.slice\(0, 60\);/, '카카오가 모르는 사용자를 지어낸다');
+  // 터는 자는 `trim()` 이 아니라 `cleanText` 다 (DS 63-1) — 보이지 않는 글자뿐인 id 는 없는 id 다.
+  assert.match(read('src/lib/kakao.ts'), /const userId = cleanText\(p\.userRequest\?\.user\?\.id\)\.slice\(0, 60\);/, '카카오가 모르는 사용자를 지어낸다');
 
   // ③ 관리 콘솔 「응답 테스트」가 자기 세션을 들고 보낸다(두 운영자·밖의 요청과 섞이지 않게).
   const admin = read('src/app/admin/page.tsx');
@@ -4086,4 +4089,50 @@ test('관리 작업 기록이 이름을 손으로 끊지 않는다 (DS 62-3)', (
     const allowed = new Set(['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'dynamic', 'revalidate', 'runtime', 'fetchCache', 'maxDuration']);
     for (const e of exports) assert.ok(allowed.has(e), `${f} 에 허용되지 않은 export 가 있다: ${e}`);
   }
+});
+
+/* ══════════ 63순위 — 백로그 소진 후 60차 재감사 (DS 63-1·63-2·63-3) ══════════ */
+
+/**
+ * DS 63-1·63-2 — **보이지 않는 글자**를 터는 자가 한 벌인가(배선).
+ *
+ * 「정말 그렇게 동작하는가」는 runtime.test.mjs 가 돌려서 본다. 여기서는 그 자를 **지나는
+ * 자리**를 고정한다 — 받는 자리(`http.optStr`·카카오 발화)와 판정하는 자리(`normalize`)가
+ * 같은 파일에서 오는지, 그리고 `trim()` 으로 되돌아간 자리가 없는지.
+ */
+test('보이지 않는 글자를 터는 자가 한 벌이다 (DS 63-1·63-2)', () => {
+  const text = read('src/lib/text.ts');
+  for (const name of ['stripInvisible', 'cleanText', 'isBlank', 'stripForMatch']) {
+    assert.match(text, new RegExp(`export function ${name}\\(`), `${name} 이 단일 출처에 없다`);
+  }
+  // **글자를 이루는** 보이지 않는 글자는 보관용 표에서 지우지 않는다 — 59차가 한 글자로 묶어 둔
+  // 것들이다(이음표·변형 선택자). 지우면 `👩‍👩‍👧` 가 낱낱의 사람이 된다.
+  const decl = text.slice(text.indexOf('const INVISIBLE'));
+  const keepTable = decl.slice(0, decl.indexOf('\n'));
+  assert.ok(/^const INVISIBLE = \/\[.+\]\/gu;$/.test(keepTable), `보관용 표를 찾지 못했다: ${keepTable.slice(0, 40)}`);
+  for (const keep of ['u{200c}', 'u{200d}', 'u{fe0f}']) {
+    assert.equal(keepTable.includes(keep), false, `보관용 표가 ${keep} 까지 지운다`);
+  }
+  // 표는 **코드포인트 표기로만** 적는다 — 글자 그대로 적으면 소스 자체가 보이지 않는 글자를 품는다.
+  const literal = [...text].find((c) => {
+    const n = c.codePointAt(0);
+    return n === 0xad || n === 0x200b || n === 0xfeff || (n >= 0x202a && n <= 0x202e) || (n >= 0x2060 && n <= 0x2069);
+  });
+  assert.equal(literal, undefined, '보이지 않는 글자를 소스에 그대로 적었다');
+
+  // ① 받는 자리 — 모든 쓰기 경로가 지나는 `optStr` 과 카카오 발화.
+  const http = read('src/lib/http.ts');
+  assert.match(http, /import \{ cleanText \} from '@\/lib\/text';/, '입력 검증이 공통 자를 끌어오지 않는다');
+  assert.match(http, /const s = cleanText\(v\);/, '입력 검증이 trim 으로 턴다');
+  const kakao = read('src/lib/kakao.ts');
+  assert.match(kakao, /const utterance = cleanText\(p\.userRequest\?\.utterance\);/, '카카오가 발화를 trim 으로 턴다');
+
+  // ② 판정하는 자리 — 「같은 말인가」의 단일 기준.
+  const norm = read('src/lib/normalize.ts');
+  assert.match(norm, /import \{ stripForMatch \} from '@\/lib\/text';/, '비교하는 자가 공통 자를 끌어오지 않는다');
+  assert.match(norm, /return stripForMatch\(toNfc\(s\)\)\.toLowerCase\(\)/, '비교 전에 보이지 않는 글자를 지우지 않는다');
+
+  // ③ 화면 사본 두 벌이 **사본임을 밝힌다**(밝히지 않으면 다음 사람이 한쪽만 고친다).
+  assert.ok(read('src/app/admin/page.tsx').includes('원본은 `src/lib/text.ts`'), '콘솔 사본이 출처를 밝히지 않는다');
+  assert.ok(read('src/components/ChatWidget.tsx').includes('원본은 `src/lib/text.ts`'), '위젯 사본이 출처를 밝히지 않는다');
 });

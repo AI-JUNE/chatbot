@@ -239,6 +239,26 @@ export const MAX_INPUT_LEN = 2000;
 const COUNT_FROM = MAX_INPUT_LEN - 200;
 
 /**
+ * 보이지 않는 글자를 터는 자 — 원본은 `src/lib/text.ts`(`cleanText`) (DS 63-1).
+ *
+ * 이 파일은 `@/lib` 을 하나도 import 하지 않는다(위 `MAX_INPUT_LEN` 과 같은 까닭 — 렌더
+ * 테스트가 파일 하나만 떼어 컴파일한다). 그래서 사본을 두고 **테스트가 두 자의 결과를 글자까지
+ * 대조한다**.
+ *
+ * 왜 `trim()` 이 아닌가: 제로폭 공백(U+200B)·소프트 하이픈·방향 제어는 `trim()` 에 지워지지
+ * 않는다. 모바일 키보드·번역기를 거친 말에 그것만 담겨 오면 종전에는 **빈 말풍선**이 올라가고
+ * 요청까지 나갔다 — 고객은 자기가 보낸 적 없는 말풍선 아래에서 「무슨 말씀인지 모르겠어요」를
+ * 읽었다. 서버도 같은 자로 털므로(`lib/http.optStr`), 보내기 전에 같은 판정을 한다.
+ */
+export function cleanText(v: string): string {
+  return (v || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u{a0}\u{1680}\u{2000}-\u{200a}\u{202f}\u{205f}\u{3000}]/gu, ' ')
+    .replace(/[\u{0}-\u{8}\u{b}\u{c}\u{e}-\u{1f}\u{7f}-\u{9f}\u{ad}\u{61c}\u{180e}\u{200b}\u{200e}\u{200f}\u{202a}-\u{202e}\u{2060}-\u{2064}\u{2066}-\u{2069}\u{feff}\u{fff9}-\u{fffb}]/gu, '')
+    .trim();
+}
+
+/**
  * 지금 누른 키가 **한글을 조합하는 중**인가 (DS 41-1).
  *
  * 한국어 입력기(IME)에서 `Enter`·`Escape` 는 글자를 만드는 키다 — Enter 는 조합 중인 음절을
@@ -362,7 +382,7 @@ const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),textarea
 
 /** 연락처 형식 검사 — 전화번호 또는 이메일. 서버도 길이를 다시 검증한다. */
 export function validContact(v: string): boolean {
-  const t = v.trim();
+  const t = cleanText(v);
   if (t.length < 5 || t.length > 100) return false;
   if (/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(t)) return true;
   return /^[0-9][0-9\s()+-]{7,}$/.test(t) && t.replace(/\D/g, '').length >= 9;
@@ -374,7 +394,7 @@ export function validContact(v: string): boolean {
  * 「잘못된 입력에 어느 항목이 왜 틀렸는지 인라인으로 알려준다」.
  */
 export function contactError(v: string): string {
-  const t = v.trim();
+  const t = cleanText(v);
   if (!t) return '연락 받으실 전화번호나 이메일을 입력해 주세요. 남기지 않으시려면 「연락처 없이 접수」를 눌러 주세요.';
   if (validContact(t)) return '';
   if (t.length > 100) return '연락처가 너무 깁니다. 전화번호나 이메일 주소 하나만 남겨 주세요.';
@@ -733,7 +753,7 @@ export function saveDraft(tenantId: string, text: string, now: number = Date.now
   const st = threadStore();
   if (!st) return;
   try {
-    if (!text.trim() || text.length > DRAFT_MAX_CHARS) { st.removeItem(draftKey(tenantId)); return; }
+    if (!cleanText(text) || text.length > DRAFT_MAX_CHARS) { st.removeItem(draftKey(tenantId)); return; }
     st.setItem(draftKey(tenantId), JSON.stringify({ v: DRAFT_VER, at: now, text } satisfies SavedDraft));
   } catch {
     /* 저장소 차단·용량 초과 — 되살리지 못할 뿐 대화는 계속된다 */
@@ -754,7 +774,7 @@ export function loadDraft(tenantId: string, now: number = Date.now()): string {
     const d = JSON.parse(raw) as Partial<SavedDraft>;
     if (d?.v !== DRAFT_VER || typeof d.text !== 'string' || typeof d.at !== 'number') return '';
     if (now - d.at > THREAD_TTL_MS) { clearDraft(tenantId); return ''; }
-    if (!d.text.trim() || d.text.length > DRAFT_MAX_CHARS) return '';
+    if (!cleanText(d.text) || d.text.length > DRAFT_MAX_CHARS) return '';
     return d.text;
   } catch {
     // 남의 데이터·깨진 JSON — 빈 칸으로 시작한다(사용자에게 알릴 실패가 아니다).
@@ -1395,7 +1415,8 @@ export default function ChatWidget({
    * @param retryOf 다시 보내기인 경우 지울 안내 말풍선의 key — 사용자 말풍선은 이미 위에 있으므로 다시 그리지 않는다.
    */
   async function sendText(raw: string, retryOf?: number) {
-    const text = raw.trim();
+    // 서버가 터는 자와 같다 (DS 63-1) — `trim()` 만 보면 보이지 않는 글자뿐인 말이 빈 말풍선으로 올라갔다.
+    const text = cleanText(raw);
     if (!text || busy) return;
     if (text.length > MAX_INPUT_LEN) return;
     // 다시 말을 거는 사람에게 「여기부터 읽지 않은 답변」은 이미 지난 경계다(DS 28-3).
@@ -2133,9 +2154,9 @@ export default function ChatWidget({
             <button
               onClick={send}
               aria-busy={busy || undefined}
-              aria-disabled={busy || tooLong || !input.trim() || undefined}
+              aria-disabled={busy || tooLong || !cleanText(input) || undefined}
               aria-label="메시지 전송"
-              style={{ width: 42, height: 42, flexShrink: 0, borderRadius: '50%', background: 'var(--brand)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: busy || tooLong || !input.trim() ? .5 : 1 }}
+              style={{ width: 42, height: 42, flexShrink: 0, borderRadius: '50%', background: 'var(--brand)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: busy || tooLong || !cleanText(input) ? .5 : 1 }}
             >
               <WIcon name="send" size={18} />
             </button>

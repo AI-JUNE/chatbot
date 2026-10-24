@@ -2118,19 +2118,44 @@ interface SearchResult {
 }
 
 /**
+ * 보이지 않는 글자를 터는 자 — 원본은 `src/lib/text.ts`(`cleanText`·`stripForMatch`) (DS 63-1·63-2).
+ * 콘솔은 lib 을 불러오지 않으므로(`MAX_DOC_CHARS`·`docLen`·`batchimOf` 와 같은 기존 규약)
+ * 사본을 두고, 테스트가 같은 입력으로 두 자의 결과를 글자까지 대조한다.
+ *
+ * 왜 화면도 이 자를 써야 하는가: 서버는 이 자로 턴 뒤에 「문서명을 입력해 주세요」를 돌려준다.
+ * 화면이 `trim()` 으로만 보면 **아무것도 보이지 않는 값을 통과시켜 보내 놓고** 서버의 거절을
+ * 토스트로 받는다 — 어느 칸이 왜 틀렸는지 그 칸 아래에서 밝히기로 한 규약(DS 29-1)이 깨진다.
+ */
+const CONSOLE_INVISIBLE = /[\u{0}-\u{8}\u{b}\u{c}\u{e}-\u{1f}\u{7f}-\u{9f}\u{ad}\u{61c}\u{180e}\u{200b}\u{200e}\u{200f}\u{202a}-\u{202e}\u{2060}-\u{2064}\u{2066}-\u{2069}\u{feff}\u{fff9}-\u{fffb}]/gu;
+function cleanText(v: string): string {
+  return (v || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u{a0}\u{1680}\u{2000}-\u{200a}\u{202f}\u{205f}\u{3000}]/gu, ' ')
+    .replace(CONSOLE_INVISIBLE, '')
+    .trim();
+}
+/** 보이는 글자가 하나도 없는가 — 필수 칸 검사는 전부 이 자를 지난다. */
+function blank(v: string): boolean {
+  return cleanText(v) === '';
+}
+
+/**
  * **이 콘솔에서 「같은 말인가」를 묻는 단 하나의 자.**
  *
- * 유니코드 정규화(NFC) → 소문자 → 3연속 이상 축약 → 공백·문장부호 제거. 서버의
- * `@/lib/normalize` 의 `compact` 와 **같은 결과**를 내야 한다 — 콘솔은 클라이언트 번들이라
- * lib 을 불러오지 않으므로(`MAX_DOC_CHARS`·`composingKey` 와 같은 기존 규약) 사본을 두고,
- * 테스트가 같은 입력으로 두 자의 결과를 대조해 갈라지면 실패시킨다.
+ * 유니코드 정규화(NFC) → 보이지 않는 글자 제거 → 소문자 → 3연속 이상 축약 → 공백·문장부호
+ * 제거. 서버의 `@/lib/normalize` 의 `compact` 와 **같은 결과**를 내야 한다 — 콘솔은 클라이언트
+ * 번들이라 lib 을 불러오지 않으므로 사본을 두고, 테스트가 같은 입력으로 두 자의 결과를 대조해
+ * 갈라지면 실패시킨다.
  *
  * 종전에는 헤더 전역 검색만 이 자(그중에서도 띄어쓰기까지만)를 쓰고, 각 탭의 검색칸은
  * `toLowerCase()` 만 했다 — 같은 말을 쳐도 헤더에서는 나오고 탭에서는 0건이었다(DS 42-1).
+ * 보이지 않는 글자를 지우는 줄은 DS 63-2 가 더했다(붙여 넣은 자료가 검색에 걸리지 않던 자리).
  */
 function searchNorm(v: string): string {
   return (v || '')
     .normalize('NFC')
+    .replace(CONSOLE_INVISIBLE, '')
+    .replace(/[\u{200c}\u{200d}\u{fe00}-\u{fe0f}]/gu, '')
     .toLowerCase()
     .replace(/(.)\1{2,}/gu, '$1$1')
     .replace(/[\s.,!?~·・…"'"'()[\]{}<>:;/\\|@#$%^&*+=_-]/gu, '');
@@ -2866,8 +2891,8 @@ export default function AdminPage() {
     }
     // 어느 항목이 왜 틀렸는지 그 칸 아래에서 밝힌다 — 토스트 한 줄은 어느 칸인지 알려주지 못했다.
     const errs: typeof impErr = {};
-    if (!imp.title.trim()) errs.title = '문서명을 입력해 주세요. 답변에 출처로 표시됩니다.';
-    if (!imp.text.trim()) errs.text = '문서 본문을 붙여넣어 주세요.';
+    if (blank(imp.title)) errs.title = '문서명을 입력해 주세요. 답변에 출처로 표시됩니다.';
+    if (blank(imp.text)) errs.text = '문서 본문을 붙여넣어 주세요.';
     else if (docLen(imp.text) > MAX_DOC_CHARS) errs.text = `본문이 ${comma(MAX_DOC_CHARS)}자를 넘습니다. 장을 나눠 올려주세요.`;
     const chunk = Number(imp.maxChars);
     if (imp.maxChars.trim() === '' || !Number.isFinite(chunk) || chunk < MIN_CHUNK_CHARS || chunk > MAX_CHUNK_CHARS) {
@@ -3209,7 +3234,7 @@ export default function AdminPage() {
     if (partnerSaving) return;
     // 서버도 같은 규칙으로 거절하지만, 어느 칸이 왜 틀렸는지는 화면에서 먼저 알린다.
     const errs: typeof pErr = {};
-    if (!pForm.name.trim()) errs.name = '파트너명을 입력해 주세요.';
+    if (blank(pForm.name)) errs.name = '파트너명을 입력해 주세요.';
     if (pForm.feeRatePct.trim() !== '') {
       const n = Number(pForm.feeRatePct);
       if (!Number.isFinite(n) || n < 0 || n > 100) errs.feeRatePct = '수수료율은 0~100 사이의 숫자(%)여야 합니다.';
@@ -3261,7 +3286,7 @@ export default function AdminPage() {
   const submitAccount = async () => {
     if (partnerSaving) return;
     const errs: typeof aErr = {};
-    if (!aForm.name.trim()) errs.name = '고객사명을 입력해 주세요.';
+    if (blank(aForm.name)) errs.name = '고객사명을 입력해 주세요.';
     if (aForm.source === 'partner' && !aForm.partnerId) errs.partnerId = '유입 경로가 「파트너 유치」이면 귀속 파트너를 골라야 합니다.';
     const date = aForm.contractedAt.trim();
     if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) errs.contractedAt = '계약일은 2026-09-01 처럼 연-월-일 형식이어야 합니다.';
@@ -3816,8 +3841,8 @@ export default function AdminPage() {
 
   const submitKB = async () => {
     const errs: { question?: string; keywords?: string; answer?: string } = {};
-    if (!form.question.trim()) errs.question = '대표 질문을 입력해 주세요.';
-    if (!form.answer.trim()) errs.answer = '답변을 입력해 주세요.';
+    if (blank(form.question)) errs.question = '대표 질문을 입력해 주세요.';
+    if (blank(form.answer)) errs.answer = '답변을 입력해 주세요.';
     // 새 자료는 키워드가 한 개 이상 있어야 서버가 받는다 — 보내 보고 토스트로 거절당하는 대신
     // 그 칸에서 먼저 말한다(DS 29-1). 수정할 때는 서버도 요구하지 않으므로 묻지 않는다.
     if (!editingId && splitKeywords(form.keywords).length === 0) {
@@ -4095,9 +4120,9 @@ export default function AdminPage() {
 
   const submitCustomRule = async () => {
     const errs: { label?: string; keywords?: string; reply?: string } = {};
-    if (!crForm.label.trim()) errs.label = '규칙 이름을 입력해 주세요.';
+    if (blank(crForm.label)) errs.label = '규칙 이름을 입력해 주세요.';
     if (splitKeywords(crForm.keywords).length === 0) errs.keywords = '고객이 쓸 표현을 한 개 이상 입력해 주세요.';
-    if (!crForm.reply.trim()) errs.reply = '고객에게 보낼 답변을 입력해 주세요.';
+    if (blank(crForm.reply)) errs.reply = '고객에게 보낼 답변을 입력해 주세요.';
     setCrErr(errs);
     if (Object.keys(errs).length) {
       focusErrorField(firstErrorId(errs, CR_FIELD_ORDER));

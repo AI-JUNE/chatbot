@@ -1845,3 +1845,37 @@ test('말풍선이 접수번호에 맞는 조사를 붙인다 (DS 61-2)', opts, 
   const hits = code.match(/\}[」』'"]?(은|는|을|를|이|가|으로|와|과)[\s.,·—]/g) || [];
   assert.deepEqual(hits, [], `값 뒤에 조사를 글자로 적은 자리가 남았다: ${hits.join(' / ')}`);
 });
+
+/**
+ * DS 63-3 — 화면이 **「비었다」를 서버와 다르게 쟀다**.
+ *
+ * 서버는 `lib/text.cleanText` 로 턴 뒤에 판정한다(DS 63-1). 위젯이 `trim()` 으로만 보면
+ * 제로폭 공백뿐인 입력에 전송 버튼이 열려 **빈 말풍선**이 올라가고 요청까지 나간다 —
+ * 고객은 자기가 보낸 적 없는 말풍선 아래에서 「무슨 말씀인지 모르겠어요」를 읽는다.
+ * 위젯은 lib 을 불러오지 않으므로(`MAX_INPUT_LEN`·`josa` 와 같은 규약) 사본을 떼어내 대조한다.
+ */
+test('위젯이 비었는지 재는 자가 서버와 같다 (DS 63-3)', opts, async () => {
+  const m = await loadModule();
+  const T = await importLib('text');
+  assert.equal(typeof m.cleanText, 'function', 'cleanText 를 내보내야 한다');
+
+  const SAMPLES = [
+    '', '   ', '\u{200b}', '\u{ad}', '\u{202e}', '\u{2060}\u{2064}', '\u0001\u001f\u007f', ' \u{200b} \u{ad} ',
+    '환불\u{200b}정책', '가온\u{202e}파트너스', '  환불 되나요?  ', '010\u{a0}1234\u{a0}5678',
+    '첫 줄\r\n둘째 줄', '표\t칸', '👩‍👩‍👧', '👍🏻', '✔️', '🇰🇷', '환불﻿정책',
+    'name@example.com', '\u{200b}010-1234-5678\u{200b}',
+  ];
+  for (const s of SAMPLES) {
+    assert.equal(m.cleanText(s), T.cleanText(s), `lib 과 다른 결과를 낸다: ${JSON.stringify(s)}`);
+  }
+
+  // ① 보이지 않는 글자뿐인 입력은 전송 버튼을 열지 않는다(소스로 고정 — 렌더 분기다).
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  assert.match(src, /aria-disabled=\{busy \|\| tooLong \|\| !cleanText\(input\) \|\| undefined\}/, '버튼이 trim 으로 판정한다');
+  assert.match(src, /const text = cleanText\(raw\);/, '보내는 자리가 trim 으로 판정한다');
+  // ② 연락처 칸도 같은 자를 쓴다 — 보이지 않는 글자가 붙은 번호를 형식 오류로 거절하지 않는다.
+  assert.equal(m.validContact('\u{200b}010-1234-5678\u{200b}'), true, '붙여 넣은 번호를 형식 오류로 본다');
+  assert.equal(m.contactError('\u{200b}'), m.contactError(''), '보이지 않는 값을 적은 값으로 본다');
+  // ③ 보관하는 임시 입력에도 같은 자를 쓴다(빈 칸을 되살리지 않는다).
+  assert.equal(/!text\.trim\(\) \|\| text\.length > DRAFT_MAX_CHARS/.test(src), false, '임시 보관이 trim 으로 판정한다');
+});

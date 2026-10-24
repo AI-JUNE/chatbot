@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { safeEqual } from '@/lib/webhookAuth';
 import { resolvePrincipal, canWrite, type Principal } from '@/lib/rbac';
 import { requiredMessage, tooLongMessage, notTextMessage } from '@/lib/refusal';
+import { cleanText } from '@/lib/text';
 
 export type ErrorCode =
   | 'invalid_json'
@@ -151,11 +152,15 @@ export type Field<T> = { ok: true; value: T } | { ok: false; res: NextResponse }
  * 선택 문자열: undefined/null이면 fallback. 문자열이 아니면 400. 길이 초과 시 400.
  * `field` 는 코드 키이고, 거절 문장은 그 키의 **사람 말 이름**으로 쓴다(DS 29-3) —
  * 이름이 없는 키(`sessionId`·`citation` 등 사용자가 적은 적 없는 자리)는 이름을 말하지 않는다.
+ *
+ * 앞뒤를 터는 자는 `trim()` 이 아니라 `lib/text.cleanText` 다 (DS 63-1) — `trim()` 은 제로폭
+ * 공백·소프트 하이픈·방향 제어를 **글자로 세므로**, 아무것도 보이지 않는 값이 필수 검사를
+ * 통과하고 길이 상한을 먹었다. 이 함수를 지나는 입력 칸이 이 제품의 거의 모든 쓰기 경로다.
  */
 export function optStr(v: unknown, field: string, max: number, fallback = ''): Field<string> {
   if (v === undefined || v === null) return { ok: true, value: fallback };
   if (typeof v !== 'string') return { ok: false, res: fail('invalid_input', notTextMessage(field)) };
-  const s = v.trim();
+  const s = cleanText(v);
   if (s.length > max) return { ok: false, res: fail('invalid_input', tooLongMessage(field, max)) };
   return { ok: true, value: s };
 }

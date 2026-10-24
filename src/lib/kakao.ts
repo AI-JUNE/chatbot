@@ -5,6 +5,7 @@ import { noContactLine, type ChatReply } from '@/lib/chat';
 import { MAX_MESSAGE_LEN, cutEnd, ellipsize } from '@/lib/limits';
 import { comma } from '@/lib/num';
 import { josa } from '@/lib/refusal';
+import { cleanText } from '@/lib/text';
 import { dedupeCheck, dedupeRemember, eventKey, safeEqual, verifySignature, type SignatureFailure } from '@/lib/webhookAuth';
 
 export const KAKAO_LIVE = process.env.KAKAO_CHANNEL_LIVE === 'true';
@@ -54,7 +55,10 @@ export type KakaoParsed =
 export function parseKakaoPayload(body: unknown): KakaoParsed {
   if (!body || typeof body !== 'object') return { ok: false, reason: 'empty' };
   const p = body as KakaoSkillPayload;
-  const utterance = (p.userRequest?.utterance ?? '').trim();
+  // 웹 창구(`http.optStr`)와 **같은 자**로 턴다 (DS 63-1) — `trim()` 은 제로폭 공백·방향 제어를
+  // 글자로 세므로, 아무것도 보이지 않는 발화가 「발화를 확인하지 못했어요」를 지나 엔진까지 갔다.
+  // 같은 말을 창구에 따라 다르게 받지 않는다(DS 38-1 이 상한에서 세운 규칙과 같은 까닭이다).
+  const utterance = cleanText(p.userRequest?.utterance);
   if (!utterance) return { ok: false, reason: 'empty' };
   if (utterance.length > KAKAO_UTTERANCE_LIMIT) return { ok: false, reason: 'too_long' };
   /**
@@ -67,7 +71,7 @@ export function parseKakaoPayload(body: unknown): KakaoParsed {
    * 않는 것이 사실이다). 중복 전달 판정 키는 이 값(빈 문자열)을 그대로 쓰므로 재전달에도
    * 변하지 않는다 — 그 자리에 난수를 넣으면 재시도마다 접수·대화 기록이 하나씩 더 생긴다.
    */
-  const userId = (p.userRequest?.user?.id ?? '').trim().slice(0, 60);
+  const userId = cleanText(p.userRequest?.user?.id).slice(0, 60);
   return { ok: true, utterance, userId };
 }
 

@@ -6037,3 +6037,112 @@ test('관리 작업 기록이 줄인 것을 줄였다고 적는다 (DS 62-3)', o
 
   A.resetAudit();
 });
+
+/* ══════════ 63순위 — 60차 재감사 (DS 63-1·63-2) ══════════ */
+
+/**
+ * 한 글자도 보이지 않는 값들 — 모두 `length` 에 세어지고 **`trim()` 이 지우지 않는다**.
+ * (`\u{feff}` 는 `trim()` 도 양 끝에서는 지운다 — 그래서 여기 두지 않고 가운데에 섞어 따로 본다.)
+ */
+const INVISIBLE_ONLY = [
+  '\u{200b}',            // 제로폭 공백 — 표·PDF 에서 붙여 넣으면 칸 사이에 들어온다
+  '\u{ad}',            // 소프트 하이픈 — 줄 끝마다 들어온다
+  '\u{202e}',            // 방향 바꾸기(RLO)
+  '\u{2060}\u{2064}',      // 이음 금지·보이지 않는 더하기
+  '\u0001\u001f\u007f', // 제어 문자
+  ' \u{200b} \u{ad} ',   // 공백과 섞인 것
+];
+
+/**
+ * DS 63-1 — **보이지 않는 글자**를 받는 자리.
+ *
+ * 59차는 「한 글자가 여러 칸인 쪽」을 보았다. 이번은 반대쪽이다 — 칸은 차지하는데 아무것도
+ * 보이지 않는 글자다. `trim()` 은 그것을 글자로 세므로 ① 아무것도 보이지 않는 값이 필수 검사를
+ * 통과해 저장되고 ② 길이 상한을 그 글자가 먹는다. 웹(`http.optStr`)과 카카오(`parseKakaoPayload`)가
+ * **같은 자**를 쓰는지까지 본다(DS 38-1 이 상한에서 세운 규칙과 같은 까닭이다).
+ */
+test('보이지 않는 글자만 적은 값은 빈 값이다 (DS 63-1)', opts, async () => {
+  const T = await importLib('text');
+  const K = await importLib('kakao', ['webhookAuth', 'text']);
+
+  // ── ① 종전 식 재현 — `trim()` 은 이 값들을 **글자로 센다**(이것이 결함의 크기다).
+  for (const v of INVISIBLE_ONLY) {
+    assert.ok(v.trim().length > 0, `재현이 깨졌다(이미 trim 이 지운다): ${JSON.stringify(v)}`);
+    assert.equal(T.cleanText(v), '', `보이지 않는 값이 남았다: ${JSON.stringify(v)}`);
+    assert.equal(T.isBlank(v), true, `빈 값이 아니라고 말한다: ${JSON.stringify(v)}`);
+  }
+  // 가운데에 섞인 바이트 순서 표시 — `trim()` 은 양 끝만 보므로 글자 사이에서는 지우지 못한다.
+  assert.notEqual('환불\u{feff}정책'.trim(), '환불정책', '재현이 깨졌다(trim 이 가운데까지 지운다)');
+  assert.equal(T.cleanText('환불\u{feff}정책'), '환불정책', '글자 사이의 보이지 않는 값이 남았다');
+  assert.equal(T.isBlank('\u{200b}\u{feff}\u{200b}'), true, '섞인 보이지 않는 값이 남았다');
+
+  // ── ② 보이는 글자는 그대로 남는다 — 지우는 것은 보이지 않는 것뿐이다.
+  assert.equal(T.cleanText('  환불\u{200b}정책  '), '환불정책');
+  assert.equal(T.cleanText('가온\u{202e}파트너스'), '가온파트너스', '방향 바꾸기가 값에 남았다');
+  assert.equal(T.cleanText('첫 줄\r\n둘째 줄'), '첫 줄\n둘째 줄', '줄바꿈 표기가 한 가지가 아니다');
+  assert.equal(T.cleanText('010\u{a0}1234'), '010 1234', '줄바꿈 없는 공백이 보통 공백이 되지 않는다');
+  assert.equal(T.cleanText('표\t칸\n줄'), '표\t칸\n줄', '탭·줄바꿈까지 지웠다');
+
+  // ── ③ **글자를 이루는** 보이지 않는 글자는 지킨다 — 59차가 한 글자로 묶어 둔 것들이다.
+  for (const v of ['👩‍👩‍👧', '👍🏻', '✔️', '1️⃣', '🇰🇷']) {
+    assert.equal(T.cleanText(v), v, `한 글자를 쪼갰다: ${JSON.stringify(v)}`);
+    assert.ok(survivesUtf8(T.cleanText(v)), '반쪽 글자가 됐다');
+  }
+
+  // ── ④ 카카오 창구도 같은 자를 쓴다 — 보이지 않는 발화는 엔진까지 가지 않는다.
+  for (const v of INVISIBLE_ONLY) {
+    const r = K.parseKakaoPayload({ userRequest: { utterance: v, user: { id: 'u1' } } });
+    assert.equal(r.ok, false, `보이지 않는 발화를 받았다: ${JSON.stringify(v)}`);
+    assert.equal(r.reason, 'empty', '빈 발화를 「너무 길다」로 거절한다');
+  }
+  const ok = K.parseKakaoPayload({ userRequest: { utterance: ' 환불\u{200b} 되나요? ', user: { id: '\u{200b}u9 ' } } });
+  assert.equal(ok.ok, true, '보이는 말이 있는 발화를 거절했다');
+  assert.equal(ok.utterance, '환불 되나요?', '발화에 보이지 않는 글자가 남았다');
+  assert.equal(ok.userId, 'u9', '사용자 id 에 보이지 않는 글자가 남았다');
+
+  // ── ⑤ 상한은 **보이는 글자**로 잰다 — 보이지 않는 글자가 상한을 먹지 않는다.
+  const padded = `${'가'.repeat(K.KAKAO_UTTERANCE_LIMIT)}${'\u{200b}'.repeat(50)}`;
+  assert.equal(K.parseKakaoPayload({ userRequest: { utterance: padded } }).ok, true, '보이지 않는 글자가 상한을 먹었다');
+  const over = '가'.repeat(K.KAKAO_UTTERANCE_LIMIT + 1);
+  assert.equal(K.parseKakaoPayload({ userRequest: { utterance: over } }).reason, 'too_long', '상한 자체가 풀렸다');
+});
+
+/**
+ * DS 63-2 — 「같은 말인가」를 묻는 자가 **보이지 않는 글자를 모른다**.
+ *
+ * 눈에 똑같이 보이는 두 글이 비교에서 갈라지면, 운영자가 PDF 에서 붙여 넣은 자료는 검색으로
+ * 찾을 수 없고(그 자료를 고치려면 먼저 찾아야 한다), 「답하지 못한 질문」은 같은 질문을 두 줄로
+ * 센다 — 그 목록의 순서가 곧 운영자가 다음에 할 일이다(DS 32-2).
+ */
+test('보이지 않는 글자가 섞여도 같은 말로 본다 (DS 63-2)', opts, async () => {
+  const N = await importLib('normalize', ['text']);
+  const base = '환불정책';
+  const variants = [
+    '환불\u{200b}정책',   // 제로폭 공백
+    '환불\u{ad}정책',   // 소프트 하이픈
+    '환불\u{feff}정책',   // 바이트 순서 표시
+    '환불\u{200d}정책',   // 이음표(비교에서는 없는 것과 같다)
+    '환\u{202d}불정책',   // 방향 바꾸기
+    '환불 정책',        // 띄어쓰기(종전에도 같은 말이었다 — 회귀 확인)
+  ];
+  for (const v of variants) {
+    assert.equal(N.compact(v), N.compact(base), `같은 말이 갈라졌다: ${JSON.stringify(v)}`);
+  }
+  // 종전 식 재현 — NFC 만으로는 합쳐지지 않는다(정규화가 덮지 못하는 쪽이다).
+  assert.notEqual('환불\u{200b}정책'.normalize('NFC'), base, '재현이 깨졌다(NFC 가 이미 지운다)');
+
+  // 엔진의 키워드 매칭도 같은 자를 지난다 — 붙여 넣은 문장에서 키워드를 찾는다.
+  const p = N.prepare('환불\u{200b}정책이 궁금합니다');
+  assert.equal(N.keywordHit(p.compact, p.jamo, '환불정책').kind, 'exact', '붙여 넣은 문장에서 키워드를 찾지 못한다');
+
+  // 「답하지 못한 질문」 묶음 — 눈에 같은 두 질문이 한 줄로 선다.
+  const conv = await importLib('convlog', CONVLOG_DEPS);
+  conv.resetLogs();
+  for (const message of ['환불 수수료 얼마인가요', '환불\u{200b} 수수료 얼마인가요?']) {
+    conv.logTurn({ sessionId: 's-inv', message, reply: '안내드릴 수 없습니다', intent: 'unknown', source: 'fallback', escalate: false });
+  }
+  const un = conv.unansweredQuestions(8);
+  assert.equal(un.groups, 1, '눈에 같은 질문을 두 줄로 센다');
+  assert.equal(un.items[0].count, 2, '묶음 안의 건수가 맞지 않는다');
+  conv.resetLogs();
+});
