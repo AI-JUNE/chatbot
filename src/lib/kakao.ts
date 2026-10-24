@@ -2,7 +2,7 @@
 // [승인 필요] 카카오 비즈니스 채널 등록·오픈빌더 스킬 URL 실연동 — 전까지 KAKAO_CHANNEL_LIVE=false 유지.
 // 시크릿(KAKAO_SKILL_TOKEN)은 Vercel 환경변수로만 관리(코드 하드코딩 금지).
 import { noContactLine, type ChatReply } from '@/lib/chat';
-import { MAX_MESSAGE_LEN } from '@/lib/limits';
+import { MAX_MESSAGE_LEN, cutEnd, ellipsize } from '@/lib/limits';
 import { comma } from '@/lib/num';
 import { josa } from '@/lib/refusal';
 import { dedupeCheck, dedupeRemember, eventKey, safeEqual, verifySignature, type SignatureFailure } from '@/lib/webhookAuth';
@@ -90,6 +90,8 @@ export interface KakaoSkillResponse {
 export const KAKAO_TEXT_LIMIT = 1000;
 /** 한 응답에 담을 수 있는 말풍선 수(오픈빌더 규격). */
 export const KAKAO_OUTPUT_LIMIT = 3;
+/** 바로가기 버튼(quickReply) 라벨의 글자 수(오픈빌더 권장). */
+export const KAKAO_LABEL_LEN = 14;
 
 /** 상한을 넘겨 잘렸을 때 붙이는 고지 — 잘렸다는 사실을 삼키지 않는다(QUALITY_BAR §3). */
 const CUT_NOTICE = '\n…(답변이 길어 여기까지만 보내드렸어요. 나머지는 "상담원"이라고 입력해 주시면 상담원이 안내드릴게요.)';
@@ -98,9 +100,15 @@ const CUT_NOTICE = '\n…(답변이 길어 여기까지만 보내드렸어요. �
  * 끊을 자리를 찾는다 — 문단(빈 줄) → 줄바꿈 → 문장 끝 → 공백 순. 모두 너무 앞(절반 미만)이면
  * 쓰지 않고 상한에서 자른다(한 말풍선만 짧게 남는 모양을 만들지 않기 위해서다).
  * 한국어는 공백 없이 이어지는 문장이 길어 공백만 보면 거의 항상 실패한다 — 문장 끝을 먼저 본다.
+ *
+ * 마지막 길(끊을 자리를 찾지 못했을 때)은 **글자를 쪼개지 않는 자리**에서 끊는다 (DS 62-2).
+ * 종전에는 `room` 을 그대로 돌려줬다 — 한국어 답변은 공백·마침표 없이 길게 이어지는 일이
+ * 흔해서 이 길이 실제로 쓰이는 길이고, 상한이 이모지 가운데 떨어지면 **앞 말풍선 끝과 뒤
+ * 말풍선 첫 글자가 둘 다 `�`** 가 됐다(반쪽 글자는 UTF-8 로 적는 순간 바뀐다).
+ * 문단·줄바꿈·문장 끝·공백으로 끊는 네 길은 모두 한 칸 글자 뒤라 애초에 안전하다.
  */
 function breakAt(text: string, room: number): number {
-  const win = text.slice(0, room);
+  const win = text.slice(0, cutEnd(text, room));
   const floor = Math.floor(room / 2);
   const para = win.lastIndexOf('\n\n');
   if (para >= floor) return para + 2;
@@ -112,7 +120,7 @@ function breakAt(text: string, room: number): number {
   }
   const space = win.lastIndexOf(' ');
   if (space >= floor) return space + 1;
-  return room;
+  return win.length;
 }
 
 /**
@@ -215,14 +223,16 @@ export function toKakaoResponse(result: ChatReply, opts: KakaoRenderOptions = {}
     // 사라지는 것이 「무엇을 근거로 답했는가」다(§13 — 근거 없는 답을 내보내지 않는다).
     const { parts } = splitKakaoText(body, KAKAO_TEXT_LIMIT, KAKAO_OUTPUT_LIMIT - (cite ? 1 : 0));
     for (const p of parts) outputs.push({ simpleText: { text: p } });
-    if (cite) outputs.push({ simpleText: { text: cite.trim().slice(0, KAKAO_TEXT_LIMIT) } });
+    if (cite) outputs.push({ simpleText: { text: ellipsize(cite.trim(), KAKAO_TEXT_LIMIT) } });
   }
 
   const res: KakaoSkillResponse = { version: '2.0', template: { outputs } };
   const quickReplies: KakaoQuickReply[] = [];
   for (const s of result.suggestions ?? []) {
-    // 카카오 quickReply label은 14자 이하 권장 — 초과 시 말줄임표 처리
-    const label = s.question.length > 14 ? `${s.question.slice(0, 13)}…` : s.question;
+    // 카카오 quickReply label은 14자 이하 권장 — 초과 시 말줄임표 처리.
+    // 자르는 자는 한 곳이다(`lib/limits.ellipsize` · DS 62-2) — 이 자리는 운영자가 적은
+    // 자료 질문이 그대로 들어오므로 이모지·분해형 한글이 상한 가운데 떨어질 수 있다.
+    const label = ellipsize(s.question, KAKAO_LABEL_LEN);
     quickReplies.push({ label, action: 'message', messageText: s.question });
   }
   // 이번 턴에서 접수됐거나(ticketId) 이미 접수해 둔 대화면(filed) 중복 접수 유도 방지

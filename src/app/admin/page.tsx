@@ -147,6 +147,54 @@ function josa(word: string, withBatchim: string, withoutBatchim: string): string
 }
 
 /**
+ * 앞 글자에 붙어서 한 글자를 이루는 코드포인트 — 원본은 `src/lib/limits.ts`(JOINS_LEFT·REGIONAL) (DS 62-1).
+ * 결합 기호 · 이음표(ZWJ) · 변형 선택자 · 피부색 수정자 · 태그 글자 · 분해형 한글의 중성·종성.
+ */
+const JOINS_LEFT = /^(?:\p{M}|[‍︎️]|[\u{1F3FB}-\u{1F3FF}]|[\u{E0020}-\u{E007F}]|[ᅠ-ᇿ])$/u;
+const REGIONAL = /^[\u{1F1E6}-\u{1F1FF}]$/u;
+
+/**
+ * `limit` 칸을 넘지 않으면서 **글자 하나를 쪼개지 않는** 마지막 자리 — 원본은
+ * `src/lib/limits.ts`(cutEnd) (DS 62-1). 콘솔은 lib 을 불러오지 않으므로 여기에 옮겨 적고,
+ * 테스트가 두 결과를 글자까지 맞춰 고정한다.
+ *
+ * 이 화면이 줄이는 값은 고객이 적은 질문·운영자가 적은 이름이다 — `slice` 는 글자가 아니라
+ * UTF-16 칸을 세므로, 상한이 이모지 가운데 떨어지면 목록 끝에 `�` 가 보였다.
+ */
+function cutEnd(text: string, limit: number): number {
+  const v = String(text ?? '');
+  if (limit <= 0) return 0;
+  if (limit >= v.length) return v.length;
+  const cpAt = (i: number) => String.fromCodePoint(v.codePointAt(i) as number);
+  let end = 0;
+  let i = 0;
+  while (i < v.length) {
+    let j = i + cpAt(i).length;
+    if (REGIONAL.test(v.slice(i, j)) && j < v.length && REGIONAL.test(cpAt(j))) j += 2;
+    while (j < v.length) {
+      const next = cpAt(j);
+      if (JOINS_LEFT.test(next) || v.codePointAt(j - 1) === 0x200d) {
+        j += next.length;
+        continue;
+      }
+      break;
+    }
+    if (j > limit) break;
+    end = j;
+    i = j;
+  }
+  return end;
+}
+
+/** 화면 한 칸에 맞춰 줄인다 — 원본은 `src/lib/limits.ts`(ellipsize·ELLIPSIS) (DS 62-2). */
+function ellipsize(text: string, limit: number): string {
+  const v = String(text ?? '');
+  if (limit <= 0) return '';
+  if (v.length <= limit) return v;
+  return `${v.slice(0, cutEnd(v, limit - 1)).trimEnd()}…`;
+}
+
+/**
  * 거절한 칸 중 **화면에서 가장 먼저 나오는 칸**의 id (DS 29-1).
  * `order` 는 폼에 그려진 순서다 — 아래쪽 칸으로 데려가면 위에 남은 오류를 지나친다.
  */
@@ -375,14 +423,17 @@ const NO_CITATION_LABEL = '근거 없음';
  */
 const UNKNOWN_KB_LABEL = '어느 자료인지 알 수 없음';
 
-/** 대화 식별자는 화면에 전부 보여주지 않는다(개인 추적 방지) — 앞 6자만. */
+/**
+ * 대화 식별자는 화면에 전부 보여주지 않는다(개인 추적 방지) — 앞 6자만.
+ * 줄이는 자는 화면에 한 곳이다(`ellipsize` · DS 62-2) — 보이는 너비는 종전과 같다.
+ */
 function shortSession(id: string): string {
-  return id.length > 6 ? `${id.slice(0, 6)}…` : id;
+  return ellipsize(id, 7);
 }
 
 /** 접수번호는 앞 8자만 보여준다(전체는 서랍 제목의 title 로). */
 function shortTicket(id: string): string {
-  return id.length > 8 ? `${id.slice(0, 8)}…` : id;
+  return ellipsize(id, 9);
 }
 
 /** 연락처는 기본 마스킹 — 전화는 가운데, 이메일은 아이디 뒷부분을 가린다. 원문은 운영자가 「보기」를 눌렀을 때만. */
@@ -2088,10 +2139,12 @@ function searchNorm(v: string): string {
 function searchMatch(q: string, ...hay: (string | undefined)[]): boolean {
   return hay.some((h) => !!h && searchNorm(h).includes(q));
 }
-/** 목록에 보일 요약 — 길면 줄인다. */
+/**
+ * 목록에 보일 요약 — 줄을 한 줄로 펴고 길면 줄인다. 줄이는 자는 `ellipsize` 한 곳이다 (DS 62-2).
+ * 종전에는 이 함수와 충돌 대화상자의 「지금 값」이 각각 다른 식으로 잘라 너비가 한 칸 달랐다.
+ */
 function clip(v: string, n = 64): string {
-  const t = v.replace(/\s+/g, ' ').trim();
-  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+  return ellipsize(v.replace(/\s+/g, ' ').trim(), n);
 }
 
 function GlobalSearch({ search, onFirstOpen }: { search: (term: string, raw: string) => SearchResult; onFirstOpen?: () => void }) {
@@ -5507,7 +5560,7 @@ export default function AdminPage() {
                 {kbConflict && (
                   <ConflictNote
                     notice={kbConflict}
-                    {...(kbConflict.current ? { nowLabel: `${kbConflict.current.question} / ${kbConflict.current.answer.slice(0, 40)}${kbConflict.current.answer.length > 40 ? '…' : ''}` } : {})}
+                    {...(kbConflict.current ? { nowLabel: `${kbConflict.current.question} / ${clip(kbConflict.current.answer, 40)}` } : {})}
                     onReload={reloadKbConflict}
                     onOverwrite={overwriteKbConflict}
                     onRecreate={recreateKbConflict}
@@ -5822,7 +5875,7 @@ export default function AdminPage() {
               {crConflict && (
                 <ConflictNote
                   notice={crConflict}
-                  {...(crConflict.current ? { nowLabel: `${crConflict.current.label} / ${crConflict.current.reply.slice(0, 40)}${crConflict.current.reply.length > 40 ? '…' : ''}` } : {})}
+                  {...(crConflict.current ? { nowLabel: `${crConflict.current.label} / ${clip(crConflict.current.reply, 40)}` } : {})}
                   onReload={reloadCrConflict}
                   onOverwrite={overwriteCrConflict}
                   onRecreate={recreateCrConflict}

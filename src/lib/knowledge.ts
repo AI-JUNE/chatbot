@@ -1,6 +1,7 @@
 // 지식베이스(FAQ). 키워드 스코어링 매칭 — LLM 없이 동작(폴백 전 단계).
 // 추후 관리 콘솔에서 편집 가능하도록 순수 데이터 + 순수 함수로 유지.
 // 매칭은 src/lib/normalize 의 동의어 확장·자모 오타 보정을 거친다(정확 일치 가중치가 가장 높다).
+import { ellipsize } from '@/lib/limits';
 import { MATCH_WEIGHT, compact, keywordHit, prepare, type PreparedText, type MatchKind } from '@/lib/normalize';
 
 export interface KBEntry {
@@ -239,7 +240,9 @@ export function buildCitation(entry: KBEntry, query: string, matched: { keyword:
       bestSentence = sentence;
     }
   }
-  const snippet = bestSentence.length > MAX_SNIPPET ? `${bestSentence.slice(0, MAX_SNIPPET - 1)}…` : bestSentence;
+  // 발췌는 **고객이 읽는 글**이다(말풍선의 「근거」 줄·카카오 말풍선). 자르는 자는 한 곳이다
+  // (`lib/limits.ellipsize` · DS 62-2) — 운영자가 적은 답변에는 이모지가 들어온다.
+  const snippet = ellipsize(bestSentence, MAX_SNIPPET);
   return {
     kbId: entry.id,
     source: entry.source?.trim() || entry.question,

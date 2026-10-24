@@ -5594,13 +5594,15 @@ test('업로드한 문서에서 빠진 조각을 세어 돌려준다 (DS 58-3)',
   assert.equal(clean.candidates.length, 1);
 
   // ── ⑤ 본문 전체를 싣지는 않는다 — 찾는 데 필요한 만큼(40자)만이다.
+  //    꼬리 표시까지 **40자**다 (DS 62-2) — 종전에는 이 자리만 41자였고(`slice(0, 40)` + `…`),
+  //    대표 질문을 만드는 자리는 40자(`slice(0, 39)` + `…`)였다. 주석에는 둘 다 「40자」였다.
   const long = ingest.ingestDocument(`# 표\n\n${Array.from({ length: 60 }, (_, i) => String(i % 10)).join(' ')}`, {
     title: '표', category: '문서',
   });
   assert.equal(long.dropped.length, 1, '재현 조건이 성립하지 않는다');
-  assert.equal(long.dropped[0].head.length, 41, '꼬리 표시까지 41자가 아니다');
+  assert.equal(long.dropped[0].head.length, ingest.DOC_HEAD_LEN, '꼬리 표시까지 40자가 아니다');
   assert.ok(long.dropped[0].head.endsWith('…'), '줄였으면 줄였다고 말하지 않는다');
-  assert.ok(long.dropped[0].chars > 41, '재현 조건이 성립하지 않는다 — 본문이 짧다');
+  assert.ok(long.dropped[0].chars > ingest.DOC_HEAD_LEN, '재현 조건이 성립하지 않는다 — 본문이 짧다');
 });
 
 /* ══════════ 60순위 — 백로그 소진 후 57차 재감사 (DS 60-1·60-3) ══════════ */
@@ -5861,4 +5863,177 @@ test('고객에게 되읽어 주는 번호의 조사가 맞는다 (DS 61-2·61-3
 
   S.resetSessions();
   esc.resetTickets();
+});
+
+/* ══════════ 62순위 — 백로그 소진 후 59차 재감사 (DS 62-1·62-2·62-3) ══════════ */
+
+/** UTF-8 로 적고 다시 읽어도 같은 글자인가 — 반쪽 글자는 여기서 `�` 가 되어 걸린다. */
+const survivesUtf8 = (s) => Buffer.from(s, 'utf8').toString('utf8') === s;
+
+/**
+ * DS 62-1 — **자르는 자가 글자 하나를 쪼개지 않는가**.
+ *
+ * `length`·`slice` 는 글자가 아니라 UTF-16 칸을 센다. 이모지 하나는 두 칸(서로게이트 쌍)이라,
+ * 상한이 그 가운데 떨어지면 반쪽(`\uD83D`)만 남는다. 반쪽은 글자가 아니다 — UTF-8 로 적는
+ * 순간 `�` 로 바뀌므로 CSV 내려받기·카카오 응답·브라우저 화면이 모두 그 모양으로 보인다.
+ * 여기서는 그 성질(적어 둔 글자가 **그대로 돌아오는가**)을 바이트로 돌려서 본다.
+ */
+test('자르는 자가 글자 하나를 쪼개지 않는다 (DS 62-1)', opts, async () => {
+  const L = await importLib('limits');
+
+  // 한 글자가 여러 칸인 값들 — 상한을 한 칸씩 옮겨 가며 **모든 자리**를 지난다.
+  const SAMPLES = [
+    ['이모지', `${'가'.repeat(8)}🙏${'나'.repeat(8)}`],
+    ['가족 이모지(이음표)', `${'가'.repeat(8)}👩‍👩‍👧${'나'.repeat(8)}`],
+    ['피부색 수정자', `${'가'.repeat(8)}👍\u{1F3FB}${'나'.repeat(8)}`],
+    ['변형 선택자', `${'가'.repeat(8)}✔️${'나'.repeat(8)}`],
+    ['키캡', `${'가'.repeat(8)}1️⃣${'나'.repeat(8)}`],
+    ['국기', `${'가'.repeat(8)}\u{1F1F0}\u{1F1F7}${'나'.repeat(8)}`],
+    ['분해형 한글', `${'가'.repeat(8)}각${'나'.repeat(8)}`],
+    ['라틴 결합 기호', `${'가'.repeat(8)}é${'나'.repeat(8)}`],
+  ];
+
+  for (const [name, v] of SAMPLES) {
+    for (let n = 0; n <= v.length + 2; n += 1) {
+      const end = L.cutEnd(v, n);
+      assert.ok(end <= n, `${name}: 자른 자리가 상한을 넘었다 (n=${n})`);
+      assert.ok(survivesUtf8(v.slice(0, end)), `${name}: 자른 자리가 글자를 쪼갰다 (n=${n})`);
+
+      for (const [label, out] of [['clip', L.clip(v, n)], ['cut', L.cut(v, n)], ['ellipsize', L.ellipsize(v, n)]]) {
+        assert.ok(out.length <= n, `${name}/${label}: 결과가 상한을 넘었다 (n=${n})`);
+        assert.ok(survivesUtf8(out), `${name}/${label}: 반쪽 글자가 남았다 (n=${n}) — ${JSON.stringify(out)}`);
+      }
+    }
+  }
+
+  // ── 종전 식이 실제로 깨지는 자리인가(재현 조건 확인) — 고치지 않았다면 여기서 `�` 가 된다.
+  const body = `${'가'.repeat(291)}🙏${'나'.repeat(50)}`;
+  assert.equal(
+    survivesUtf8(`${body.slice(0, 300 - L.CLIP_MARK.length)}${L.CLIP_MARK}`),
+    false,
+    '재현 조건이 성립하지 않는다 — 종전 식도 멀쩡하다',
+  );
+  assert.ok(survivesUtf8(L.clip(body, 300)), '접수 본문 상한이 글자를 쪼갠다');
+  assert.ok(L.clip(body, 300).endsWith(L.CLIP_MARK), '잘랐다고 말하지 않는다');
+
+  // ── 종전에 지키던 값은 그대로다(평범한 한국어는 한 글자 한 칸이라 바뀔 것이 없다).
+  assert.equal(L.clip('짧은 글', 100), '짧은 글');
+  assert.equal(L.clip('가'.repeat(20), 10), `${'가'.repeat(2)}${L.CLIP_MARK}`);
+  assert.equal(L.ellipsize('가'.repeat(20), 10), `${'가'.repeat(9)}…`);
+  assert.equal(L.cut('가'.repeat(20), 10), '가'.repeat(10));
+  assert.equal(L.ellipsize('짧은 글', 100), '짧은 글');
+  assert.equal(L.ellipsize('', 10), '');
+  assert.equal(L.ellipsize('가나다 라마바', 5), '가나다…', '값 끝의 공백을 표시 앞에 남긴다');
+  // 한 글자도 들어가지 않으면 표시만 남는다 — 반쪽 글자를 남기는 쪽보다 낫다.
+  assert.equal(L.ellipsize('🙏🙏', 2), '…');
+});
+
+/**
+ * DS 62-2 — **고객이 읽는 글**을 자르는 자리.
+ *
+ * 카카오 말풍선 나누기(DS 37-3)는 끊을 자리를 못 찾으면 상한에서 그대로 끊었다. 한국어
+ * 답변은 공백·마침표 없이 길게 이어지는 일이 흔해 그 길이 실제로 쓰이는 길이고, 상한이
+ * 이모지 가운데 떨어지면 **앞 말풍선 끝과 뒤 말풍선 첫 글자가 둘 다** `�` 였다.
+ */
+test('고객이 읽는 글이 반쪽 글자로 끝나지 않는다 (DS 62-2)', opts, async () => {
+  const GROUP = ['chat', 'session', 'handoff', 'intents', 'rules', 'escalation', 'adminStore', 'knowledge', 'normalize', 'storage', 'slots', 'tenantKB', 'tenants', 'llm', 'limits', 'webhookAuth'];
+  const K = await importLib('kakao', GROUP);
+  const KN = await importLib('knowledge', ['normalize', 'tenants', 'limits']);
+  const LLM = await importLib('llm', ['monitoring', 'logger', 'limits']);
+
+  // ── ① 말풍선 나누기 — 상한(1000칸)이 이모지 가운데 떨어지는 답변.
+  const long = `${'안'.repeat(999)}🙏${'녕'.repeat(300)}`;
+  const split = K.splitKakaoText(long);
+  assert.ok(split.parts.length >= 2, '재현 조건이 성립하지 않는다 — 나눠지지 않았다');
+  for (const [i, p] of split.parts.entries()) {
+    assert.ok(survivesUtf8(p), `${i}번째 말풍선이 반쪽 글자로 끝난다: ${JSON.stringify(p.slice(-2))}`);
+    assert.ok(p.length <= K.KAKAO_TEXT_LIMIT, `${i}번째 말풍선이 상한을 넘었다`);
+  }
+  // 쪼개지 않았으므로 이모지는 **뒤 말풍선에 온전히** 있다(버리지도 않았다).
+  assert.ok(split.parts.join('').includes('🙏'), '이모지를 버렸다');
+
+  // 끊을 자리를 찾는 네 길(문단·줄바꿈·문장 끝·공백)은 종전 그대로다.
+  const lines = K.splitKakaoText(`${'가'.repeat(60)}\n${'나'.repeat(60)}`, 100, 2);
+  assert.deepEqual(lines.parts, ['가'.repeat(60), '나'.repeat(60)], '줄바꿈으로 끊는 길이 바뀌었다');
+
+  // ── ② 바로가기 버튼 라벨 — 운영자가 적은 질문이 그대로 들어온다.
+  const res = K.toKakaoResponse({
+    reply: '네, 안내드릴게요.',
+    intent: 'faq',
+    source: 'kb',
+    // 상한(14칸)이 이모지 **가운데** 떨어지는 질문 — 종전 식(`slice(0, 13)`)은 반쪽을 남겼다.
+    suggestions: [{ question: `${'환불'.repeat(6)}🙏${'녕'.repeat(5)}` }, { question: '짧은 질문' }],
+  });
+  for (const q of res.template.quickReplies) {
+    assert.ok(q.label.length <= K.KAKAO_LABEL_LEN, `라벨이 ${K.KAKAO_LABEL_LEN}자를 넘었다: ${q.label}`);
+    assert.ok(survivesUtf8(q.label), `라벨이 반쪽 글자로 끝난다: ${JSON.stringify(q.label)}`);
+  }
+  assert.equal(res.template.quickReplies[1].label, '짧은 질문', '짧은 라벨까지 줄였다');
+
+  // ── ③ 인용 발췌 — 운영자가 적은 답변의 한 문장이다.
+  //    상한(140칸)이 이모지 가운데 떨어지도록 앞 138칸을 채운다(종전 식은 139칸에서 잘랐다).
+  const cite = KN.buildCitation(
+    {
+      id: 'kb_cut', category: '요금', question: '환불 수수료', keywords: ['환불'],
+      answer: `${'환불 수수료는 결제 수단에 따라 다르게 적용됩니다 '.repeat(4)}${'가'.repeat(26)}🙏 자세한 내용은 안내드릴게요`,
+    },
+    '환불 수수료',
+    [{ keyword: '환불' }],
+  );
+  assert.ok(cite.snippet.length <= 140, '발췌가 상한을 넘었다');
+  assert.ok(survivesUtf8(cite.snippet), `발췌가 반쪽 글자로 끝난다: ${JSON.stringify(cite.snippet.slice(-2))}`);
+  assert.ok(cite.snippet.endsWith('…'), '줄였으면 줄였다고 말하지 않는다');
+
+  // ── ④ 생성 답변의 상한 — 잘랐다고 **말한다**(종전에는 문장 중간에서 조용히 끊겼다).
+  const answer = LLM.sanitizeAnswer(`${'안'.repeat(899)}🙏${'녕'.repeat(50)}`, 900);
+  assert.ok(answer.length <= 900, '생성 답변이 상한을 넘었다');
+  assert.ok(survivesUtf8(answer), '생성 답변이 반쪽 글자로 끝난다');
+  assert.ok(answer.endsWith('…(이하 생략)'), '잘랐다고 말하지 않는다');
+  assert.equal(LLM.sanitizeAnswer('짧은 답입니다.', 900), '짧은 답입니다.', '짧은 답까지 줄였다');
+});
+
+/**
+ * DS 62-3 — **운영자가 적은 이름**을 기록에 싣는 자리.
+ *
+ * 감사 로그는 영구히 남고 정산 분쟁에서 꺼내는 글이다. 그런데 「대상」·「내용」의 상한은
+ * `lib/audit.ts` 안의 `slice(0, 100)`·`slice(0, 300)` 이었고, 다섯 라우트가 그 안에 싣는
+ * 이름도 각각 `slice(0, 60)`·`slice(0, 40)` 으로 **잘렸다고 말하지 않고** 끊었다.
+ * 쓰는 쪽과 복원하는 쪽이 같은 자를 지나는지도 함께 본다(한쪽만 고치면 복원분만 꼬리를 잃는다).
+ */
+test('관리 작업 기록이 줄인 것을 줄였다고 적는다 (DS 62-3)', opts, async () => {
+  const A = await importLib('audit', ['storage', 'csv', 'kst', 'refusal', 'retention', 'num', 'limits']);
+  const L = await importLib('limits');
+
+  A.resetAudit();
+  // ── ① 쓰는 쪽 — 상한을 넘기면 표시를 남기고, 글자를 쪼개지 않는다.
+  const detail = `${'가'.repeat(L.AUDIT_DETAIL_LEN - 1)}🙏${'나'.repeat(20)}`;
+  const target = `${'대'.repeat(L.AUDIT_TARGET_LEN - 1)}🙏`;
+  const e = A.logAudit({ action: 'kb.upsert', target, detail, authed: true });
+  assert.ok(e.detail.length <= L.AUDIT_DETAIL_LEN, '내용이 상한을 넘었다');
+  assert.ok(e.target.length <= L.AUDIT_TARGET_LEN, '대상이 상한을 넘었다');
+  assert.ok(e.detail.endsWith(L.CLIP_MARK), '내용을 줄이고 말하지 않는다');
+  assert.ok(e.target.endsWith(L.CLIP_MARK), '대상을 줄이고 말하지 않는다');
+  assert.ok(survivesUtf8(e.detail) && survivesUtf8(e.target), '기록이 반쪽 글자를 들고 있다');
+  // 짧은 값은 종전 그대로다.
+  assert.equal(A.logAudit({ action: 'kb.delete', target: 'KB-1', detail: '삭제: 환불 안내', authed: true }).detail, '삭제: 환불 안내');
+
+  // ── ② CSV 로 내려받아도 글자가 그대로다(바이트로 적히는 자리다).
+  const csv = A.auditToCsv();
+  assert.ok(survivesUtf8(csv), 'CSV 가 반쪽 글자를 들고 있다');
+  assert.ok(csv.includes(L.CLIP_MARK), 'CSV 에 줄였다는 표시가 없다');
+
+  // ── ③ 복원하는 쪽도 **같은 자**를 지난다 — 합친 백업이 들고 온 긴 줄에서도 그렇다.
+  const snap = A.exportAudit();
+  A.resetAudit();
+  const r = A.importAudit({
+    ...snap,
+    events: [{ id: 'A-000001', at: '2026-01-02T03:04:05.000Z', action: 'kb.upsert', target: `${'옛'.repeat(L.AUDIT_TARGET_LEN - 1)}🙏`, detail, authed: true }],
+  });
+  assert.equal(r.ok, true, `복원이 거절됐다: ${r.error ?? ''}`);
+  const back = A.listAudit(10).find((x) => x.id === 'A-000001');
+  assert.ok(back, '복원한 줄을 찾지 못했다');
+  assert.ok(back.detail.length <= L.AUDIT_DETAIL_LEN && back.detail.endsWith(L.CLIP_MARK), '복원분만 줄인 것을 말하지 않는다');
+  assert.ok(survivesUtf8(back.detail) && survivesUtf8(back.target), '복원분이 반쪽 글자를 들고 있다');
+
+  A.resetAudit();
 });

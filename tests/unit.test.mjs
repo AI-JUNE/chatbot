@@ -2769,7 +2769,8 @@ test('받는 말·남기는 말의 상한이 한 곳에서 온다 (DS 38-1·38-3
   }
   assert.match(limits, /export const CLIP_MARK = '…\(이하 생략\)';/, '잘랐다는 표시가 없다');
   // 표시까지 상한 안에 넣는다 — 저장·내려받기 계약은 「상한 이하」다.
-  assert.match(limits, /v\.slice\(0, limit - CLIP_MARK\.length\)/, '표시를 붙이며 상한을 넘긴다');
+  // 자르는 자리는 `cutEnd` 가 고른다 (DS 62-1) — 글자 하나를 쪼개지 않는다.
+  assert.match(limits, /v\.slice\(0, cutEnd\(v, limit - CLIP_MARK\.length\)\)/, '표시를 붙이며 상한을 넘긴다');
 
   // 기록에 남기는 자리는 전부 `clip` 을 지난다 — 숫자를 손으로 적은 `slice` 가 남으면 안 된다.
   for (const f of ['src/lib/convlog.ts', 'src/lib/escalation.ts']) {
@@ -3065,7 +3066,9 @@ test('유니코드 정규화는 한 곳에서만 적는다 (DS 42-3)', () => {
 
   // 문서 업로드: 자르기·토큰 경계·길이 판정이 모두 정규화 **뒤**에 온다.
   const ing = read('src/lib/ingest.ts');
-  assert.match(ing, /const text = toNfc\(raw\)\.slice\(0, MAX_DOC_CHARS\)/, '정규화 전에 문서를 자른다');
+  // 정규화 **뒤에** 자르고, 자르는 자리는 `cutEnd` 가 고른다 (DS 62-1) — 정규화가 합쳐 주지
+  // 못하는 두 칸 글자(이모지)가 상한 가운데 떨어지면 마지막 글자가 반쪽으로 남는다.
+  assert.match(ing, /const nfc = toNfc\(raw\);\n\s*const text = nfc\.slice\(0, cutEnd\(nfc, MAX_DOC_CHARS\)\)/, '정규화 전에 문서를 자른다');
   assert.match(ing, /const tokens = toNfc\(text\)\n\s*\.toLowerCase\(\)/, '정규화 전에 토큰을 가른다');
   const route = read('src/app/api/admin/kb/import/route.ts');
   assert.match(route, /reqStr\(typeof body\.text === 'string' \? toNfc\(body\.text\) : body\.text, 'text', MAX_DOC_CHARS\)/, '길이를 정규화 전에 잰다');
@@ -3475,7 +3478,8 @@ test('평가 라우트는 호출자의 라벨을 저장하지 않는다 (DS 53-2
   // ③ 저장소는 그 한 쌍만 적는다 — 복원은 저장분의 이름을 들고 오지 않는다.
   const lib = read('src/lib/feedback.ts');
   assert.match(lib, /export function resolveKb\(kbId: unknown, labels: Record<string, string>\)/, '가리는 자가 저장소에 없다');
-  assert.match(lib, /return label \? \{ kbId: id, citation: label\.slice\(0, MAX_CITATION_LEN\) \} : null;/, '모르는 자료 id 를 받아들인다');
+  // 이름을 줄일 때는 **줄였다고 적는다** (DS 62-3) — 종전에는 120칸에서 말없이 끊겼다.
+  assert.match(lib, /return label \? \{ kbId: id, citation: ellipsize\(label, MAX_CITATION_LEN\) \} : null;/, '모르는 자료 id 를 받아들인다');
   assert.match(lib, /export const DELETED_KB_LABEL = '지워진 자료';/, '이름을 댈 수 없는 줄의 표기가 없다');
   assert.equal(/citation: typeof e\.citation === 'string'/.test(lib), false, '복원이 저장분의 이름을 들고 온다');
 });
@@ -3531,8 +3535,11 @@ test('접수 복원이 칸을 하나씩 적는다 (DS 54-1)', () => {
   assert.match(body, /mergeKinds\(Array\.isArray\(c\.piiKinds\) \? c\.piiKinds : \[\], body\.hits, brief\.hits\)/, '요약에서 가린 종류를 세지 않는다');
   // 메모·연락처의 상한은 접수를 만드는 쪽과 같은 수다(이름 없는 숫자를 다시 적지 않는다).
   assert.match(body, /note: clip\(c\.note\.trim\(\), TICKET_NOTE_LEN\)/, '메모에 길이 상한이 없다');
-  assert.match(body, /contact\.slice\(0, TICKET_CONTACT_LEN\)/, '연락처에 길이 상한이 없다');
+  // 연락처는 표시 없이 상한만 지키되 **글자를 쪼개지 않는다** (DS 62-1) — 「…(이하 생략)」이
+  // 섞이면 상담원이 걸 수 없는 번호가 되고, 반쪽 글자도 걸 수 없는 번호다.
+  assert.match(body, /cut\(contact, TICKET_CONTACT_LEN\)/, '연락처에 길이 상한이 없다');
   assert.equal(/slice\(0, 100\)/.test(esc), false, '이름 없는 숫자가 남아 있다');
+  assert.equal(/\.slice\(0, TICKET_CONTACT_LEN\)/.test(esc), false, '글자를 쪼갤 수 있는 자리가 남아 있다');
 });
 
 /**
@@ -3693,7 +3700,9 @@ test('파트너 삭제가 모습을 받고 무엇을 지웠는지 기록한다 (
   assert.match(del, /deletePartner\(id\.value, \{ baseRev: req\.nextUrl\.searchParams\.get\('baseRev'\) \}\)/, '삭제가 모습을 받지 않는다');
   // ② 「무엇을 지웠는가」를 적는다 — 식별자만 남기지 않는다.
   assert.match(del, /action: 'partner\.delete'/, '감사 기록이 사라졌다');
-  assert.match(del, /detail: `삭제: \$\{r\.partner\.name\.slice\(0, 40\)\} \/ 수수료율 \$\{feeRateWords\(r\.partner\.feeRateBp\)\} \/ \$\{PARTNER_STATUS_LABELS\[r\.partner\.status\]\}`/, '지운 파트너의 이름·수수료율·상태를 적지 않는다');
+  // 이름을 줄일 때는 **줄였다고 적는다** (DS 62-3) — 영구히 남는 기록이고 정산 분쟁에서
+  // 꺼내는 글이라, 줄인 이름이 이름의 전부인 것처럼 읽히면 안 된다.
+  assert.match(del, /detail: `삭제: \$\{ellipsize\(r\.partner\.name, AUDIT_PART_LEN\)\} \/ 수수료율 \$\{feeRateWords\(r\.partner\.feeRateBp\)\} \/ \$\{PARTNER_STATUS_LABELS\[r\.partner\.status\]\}`/, '지운 파트너의 이름·수수료율·상태를 적지 않는다');
   // ③ 사람이 읽는 기록에 내부 단위(bp)·코드 어휘를 적지 않는다(DS 2-12·29-3).
   assert.equal(/detail: [^\n]*feeRateBp\}/.test(del), false, '기록에 내부 단위가 새어 나간다');
   // ④ 수수료율을 사람 말로 바꾸는 자는 **저장소 쪽 한 벌**이다(라우트가 따로 적지 않는다).
@@ -3827,7 +3836,11 @@ test('문서 업로드에서 거르는 자와 세는 자가 한 벌이다 (DS 58
     ['index', 'heading', 'chars', 'head'],
     '빠진 조각이 담는 칸이 달라졌다',
   );
-  assert.match(i, /head: flat\.length > 40 \? `\$\{flat\.slice\(0, 40\)\}…` : flat,/, '줄였으면 줄였다고 말하지 않는다');
+  // 줄이는 자는 한 곳이고 너비도 한 수다 (DS 62-2) — 종전에는 이 자리(41자)와 대표 질문을
+  // 만드는 자리(40자)가 각각 다르게 잘랐고, 주석에는 둘 다 「40자」라 적혀 있었다.
+  assert.match(i, /head: ellipsize\(flat, DOC_HEAD_LEN\),/, '줄였으면 줄였다고 말하지 않는다');
+  assert.match(i, /export const DOC_HEAD_LEN = 40;/, '첫머리 너비가 단일 출처에 없다');
+  assert.equal(/length > 40 \?/.test(i), false, '손으로 자르는 자리가 남아 있다');
   // ④ 라우트에만 export 가 늘지 않았다(★ 안전 원칙 — HTTP 메서드·설정 외 export 금지).
   const route = read('src/app/api/admin/kb/import/route.ts');
   const exports = [...route.matchAll(/^export (?:async function|function|const) (\w+)/gm)].map((m) => m[1]);
@@ -3985,5 +3998,92 @@ test('조사를 고르는 자가 lib/refusal 하나다 (DS 61-1)', () => {
   for (const f of ['src/app/admin/page.tsx', 'src/components/ChatWidget.tsx']) {
     assert.match(read(f), /function batchimOf\(word: string\): 'none' \| 'rieul' \| 'other' \| null \{/, `${f} 에 사본이 없다`);
     assert.match(read(f), /원본은 `src\/lib\/refusal\.ts`/, `${f} 가 사본임을 밝히지 않는다`);
+  }
+});
+
+/* ══════════ 62순위 — 백로그 소진 후 59차 재감사 (DS 62-1·62-2·62-3) ══════════ */
+
+/**
+ * DS 62-1·62-2 — **글을 자르는 자가 한 곳인가**.
+ *
+ * 「정말 글자를 쪼개지 않는가」는 `tests/runtime.test.mjs`(DS 62-1)가 바이트로 돌려서 본다.
+ * 여기서는 ① 자르는 식이 `lib/limits` 한 곳에 있는 것 ② 사람이 읽는 글을 적는 파일에서 손으로
+ * 자른 뒤 `…` 를 붙이는 자리가 **0건**인 것 ③ 너비 숫자가 이름을 가진 것을 고정한다.
+ * (다시 생기는 것을 막는 자리다 — 새 목록 한 줄이 `slice(0, 40) + '…'` 로 들어오면 걸린다.)
+ */
+test('글을 자르는 자가 한 곳에서 온다 (DS 62-1·62-2)', () => {
+  const limits = read('src/lib/limits.ts');
+  // 쪼개지지 않는 자리를 고르는 식은 한 벌이다 — 세 자(`cut`·`clip`·`ellipsize`)가 그것을 지난다.
+  assert.match(limits, /export function cutEnd\(text: unknown, limit: number\): number \{/, '자르는 자리를 고르는 자가 없다');
+  assert.match(limits, /export function cut\(text: unknown, limit: number\): string \{/, '표시 없이 상한만 지키는 자가 없다');
+  assert.match(limits, /export function ellipsize\(text: unknown, limit: number\): string \{/, '화면용으로 줄이는 자가 없다');
+  assert.match(limits, /export const ELLIPSIS = '…';/, '화면 표시가 단일 출처에 없다');
+  for (const fn of ['cut', 'clip', 'ellipsize']) {
+    const i = limits.indexOf(`export function ${fn}(`);
+    const body = limits.slice(i, limits.indexOf('\n}', i));
+    assert.match(body, /cutEnd\(/, `${fn} 이 자르는 자리를 제 식으로 고른다`);
+  }
+  // 상한 세 벌(묶음 판정표)이 두 곳에 적히지 않았다 — 한쪽만 고치면 콘솔과 서버가 갈라진다.
+  assert.equal((limits.match(/const JOINS_LEFT = /g) || []).length, 1, '묶음 판정표가 두 벌로 적혀 있다');
+
+  // ── 사람이 읽는 글을 적는 파일에 손으로 자르는 자리가 남지 않았다.
+  const FILES = [
+    'src/lib/kakao.ts', 'src/lib/knowledge.ts', 'src/lib/ingest.ts', 'src/lib/handoff.ts',
+    'src/lib/llm.ts', 'src/lib/feedback.ts', 'src/lib/escalation.ts', 'src/lib/audit.ts',
+    'src/app/admin/page.tsx',
+  ];
+  for (const f of FILES) {
+    const code = read(f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    const hits = code.match(/\.slice\(0,[^)\n]*\)[^\n]{0,8}…/g) || [];
+    assert.deepEqual(hits, [], `${f}: 손으로 자른 뒤 표시를 붙이는 자리가 남았다 — ${hits.join(' / ')}`);
+  }
+
+  // ── 너비 숫자는 이름을 가진다(이름 없는 숫자는 입구마다 갈라진다 — 이 파일이 생긴 까닭이다).
+  assert.match(read('src/lib/ingest.ts'), /ellipsize\(firstLine, DOC_HEAD_LEN\)/, '대표 질문이 제 숫자로 자른다');
+  assert.match(read('src/lib/kakao.ts'), /export const KAKAO_LABEL_LEN = 14;/, '바로가기 라벨 너비에 이름이 없다');
+  assert.match(read('src/lib/kakao.ts'), /ellipsize\(s\.question, KAKAO_LABEL_LEN\)/, '바로가기 라벨이 제 식으로 자른다');
+  // 말풍선 나누기의 마지막 길도 쪼개지지 않는 자리에서 끊는다(종전에는 `return room`).
+  const kakao = read('src/lib/kakao.ts');
+  assert.match(kakao, /const win = text\.slice\(0, cutEnd\(text, room\)\);/, '말풍선 나누기가 칸으로 끊는다');
+  assert.equal(/^  return room;$/m.test(kakao), false, '상한을 그대로 돌려주는 자리가 남았다');
+});
+
+/**
+ * DS 62-3 — 기록에 **운영자가 적은 이름**을 싣는 다섯 라우트가 같은 자를 지나는가.
+ * (감사 로그는 영구히 남고 정산 분쟁에서 꺼내는 글이다 — 줄였다는 사실이 없으면 줄인 이름이
+ * 이름의 전부인 것처럼 읽힌다. 「정말 표시가 남는가」는 runtime.test.mjs 가 돌려서 본다.)
+ */
+test('관리 작업 기록이 이름을 손으로 끊지 않는다 (DS 62-3)', () => {
+  const limits = read('src/lib/limits.ts');
+  for (const name of ['AUDIT_TARGET_LEN', 'AUDIT_DETAIL_LEN', 'AUDIT_NAME_LEN', 'AUDIT_PART_LEN']) {
+    assert.match(limits, new RegExp(`export const ${name} = \\d+;`), `${name} 이 단일 출처에 없다`);
+  }
+  // 저장 상한은 `clip`(표시를 상한 안에 담는다) — 쓰는 쪽과 복원하는 쪽이 같은 자다.
+  const audit = read('src/lib/audit.ts');
+  assert.equal((audit.match(/clip\(e?\.?[a-z.?\s']*target[^)]*AUDIT_TARGET_LEN\)/g) || []).length, 2, '쓰는 쪽과 복원하는 쪽이 갈라졌다(대상)');
+  assert.equal((audit.match(/clip\([^)]*AUDIT_DETAIL_LEN\)/g) || []).length, 2, '쓰는 쪽과 복원하는 쪽이 갈라졌다(내용)');
+  const auditCode = audit.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  assert.equal(/slice\(0, (100|300)\)/.test(auditCode), false, '이름 없는 숫자가 남아 있다');
+
+  // 라우트가 싣는 이름은 `ellipsize`(한 글자로 말한다) — 좁은 칸에서 내용이 사라지지 않게.
+  const ROUTES = {
+    'src/app/api/admin/kb/route.ts': [/ellipsize\(result\.entry\.question, AUDIT_NAME_LEN\)/],
+    'src/app/api/admin/rules/route.ts': [/ellipsize\(result\.rule\.label, AUDIT_NAME_LEN\)/],
+    'src/app/api/admin/kb/import/route.ts': [/ellipsize\(title\.value, AUDIT_NAME_LEN\)/],
+    'src/app/api/admin/partners/route.ts': [
+      /ellipsize\(r\.partner\.name, AUDIT_PART_LEN\)/,
+      /ellipsize\(r\.account\.name, AUDIT_PART_LEN\)/,
+      /ellipsize\(last\.note, AUDIT_PART_LEN\)/,
+    ],
+  };
+  for (const [f, pats] of Object.entries(ROUTES)) {
+    const s = read(f);
+    assert.match(s, /from '@\/lib\/limits'/, `${f} 가 자르는 자를 끌어오지 않는다`);
+    for (const p of pats) assert.match(s, p, `${f}: ${p} 가 없다`);
+    assert.equal(/\.slice\(0, (40|60)\)/.test(s), false, `${f} 에 말없이 끊는 자리가 남았다`);
+    // ★ 안전 원칙 — route.ts 에 HTTP 메서드·설정 외 export 가 늘지 않았다.
+    const exports = [...s.matchAll(/^export (?:async function|function|const) (\w+)/gm)].map((m) => m[1]);
+    const allowed = new Set(['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'dynamic', 'revalidate', 'runtime', 'fetchCache', 'maxDuration']);
+    for (const e of exports) assert.ok(allowed.has(e), `${f} 에 허용되지 않은 export 가 있다: ${e}`);
   }
 });

@@ -1431,9 +1431,19 @@ test('지운 자료를 가리키던 편집 폼을 거둔다 (DS 27-3)', opts, ()
 
 /* ══════════ 29순위 — 백로그 소진 후 26차 재감사 (DS 29-x) ══════════ */
 
-/** 모듈 안에만 있는 최상위 함수를 컴파일된 JS 에서 떼어내 실제로 돌린다(DS 27-2 와 같은 방식). */
-async function loadConsoleFns(names) {
+/**
+ * 모듈 안에만 있는 최상위 함수를 컴파일된 JS 에서 떼어내 실제로 돌린다(DS 27-2 와 같은 방식).
+ * @param names 떼어낼 함수 이름
+ * @param consts 그 함수가 쓰는 최상위 `const` 한 줄 선언(정규식 표 등 · DS 62-1)
+ */
+async function loadConsoleFns(names, consts = []) {
   await loadConsole();
+  const head = consts.map((n) => {
+    const i = cachedJs.indexOf(`const ${n} = `);
+    assert.ok(i >= 0, `${n} 선언을 찾지 못했다`);
+    const end = cachedJs.indexOf('\n', i);
+    return cachedJs.slice(i, end);
+  });
   const parts = names.map((n) => {
     const i = cachedJs.indexOf(`function ${n}(`);
     assert.ok(i >= 0, `${n} 선언을 찾지 못했다`);
@@ -1441,7 +1451,7 @@ async function loadConsoleFns(names) {
     assert.ok(end > i, `${n} 의 끝을 찾지 못했다`);
     return cachedJs.slice(i, end + 2);
   });
-  return new Function(`${parts.join('\n')}\nreturn { ${names.join(', ')} };`)();
+  return new Function(`${[...head, ...parts].join('\n')}\nreturn { ${names.join(', ')} };`)();
 }
 
 /**
@@ -3579,4 +3589,60 @@ test('화면이 값 뒤에 조사를 글자로 박아 두지 않는다 (DS 61-3)
   // 「건」·「가지」·「번째」 같은 셈말은 조사가 아니다 — 조사 다음이 공백·문장부호인 자리만 센다.
   const hits = code.match(/\}[」』'"]?(은|는|을|를|이|가|으로|와|과)[\s.,·—]/g) || [];
   assert.deepEqual(hits, [], `값 뒤에 조사를 글자로 적은 자리가 남았다: ${hits.join(' / ')}`);
+});
+
+/* ══════════ 62순위 — 백로그 소진 후 59차 재감사 (DS 62-1·62-2) ══════════ */
+
+/**
+ * DS 62-1·62-2 — 콘솔이 목록 한 줄을 **줄이는 자**.
+ *
+ * 이 화면이 줄이는 값은 고객이 적은 질문·운영자가 적은 이름·답변 본문이다. `slice` 는 글자가
+ * 아니라 UTF-16 칸을 세므로, 상한이 이모지 가운데 떨어지면 목록 끝에 `�` 가 보였다. 콘솔은
+ * lib 을 불러오지 않으므로(클라이언트 묶음) 판정은 `src/lib/limits.ts` 의 **사본**이다 —
+ * 떼어내 실제로 돌려 두 결과를 글자까지 대조한다(`josa`·`comma` 와 같은 규약).
+ */
+test('콘솔이 줄이는 자가 글자를 쪼개지 않고 lib 과 같은 글자를 적는다 (DS 62-1·62-2)', opts, async () => {
+  const { cutEnd, ellipsize } = await loadConsoleFns(['cutEnd', 'ellipsize'], ['JOINS_LEFT', 'REGIONAL']);
+  const L = await importLib('limits');
+  const survivesUtf8 = (s) => Buffer.from(s, 'utf8').toString('utf8') === s;
+
+  const VALUES = [
+    '환불 수수료가 어떻게 되나요',
+    `${'가'.repeat(8)}🙏${'나'.repeat(8)}`,
+    `${'가'.repeat(8)}👩‍👩‍👧${'나'.repeat(8)}`,
+    `${'가'.repeat(8)}👍\u{1F3FB}${'나'.repeat(8)}`,
+    `${'가'.repeat(8)}1️⃣${'나'.repeat(8)}`,
+    `${'가'.repeat(8)}\u{1F1F0}\u{1F1F7}${'나'.repeat(8)}`,
+    `${'가'.repeat(8)}각${'나'.repeat(8)}`,
+    '짧다',
+    '',
+  ];
+  for (const v of VALUES) {
+    for (let n = 0; n <= v.length + 2; n += 1) {
+      assert.equal(cutEnd(v, n), L.cutEnd(v, n), `lib 과 다른 자리에서 자른다: ${JSON.stringify(v)} n=${n}`);
+      assert.equal(ellipsize(v, n), L.ellipsize(v, n), `lib 과 다른 글자를 적는다: ${JSON.stringify(v)} n=${n}`);
+      assert.ok(survivesUtf8(ellipsize(v, n)), `반쪽 글자가 남았다: ${JSON.stringify(v)} n=${n}`);
+      assert.ok(ellipsize(v, n).length <= n, `상한을 넘겼다: ${JSON.stringify(v)} n=${n}`);
+    }
+  }
+  // 종전 결함이 재현되는 값인가 — 사본이 칸만 세던 때 이 자리는 반쪽 글자로 끝났다.
+  const v = `${'가'.repeat(8)}🙏${'나'.repeat(8)}`;
+  assert.equal(survivesUtf8(`${v.slice(0, 8)}…`), true, '재현 조건이 바뀌었다');
+  assert.equal(survivesUtf8(`${v.slice(0, 9)}…`), false, '재현 조건이 성립하지 않는다 — 종전 식도 멀쩡하다');
+  assert.equal(ellipsize(v, 10), '가가가가가가가가…', '이모지가 들어갈 자리가 없으면 그 앞에서 끊는다');
+
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // 줄이는 자는 화면에 **한 곳**이다 — 목록 요약(`clip`)도 그 자를 지난다.
+  assert.ok(
+    src.includes("function clip(v: string, n = 64): string {\n  return ellipsize(v.replace(/\\s+/g, ' ').trim(), n);\n}"),
+    '목록 요약이 따로 자른다',
+  );
+  // 사본임을 밝혀 둔다 — 밝히지 않으면 다음 사람이 한쪽만 고친다.
+  assert.ok(src.includes('원본은 `src/lib/limits.ts`(JOINS_LEFT·REGIONAL)'), '사본임을 밝히지 않는다(JOINS_LEFT)');
+  assert.ok(src.includes('`src/lib/limits.ts`(cutEnd)'), '사본임을 밝히지 않는다(cutEnd)');
+  assert.ok(src.includes('`src/lib/limits.ts`(ellipsize·ELLIPSIS)'), '사본임을 밝히지 않는다(ellipsize)');
+  // 손으로 자른 뒤 「…」를 붙이는 자리가 남지 않았다(다시 생기는 것을 막는 자리다).
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  const hits = code.match(/\.length > \w+ \? `?\$?\{?\w+\.slice\(0,[^\n]*…/g) || [];
+  assert.deepEqual(hits, [], `손으로 자르는 자리가 남았다: ${hits.join(' / ')}`);
 });

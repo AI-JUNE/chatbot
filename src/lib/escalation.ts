@@ -6,7 +6,7 @@
 // 이관 사유 코드(reasonCode)와 요약(summary)은 AICC-Core `src/core/handoffSummary.ts` 어휘를 따른다.
 import { isHandoffReason, type HandoffReason } from '@/lib/handoff';
 import { maskPii, mergeKinds } from '@/lib/pii';
-import { SUMMARY_TEXT_LEN, TICKET_CONTACT_LEN, TICKET_MESSAGE_LEN, TICKET_NOTE_LEN, clip } from '@/lib/limits';
+import { SUMMARY_TEXT_LEN, TICKET_CONTACT_LEN, TICKET_MESSAGE_LEN, TICKET_NOTE_LEN, clip, cut } from '@/lib/limits';
 import { isReadableInstant, readInstant } from '@/lib/kst';
 import { loadJson, scheduleSave } from '@/lib/storage';
 import { isSharedSessionKey } from '@/lib/session';
@@ -201,7 +201,9 @@ export function importTickets(input: unknown): { ok: true; count: number } | { o
       reasonCode: isHandoffReason(c.reasonCode) ? c.reasonCode : toReasonCode(c.reason),
       message: clip(body.text, TICKET_MESSAGE_LEN),
       ...(kinds.length ? { piiKinds: kinds } : {}),
-      ...(purgedAt ? { contactPurgedAt: purgedAt } : contact ? { contact: contact.slice(0, TICKET_CONTACT_LEN) } : {}),
+      // 연락처는 표시 없이 상한만 지킨다 — 「…(이하 생략)」이 섞이면 걸 수 없는 번호가 된다.
+      // 그래도 글자를 쪼개지는 않는다(DS 62-1).
+      ...(purgedAt ? { contactPurgedAt: purgedAt } : contact ? { contact: cut(contact, TICKET_CONTACT_LEN) } : {}),
       status: c.status,
       ...(typeof c.note === 'string' && c.note.trim() ? { note: clip(c.note.trim(), TICKET_NOTE_LEN) } : {}),
       ...(brief.text ? { summary: clip(brief.text, SUMMARY_TEXT_LEN) } : {}),
@@ -268,7 +270,7 @@ export function createTicket(input: {
       else delete existing.piiKinds;
     }
     if (input.contact) {
-      existing.contact = String(input.contact).trim().slice(0, TICKET_CONTACT_LEN);
+      existing.contact = cut(String(input.contact).trim(), TICKET_CONTACT_LEN);
       // 다시 받은 연락처는 「파기됨」이 아니다(다시 열린 접수에 새로 남긴 경우).
       delete existing.contactPurgedAt;
     }
@@ -296,7 +298,7 @@ export function createTicket(input: {
     message: clip(body.text, TICKET_MESSAGE_LEN),
     ...(body.hits.length ? { piiKinds: body.hits } : {}),
     summary: input.summary ? clip(input.summary, SUMMARY_TEXT_LEN) : undefined,
-    contact: input.contact ? String(input.contact).trim().slice(0, TICKET_CONTACT_LEN) : undefined,
+    contact: input.contact ? cut(String(input.contact).trim(), TICKET_CONTACT_LEN) : undefined,
     status: 'open',
     createdAt: now(),
     updatedAt: now(),

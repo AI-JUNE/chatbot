@@ -5,6 +5,7 @@ import { NextRequest } from 'next/server';
 import { bulkUpsertKB, docOverlap, saveAdminNow } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { ingestDocument, docIdPrefix, MAX_DOC_CHARS, DEFAULT_CHUNK_CHARS } from '@/lib/ingest';
+import { AUDIT_NAME_LEN, ellipsize } from '@/lib/limits';
 import { toNfc } from '@/lib/normalize';
 import { ok, fail, readJson, reqStr, optStr, requireAdmin, isAdminAuthed, MAX_IMPORT_BYTES } from '@/lib/http';
 
@@ -84,7 +85,8 @@ export async function POST(req: NextRequest) {
   );
   logAudit({
     action: 'kb.import',
-    target: title.value.slice(0, 60),
+    // 운영자가 적은 문서 제목 — 줄일 때 **줄였다고 적는다** (DS 62-3).
+    target: ellipsize(title.value, AUDIT_NAME_LEN),
     // 남는 조각은 등록 이력에도 남긴다 — 「그때 무엇이 남았는지」를 나중에 감사 로그에서 찾는다.
     detail:
       `문서 등록: 신규 ${result.created.length} · 갱신 ${result.updated.length} · 실패 ${result.errors.length}` +

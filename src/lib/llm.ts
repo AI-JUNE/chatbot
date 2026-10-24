@@ -10,6 +10,7 @@
  * - API 키는 환경변수에서만 읽는다(하드코딩 금지). 키가 없으면 not_configured 로 즉시 실패.
  * - 연속 실패가 쌓이면 짧게 차단(circuit breaker)해 장애 중인 업스트림을 두들기지 않는다.
  */
+import { clip, cut, ellipsize } from '@/lib/limits';
 import { scrub } from '@/lib/monitoring';
 
 export type LLMProviderName = 'anthropic' | 'openai';
@@ -124,7 +125,7 @@ export function clampMessages(
   messages: LLMMessage[],
   maxInputChars: number,
 ): { system: string; messages: LLMMessage[]; dropped: number; chars: number } {
-  const sys = system.slice(0, Math.max(200, Math.floor(maxInputChars * 0.8)));
+  const sys = cut(system, Math.max(200, Math.floor(maxInputChars * 0.8)));
   let budget = maxInputChars - sys.length;
   const kept: LLMMessage[] = [];
   let dropped = 0;
@@ -138,7 +139,7 @@ export function clampMessages(
     }
     // 마지막(가장 최근) 메시지는 잘라서라도 살린다
     if (kept.length === 0 && budget > 80) {
-      kept.unshift({ role: m.role, content: `${m.content.slice(0, budget - 1)}…` });
+      kept.unshift({ role: m.role, content: ellipsize(m.content, budget) });
       budget = 0;
       dropped += i;
       break;
@@ -388,9 +389,15 @@ export function buildSystemPrompt(docs: GroundingDoc[]): string {
   ].join('\n');
 }
 
-/** 생성 답변 후처리 — 길이 상한, 마스킹, 빈 응답 차단. */
+/**
+ * 생성 답변 후처리 — 길이 상한, 마스킹, 빈 응답 차단.
+ *
+ * 상한에 걸린 답변은 **잘렸다고 말한다** (DS 62-2). 종전에는 `slice(0, maxChars)` 였다 —
+ * 고객은 문장 중간에서 끊긴 답을 읽고 그것이 답의 전부인 줄 알았고(카카오의 `CUT_NOTICE` 가
+ * 같은 창구에서 이미 막아 둔 모양이다), 상한이 이모지 가운데 떨어지면 끝 글자가 `�` 였다.
+ */
 export function sanitizeAnswer(text: string, maxChars = 900): string {
-  return scrub(String(text).trim()).slice(0, maxChars);
+  return clip(scrub(String(text).trim()), maxChars);
 }
 
 /**

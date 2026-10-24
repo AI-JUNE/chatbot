@@ -6,6 +6,7 @@
 import { loadJson, saveJson, savedInfo, scheduleSave, SavedInfo } from '@/lib/storage';
 import { csvCell, csvRow } from '@/lib/csv';
 import { KST_CSV_NOTE, isReadableInstant, kstDateTime, readInstant } from '@/lib/kst';
+import { AUDIT_DETAIL_LEN, AUDIT_TARGET_LEN, clip } from '@/lib/limits';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 import { RetentionInfo, retentionNotes } from '@/lib/retention';
 
@@ -122,14 +123,22 @@ function trimToLimit(): void {
   syncMergedFrom();
 }
 
+/**
+ * 기록 한 줄을 남긴다.
+ *
+ * 「대상」·「내용」의 상한은 `lib/limits` 에 이름으로 있고, 넘치면 **잘렸다고 적는다**
+ * (DS 62-3). 종전에는 이 두 줄이 `slice(0, 100)`·`slice(0, 300)` 이었다 — 영구히 남는
+ * 기록이고 정산 분쟁에서 꺼내는 글인데, 꼬리에 붙는 값(`/ 수수료율 1.5% / 활성`)이
+ * 조용히 사라지면 「무엇을 지웠는가」를 적어 둔 뜻이 없어진다.
+ */
 export function logAudit(input: { action: AuditAction; target?: string; detail?: string; authed?: boolean }): AuditEvent {
   seq += 1;
   const e: AuditEvent = {
     id: `A-${String(seq).padStart(6, '0')}`,
     at: new Date().toISOString(),
     action: input.action,
-    target: String(input.target ?? '').slice(0, 100),
-    detail: String(input.detail ?? '').slice(0, 300),
+    target: clip(input.target ?? '', AUDIT_TARGET_LEN),
+    detail: clip(input.detail ?? '', AUDIT_DETAIL_LEN),
     authed: input.authed === true,
   };
   events.push(e);
@@ -254,8 +263,10 @@ function readEvents(input: unknown): AuditEvent[] | null {
        */
       at: readInstant(e.at, new Date().toISOString()),
       action: e.action as AuditAction,
-      target: String(e.target ?? '').slice(0, 100),
-      detail: String(e.detail ?? '').slice(0, 300),
+      // 복원 경로도 쓰는 쪽과 **같은 자**를 지난다 (DS 62-3) — 한쪽만 표시를 남기면
+      // 복원한 기록만 조용히 꼬리를 잃는다(DS 54-1 이 연락처에서 만난 그 갈라짐이다).
+      target: clip(e.target ?? '', AUDIT_TARGET_LEN),
+      detail: clip(e.detail ?? '', AUDIT_DETAIL_LEN),
       authed: e.authed === true,
     });
   }

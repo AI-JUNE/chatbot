@@ -2,9 +2,17 @@
 // 벡터 검색·임베딩 없이(비용·의존성 0) 제목 계층 + 문단 경계로 자르고 키워드를 뽑는 방식.
 // [승인 필요] 임베딩 기반 시맨틱 검색·외부 스토리지 업로드 — 전까지 서버 메모리·관리 콘솔 등록만.
 import type { KBEntry } from '@/lib/knowledge';
+import { cutEnd, ellipsize } from '@/lib/limits';
 import { compact, toNfc } from '@/lib/normalize';
 
 export const MAX_DOC_CHARS = 100_000;
+
+/**
+ * 문서에서 떠온 **첫머리**를 보일 글자 수 — 대표 질문·빠진 조각 미리보기가 같은 수를 쓴다
+ * (DS 62-2). 종전에는 한 쪽이 `slice(0, 39)`(결과 40자), 다른 쪽이 `slice(0, 40)`
+ * (결과 41자)였고 주석에는 둘 다 「40자」라 적혀 있었다.
+ */
+export const DOC_HEAD_LEN = 40;
 export const DEFAULT_CHUNK_CHARS = 500;
 export const MIN_CHUNK_CHARS = 40;
 
@@ -52,7 +60,12 @@ export function chunkDocument(raw: string, opts: ChunkOptions = {}): DocChunk[] 
   // 먼저 자르면 ① 글자 수 상한이 실제보다 일찍 걸리고 ② 자른 자리가 음절 한가운데가 되어
   // 마지막 글자가 자모 조각으로 남는다. 제목 판정(`제1조`)·키워드 추출의 한글 범위도
   // 완성형만 보므로, 이 한 줄이 없으면 아래 전부가 분해형 문서에서 조용히 빈손이 된다(DS 42-3).
-  const text = toNfc(raw).slice(0, MAX_DOC_CHARS).replace(/\r\n?/g, '\n');
+  //
+  // 정규화가 **덮지 못하는** 쪽은 따로 막는다 (DS 62-1) — 이모지는 NFC 로 합쳐지지 않는
+  // 두 칸 글자라, 상한이 그 가운데 떨어지면 마지막 글자가 반쪽으로 남는다. 그 반쪽은 미리보기
+  // 첫머리·대표 질문을 타고 지식베이스에 그대로 저장된다.
+  const nfc = toNfc(raw);
+  const text = nfc.slice(0, cutEnd(nfc, MAX_DOC_CHARS)).replace(/\r\n?/g, '\n');
 
   const stack: string[] = [];
   const chunks: { heading: string; parts: string[] }[] = [];
@@ -222,8 +235,7 @@ function toQuestion(chunk: DocChunk, title: string): string {
   const head = chunk.heading.split(' > ').pop()?.trim();
   if (head) return `${head}에 대해 알려주세요`;
   const firstLine = chunk.text.split('\n')[0].trim();
-  const short = firstLine.length > 40 ? `${firstLine.slice(0, 39)}…` : firstLine;
-  return short || `${title} 안내`;
+  return ellipsize(firstLine, DOC_HEAD_LEN) || `${title} 안내`;
 }
 
 /**
@@ -239,7 +251,7 @@ export interface DroppedChunk {
   heading: string;
   /** 본문 길이(자) — 「한 줄짜리인가 한 쪽인가」로 운영자가 급한 정도를 가린다. */
   chars: number;
-  /** 본문 첫머리(40자). 제목이 없는 조각은 이 글자가 유일한 단서다. */
+  /** 본문 첫머리(`DOC_HEAD_LEN` 자 이하, 줄였으면 `…`). 제목이 없는 조각은 이 글자가 유일한 단서다. */
   head: string;
 }
 
@@ -282,7 +294,7 @@ export function ingestDocument(raw: string, opts: IngestOptions): IngestResult {
         index: chunk.index,
         heading: chunk.heading,
         chars: chunk.text.length,
-        head: flat.length > 40 ? `${flat.slice(0, 40)}…` : flat,
+        head: ellipsize(flat, DOC_HEAD_LEN),
       });
       continue;
     }

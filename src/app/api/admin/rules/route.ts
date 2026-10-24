@@ -6,6 +6,7 @@ import { shadowOfRule } from '@/lib/chat';
 import { getRuleOverride, setRuleOverride, listCustomRules, upsertCustomRule, deleteCustomRule, customRuleRev, ruleOverrideRev, overrideConflict, saveAdminNow, MAX_RULE_REPLY_LEN, CustomRuleInput, type CustomRule } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, reqQuery, optStr, requireAdmin, isAdminAuthed } from '@/lib/http';
+import { AUDIT_NAME_LEN, ellipsize } from '@/lib/limits';
 import { CHANGED_TARGET_MESSAGE, STALE_TARGET_MESSAGE, tooLongMessage } from '@/lib/refusal';
 
 export const dynamic = 'force-dynamic';
@@ -72,7 +73,8 @@ export async function POST(req: NextRequest) {
   logAudit({
     action: 'rule.custom.upsert',
     target: result.rule.intent,
-    detail: `${result.created ? '생성' : '수정'}: ${result.rule.label.slice(0, 60)}`,
+    // 운영자가 적은 규칙 이름 — 줄일 때 **줄였다고 적는다** (DS 62-3).
+    detail: `${result.created ? '생성' : '수정'}: ${ellipsize(result.rule.label, AUDIT_NAME_LEN)}`,
     authed: isAdminAuthed(req),
   });
   // 저장은 됐지만 **쓰이지 않을** 수 있다 — 그 사실을 저장한 자리에서 바로 말한다(DS 44-3).

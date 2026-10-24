@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server';
 import { listKB, upsertKB, deleteKB, resetKB, kbRev, saveAdminNow } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, reqQuery, requireAdmin, isAdminAuthed } from '@/lib/http';
+import { AUDIT_NAME_LEN, ellipsize } from '@/lib/limits';
 import { STALE_TARGET_MESSAGE } from '@/lib/refusal';
 
 export const dynamic = 'force-dynamic';
@@ -46,7 +47,8 @@ export async function POST(req: NextRequest) {
   logAudit({
     action: 'kb.upsert',
     target: result.entry.id,
-    detail: `${result.created ? '생성' : '수정'}: ${result.entry.question.slice(0, 60)}`,
+    // 운영자가 적은 질문은 길이가 열려 있다 — 줄일 때 **줄였다고 적는다** (DS 62-3).
+    detail: `${result.created ? '생성' : '수정'}: ${ellipsize(result.entry.question, AUDIT_NAME_LEN)}`,
     authed: isAdminAuthed(req),
   });
   // 「저장되었습니다」는 **디스크를 보고 나온 말**이어야 한다 (DS 47-1) — 보관이 막혔거나

@@ -11,6 +11,7 @@
 // 저장한다. 종전에는 이 모듈만 `scheduleSave` 를 부르지 않아 **배포가 한 번 재시작되면 평가가
 // 통째로 사라졌고**, 「저장소 상태」 카드에도 뜨지 않아 운영자는 사라진 줄도 몰랐다.
 
+import { ellipsize } from '@/lib/limits';
 import { loadJson, scheduleSave } from '@/lib/storage';
 import { readInstant } from '@/lib/kst';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
@@ -120,7 +121,9 @@ export function resolveKb(kbId: unknown, labels: Record<string, string>): { kbId
   const id = typeof kbId === 'string' ? kbId.trim().slice(0, MAX_KB_ID_LEN) : '';
   if (!id) return null;
   const label = labels[id];
-  return label ? { kbId: id, citation: label.slice(0, MAX_CITATION_LEN) } : null;
+  // 이름은 운영자가 적은 글이라 길이가 열려 있다 — 줄일 때 줄였다고 적고, 글자를 쪼개지
+  // 않는다(DS 62-3). 종전에는 120칸에서 말없이 끊겨 콘솔 「자료」 칸에 그대로 나갔다.
+  return label ? { kbId: id, citation: ellipsize(label, MAX_CITATION_LEN) } : null;
 }
 
 /** 잘못된 입력은 조용히 버리지 않고 사유를 돌려준다(라우트가 400으로 바꾼다). */
@@ -138,7 +141,7 @@ export function recordFeedback(input: {
   if (typeof input.sessionHash !== 'string' || !input.sessionHash) {
     return { ok: false, error: '평가를 기록하지 못했습니다. 다시 눌러 주세요.' };
   }
-  const citation = typeof input.citation === 'string' ? input.citation.slice(0, MAX_CITATION_LEN) : '';
+  const citation = typeof input.citation === 'string' ? ellipsize(input.citation, MAX_CITATION_LEN) : '';
   const kbId = typeof input.kbId === 'string' ? input.kbId.trim().slice(0, MAX_KB_ID_LEN) : '';
   const channel = typeof input.channel === 'string' && input.channel ? input.channel : 'web';
   seq += 1;

@@ -7,7 +7,7 @@
 // 규칙 기반 순수 함수다. LLM을 호출하지 않으므로 결정적이고 이관 지연이 모델에 좌우되지 않는다.
 // [승인 필요] LLM 추상 요약, 요약 영구 저장·상담사 시스템(CTI/슬랙) 실전송.
 import { CHANNEL_LABELS, intentLabel } from '@/lib/intents';
-import { SUMMARY_LINE_LEN, SUMMARY_TEXT_LEN, clip } from '@/lib/limits';
+import { SUMMARY_LINE_LEN, SUMMARY_TEXT_LEN, clip, ellipsize } from '@/lib/limits';
 import { maskKindLabel, maskPii, type MaskResult } from '@/lib/pii';
 
 // 마스킹 규칙은 `@/lib/pii` 하나에만 있다 (DS 39-3). 이 파일이 규칙을 들고 있던 동안에는
@@ -38,10 +38,13 @@ export type Speaker = 'customer' | 'bot' | 'agent';
 
 const SPEAKER_LABELS: Record<Speaker, string> = { customer: '고객', bot: 'AI', agent: '상담원' };
 
-/** 식별자는 앞자리만 — 관리 콘솔 서랍 제목(`shortTicket`·`shortSession`)과 같은 길이다. */
+/**
+ * 식별자는 앞자리만 — 관리 콘솔 서랍 제목(`shortTicket`·`shortSession`)과 같은 길이다.
+ * 줄이는 자는 한 곳이다(`lib/limits.ellipsize` · DS 62-2) — 보이는 너비는 종전과 같다
+ * (표시까지 `len + 1` 자다).
+ */
 function shortId(id: string, len: number): string {
-  const v = String(id ?? '');
-  return v.length > len ? `${v.slice(0, len)}…` : v;
+  return ellipsize(id, len + 1);
 }
 
 export interface SummaryLine {
