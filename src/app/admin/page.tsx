@@ -102,15 +102,48 @@ function docLen(v: string): number {
 const MAX_RULE_REPLY_LEN = 1000;
 
 /**
- * 조사를 받침에 맞춰 붙인다 — 원본은 `src/lib/refusal.ts`(josa).
+ * 끝 글자의 받침 — 원본은 `src/lib/refusal.ts`(batchimOf) (DS 61-1).
  * 콘솔은 lib 을 불러오지 않으므로 여기에 옮겨 적고, 테스트가 두 결과를 맞춰 고정한다.
+ *
+ * 한글 음절만 보지 않는다 — 이 화면이 문장에 끼워 넣는 값에는 운영자가 적은 **영문 키워드**와
+ * 접수번호·고객사 id 가 섞여 있다. 숫자는 한글 독음(0 영 · 1 일 · 2 이 · 3 삼 · 4 사 · 5 오 ·
+ * 6 육 · 7 칠 · 8 팔 · 9 구), 영문은 자모 이름(l 엘 · m 엠 · n 엔만 받침이 있다) 기준이다.
+ * 값 뒤에 붙은 닫는 따옴표·괄호는 소리가 없어 그 앞 글자로 판정한다(「「환불」은」).
+ */
+function batchimOf(word: string): 'none' | 'rieul' | 'other' | null {
+  const last = String(word ?? '').replace(/[\s」』〉》"'”’»›)\]}]+$/, '').slice(-1);
+  if (!last) return null;
+  const code = last.charCodeAt(0);
+  if (code >= 0xac00 && code <= 0xd7a3) {
+    const jong = (code - 0xac00) % 28;
+    return jong === 0 ? 'none' : jong === 8 ? 'rieul' : 'other';
+  }
+  if (last >= '0' && last <= '9') {
+    return (['other', 'rieul', 'none', 'other', 'none', 'none', 'other', 'rieul', 'rieul', 'none'] as const)[Number(last)];
+  }
+  const alpha = last.toLowerCase();
+  if (alpha >= 'a' && alpha <= 'z') return alpha === 'l' ? 'rieul' : alpha === 'm' || alpha === 'n' ? 'other' : 'none';
+  return null;
+}
+
+/**
+ * 조사 한 짝에서 **붙일 글자만** 고른다 — 원본은 `src/lib/refusal.ts`(particle) (DS 61-3).
+ * 값과 조사 사이에 다른 글자가 끼는 자리(「「${keyword}」은」)는 `josa` 로 적을 수 없다.
+ * ㄹ 받침은 「으」로 시작하는 짝에서만 받침 없는 쪽을 쓴다(「서울로」 — 「서울으로」가 아니다).
+ */
+function particle(word: string, withBatchim: string, withoutBatchim: string): string {
+  const b = batchimOf(word);
+  if (b === null || b === 'none') return withoutBatchim;
+  if (b === 'rieul' && withBatchim.startsWith('으')) return withoutBatchim;
+  return withBatchim;
+}
+
+/**
+ * 조사를 받침에 맞춰 붙인다 — 원본은 `src/lib/refusal.ts`(josa).
  * 종전에는 「감사 로그을(를) 내려받지 못했습니다」처럼 괄호가 그대로 보였다(DS 29-3).
  */
 function josa(word: string, withBatchim: string, withoutBatchim: string): string {
-  const last = (word || '').trim().slice(-1);
-  const code = last ? last.charCodeAt(0) : 0;
-  const hangul = code >= 0xac00 && code <= 0xd7a3;
-  return `${word}${hangul && (code - 0xac00) % 28 !== 0 ? withBatchim : withoutBatchim}`;
+  return `${word}${particle(word, withBatchim, withoutBatchim)}`;
 }
 
 /**
@@ -4057,7 +4090,9 @@ export default function AdminPage() {
       const savedWarn = savedWarning(data.saved as SavedView | undefined);
       if (shadow) {
         notify(
-          `규칙을 저장했지만 상담창에서는 쓰이지 않습니다 — 「${shadow.keyword}」${shadow.kind === 'builtin' ? '는 기본 규칙' : '는 먼저 만든 규칙'} 「${shadow.label}」이 먼저 답합니다. 목록에서 다음에 할 일을 확인해 주세요.${savedWarn ? ` ${savedWarn}` : ''}`,
+          // 운영자가 적은 키워드·규칙 이름에 조사를 **손으로** 붙이지 않는다 (DS 61-3) —
+          // 「「환불」는」·「「요금 안내」이」가 운영자가 저장할 때 보는 첫 문장이었다.
+          `규칙을 저장했지만 상담창에서는 쓰이지 않습니다 — 「${shadow.keyword}」${particle(shadow.keyword, '은', '는')}${shadow.kind === 'builtin' ? ' 기본 규칙' : ' 먼저 만든 규칙'} 「${shadow.label}」${particle(shadow.label, '이', '가')} 먼저 답합니다. 목록에서 다음에 할 일을 확인해 주세요.${savedWarn ? ` ${savedWarn}` : ''}`,
           'fail',
         );
       } else {
@@ -5576,7 +5611,7 @@ export default function AdminPage() {
                       {/* 저장은 됐지만 **쓰이지 않는** 규칙 — 그 사실과 다음에 할 일을 함께 적는다(DS 44-3). */}
                       {r.shadowedBy && (
                         <p className="ac-err" style={{ margin: '0 0 6px' }}>
-                          「{r.shadowedBy.keyword}」{r.shadowedBy.kind === 'builtin' ? '는 기본 규칙' : '는 먼저 만든 규칙'} 「{r.shadowedBy.label}」이 먼저 답합니다 — 이 규칙은 상담창에서 쓰이지 않습니다.{' '}
+                          「{r.shadowedBy.keyword}」{particle(r.shadowedBy.keyword, '은', '는')}{r.shadowedBy.kind === 'builtin' ? ' 기본 규칙' : ' 먼저 만든 규칙'} 「{r.shadowedBy.label}」{particle(r.shadowedBy.label, '이', '가')} 먼저 답합니다 — 이 규칙은 상담창에서 쓰이지 않습니다.{' '}
                           {r.shadowedBy.kind === 'builtin' ? (
                             <button type="button" className="ac-linkbtn" onClick={() => goToBuiltinRule(r.shadowedBy!.intent)}>
                               「{r.shadowedBy.label}」 기본 규칙 열기

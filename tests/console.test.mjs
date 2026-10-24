@@ -1464,7 +1464,8 @@ test('거절한 칸 중 화면에서 가장 먼저 나오는 칸을 고른다 (D
 });
 
 test('콘솔의 조사 판정이 lib 사본과 같은 답을 낸다 (DS 29-3)', opts, async () => {
-  const { josa } = await loadConsoleFns(['josa']);
+  // `josa` 는 제 판정을 하지 않고 `particle` 을 지난다(DS 61-1) — 함께 떼어내야 돈다.
+  const { josa } = await loadConsoleFns(['batchimOf', 'particle', 'josa']);
   for (const [word, withB, withoutB, want] of [
     ['감사 로그', '을', '를', '감사 로그를'],
     ['대화 기록', '을', '를', '대화 기록을'],
@@ -2270,7 +2271,8 @@ test('가려져 쓰이지 않는 규칙을 화면이 말하고 다음에 할 일
   // ③ 목록이 그 사실과 **다음에 할 일**을 함께 적는다 — 기본 규칙이면 그 규칙으로 데려간다.
   const t = src.slice(src.indexOf("{tab === 'rules' &&"), src.indexOf("{tab === 'esc' &&"));
   assert.ok(t.includes('가려짐'), '가려진 규칙에 표시가 없다');
-  assert.ok(t.includes('이 먼저 답합니다 — 이 규칙은 상담창에서 쓰이지 않습니다'), '쓰이지 않는다는 사실을 말하지 않는다');
+  // 조사는 규칙 이름의 받침에 맞춰 붙는다(DS 61-3) — 문장의 나머지는 종전 그대로다.
+  assert.ok(t.includes(" 먼저 답합니다 — 이 규칙은 상담창에서 쓰이지 않습니다"), '쓰이지 않는다는 사실을 말하지 않는다');
   assert.ok(t.includes('기본 규칙 열기'), '먼저 답하는 기본 규칙으로 데려가지 않는다');
   assert.ok(t.includes('그 규칙의 표현을 좁히거나'), '먼저 만든 내 규칙일 때 할 일을 말하지 않는다');
   assert.match(src, /const goToBuiltinRule = \(intent: string\) => \{\n\s*setRuleQuery\(''\);/, '검색에 가려진 규칙으로 데려가다 길을 잃는다');
@@ -3510,4 +3512,71 @@ test('화면의 수가 lib 과 같은 자로 끊긴다 (DS 60-3)', opts, async (
     src.includes('총 {comma(info.total)}{unit} 중 {comma(info.from)}–{comma(info.to)}번째'),
     '쪽수 줄이 총계만 끊어 적는다',
   );
+});
+
+/* ══════════ 61순위 — 백로그 소진 후 58차 재감사 (DS 61-3) ══════════ */
+
+/**
+ * DS 61-3 — 운영자가 **적은 이름**에 조사를 손으로 붙인 자리.
+ *
+ * 가려진 규칙 안내(DS 44-3)는 토스트와 목록 두 곳에서 같은 말을 한다. 그 문장은 운영자가
+ * 직접 적은 **키워드**와 **규칙 이름**을 끼워 넣는데, 조사는 글자로 박혀 있었다 —
+ * 「「환불」는 기본 규칙 「요금 안내」이 먼저 답합니다」. 둘 다 운영자가 저장을 누른 직후
+ * 가장 먼저 읽는 문장이다.
+ *
+ * 콘솔은 lib 을 불러오지 않으므로(클라이언트 묶음) 판정은 `src/lib/refusal.ts` 의 **사본**이다 —
+ * 떼어내 실제로 돌려 두 결과를 글자까지 대조한다(`timeLabel`·`comma` 와 같은 규약).
+ */
+test('콘솔이 운영자가 적은 이름에 맞는 조사를 붙인다 (DS 61-3)', opts, async () => {
+  const { josa, particle } = await loadConsoleFns(['batchimOf', 'particle', 'josa']);
+  const R = await importLib('refusal');
+
+  const WORDS = ['환불', '요금 안내', '배송 문의', '서울', '취소', 'CSV', 'eum', 'gmail', 'ESC-0001', 'ESC-0010', '010-****-5673', '「환불」', '***', ''];
+  const PAIRS = [['은', '는'], ['이', '가'], ['을', '를'], ['으로', '로'], ['과', '와']];
+  for (const w of WORDS) {
+    for (const [a, b] of PAIRS) {
+      assert.equal(particle(w, a, b), R.particle(w, a, b), `lib 과 다른 조사를 고른다: ${w} ${a}/${b}`);
+      assert.equal(josa(w, a, b), R.josa(w, a, b), `lib 과 다른 글자를 적는다: ${w} ${a}/${b}`);
+    }
+  }
+  // 종전 결함이 재현되는 값인가 — 사본이 한글만 보던 때 이 셋은 모두 받침 없는 쪽으로 떨어졌다.
+  assert.equal(particle('환불', '은', '는'), '은');
+  assert.equal(particle('ESC-0010', '으로', '로'), '으로');
+  assert.equal(particle('gmail', '은', '는'), '은');
+
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // 두 자리(저장 직후 토스트·목록 줄)가 **같은 자**로 고른다 — 한쪽만 고치면 또 갈라진다.
+  assert.ok(
+    src.includes("「${shadow.keyword}」${particle(shadow.keyword, '은', '는')}"),
+    '저장 직후 안내가 키워드의 조사를 손으로 적는다',
+  );
+  assert.ok(
+    src.includes("「${shadow.label}」${particle(shadow.label, '이', '가')}"),
+    '저장 직후 안내가 규칙 이름의 조사를 손으로 적는다',
+  );
+  assert.ok(
+    src.includes("「{r.shadowedBy.keyword}」{particle(r.shadowedBy.keyword, '은', '는')}"),
+    '목록 줄이 키워드의 조사를 손으로 적는다',
+  );
+  assert.ok(
+    src.includes("「{r.shadowedBy.label}」{particle(r.shadowedBy.label, '이', '가')}"),
+    '목록 줄이 규칙 이름의 조사를 손으로 적는다',
+  );
+  // 사본임을 밝혀 둔다 — 밝히지 않으면 다음 사람이 한쪽만 고친다(DS 29-3 의 규약).
+  assert.match(src, /원본은 `src\/lib\/refusal\.ts`\(particle\)/, '사본임을 밝히지 않는다');
+  assert.match(src, /원본은 `src\/lib\/refusal\.ts`\(batchimOf\)/, '사본임을 밝히지 않는다');
+});
+
+/**
+ * DS 61-3 — 값 바로 뒤에 조사를 **글자로** 적은 자리가 화면 코드에 남지 않았는가.
+ * (다시 생기는 것을 막는 자리다 — 새 문장이 「…}는」으로 들어오면 여기서 걸린다.)
+ */
+test('화면이 값 뒤에 조사를 글자로 박아 두지 않는다 (DS 61-3)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // 주석은 센 자리가 아니다 — 블록 주석·줄 주석을 먼저 걷어낸다.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  // 값 바로 뒤(닫는 괄호·따옴표 하나는 넘겨 가며)에 조사가 붙은 자리.
+  // 「건」·「가지」·「번째」 같은 셈말은 조사가 아니다 — 조사 다음이 공백·문장부호인 자리만 센다.
+  const hits = code.match(/\}[」』'"]?(은|는|을|를|이|가|으로|와|과)[\s.,·—]/g) || [];
+  assert.deepEqual(hits, [], `값 뒤에 조사를 글자로 적은 자리가 남았다: ${hits.join(' / ')}`);
 });

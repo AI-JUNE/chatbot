@@ -2489,7 +2489,9 @@ test('화면에 뜨는 말에 괄호 조사가 없다 (DS 29-3)', () => {
   const console_ = read('src/app/admin/page.tsx');
   for (const s of [lib, console_]) {
     assert.match(s, /0xac00/, '받침 판정이 한글 음절 범위를 쓰지 않는다');
-    assert.match(s, /% 28 !== 0/, '받침 판정식이 바뀌었다');
+    assert.match(s, /% 28;/, '받침 판정식이 바뀌었다');
+    // ㄹ 받침은 따로 가른다 — 「으로」 짝에서만 받침 없는 쪽이다(DS 61-1).
+    assert.match(s, /jong === 0 \? 'none' : jong === 8 \? 'rieul' : 'other'/, 'ㄹ 받침을 따로 가르지 않는다');
   }
   assert.match(console_, /원본은 `src\/lib\/refusal\.ts`\(josa\)/, '사본임을 밝히지 않으면 다음 사람이 따로 고친다');
 });
@@ -3239,7 +3241,8 @@ test('접수번호를 알리는 자리가 모두 바뀐 사실을 말한다 (DS 
   const s = read('src/lib/chat.ts');
 
   assert.match(s, /function renumberedLine\(prevId: string \| undefined, nextId: string, created: boolean\)/, '바뀐 사실을 말하는 한 문장이 없다');
-  assert.match(s, /앞서 안내드린 접수번호 \$\{prevId\}는 더 진행되지 않아 새로 접수했어요/, '앞 번호가 끝났다는 사실을 말하지 않는다');
+  // 조사는 번호를 읽는 소리에 맞춘다(DS 61-2) — 종전에는 `${prevId}는` 이라 「ESC-0001는」이었다.
+  assert.match(s, /앞서 안내드린 접수번호 \$\{josa\(prevId, '은', '는'\)\} 더 진행되지 않아 새로 접수했어요/, '앞 번호가 끝났다는 사실을 말하지 않는다');
   // 까닭은 말하지 않는다 — `created` 만으로는 완료인지 취소인지(또는 복원인지) 알 수 없다.
   const fn = s.slice(s.indexOf('function renumberedLine('), s.indexOf("/** 폴백 제안 번호 선택"));
   assert.equal(/완료|취소/.test(fn), false, '알 수 없는 까닭을 지어낸다');
@@ -3250,8 +3253,9 @@ test('접수번호를 알리는 자리가 모두 바뀐 사실을 말한다 (DS 
   assert.equal((s.match(/renumberedLine\(ctx\.ticketId, ticket\.id, created\)/g) || []).length, 6, '접수번호를 알리는 자리 중 빠진 곳이 있다');
   // 「그대로」는 **번호가 그대로일 때만** 쓴다.
   const grammar = s.slice(s.indexOf('// 0-a2)'), s.indexOf('// 0-b)'));
-  assert.match(grammar, /renumbered\s*\n\s*\/\/[^\n]*\n\s*\? `연락처를 \$\{masked\}로 바꿨어요\.\$\{renumbered\} 새 접수번호는 \$\{ticket\.id\}입니다\./, '번호가 갈렸는데 「그대로」라고 말한다');
-  assert.match(grammar, /: `연락처를 \$\{masked\}로 바꿨어요\. 접수번호 \$\{ticket\.id\} 그대로/, '번호가 그대로인 경우의 말까지 바꿨다');
+  // 가린 번호의 조사도 받침에 맞춘다(DS 61-3) — 종전에는 `${masked}로` 였다.
+  assert.match(grammar, /renumbered\s*\n\s*\/\/[^\n]*\n\s*\? `연락처를 \$\{josa\(masked, '으로', '로'\)\} 바꿨어요\.\$\{renumbered\} 새 접수번호는 \$\{ticket\.id\}입니다\./, '번호가 갈렸는데 「그대로」라고 말한다');
+  assert.match(grammar, /: `연락처를 \$\{josa\(masked, '으로', '로'\)\} 바꿨어요\. 접수번호 \$\{ticket\.id\} 그대로/, '번호가 그대로인 경우의 말까지 바꿨다');
   // `created` 를 버리는 자리가 남아 있지 않다(그 값이 곧 「번호가 새로 발급됐다」다).
   assert.equal(/const \{ ticket \} = createTicket\(\{ sessionId, tenant: tenantOf\(sessionId\), contact,/.test(s), false, 'created 를 버리는 접수 자리가 남아 있다');
 });
@@ -3923,4 +3927,63 @@ test('수를 끊어 적는 자가 lib/num 하나다 (DS 60-3)', () => {
   }
   // 콘솔은 lib 을 불러오지 않는 규약이라 사본을 들고 있다(값 대조는 tests/console.test.mjs).
   assert.match(read('src/app/admin/page.tsx'), /^function comma\(n: number\): string \{$/m, '콘솔에 사본이 없다');
+});
+
+/* ══════════ 61순위 — 백로그 소진 후 58차 재감사 (DS 61-1·61-2·61-3) ══════════ */
+
+/**
+ * DS 61-1·61-2·61-3 — 값 뒤에 조사를 **글자로 박아 둔 자리**가 남지 않았는가.
+ *
+ * 조사를 고르는 자(`josa`)는 29차에 이미 세워 두었다. 그런데 **고객·운영자에게 보이는 글**에서
+ * 그 자를 지나지 않고 손으로 적은 자리가 아홉 있었다 — 접수번호(`${prevId}는`·`{id}로`),
+ * 가린 연락처(`${masked}가`·`${masked}로`), 접수 폼 이름(`${form.title}를`), 운영자가 적은
+ * 규칙 키워드·이름(`「${keyword}」는`·`「${label}」이`). 그 값들은 모두 숫자·영문·운영자 입력으로
+ * 끝나므로 한쪽으로 박아 두면 **절반 가까이가 틀린 글자**가 된다.
+ *
+ * 다시 생기는 것을 막는 자리다 — 사람이 읽는 글을 적는 다섯 파일에 그 모양이 0건임을 고정한다.
+ */
+test('사람이 읽는 글에 조사를 글자로 박아 두지 않는다 (DS 61-1·61-2·61-3)', () => {
+  const FILES = [
+    'src/lib/chat.ts',
+    'src/lib/kakao.ts',
+    'src/lib/refusal.ts',
+    'src/lib/slots.ts',
+    'src/lib/retention.ts',
+    'src/components/ChatWidget.tsx',
+    'src/app/admin/page.tsx',
+  ];
+  for (const f of FILES) {
+    // 주석은 센 자리가 아니다 — 블록 주석·줄 주석을 먼저 걷어낸다.
+    const code = read(f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    // 값 바로 뒤(닫는 괄호·따옴표 하나는 넘겨 가며)에 조사가 붙은 자리.
+    // 「건」·「가지」·「번째」 같은 셈말은 조사가 아니다 — 조사 다음이 공백·문장부호인 자리만 센다.
+    const hits = code.match(/\}[」』'"]?(은|는|을|를|이|가|으로|와|과)[\s.,·—]/g) || [];
+    assert.deepEqual(hits, [], `${f} 에 손으로 적은 조사가 남았다: ${hits.join(' / ')}`);
+  }
+});
+
+/** DS 61-1 — 조사를 고르는 자는 `lib/refusal` 하나이고, 쓰는 쪽이 그것을 불러온다. */
+test('조사를 고르는 자가 lib/refusal 하나다 (DS 61-1)', () => {
+  const r = read('src/lib/refusal.ts');
+  assert.match(r, /export function batchimOf\(word: string\): Batchim \| null/, 'batchimOf 를 내보내지 않는다');
+  assert.match(r, /export function particle\(word: string, withBatchim: string, withoutBatchim: string\): string/, 'particle 을 내보내지 않는다');
+  // `josa` 는 제 판정을 하지 않는다 — `particle` 하나를 지나간다(식을 두 벌로 적지 않는다).
+  const i = r.indexOf('export function josa(');
+  assert.ok(i > 0, 'josa 가 없다');
+  const body = r.slice(i, r.indexOf('\n}', i));
+  assert.match(body, /particle\(word, withBatchim, withoutBatchim\)/, '조사 판정을 두 벌로 적었다');
+  assert.equal(/0xac00|charCodeAt/.test(body), false, '받침 계산을 또 적었다');
+  // ㄹ 받침은 「으」로 시작하는 짝에서만 받침 없는 쪽이다 — 그 예외가 한 곳에 있다.
+  assert.match(r, /withBatchim\.startsWith\('으'\)/, 'ㄹ 받침 예외가 없다');
+
+  // 서버에서 글을 만드는 쪽은 lib 을 불러온다.
+  for (const f of ['src/lib/chat.ts', 'src/lib/kakao.ts', 'src/lib/slots.ts', 'src/lib/retention.ts']) {
+    assert.match(read(f), /import \{ josa[ ,}]/, `${f} 가 조사를 제 식으로 고른다`);
+  }
+  // 콘솔·위젯은 lib 을 불러오지 않는 규약이라 사본을 들고 있다
+  // (값 대조는 tests/console.test.mjs · tests/widget.test.mjs).
+  for (const f of ['src/app/admin/page.tsx', 'src/components/ChatWidget.tsx']) {
+    assert.match(read(f), /function batchimOf\(word: string\): 'none' \| 'rieul' \| 'other' \| null \{/, `${f} 에 사본이 없다`);
+    assert.match(read(f), /원본은 `src\/lib\/refusal\.ts`/, `${f} 가 사본임을 밝히지 않는다`);
+  }
 });

@@ -11,6 +11,8 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+// 위젯이 들고 있는 **사본**(`josa` · DS 61-2)을 lib 의 단일 출처와 대조하기 위해 쓴다.
+import { importLib } from './_compile.mjs';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
 const TSC = path.join(REPO, 'node_modules', 'typescript', 'bin', 'tsc');
@@ -1225,7 +1227,8 @@ test('접수한 뒤에는 다른 답변에서 다시 접수를 권하지 않는�
     src.slice(src.indexOf("{vote?.verdict === 'down' && !m.escalate && ("), src.indexOf('{/* 타이핑 인디케이터')),
   ]) {
     assert.match(guard, /filedTicket \?/, '접수번호를 들고 있는데 또 접수를 권한다');
-    assert.match(guard, /접수번호 \{filedTicket\.id\}로 상담원 연결이 접수돼 있어요/, '접수번호를 알려 주지 않는다');
+    // 조사는 번호를 읽는 소리에 맞춘다(DS 61-2) — 종전에는 `{filedTicket.id}로` 였다.
+    assert.match(guard, /접수번호 \{josa\(filedTicket\.id, '으로', '로'\)\} 상담원 연결이 접수돼 있어요/, '접수번호를 알려 주지 않는다');
     assert.equal(/stage === 'done'/.test(guard), false, '접수 여부를 카드 단계로 가른다');
     // 접수번호를 받기 전에 보내는 중이면 — 또 누르면 그 요청의 답이 먼저 누른 말풍선으로 돌아가
     // 방금 적던 카드를 덮는다. 그 사이에도 버튼을 그리지 않고 진행 중임을 밝힌다.
@@ -1799,4 +1802,46 @@ test('위젯이 시각·수를 Intl 서식에 맡기지 않는다 (DS 60-2)', op
   assert.deepEqual(calls, [], `Intl 서식이 남아 있다: ${calls.join(', ')}`);
   // 시각을 적는 자리는 한 곳(clock)이다 — 두 벌이 되면 또 갈라진다.
   assert.equal((src.match(/\{mounted && m\.at \? clock\(m\.at\) : ''\}/g) || []).length, 1, '말풍선 시각을 적는 자리가 바뀌었다');
+});
+
+/* ══════════ 61순위 — 백로그 소진 후 58차 재감사 (DS 61-2) ══════════ */
+
+/**
+ * DS 61-2 — 말풍선이 **접수번호 뒤의 조사를 글자로** 적었다.
+ *
+ * 접수번호는 `ESC-0001` 꼴 연번이라 끝 글자가 늘 숫자다. 종전에는 두 자리(전환 제안 말풍선·
+ * 👎 를 누른 답변)가 「접수번호 {filedTicket.id}**로** 상담원 연결이 접수돼 있어요」라고
+ * 박아 두었다 — 「…영」·「…삼」·「…육」으로 끝나는 번호에서는 「으로」여야 한다.
+ *
+ * 위젯은 lib 을 불러오지 않으므로(클라이언트 묶음) 판정은 `src/lib/refusal.ts` 의 **사본**이다 —
+ * 떼어내 돌려 두 결과를 글자까지 대조한다(`ticketClosed`·`clock` 과 같은 규약).
+ */
+test('말풍선이 접수번호에 맞는 조사를 붙인다 (DS 61-2)', opts, async () => {
+  const m = await loadModule();
+  const R = await importLib('refusal');
+  assert.equal(typeof m.josa, 'function', 'josa 를 내보내야 한다');
+
+  // 열 가지 끝 숫자 전부 — 「…영」·「…삼」·「…육」만 「으로」다.
+  for (const [id, want] of [
+    ['ESC-0010', 'ESC-0010으로'], ['ESC-0003', 'ESC-0003으로'], ['ESC-0006', 'ESC-0006으로'],
+    ['ESC-0001', 'ESC-0001로'], ['ESC-0002', 'ESC-0002로'], ['ESC-0004', 'ESC-0004로'],
+    ['ESC-0005', 'ESC-0005로'], ['ESC-0007', 'ESC-0007로'], ['ESC-0008', 'ESC-0008로'],
+    ['ESC-0009', 'ESC-0009로'],
+  ]) {
+    assert.equal(m.josa(id, '으로', '로'), want, `조사가 틀렸다: ${id}`);
+  }
+
+  // lib 의 단일 출처와 **같은 글자**다(사본이 갈라지지 않았다).
+  const WORDS = ['ESC-0001', 'ESC-0010', '환불', '요금 안내', '서울', 'CSV', 'eum', 'gmail', '010-****-5673', '「환불」', '***', ''];
+  for (const w of WORDS) {
+    for (const [a, b] of [['은', '는'], ['이', '가'], ['을', '를'], ['으로', '로'], ['과', '와']]) {
+      assert.equal(m.josa(w, a, b), R.josa(w, a, b), `lib 과 다른 글자를 적는다: ${w} ${a}/${b}`);
+    }
+  }
+
+  // 값 뒤에 조사를 글자로 적은 자리가 남지 않았다(주석은 센 자리가 아니다).
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  const hits = code.match(/\}[」』'"]?(은|는|을|를|이|가|으로|와|과)[\s.,·—]/g) || [];
+  assert.deepEqual(hits, [], `값 뒤에 조사를 글자로 적은 자리가 남았다: ${hits.join(' / ')}`);
 });

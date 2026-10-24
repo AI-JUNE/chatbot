@@ -311,7 +311,8 @@ export function noContactLine(): string {
  */
 function renumberedLine(prevId: string | undefined, nextId: string, created: boolean): string {
   if (!created || !prevId || prevId === nextId) return '';
-  return ` 앞서 안내드린 접수번호 ${prevId}는 더 진행되지 않아 새로 접수했어요.`;
+  // 조사는 **번호를 읽는 소리**에 맞춘다 (DS 61-2) — 「ESC-0001은」·「ESC-0002는」.
+  return ` 앞서 안내드린 접수번호 ${josa(prevId, '은', '는')} 더 진행되지 않아 새로 접수했어요.`;
 }
 
 /** 폴백 제안 번호 선택("1", "2번", "3.") 파싱. 범위 밖이면 null. */
@@ -426,7 +427,7 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
            * 이메일 같은 값은 가려서 보관한다(`lib/pii` — DS 39-1 이 세운 저장 관문).
            */
           reply:
-            `${form.title}를 중단했어요. 접수는 만들지 않았습니다.` +
+            `${josa(form.title, '을', '를')} 중단했어요. 접수는 만들지 않았습니다.` +
             ' 지금까지 나눈 대화는 상담 기록에 남고, 전화번호·이메일 같은 값은 가려서 보관합니다.' +
             ' 다시 필요하시면 언제든 말씀해 주세요.',
           intent: `form:${form.id}:cancelled`,
@@ -564,7 +565,8 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
            * 받아 적는 자가 틀릴 수 있는 자리라면(이메일을 전화번호로 읽던 자리다) 고객이
            * 그 자리에서 고칠 수 있어야 한다 — 다른 연락처로 받는 길은 바로 아래 0-a2 다.
            */
-          `연락처 ${maskPii(contact).text}가 접수번호 ${ticket.id}에 등록됐어요.` +
+          // 조사는 **가린 번호를 읽는 소리**에 맞춘다 (DS 61-3) — 「…5673이」·「…5672가」.
+          `연락처 ${josa(maskPii(contact).text, '이', '가')} 접수번호 ${ticket.id}에 등록됐어요.` +
           // 앞 접수가 닫혀 번호가 새로 발급됐으면 그 사실을 먼저 말한다 (DS 50-2).
           renumberedLine(ctx.ticketId, ticket.id, created) +
           ' 상담원이 순서대로 연락드릴게요.' +
@@ -612,9 +614,9 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
         before && before !== contact
           ? renumbered
             // 번호가 갈렸으면 「그대로」를 쓸 수 없다 — 새 번호를 말하고 앞 번호가 끝났음을 밝힌다.
-            ? `연락처를 ${masked}로 바꿨어요.${renumbered} 새 접수번호는 ${ticket.id}입니다. 상담원이 순서대로 연락드릴게요.`
-            : `연락처를 ${masked}로 바꿨어요. 접수번호 ${ticket.id} 그대로 상담원이 순서대로 연락드릴게요.`
-          : `연락처 ${masked}가 접수번호 ${ticket.id}에 등록됐어요.${renumbered} 상담원이 순서대로 연락드릴게요.`,
+            ? `연락처를 ${josa(masked, '으로', '로')} 바꿨어요.${renumbered} 새 접수번호는 ${ticket.id}입니다. 상담원이 순서대로 연락드릴게요.`
+            : `연락처를 ${josa(masked, '으로', '로')} 바꿨어요. 접수번호 ${ticket.id} 그대로 상담원이 순서대로 연락드릴게요.`
+          : `연락처 ${josa(masked, '이', '가')} 접수번호 ${ticket.id}에 등록됐어요.${renumbered} 상담원이 순서대로 연락드릴게요.`,
       intent: before && before !== contact ? 'contact_updated' : 'contact_captured',
       escalate: false,
       source: 'context',

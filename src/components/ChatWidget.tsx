@@ -409,6 +409,38 @@ export function lastUserText(list: Msg[]): string {
 }
 
 /**
+ * 조사를 받침에 맞춰 붙인다 — 원본은 `src/lib/refusal.ts`(`josa`·`batchimOf`) (DS 61-2).
+ * 위젯은 lib 을 불러오지 않으므로(클라이언트 묶음 · `ticketClosed`·`clock` 과 같은 규약)
+ * 여기에 옮겨 적고, 테스트가 두 결과를 글자까지 대조한다.
+ *
+ * 이 자리에 들어오는 값은 **접수번호**(`ESC-0001`)다 — 끝 글자가 숫자라 종전 판정은
+ * 전부 「모른다」로 떨어져 「접수번호 ESC-0010로」가 됐다. 숫자는 한글 독음으로 읽는다
+ * (0 영 · 1 일 · 2 이 · 3 삼 · 4 사 · 5 오 · 6 육 · 7 칠 · 8 팔 · 9 구), 영문은 자모 이름으로
+ * 읽는다(l 엘 · m 엠 · n 엔만 받침이 있다). ㄹ 받침은 「으로」 짝에서만 받침 없는 쪽을 쓴다.
+ */
+function batchimOf(word: string): 'none' | 'rieul' | 'other' | null {
+  const last = String(word ?? '').replace(/[\s」』〉》"'”’»›)\]}]+$/, '').slice(-1);
+  if (!last) return null;
+  const code = last.charCodeAt(0);
+  if (code >= 0xac00 && code <= 0xd7a3) {
+    const jong = (code - 0xac00) % 28;
+    return jong === 0 ? 'none' : jong === 8 ? 'rieul' : 'other';
+  }
+  if (last >= '0' && last <= '9') {
+    return (['other', 'rieul', 'none', 'other', 'none', 'none', 'other', 'rieul', 'rieul', 'none'] as const)[Number(last)];
+  }
+  const alpha = last.toLowerCase();
+  if (alpha >= 'a' && alpha <= 'z') return alpha === 'l' ? 'rieul' : alpha === 'm' || alpha === 'n' ? 'other' : 'none';
+  return null;
+}
+
+export function josa(word: string, withBatchim: string, withoutBatchim: string): string {
+  const b = batchimOf(word);
+  const open = b === null || b === 'none' || (b === 'rieul' && withBatchim.startsWith('으'));
+  return `${word}${open ? withoutBatchim : withBatchim}`;
+}
+
+/**
  * 말풍선에 적는 시각 — 「오전/오후 h:mm」. 마운트 이후에만 호출한다 (DS 60-2).
  *
  * 종전에는 `toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' })` 였다.
@@ -1804,7 +1836,7 @@ export default function ChatWidget({
                     {m.escalate && !m.ticketId && handoff?.key !== m.key && (
                       filedTicket ? (
                         <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--sub)' }}>
-                          접수번호 {filedTicket.id}로 상담원 연결이 접수돼 있어요.
+                          접수번호 {josa(filedTicket.id, '으로', '로')} 상담원 연결이 접수돼 있어요.
                         </div>
                       ) : filing ? (
                         <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--sub)' }}>
@@ -2016,7 +2048,7 @@ export default function ChatWidget({
                         */}
                         {vote?.verdict === 'down' && !m.escalate && (
                           filedTicket ? (
-                            <span>접수번호 {filedTicket.id}로 상담원 연결이 접수돼 있어요.</span>
+                            <span>접수번호 {josa(filedTicket.id, '으로', '로')} 상담원 연결이 접수돼 있어요.</span>
                           ) : filing ? (
                             <span>상담원 연결을 접수하고 있어요.</span>
                           ) : handoff?.key !== m.key ? (

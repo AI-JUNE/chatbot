@@ -16,13 +16,57 @@
  */
 import { comma } from '@/lib/num';
 
-/** 받침이 있으면 true. 한글 음절이 아니면(영문·숫자·기호) 판정하지 않는다(null). */
-function hasBatchim(word: string): boolean | null {
-  const last = word.trim().slice(-1);
+/**
+ * 끝 글자의 **받침** — 조사를 고르는 데 필요한 만큼만 셋으로 가른다 (DS 61-1).
+ *
+ *  - `none`  : 받침이 없다 → 는·가·를·와·로
+ *  - `rieul` : ㄹ 받침 → 은·이·을·과이지만 **로**(「서울로」 — 「서울으로」가 아니다)
+ *  - `other` : 그 밖의 받침 → 은·이·을·과·으로
+ *  - `null`  : 읽을 수 없다(기호·한자 등) → 부르는 쪽이 받침 없는 쪽으로 떨어진다
+ *
+ * **한글 음절만 보지 않는다.** 종전 판정(`hasBatchim`)은 끝 글자가 한글 음절이 아니면 전부
+ * 「모른다」로 두고 받침 없는 쪽을 썼다. 그런데 이 자리에 들어오는 값의 상당수는 접수번호
+ * (`ESC-0001`)·가린 연락처(`010-****-5673`·`ab***@example.com`)·고객사 id(`eum`)처럼
+ * **숫자·영문으로 끝난다** — 그래서 고객 말풍선에 「접수번호 ESC-0001는」이 적혔다.
+ * 사람은 그 값을 **소리로 읽는다**:
+ *  - 숫자 한 자의 한글 독음 — 0 영 · 1 일 · 2 이 · 3 삼 · 4 사 · 5 오 · 6 육 · 7 칠 · 8 팔 · 9 구
+ *    (받침 있는 쪽이 0·1·3·6·7·8 여섯이고, 그중 1·7·8 은 ㄹ 받침이다)
+ *  - 영문 한 자의 자모 이름 — l 엘 · m 엠 · n 엔만 받침이 있고 나머지는 모두 열린 소리다
+ *    (a 에이 · b 비 · f 에프 · r 아르 · v 브이 · x 엑스 …)
+ *
+ * 값 뒤에 붙은 닫는 따옴표·괄호는 **소리가 없다** — 그 앞 글자로 판정한다(「「환불」은」).
+ */
+export type Batchim = 'none' | 'rieul' | 'other';
+
+const DIGIT_BATCHIM: Batchim[] = ['other', 'rieul', 'none', 'other', 'none', 'none', 'other', 'rieul', 'rieul', 'none'];
+
+export function batchimOf(word: string): Batchim | null {
+  const last = String(word ?? '').replace(/[\s」』〉》"'”’»›)\]}]+$/, '').slice(-1);
   if (!last) return null;
   const code = last.charCodeAt(0);
-  if (code < 0xac00 || code > 0xd7a3) return null;
-  return (code - 0xac00) % 28 !== 0;
+  if (code >= 0xac00 && code <= 0xd7a3) {
+    const jong = (code - 0xac00) % 28;
+    return jong === 0 ? 'none' : jong === 8 ? 'rieul' : 'other';
+  }
+  if (last >= '0' && last <= '9') return DIGIT_BATCHIM[Number(last)];
+  const alpha = last.toLowerCase();
+  if (alpha >= 'a' && alpha <= 'z') return alpha === 'l' ? 'rieul' : alpha === 'm' || alpha === 'n' ? 'other' : 'none';
+  return null;
+}
+
+/**
+ * 조사 한 짝에서 **붙일 글자만** 고른다 — 값과 조사 사이에 다른 글자가 끼는 자리
+ * (「「${keyword}」은」)는 `josa` 로는 적을 수 없다 (DS 61-3).
+ *
+ * ㄹ 받침은 **「으」로 시작하는 짝**에서만 받침 없는 쪽을 쓴다: 「으로」처럼 매개모음 「으」가
+ * 끼는 조사는 ㄹ 받침 뒤에서 그 「으」가 빠진다(「서울로」·「ESC-0001로」). 은/는·이/가·
+ * 을/를·과/와는 그렇지 않다 — 그래서 받침 유무 하나로는 두 무리를 함께 고를 수 없다.
+ */
+export function particle(word: string, withBatchim: string, withoutBatchim: string): string {
+  const b = batchimOf(word);
+  if (b === null || b === 'none') return withoutBatchim;
+  if (b === 'rieul' && withBatchim.startsWith('으')) return withoutBatchim;
+  return withBatchim;
 }
 
 /**
@@ -30,7 +74,7 @@ function hasBatchim(word: string): boolean | null {
  * 판정할 수 없는 끝 글자에는 받침 없는 쪽을 쓴다(읽을 때 덜 어색한 쪽이다).
  */
 export function josa(word: string, withBatchim: string, withoutBatchim: string): string {
-  return `${word}${hasBatchim(word) ? withBatchim : withoutBatchim}`;
+  return `${word}${particle(word, withBatchim, withoutBatchim)}`;
 }
 
 /**

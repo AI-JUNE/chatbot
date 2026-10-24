@@ -4,6 +4,7 @@
 import { noContactLine, type ChatReply } from '@/lib/chat';
 import { MAX_MESSAGE_LEN } from '@/lib/limits';
 import { comma } from '@/lib/num';
+import { josa } from '@/lib/refusal';
 import { dedupeCheck, dedupeRemember, eventKey, safeEqual, verifySignature, type SignatureFailure } from '@/lib/webhookAuth';
 
 export const KAKAO_LIVE = process.env.KAKAO_CHANNEL_LIVE === 'true';
@@ -195,7 +196,8 @@ export function toKakaoResponse(result: ChatReply, opts: KakaoRenderOptions = {}
    */
   const already = Boolean(filed) && result.escalate && !result.ticketId;
   const notice = already
-    ? `\n\n이미 접수번호 ${filed!.id}로 접수돼 있어요.` +
+    // 조사는 **번호를 읽는 소리**에 맞춘다 (DS 61-2) — 「ESC-0009로」·「ESC-0010으로」.
+    ? `\n\n이미 접수번호 ${josa(filed!.id, '으로', '로')} 접수돼 있어요.` +
       (filed!.contactOnFile
         ? ' 다시 접수하지 않으셔도 상담원이 순서대로 연락드릴게요.'
         // 연락처가 없는 접수에 회신을 약속하지 않는다 (DS 45-1) — 문장은 엔진과 **한 벌**이다.

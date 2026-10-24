@@ -4036,6 +4036,9 @@ test('앞 접수가 닫힌 뒤 바뀐 접수번호를 말한다 (DS 50-2)', opts
   const chat = await eng('chat');
   const E = await eng('escalation');
   const S = await eng('session');
+  // 조사는 **번호를 읽는 소리**에 맞는다 (DS 61-2) — 끝 숫자가 영·일·삼·육·칠·팔이면 받침이 있다.
+  // (lib 의 `particle` 과 같은 판정이고, 그 쪽은 `tests/runtime.test.mjs` DS 61-1 이 돌려서 본다.)
+  const eunNeun = (id) => ('013678'.includes(id.slice(-1)) ? '은' : '는');
 
   // ── ① 연락처만 보낸 경우(0-a2) — 종전에 「그대로」라고 적던 자리.
   const sid = 'rt-ds50-renum';
@@ -4046,7 +4049,7 @@ test('앞 접수가 닫힌 뒤 바뀐 접수번호를 말한다 (DS 50-2)', opts
 
   const r = chat.replyTo('010-9876-5432', sid, null);
   assert.notEqual(r.ticketId, old.id, '닫힌 접수를 그대로 쓴다 — 이 결함의 전제가 사라졌다');
-  assert.ok(r.reply.includes(`앞서 안내드린 접수번호 ${old.id}는 더 진행되지 않아`), '앞 번호가 끝난 사실을 말하지 않는다');
+  assert.ok(r.reply.includes(`앞서 안내드린 접수번호 ${old.id}${eunNeun(old.id)} 더 진행되지 않아`), '앞 번호가 끝난 사실을 말하지 않는다');
   assert.ok(r.reply.includes(`새 접수번호는 ${r.ticketId}입니다`), '새 번호를 말하지 않는다');
   assert.equal(r.reply.includes('그대로'), false, '번호가 갈렸는데 「그대로」라고 말한다');
 
@@ -4066,7 +4069,7 @@ test('앞 접수가 닫힌 뒤 바뀐 접수번호를 말한다 (DS 50-2)', opts
   assert.equal(E.updateTicket(old3.id, { status: 'canceled' }).ok, true);
   const r3 = chat.replyTo('010-1111-2222', sid3, null);
   assert.notEqual(r3.ticketId, old3.id);
-  assert.ok(r3.reply.includes(`앞서 안내드린 접수번호 ${old3.id}는 더 진행되지 않아`), '연락처 수집 자리가 바뀐 번호를 말하지 않는다');
+  assert.ok(r3.reply.includes(`앞서 안내드린 접수번호 ${old3.id}${eunNeun(old3.id)} 더 진행되지 않아`), '연락처 수집 자리가 바뀐 번호를 말하지 않는다');
   assert.ok(r3.reply.includes(`접수번호 ${r3.ticketId}`), '새 번호를 말하지 않는다');
 
   // ── ④ 앞서 알려 준 번호가 **없었으면** 아무 말도 보태지 않는다(첫 접수에 지난 번호는 없다).
@@ -4277,7 +4280,8 @@ test('카카오가 끝난 접수를 현재형으로 말하지 않는다 (DS 51-3
 
   // ── ⑤ 진행 중이지만 **연락처가 없는** 접수에는 회신을 약속하지 않는다 (DS 45-1 과 같은 문장).
   const noContact = K.toKakaoResponse(base, { filedTicket: { id: 'ESC-0010', closed: false, contactOnFile: false } });
-  assert.ok(texts(noContact).includes('이미 접수번호 ESC-0010로 접수돼 있어요.'), '접수한 사실을 알리지 않는다');
+  // 「ESC-0010」은 「…영」으로 읽히므로 「으로」다 (DS 61-2) — 종전에는 이 줄이 「ESC-0010로」였다.
+  assert.ok(texts(noContact).includes('이미 접수번호 ESC-0010으로 접수돼 있어요.'), '접수한 사실을 알리지 않는다');
   assert.equal(texts(noContact).includes(PROMISE), false, '연락처가 없는데 연락을 약속한다');
   assert.ok(texts(noContact).includes(engine.noContactLine().trim()), '엔진과 다른 말로 안내한다');
   assert.equal(agentReply(noContact), false, '접수한 사람에게 접수를 다시 권한다');
@@ -5693,4 +5697,168 @@ test('파트너 월 이용료 거절 문장도 같은 자로 적는다 (DS 60-3)
   const r = P.parseMonthlyFee(999_999_999_999);
   assert.equal(r.ok, false);
   assert.match(r.error, /^월 이용료는 \d{1,3}(,\d{3})*원 이하여야 합니다\.$/, `끊어 적지 않는다: ${r.error}`);
+});
+
+/* ══════════ 61순위 — 백로그 소진 후 58차 재감사 (DS 61-1·61-2·61-3) ══════════ */
+
+/**
+ * DS 61-1 — 조사를 고르는 자(`josa`)가 **숫자·영문으로 끝나는 값에서 판정을 포기했다.**
+ *
+ * 종전 `hasBatchim` 은 끝 글자가 한글 음절이 아니면 전부 `null`(모른다)로 두고 받침 없는 쪽을
+ * 썼다. 그런데 이 함수에 들어오는 값의 상당수는 접수번호(`ESC-0001`)·가린 연락처
+ * (`010-****-5673`·`ab***@example.com`)·고객사 id(`eum`)처럼 **숫자·영문으로 끝난다.**
+ * 사람은 그 값을 소리로 읽으므로(1 일 · 0 영 · m 엠) 받침은 분명히 있다.
+ *
+ * 그 위에 조사 짝이 하나 더 갈린다 — 「으로/로」는 **ㄹ 받침을 받침 없는 쪽처럼** 센다
+ * (「서울로」 · 「ESC-0001로」). 받침 유무 하나로는 은/는·이/가·을/를과 함께 고를 수 없는데,
+ * 종전 식은 그 예외를 몰라 `changedStatusMessage` 가 쓰는 짝까지 같은 자로 골랐다.
+ */
+test('조사를 고르는 자가 숫자·영문·ㄹ 받침을 읽는다 (DS 61-1)', opts, async () => {
+  const R = await importLib('refusal', []);
+
+  // ── ① 한글은 종전 그대로 가른다(멀쩡한 자리를 바꾸지 않았다).
+  assert.equal(R.batchimOf('안내'), 'none');
+  assert.equal(R.batchimOf('요금'), 'other');
+  assert.equal(R.batchimOf('환불'), 'rieul');
+  assert.equal(R.josa('문서 본문', '은', '는'), '문서 본문은');
+  assert.equal(R.josa('카테고리', '은', '는'), '카테고리는');
+  assert.equal(R.josa('예약 접수', '을', '를'), '예약 접수를');
+  assert.equal(R.josa('장애 신고 접수', '을', '를'), '장애 신고 접수를');
+
+  // ── ② ㄹ 받침 — 「으로」 짝에서만 받침 없는 쪽이다.
+  assert.equal(R.josa('서울', '은', '는'), '서울은');
+  assert.equal(R.josa('서울', '이', '가'), '서울이');
+  assert.equal(R.josa('서울', '을', '를'), '서울을');
+  assert.equal(R.josa('서울', '으로', '로'), '서울로');
+  assert.equal(R.josa('부산', '으로', '로'), '부산으로');
+  assert.equal(R.josa('취소', '으로', '로'), '취소로');
+  // 접수 상태 라벨이 쓰는 그 짝이다(DS 46-2 의 문장) — 네 라벨 모두 그대로 읽힌다.
+  assert.equal(R.changedStatusMessage('상담 중').includes('상담 중으로 바뀌었습니다'), true);
+  assert.equal(R.changedStatusMessage('완료').includes('완료로 바뀌었습니다'), true);
+
+  // ── ③ 숫자 — **접수번호가 들어오는 자리**다. 한글 독음(영·일·이·삼·사·오·육·칠·팔·구)으로 읽는다.
+  const EXPECT = {
+    0: ['은', '으로'], 1: ['은', '로'], 2: ['는', '로'], 3: ['은', '으로'], 4: ['는', '로'],
+    5: ['는', '로'], 6: ['은', '으로'], 7: ['은', '로'], 8: ['은', '로'], 9: ['는', '로'],
+  };
+  for (const [d, [eun, ro]] of Object.entries(EXPECT)) {
+    const id = `ESC-000${d}`;
+    assert.equal(R.particle(id, '은', '는'), eun, `${id} 의 은/는 이 틀렸다`);
+    assert.equal(R.particle(id, '으로', '로'), ro, `${id} 의 으로/로 가 틀렸다`);
+  }
+  // 종전 식은 **열 가지를 모두** 받침 없는 쪽으로 떨어뜨렸다 — 그 결함의 크기를 세어 둔다
+  // (은/는 은 열 중 여섯, 으로/로 는 열 중 셋이 틀린 글자였다).
+  assert.equal(Object.values(EXPECT).filter(([e]) => e === '은').length, 6, '재현 조건이 바뀌었다');
+  assert.equal(Object.values(EXPECT).filter(([, r]) => r === '으로').length, 3, '재현 조건이 바뀌었다');
+
+  // ── ④ 영문 — 자모 이름으로 읽는다(l 엘 · m 엠 · n 엔만 받침이 있다).
+  assert.equal(R.josa('eum', '은', '는'), 'eum은');
+  assert.equal(R.josa('gmail', '은', '는'), 'gmail은');
+  assert.equal(R.josa('gmail', '으로', '로'), 'gmail로');
+  assert.equal(R.josa('example.com', '이', '가'), 'example.com이');
+  assert.equal(R.josa('co.kr', '이', '가'), 'co.kr가');
+  // 종전에 이미 지키던 값은 그대로다(DS 29-3 의 그 자리).
+  assert.equal(R.josa('CSV', '은', '는'), 'CSV는');
+  assert.equal(R.josa('CSV', '을', '를'), 'CSV를');
+
+  // ── ⑤ 값 뒤에 붙은 닫는 따옴표·괄호는 **소리가 없다** — 그 앞 글자로 판정한다.
+  assert.equal(R.particle('「환불」', '은', '는'), '은');
+  assert.equal(R.josa('「요금 안내」', '이', '가'), '「요금 안내」가');
+
+  // ── ⑥ 그래도 읽을 수 없는 끝 글자·빈 값에는 받침 없는 쪽이다(종전 그대로 — 괄호를 남기지 않는다).
+  assert.equal(R.batchimOf('ESC-'), null);
+  assert.equal(R.josa('', '은', '는'), '는');
+  assert.equal(R.josa('***-****-****', '이', '가'), '***-****-****가');
+  for (const w of ['ESC-0001', 'eum', '「환불」', '', '***']) {
+    for (const pair of [['은', '는'], ['이', '가'], ['을', '를'], ['으로', '로'], ['과', '와']]) {
+      assert.equal(/[()]/.test(R.josa(w, pair[0], pair[1])), false, `조사 괄호가 남았다: ${w}`);
+    }
+  }
+});
+
+/**
+ * DS 61-2 — 접수번호를 문장에 끼우는 자리가 조사를 **손으로** 적었다.
+ *
+ * 접수번호는 `ESC-0001` 꼴 연번이고, 고객이 받아 적어 전화로 읽어 주는 단 하나의 값이다
+ * (DS 50-2). 그 값을 문장에 끼우는 자리 넷(엔진의 「앞 번호는 끝났다」 한 줄 · 카카오의
+ * 「이미 접수번호 …로」 · 위젯 말풍선 둘)은 조사를 글자로 박아 두었다 — 끝 숫자에 따라
+ * 「ESC-0001는」·「ESC-0010로」가 그대로 고객에게 나갔다. 여기서는 **돌려서** 확인한다.
+ */
+test('접수번호의 조사가 번호를 읽는 소리에 맞는다 (DS 61-2)', opts, async () => {
+  const K = await importLib('kakao', ['chat', 'webhookAuth']);
+  const base = { reply: '네, 도와드릴게요.', intent: 'fallback', source: 'fallback', escalate: true, confidence: 0.15 };
+  const say = (id) =>
+    K.toKakaoResponse(base, { filedTicket: { id, closed: false, contactOnFile: true } })
+      .template.outputs.map((o) => o.simpleText.text).join('\n');
+
+  // 「…영」·「…삼」·「…육」은 「으로」, 나머지 일곱 숫자는 「로」다.
+  for (const [id, want] of [
+    ['ESC-0010', '이미 접수번호 ESC-0010으로 접수돼 있어요.'],
+    ['ESC-0003', '이미 접수번호 ESC-0003으로 접수돼 있어요.'],
+    ['ESC-0006', '이미 접수번호 ESC-0006으로 접수돼 있어요.'],
+    ['ESC-0001', '이미 접수번호 ESC-0001로 접수돼 있어요.'],
+    ['ESC-0007', '이미 접수번호 ESC-0007로 접수돼 있어요.'],
+    ['ESC-0009', '이미 접수번호 ESC-0009로 접수돼 있어요.'],
+  ]) {
+    assert.ok(say(id).includes(want), `카카오가 적는 조사가 틀렸다: ${say(id)}`);
+  }
+  // 조사만 바꿨다 — 문장의 나머지(회신 안내)는 종전 그대로다.
+  assert.ok(say('ESC-0010').includes('다시 접수하지 않으셔도 상담원이 순서대로 연락드릴게요.'), '다른 말까지 바뀌었다');
+});
+
+/**
+ * DS 61-2·61-3 — 엔진이 **고객 말풍선에** 적는 두 문장을 돌려서 본다.
+ *
+ *  - 「앞서 안내드린 접수번호 ESC-0001**은** 더 진행되지 않아…」 (종전 `ESC-0001는`)
+ *  - 「연락처 010-****-5673**이** 접수번호 …에 등록됐어요」 (종전 `…5673가`)
+ *  - 「연락처를 010-****-5670**으로** 바꿨어요」 (종전 `…5670로`)
+ *
+ * 가린 연락처는 전화면 **끝 네 자리**, 메일이면 **도메인**으로 끝난다(`lib/pii` 의 readable
+ * 치환) — 그래서 이 자리에 오는 값은 언제나 숫자나 영문으로 끝난다.
+ */
+test('고객에게 되읽어 주는 번호의 조사가 맞는다 (DS 61-2·61-3)', opts, async () => {
+  const GROUP = ['chat', 'session', 'handoff', 'intents', 'rules', 'escalation', 'adminStore', 'knowledge', 'normalize', 'storage', 'slots', 'tenantKB', 'tenants', 'llm'];
+  const pick = (name) => importLib(name, GROUP.filter((n) => n !== name));
+  const { replyTo } = await pick('chat');
+  const S = await pick('session');
+  const esc = await pick('escalation');
+
+  S.resetSessions();
+  esc.resetTickets();
+
+  // ── ① 받아 적은 번호를 되읽는 문장 — 끝 숫자가 「삼」이면 「이」다.
+  const sid = 'rt-ds61-readback';
+  const first = replyTo('상담원 연결해 주세요', sid);
+  assert.equal(first.ticketId, 'ESC-0001', '재현 조건이 바뀌었다 — 접수번호가 연번이 아니다');
+  const got = replyTo('010-1234-5673', sid);
+  assert.equal(got.intent, 'contact_captured', '재현 조건이 깨졌다 — 연락처를 받지 못했다');
+  assert.ok(got.reply.startsWith('연락처 010-****-5673이 접수번호 ESC-0001에 등록됐어요.'), `조사가 틀렸다: ${got.reply}`);
+
+  // ── ② 앞 접수가 닫힌 뒤 번호만 보내면 — 앞 번호가 끝났다는 한 줄과 바뀐 연락처를 함께 말한다.
+  assert.equal(esc.updateTicket('ESC-0001', { status: 'resolved' }).ok, true);
+  const again = replyTo('010-9999-5670', sid);
+  assert.equal(again.intent, 'contact_updated', '재현 조건이 깨졌다 — 번호만 보낸 길이 아니다');
+  assert.equal(again.ticketId, 'ESC-0002', '재현 조건이 깨졌다 — 번호가 새로 발급되지 않았다');
+  // 「…영」이라 「으로」, 앞 번호 「…일」이라 「은」이다.
+  assert.ok(again.reply.includes('연락처를 010-****-5670으로 바꿨어요.'), `조사가 틀렸다: ${again.reply}`);
+  assert.ok(again.reply.includes('앞서 안내드린 접수번호 ESC-0001은 더 진행되지 않아 새로 접수했어요.'), `조사가 틀렸다: ${again.reply}`);
+
+  // ── ③ 끝 숫자가 「이」인 번호에는 「가」다(한쪽으로 몰아 붙이지 않았다).
+  const sid2 = 'rt-ds61-readback-b';
+  replyTo('상담원 연결해 주세요', sid2);
+  const two = replyTo('010-1234-5672', sid2);
+  assert.ok(two.reply.startsWith('연락처 010-****-5672가 접수번호 '), `조사가 틀렸다: ${two.reply}`);
+
+  // ── ④ 메일 주소는 **도메인**으로 끝난다 — `.com` 은 「…엠」이라 받침이 있다.
+  const sid3 = 'rt-ds61-readback-c';
+  replyTo('상담원 연결해 주세요', sid3);
+  const mail = replyTo('hong@example.com', sid3);
+  assert.ok(mail.reply.startsWith('연락처 ho***@example.com이 접수번호 '), `조사가 틀렸다: ${mail.reply}`);
+  const sid4 = 'rt-ds61-readback-d';
+  replyTo('상담원 연결해 주세요', sid4);
+  const kr = replyTo('hong@gowon.co.kr', sid4);
+  assert.ok(kr.reply.startsWith('연락처 ho***@gowon.co.kr가 접수번호 '), `조사가 틀렸다: ${kr.reply}`);
+
+  S.resetSessions();
+  esc.resetTickets();
 });
