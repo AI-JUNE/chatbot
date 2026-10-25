@@ -6146,3 +6146,151 @@ test('보이지 않는 글자가 섞여도 같은 말로 본다 (DS 63-2)', opts
   assert.equal(un.items[0].count, 2, '묶음 안의 건수가 맞지 않는다');
   conv.resetLogs();
 });
+
+/* ══════════ 64순위 — 61차 재감사 (DS 64-1·64-2·64-3) ══════════ */
+
+/**
+ * DS 64-1 — **호환 문자**. 눈에 같은 글자인데 「같은 말인가」가 아니라고 답하던 자리.
+ *
+ * 63차가 닫은 것은 「보이는 것이 없는데 칸을 차지하는 글자」였다. 이번은 그 옆칸 —
+ * **보이기는 똑같은데 코드가 다른 글자**다. `㈜`(한 글자)와 `(주)`(세 글자), 전각 `Ａ／Ｓ`·
+ * `？`·`：`·`～`, 로마 숫자 `Ⅰ`, 단위 기호 `㎡`. 한글(HWP)·PDF·사내 시스템에서 붙여 넣은
+ * 자료와 모바일 「한자」 변환으로 들어온다 — 운영자가 `㈜고원` 으로 적어 둔 자료는
+ * `(주)고원` 으로 친 검색에 **0건**이었다.
+ */
+test('눈에 같은 글자를 같은 말로 본다 — 호환 문자·전각·한국어 문장부호 (DS 64-1)', opts, async () => {
+  const N = await importLib('normalize', ['text']);
+
+  // ① 같은 말로 모인다. 왼쪽은 붙여 넣은 글, 오른쪽은 손으로 친 글이다.
+  const pairs = [
+    ['㈜고원 환불', '(주)고원 환불'],      // 괄호 묶음 글자(U+321C)
+    ['ＡＳ 신청', 'as 신청'],              // 전각 영문
+    ['A／S 문의', 'a/s 문의'],             // 전각 빗금
+    ['요금？', '요금?'],                   // 전각 물음표
+    ['이메일：문의', '이메일:문의'],        // 전각 쌍점
+    ['요금～환불', '요금~환불'],           // 물결표
+    ['①번 문의', '1번 문의'],              // 묶음 숫자
+    ['㎡ 면적', 'm2 면적'],                // 단위 기호
+    ['「환불 정책」', '환불정책'],          // 낫표 — NFKC 가 덮지 않아 문장부호 표에 적었다
+    ['환불, 정책。', '환불정책'],           // 온점
+    ['요금ㆍ환불', '요금환불'],            // 가운뎃점(U+318D)
+    ['전화―문의', '전화-문의'],            // 긴 이음표
+  ];
+  for (const [a, b] of pairs) {
+    assert.equal(N.compact(a), N.compact(b), `같은 말이 갈라졌다: ${JSON.stringify(a)} ↔ ${JSON.stringify(b)}`);
+  }
+
+  // ② 종전 식 재현 — NFC 로는 합쳐지지 않는다(이것이 결함의 크기다).
+  for (const [a, b] of pairs) {
+    const old = (s) => s.normalize('NFC').toLowerCase().replace(/[\s.,!?~()[\]{}<>:;/\\|@#$%^&*+=_-]/gu, '');
+    if (old(a) === old(b)) continue;
+    assert.notEqual(old(a), old(b), '재현이 깨졌다');
+  }
+  assert.notEqual('㈜고원'.normalize('NFC'), '(주)고원', '재현이 깨졌다(NFC 가 이미 합친다)');
+
+  // ③ **한글 호환 자모는 건드리지 않는다.** NFKC 는 `ㄱ`(U+3131)을 조합용 `ᄀ`(U+1100)으로
+  //    바꾼다 — 그러면 자모 오타 보정이 쓰는 글자표와 갈라져 같은 `ㄱ` 이 두 코드가 된다.
+  assert.equal(N.compact('ㄱ').codePointAt(0), 0x3131, '호환 자모가 조합용 자모로 바뀌었다');
+  assert.equal(N.compact('ㅋㅋㅋ'), 'ㅋㅋ', '늘여 쓴 자모가 그대로 남았다');
+  assert.equal(N.decomposeJamo('가').codePointAt(0), 0x3131, '분해가 쓰는 글자표가 바뀌었다');
+  assert.equal(N.decomposeJamo(N.compact('ㄱ격')).codePointAt(0), 0x3131, '분해 결과에 두 가지 `ㄱ` 이 섞인다');
+
+  // ④ 종전에 되던 것은 그대로 — 분해형 한글·띄어쓰기·동의어.
+  assert.equal(N.compact('환불정책'.normalize('NFD')), N.compact('환불 정책'), '분해형 한글이 갈라졌다');
+  assert.ok(N.variantsOf('카톡').includes('카카오톡'), '동의어 묶음이 깨졌다');
+
+  // ⑤ 엔진도 같은 자를 지난다 — 붙여 넣은 문장에서 키워드를 찾는다.
+  const p = N.prepare('㈜고원 환불 정책이 궁금합니다');
+  assert.equal(N.keywordHit(p.compact, p.jamo, '(주)고원').kind, 'exact', '붙여 넣은 상호를 키워드로 찾지 못한다');
+});
+
+/**
+ * DS 64-3 — 늘여 쓴 말을 줄이는 자가 **숫자까지** 줄였다.
+ *
+ * 「ㅋㅋㅋ→ㅋㅋ」를 하려고 둔 식(`(.)\1{2,}`)이 「1000원」을 「100원」으로 줄였다. 두 금액이
+ * 비교에서 같은 말이 되어, 1,000원 요금제 자료가 「100원짜리 있나요」에 **정확 일치**로 걸렸다.
+ * 보정 쪽도 같은 종류였다 — 「24시간」과 「2시간」은 자모 편집거리 1 이라 허용치 안이다.
+ * 숫자는 손가락 실수가 아니라 **값**이다.
+ */
+test('숫자는 늘여 쓴 말이 아니다 — 1000원과 100원을 가른다 (DS 64-3)', opts, async () => {
+  const N = await importLib('normalize', ['text']);
+
+  // ① 값이 다르면 다른 말이다.
+  assert.notEqual(N.compact('1000원'), N.compact('100원'), '1,000원과 100원이 같은 말이 된다');
+  assert.notEqual(N.compact('010-1111-2222'), N.compact('010-11-22'), '다른 전화번호가 같은 값이 된다');
+  assert.equal(N.compact('1000원'), '1000원', '숫자가 줄어든 채로 남았다');
+  // 종전 식 재현 — 이것이 결함의 크기다.
+  const old = (s) => N.compact(s).replace(/(.)\1{2,}/gu, '$1$1');
+  assert.equal(old('1000원'), old('100원'), '재현이 깨졌다(종전 식에서도 갈라진다)');
+
+  // ② 늘여 쓴 말은 그대로 줄인다(고치려던 일이 살아 있는가).
+  assert.equal(N.compact('ㅋㅋㅋㅋ'), 'ㅋㅋ', '늘여 쓴 자모를 줄이지 않는다');
+  assert.equal(N.compact('좋아요오오오'), '좋아요오오', '늘여 쓴 말을 줄이지 않는다');
+
+  // ③ 오타 보정이 숫자를 넘겨다보지 않는다 — 정확 일치·동의어는 그대로다.
+  const hit = (text, kw) => {
+    const p = N.prepare(text);
+    return N.keywordHit(p.compact, p.jamo, kw).kind;
+  };
+  assert.equal(hit('100원짜리 있나요', '1000원'), 'none', '다른 금액을 오타로 본다');
+  assert.equal(hit('2시간 상담 되나요', '24시간'), 'none', '다른 시간을 오타로 본다');
+  assert.equal(hit('1000원 요금제', '1000원'), 'exact', '같은 값을 못 찾는다');
+  assert.equal(hit('삼담원 연결해주세요', '상담원'), 'fuzzy', '글자 오타 보정까지 꺼졌다');
+  assert.equal(hit('카톡으로 문의', '카카오톡'), 'synonym', '동의어가 끊겼다');
+
+  // ④ 고객이 받는 답이 달라진다 — 금액이 다른 두 자료가 나란히 있을 때.
+  const K = await importLib('knowledge', ['normalize', 'text', 'limits']);
+  const kb = [
+    { id: 'thousand', category: '요금', question: '1000원 요금제', keywords: ['1000원'], answer: '1,000원 요금제 안내' },
+    { id: 'hundred', category: '요금', question: '100원 요금제', keywords: ['100원'], answer: '100원 요금제 안내' },
+  ];
+  assert.equal(K.matchKnowledge('100원 얼마예요?', 2, kb)?.entry.id, 'hundred', '100원을 물었는데 1,000원 자료로 답한다');
+  assert.equal(K.matchKnowledge('1000원 얼마예요?', 2, kb)?.entry.id, 'thousand', '1,000원을 물었는데 다른 자료로 답한다');
+});
+
+/**
+ * DS 64-2 — **줄 세우는 자가 자리마다 달랐다.**
+ *
+ * 같은 질문(「ㄱ 다음은 무엇인가」)에 네 가지로 답하고 있었다 — 코드포인트 순, 로케일을 적지
+ * 않은 `localeCompare`(그 서버에 켜진 로케일), `ko`, `ko`+`numeric`. 운영자는 한 화면에서
+ * 두 번 다른 순서를 본다(안내 자료 탭의 거르개와 바로 밑 표, 정산 표의 머리칸 누르기 전후).
+ */
+test('이름으로 줄을 세우는 자가 한 벌이다 (DS 64-2)', opts, async () => {
+  const O = await importLib('order');
+
+  // ① 한국어 사전 순 + 자리수대로. 코드포인트 순과 **눈에 띄게** 다르다(영문이 한글 앞에 온다).
+  const cats = ['요금', 'A/S', '배송', 'as', '2차 안내', '10차 안내', '가입', 'Zebra'];
+  assert.deepEqual(
+    [...cats].sort(O.compareText),
+    ['2차 안내', '10차 안내', '가입', '배송', '요금', 'A/S', 'apple', 'as', 'Zebra'].filter((x) => cats.includes(x)),
+    '한국어 사전 순으로 서지 않는다',
+  );
+  assert.notDeepEqual([...cats].sort(), [...cats].sort(O.compareText), '재현이 깨졌다(코드포인트 순과 같다)');
+  assert.ok(O.compareText('2차 안내', '10차 안내') < 0, '자리수대로 서지 않는다');
+  assert.equal(O.compareText(null, undefined), 0, '빈 값끼리 순서를 바꾼다');
+  assert.ok(O.compareText(null, '가') < 0, '빈 값을 글자로 보지 않는다');
+
+  // ② 서버가 내주는 목록이 그 자를 지난다 — 정산 표의 기본 차례.
+  //    종전에는 파트너 이름만 `ko`, 고객사 코드는 로케일 없는 `localeCompare` 였고 둘 다
+  //    자리수를 보지 않았다 — 화면에서 「파트너」 머리칸을 **누르기 전과 누른 뒤**가 달랐다.
+  const { P, S } = await settlementLib();
+  const ptr = (name) => P.upsertPartner({ name }).partner;
+  const p10 = ptr('가온 10팀');
+  const p2 = ptr('가온 2팀');
+  for (const [name, partner] of [['나 고객사', p10], ['다 고객사', p2]]) {
+    const r = P.upsertAccount({
+      name, partnerId: partner.id, source: 'partner',
+      status: 'contracted', contractedAt: '2026-08-01', monthlyFeeKrw: 100000,
+    });
+    assert.equal(r.ok, true, `${name} 등록에 실패했다`);
+  }
+  const r = S.buildSettlement({ month: '2026-09' });
+  assert.equal(r.ok, true);
+  assert.deepEqual(
+    r.report.rows.map((x) => x.partnerName),
+    ['가온 2팀', '가온 10팀'],
+    '정산 표가 자리수대로 서지 않는다(화면 머리칸 정렬과 차례가 갈린다)',
+  );
+  assert.deepEqual(r.report.partnerTotals.map((x) => x.partnerName), ['가온 2팀', '가온 10팀'], '파트너 합계도 같은 차례여야 한다');
+  P.resetPartners();
+});

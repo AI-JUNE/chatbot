@@ -14,6 +14,7 @@
 import { ellipsize } from '@/lib/limits';
 import { loadJson, scheduleSave } from '@/lib/storage';
 import { readInstant } from '@/lib/kst';
+import { compareText } from '@/lib/order';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
 
 export type Verdict = 'up' | 'down';
@@ -246,7 +247,8 @@ export function feedbackSummary(labels?: Record<string, string>): FeedbackSummar
         down: v.down,
       };
     })
-    .sort((a, b) => b.down - a.down || a.citation.localeCompare(b.citation) || a.key.localeCompare(b.key))
+    // 같은 수면 근거 이름순 — 줄 세우는 자는 `lib/order` 한 곳이다 (DS 64-2).
+    .sort((a, b) => b.down - a.down || compareText(a.citation, b.citation) || compareText(a.key, b.key))
     .slice(0, 5);
   return { total, up, down, helpfulRate: total === 0 ? null : Math.round((up / total) * 100), topDown };
 }

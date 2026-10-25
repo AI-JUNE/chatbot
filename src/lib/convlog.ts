@@ -9,6 +9,7 @@ import { TURN_TEXT_LEN, CLIP_MARK, clip } from '@/lib/limits';
 import { KST_CSV_NOTE, kstDate, kstDateTime, readInstant } from '@/lib/kst';
 import { CHANNEL_LABELS, SOURCE_CODES, intentLabel, sourceLabel } from '@/lib/intents';
 import { compact } from '@/lib/normalize';
+import { compareText } from '@/lib/order';
 import { tenantLabel } from '@/lib/tenants';
 import { csvCell, csvRow } from '@/lib/csv';
 import { RESTORE_FORMAT_MESSAGE } from '@/lib/refusal';
@@ -512,8 +513,10 @@ export function convStats(): ConvStats {
     byChannel,
     byTenant: [...byTenantMap.values()]
       .map((b) => ({ tenant: b.tenant, turns: b.turns, sessions: b.sessions.size, escalated: b.escalated }))
-      // 대화 많은 쪽이 앞. 같으면 기본 구성을 먼저 둔다(순서가 실행마다 흔들리지 않게).
-      .sort((a, b) => b.turns - a.turns || (a.tenant ?? '').localeCompare(b.tenant ?? '')),
+      // 대화 많은 쪽이 앞. 같으면 이름순으로 둔다(순서가 실행마다 흔들리지 않게).
+      // 줄 세우는 자는 `lib/order` 한 곳이다 (DS 64-2) — 종전에는 로케일을 적지 않아
+      // **그 서버에 켜진 로케일**로 셌다(흔들리지 않게 두려던 자리가 환경에 매여 있었다).
+      .sort((a, b) => b.turns - a.turns || compareText(a.tenant, b.tenant)),
     topIntents,
     autoHandled,
     autoRate: totalTurns ? Math.round((autoHandled / totalTurns) * 1000) / 1000 : 0,

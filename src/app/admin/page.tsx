@@ -1208,18 +1208,29 @@ type Cell = string | number | null | undefined;
 type SortCols<T> = Record<string, (r: T) => Cell>;
 
 /**
- * 셀 하나의 비교. 숫자는 숫자로, 글자는 한국어 사전 순으로 본다(`numeric` — 「2건」과 「10건」이
- * 자리수대로 선다). **빈 값은 방향과 무관하게 뒤로 보낸다**: 미입력(「—」)이 위로 몰리면 오름차순
- * 첫 장이 빈 칸으로 가득 차, 정렬한 사람이 보려던 값은 어느 장에도 보이지 않는다.
+ * **이 콘솔에서 이름으로 줄을 세우는 단 하나의 자** — 원본은 `src/lib/order.ts`(`compareText`)
+ * (DS 64-2). 콘솔은 lib 을 불러오지 않으므로(`searchNorm`·`cleanText` 와 같은 기존 규약)
+ * 사본을 두고, 테스트가 같은 입력으로 두 자의 결과를 대조해 갈라지면 실패시킨다.
+ *
+ * 종전에는 표 머리칸만 이 자(`ko` + `numeric`)였고, 바로 위의 분류 거르개는 코드포인트 순
+ * (`[...cats].sort()`), 고객사 목록은 `ko` 만(자리수를 보지 않는다)이었다 — 한 화면 안에서
+ * **거르개와 표가 서로 다른 차례**로 섰다(코드포인트는 영문 대문자를 한글보다 앞에 둔다).
+ */
+function compareText(a: string | null | undefined, b: string | null | undefined): number {
+  return String(a ?? '').localeCompare(String(b ?? ''), 'ko', { numeric: true });
+}
+
+/**
+ * 셀 하나의 비교. 숫자는 숫자로, 글자는 `compareText`(한국어 사전 순 + 자리수대로 — 「2건」과
+ * 「10건」이 자리수대로 선다). **빈 값은 방향과 무관하게 뒤로 보낸다**: 미입력(「—」)이 위로
+ * 몰리면 오름차순 첫 장이 빈 칸으로 가득 차, 정렬한 사람이 보려던 값은 어느 장에도 보이지 않는다.
  */
 function compareCell(a: Cell, b: Cell, dir: SortDir): number {
   const empty = (v: Cell) => v === null || v === undefined || v === '';
   if (empty(a) && empty(b)) return 0;
   if (empty(a)) return 1;
   if (empty(b)) return -1;
-  const r = typeof a === 'number' && typeof b === 'number'
-    ? a - b
-    : String(a).localeCompare(String(b), 'ko', { numeric: true });
+  const r = typeof a === 'number' && typeof b === 'number' ? a - b : compareText(String(a), String(b));
   return dir === 'asc' ? r : -r;
 }
 
@@ -2142,7 +2153,7 @@ function blank(v: string): boolean {
 /**
  * **이 콘솔에서 「같은 말인가」를 묻는 단 하나의 자.**
  *
- * 유니코드 정규화(NFC) → 보이지 않는 글자 제거 → 소문자 → 3연속 이상 축약 → 공백·문장부호
+ * 보이지 않는 글자 제거 → 호환 문자 정규화(NFKC) → 소문자 → 늘여 쓴 글자 축약 → 공백·문장부호
  * 제거. 서버의 `@/lib/normalize` 의 `compact` 와 **같은 결과**를 내야 한다 — 콘솔은 클라이언트
  * 번들이라 lib 을 불러오지 않으므로 사본을 두고, 테스트가 같은 입력으로 두 자의 결과를 대조해
  * 갈라지면 실패시킨다.
@@ -2150,15 +2161,18 @@ function blank(v: string): boolean {
  * 종전에는 헤더 전역 검색만 이 자(그중에서도 띄어쓰기까지만)를 쓰고, 각 탭의 검색칸은
  * `toLowerCase()` 만 했다 — 같은 말을 쳐도 헤더에서는 나오고 탭에서는 0건이었다(DS 42-1).
  * 보이지 않는 글자를 지우는 줄은 DS 63-2 가 더했다(붙여 넣은 자료가 검색에 걸리지 않던 자리).
+ * NFC 를 NFKC 로 올리고(`㈜고원`=`(주)고원`·전각 `Ａ／Ｓ`) 축약에서 숫자를 뺀 것은 DS 64-1·64-3 —
+ * 까닭과 한글 호환 자모를 건너뛰는 이유는 `lib/normalize` 의 `toMatchForm` 주석에 있다.
  */
+const CONSOLE_NOT_JAMO = /[^\u{3130}-\u{318f}]+/gu;
 function searchNorm(v: string): string {
   return (v || '')
-    .normalize('NFC')
     .replace(CONSOLE_INVISIBLE, '')
     .replace(/[\u{200c}\u{200d}\u{fe00}-\u{fe0f}]/gu, '')
+    .replace(CONSOLE_NOT_JAMO, (run) => run.normalize('NFKC'))
     .toLowerCase()
-    .replace(/(.)\1{2,}/gu, '$1$1')
-    .replace(/[\s.,!?~·・…"'"'()[\]{}<>:;/\\|@#$%^&*+=_-]/gu, '');
+    .replace(/([^0-9])\1{2,}/gu, '$1$1')
+    .replace(/[\s.,!?~·・…"'"'()[\]{}<>:;/\\|@#$%^&*+=。、〈〉《》「」『』【】〔〕ㆍ‐‑‒–—―−※_-]/gu, '');
 }
 /** `q` 는 **이미 `searchNorm` 을 지난 값**이다(한 번만 재서 목록 전체에 쓴다). */
 function searchMatch(q: string, ...hay: (string | undefined)[]): boolean {
@@ -5269,7 +5283,9 @@ export default function AdminPage() {
 
       {tab === 'kb' && (() => {
         const q = searchNorm(kbQuery);
-        const cats = Array.from(new Set(entries.map((e) => e.category).filter(Boolean))).sort();
+        // 거르개도 표와 **같은 차례**로 선다 (DS 64-2) — 종전의 맨 `sort()` 는 코드포인트 순이라
+        // 영문 대문자가 한글보다 앞에 왔다(바로 밑 표의 「카테고리」 열과 차례가 갈렸다).
+        const cats = Array.from(new Set(entries.map((e) => e.category).filter(Boolean))).sort(compareText);
         const shown = entries.filter((e) => {
           if (kbCat && e.category !== kbCat) return false;
           if (!q) return true;
@@ -6151,7 +6167,7 @@ export default function AdminPage() {
         const filteredAccounts = accounts
           .filter((a) => !q || searchMatch(q, a.name, partnerName(a.partnerId), a.ownerName ?? '', SOURCE_LABELS[a.source] ?? '', ACCOUNT_STATUS_LABELS[a.status]))
           .slice()
-          .sort((x, y) => x.name.localeCompare(y.name, 'ko'));
+          .sort((x, y) => compareText(x.name, y.name));
         const rollupOf = (id: string | null) => rollup.find((r) => (r.partnerId ?? null) === id);
         const directRollup = rollupOf(null);
         /**

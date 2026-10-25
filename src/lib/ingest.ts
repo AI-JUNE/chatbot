@@ -4,6 +4,7 @@
 import type { KBEntry } from '@/lib/knowledge';
 import { cutEnd, ellipsize } from '@/lib/limits';
 import { compact, toNfc } from '@/lib/normalize';
+import { compareText } from '@/lib/order';
 
 export const MAX_DOC_CHARS = 100_000;
 
@@ -190,7 +191,8 @@ export function extractKeywords(text: string, limit = 8): string[] {
 
   return [...freq.entries()]
     .map(([term, n]) => ({ term, weight: n + Math.min(term.length, 6) * 0.3 }))
-    .sort((a, b) => b.weight - a.weight || a.term.localeCompare(b.term))
+    // 같은 무게면 이름순 — 줄 세우는 자는 `lib/order` 한 곳이다 (DS 64-2).
+    .sort((a, b) => b.weight - a.weight || compareText(a.term, b.term))
     .slice(0, limit)
     .map((x) => x.term);
 }

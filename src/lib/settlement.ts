@@ -19,6 +19,7 @@ import {
 } from '@/lib/partners';
 import { csvCell, csvRow } from '@/lib/csv';
 import { kstMonth } from '@/lib/kst';
+import { compareText } from '@/lib/order';
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
@@ -249,10 +250,13 @@ export function buildSettlement(input: SettlementInput): SettlementResult {
     totalsByPartner.set(partnerId, t);
   }
 
+  // 줄 세우는 자는 한 곳이다 (DS 64-2) — 종전에는 파트너 이름만 `ko`, 고객사 코드는 로케일을
+  // 적지 않아 **그 서버에 켜진 로케일**로 셌고, 둘 다 자리수(`numeric`)를 보지 않아 화면의
+  // 머리칸 정렬과 차례가 갈렸다.
   rows.sort((x, y) =>
-    x.partnerName === y.partnerName ? x.accountId.localeCompare(y.accountId) : x.partnerName.localeCompare(y.partnerName, 'ko'),
+    x.partnerName === y.partnerName ? compareText(x.accountId, y.accountId) : compareText(x.partnerName, y.partnerName),
   );
-  const partnerTotals = [...totalsByPartner.values()].sort((x, y) => x.partnerName.localeCompare(y.partnerName, 'ko'));
+  const partnerTotals = [...totalsByPartner.values()].sort((x, y) => compareText(x.partnerName, y.partnerName));
 
   const billable = partnerTotals.reduce((s, t) => s + t.billable, 0);
   const incomplete = partnerTotals.reduce((s, t) => s + t.incomplete, 0);

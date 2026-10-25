@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const has = (p) => existsSync(new URL(`../${p}`, import.meta.url));
@@ -3047,7 +3047,8 @@ test('「같은 말인가」를 묻는 자가 한 벌이다 (DS 42-1)', () => {
   }
   assert.equal(/Query\.trim\(\)\.toLowerCase\(\)/.test(s), false, '탭 검색칸이 제 자를 따로 적고 있다');
   // 비교용 정규화를 적는 자리는 그 함수 하나뿐이다(`docLen` 은 길이를 재는 다른 일이다).
-  assert.equal((s.match(/\.toLowerCase\(\)\s*\n?\s*\.replace\(\/\(\.\)/g) || []).length, 1, '콘솔에 비교용 정규화가 두 벌 이상 있다');
+  // 늘여 쓴 글자를 줄이는 식에서 숫자를 뺀 것은 DS 64-3 — 「1000원」과 「100원」은 다른 값이다.
+  assert.equal((s.match(/\.toLowerCase\(\)\s*\n?\s*\.replace\(\/\(\[\^0-9\]\)/g) || []).length, 1, '콘솔에 비교용 정규화가 두 벌 이상 있다');
 });
 
 /**
@@ -4130,9 +4131,74 @@ test('보이지 않는 글자를 터는 자가 한 벌이다 (DS 63-1·63-2)', (
   // ② 판정하는 자리 — 「같은 말인가」의 단일 기준.
   const norm = read('src/lib/normalize.ts');
   assert.match(norm, /import \{ stripForMatch \} from '@\/lib\/text';/, '비교하는 자가 공통 자를 끌어오지 않는다');
-  assert.match(norm, /return stripForMatch\(toNfc\(s\)\)\.toLowerCase\(\)/, '비교 전에 보이지 않는 글자를 지우지 않는다');
+  // 지우는 것이 **먼저**다 — 분해형 한글 사이에 제로폭 공백이 끼면 정규화가 합치지 못한다 (DS 64-1).
+  assert.match(norm, /return toMatchForm\(stripForMatch\(s\)\)\.toLowerCase\(\)/, '비교 전에 보이지 않는 글자를 지우지 않는다');
 
   // ③ 화면 사본 두 벌이 **사본임을 밝힌다**(밝히지 않으면 다음 사람이 한쪽만 고친다).
   assert.ok(read('src/app/admin/page.tsx').includes('원본은 `src/lib/text.ts`'), '콘솔 사본이 출처를 밝히지 않는다');
   assert.ok(read('src/components/ChatWidget.tsx').includes('원본은 `src/lib/text.ts`'), '위젯 사본이 출처를 밝히지 않는다');
+});
+
+/* ══════════ 64순위 — 백로그 소진 후 61차 재감사 (DS 64-1·64-2) ══════════ */
+
+/**
+ * DS 64-2 — **이름으로 줄을 세우는 자가 한 벌인가**(배선).
+ *
+ * 「정말 그 차례로 서는가」는 runtime.test.mjs 가 돌려서 본다. 여기서는 그 자를 **적는
+ * 자리**를 고정한다: `localeCompare` 를 손으로 적은 자리가 `lib/order.ts` 와 콘솔 사본
+ * 말고는 없는지, 그리고 이름 목록을 맨 `sort()`(코드포인트 순)로 세우는 자리가 남지 않았는지.
+ *
+ * 로케일을 적지 않은 `localeCompare` 가 특히 위험하다 — 돌려 보는 PC 는 `ko-KR` 이고
+ * 배포 환경은 대개 `en-US` 라서, **테스트가 통과하는 곳에서는 드러나지 않는다**.
+ */
+test('이름으로 줄을 세우는 자가 한 벌이다 (DS 64-2)', () => {
+  const order = read('src/lib/order.ts');
+  assert.match(order, /export function compareText\(/, '줄 세우는 자가 단일 출처에 없다');
+  assert.match(order, /localeCompare\(String\(b \?\? ''\), ORDER_LOCALE, ORDER_OPTIONS\)/, '로케일·옵션을 한 곳에 못박지 않았다');
+
+  // lib 에서 `localeCompare` 를 적은 자리는 `order.ts` 하나뿐이다.
+  const libs = readdirSync(new URL('../src/lib', import.meta.url)).filter((f) => f.endsWith('.ts'));
+  for (const f of libs) {
+    if (f === 'order.ts') continue;
+    const body = stripComments(read(`src/lib/${f}`));
+    assert.equal(/localeCompare\(/.test(body), false, `src/lib/${f}: 줄 세우는 자를 따로 적고 있다`);
+  }
+  // 종전에 갈라져 있던 네 자리가 공통 자를 지난다.
+  for (const [f, pat] of [
+    ['src/lib/convlog.ts', /compareText\(a\.tenant, b\.tenant\)/],
+    ['src/lib/feedback.ts', /compareText\(a\.citation, b\.citation\) \|\| compareText\(a\.key, b\.key\)/],
+    ['src/lib/ingest.ts', /compareText\(a\.term, b\.term\)/],
+    ['src/lib/settlement.ts', /compareText\(x\.partnerName, y\.partnerName\)/],
+  ]) {
+    assert.match(read(f), pat, `${f}: 공통 자를 지나지 않는다`);
+  }
+
+  // 콘솔은 lib 을 불러올 수 없으므로 사본을 두되, **출처를 밝히고** 한 벌이어야 한다.
+  const con = read('src/app/admin/page.tsx');
+  assert.ok(con.includes('원본은 `src/lib/order.ts`'), '콘솔 사본이 출처를 밝히지 않는다');
+  assert.equal((stripComments(con).match(/\.localeCompare\(/g) || []).length, 1, '콘솔에 줄 세우는 자가 두 벌 이상 있다');
+});
+
+/**
+ * DS 64-1 — 비교용 정규화(NFKC)를 적는 자리도 한 곳인가.
+ *
+ * DS 42-3 이 `normalize('NFC')` 에 대해 세운 규약과 같은 종류다 — 자리마다 적으면 빠뜨린
+ * 자리가 조용히 생긴다. 보관하는 값은 여전히 NFC 다(`toNfc`): 바꾸는 것은 **비교**뿐이다.
+ */
+test('호환 문자 정규화는 비교하는 자리에서만 한다 (DS 64-1)', () => {
+  const norm = read('src/lib/normalize.ts');
+  assert.match(norm, /export function toMatchForm\(s: string\): string \{/, '비교용 정규화가 단일 출처에 없다');
+  assert.match(norm, /const NOT_COMPAT_JAMO = \/\[\^\\u\{3130\}-\\u\{318f\}\]\+\/gu;/, '한글 자모 구간을 건너뛰지 않는다');
+  // 보관하는 값은 NFC 그대로다 — 들어온 글을 우리가 바꿔 저장하지 않는다(63차가 그은 선).
+  assert.match(norm, /export function toNfc\(s: string\): string \{\n\s*return \(s \|\| ''\)\.normalize\('NFC'\);/, '보관용 정규화가 바뀌었다');
+  for (const f of ['src/app/api/admin/kb/import/route.ts', 'src/lib/ingest.ts']) {
+    assert.equal(/normalize\('NFKC'\)/.test(read(f)), false, `${f}: 보관하는 값에 NFKC 를 걸고 있다`);
+  }
+  // NFKC 를 적는 자리는 lib 한 곳 + 콘솔 사본 한 곳뿐이다.
+  const libs = readdirSync(new URL('../src/lib', import.meta.url)).filter((f) => f.endsWith('.ts'));
+  for (const f of libs) {
+    if (f === 'normalize.ts') continue;
+    assert.equal(/normalize\('NFKC'\)/.test(read(`src/lib/${f}`)), false, `src/lib/${f}: 비교용 정규화를 따로 적고 있다`);
+  }
+  assert.equal((stripComments(read('src/app/admin/page.tsx')).match(/normalize\('NFKC'\)/g) || []).length, 1, '콘솔에 비교용 정규화가 두 벌 이상 있다');
 });

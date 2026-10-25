@@ -1580,7 +1580,8 @@ test('표가 길어지면 장을 나누고 「몇 건 중 어디인가」를 말
 });
 
 test('표 정렬·페이지 판정을 실제로 돌린다 (DS 31-1·31-2)', opts, async () => {
-  const { compareCell, sortRows, pageSlice } = await loadConsoleFns(['compareCell', 'sortRows', 'pageSlice']);
+  // 글자 비교는 `compareText` 한 자로 모았다 (DS 64-2) — 함께 떼어내야 돈다.
+  const { compareCell, sortRows, pageSlice } = await loadConsoleFns(['compareText', 'compareCell', 'sortRows', 'pageSlice']);
 
   // ① 숫자는 숫자로 — 글자로 비교하면 「10」이 「2」보다 앞에 선다.
   assert.ok(compareCell(2, 10, 'asc') < 0, '숫자 오름차순');
@@ -2005,9 +2006,10 @@ test('덮개가 열려 있으면 검색 단축키가 초점을 빼내지 않는�
  */
 test('콘솔의 모든 검색칸이 서버와 같은 자를 쓴다 (DS 42-1)', opts, async () => {
   // 보이지 않는 글자를 지우는 표(`CONSOLE_INVISIBLE`)를 함께 떼어내야 돈다 (DS 63-2).
+  // 호환 문자 정규화가 건너뛰는 한글 자모 구간 표(`CONSOLE_NOT_JAMO`)도 함께 떼어내야 돈다 (DS 64-1).
   const { searchNorm, searchMatch, probeKeywords } = await loadConsoleFns(
     ['searchNorm', 'searchMatch', 'probeKeywords'],
-    ['CONSOLE_INVISIBLE'],
+    ['CONSOLE_INVISIBLE', 'CONSOLE_NOT_JAMO'],
   );
   const { compact } = await importLib('normalize', ['text']);
 
@@ -3692,4 +3694,75 @@ test('콘솔이 비었는지 재는 자가 서버와 같다 (DS 63-3)', opts, as
   assert.deepEqual(left, [], `필수 칸을 trim 으로 재는 자리가 남았다: ${left.join(' / ')}`);
   // 사본임을 밝혀 둔다 — 밝히지 않으면 다음 사람이 한쪽만 고친다.
   assert.ok(src.includes('원본은 `src/lib/text.ts`'), '사본임을 밝히지 않는다(cleanText)');
+});
+
+/* ══════════ 64순위 — 61차 재감사 (DS 64-1·64-2·64-3) ══════════ */
+
+/**
+ * DS 64-1·64-3 — 콘솔 사본(`searchNorm`)이 서버의 `compact` 와 **글자까지** 같은가.
+ *
+ * 갈라지면 같은 말을 콘솔에서는 못 찾고 서버에서는 찾는다(DS 42-1 이 닫았던 그 자리다).
+ * 이번에 바뀐 것은 두 줄 — 호환 문자 정규화(NFC→NFKC, 한글 자모 구간은 건너뛴다)와
+ * 늘여 쓴 글자 축약에서 숫자를 뺀 것이다. 두 줄 모두 사본에 그대로 들어갔는지를 본다.
+ */
+test('콘솔이 「같은 말인가」를 서버와 같은 자로 묻는다 — 호환 문자·숫자 (DS 64-1·64-3)', opts, async () => {
+  const { searchNorm, searchMatch } = await loadConsoleFns(
+    ['searchNorm', 'searchMatch'],
+    ['CONSOLE_INVISIBLE', 'CONSOLE_NOT_JAMO'],
+  );
+  const { compact } = await importLib('normalize', ['text']);
+
+  const SAMPLES = [
+    '㈜고원 환불', '(주)고원 환불', 'ＡＳ 신청', 'as 신청', 'A／S 문의', 'a/s 문의',
+    '요금？', '요금?', '이메일：문의', '요금～환불', '①번 문의', '㎡ 면적',
+    '「환불 정책」', '환불, 정책。', '요금ㆍ환불', '전화―문의',
+    '1000원', '100원', '010-1111-2222', '010-11-22', '3333번',
+    'ㄱ', 'ㅋㅋㅋㅋ', 'ㅠㅠㅠ', 'ㄱ가격', '좋아요오오오',
+    '환불정책'.normalize('NFD'), '환불\u{200b}정책', '', '   ',
+  ];
+  for (const s of SAMPLES) {
+    assert.equal(searchNorm(s), compact(s), `콘솔과 서버의 자가 갈라졌다: ${JSON.stringify(s)}`);
+  }
+
+  // 화면에서 실제로 달라지는 것 — 붙여 넣은 상호로 적어 둔 자료를 손으로 쳐서 찾는다.
+  assert.equal(searchMatch(searchNorm('(주)고원'), '㈜고원 커머스 안내'), true, '붙여 넣은 상호를 찾지 못한다');
+  assert.equal(searchMatch(searchNorm('as'), 'Ａ／Ｓ 접수 안내'), true, '전각으로 적힌 자료를 찾지 못한다');
+  // 숫자는 값이다 — 1,000원을 찾을 때 100원 자료가 끼어들지 않는다.
+  assert.equal(searchMatch(searchNorm('1000원'), '100원 요금제'), false, '다른 금액을 같은 말로 본다');
+  assert.equal(searchMatch(searchNorm('1000원'), '1000원 요금제'), true, '같은 금액을 찾지 못한다');
+});
+
+/**
+ * DS 64-2 — 콘솔에서 이름으로 줄을 세우는 자가 **하나**이고, 서버의 자와 같은가.
+ *
+ * 종전에는 표 머리칸만 `ko`+`numeric`, 분류 거르개는 코드포인트 순, 고객사 목록은 `ko` 만이라
+ * 한 화면 안에서 거르개와 표가 서로 다른 차례로 섰다.
+ */
+test('콘솔이 이름으로 줄을 세우는 자가 서버와 같다 (DS 64-2)', opts, async () => {
+  const { compareText } = await loadConsoleFns(['compareText']);
+  const O = await importLib('order');
+
+  const NAMES = ['요금', 'A/S', '배송', 'as', '2차 안내', '10차 안내', '가입', 'Zebra', 'apple', '', null, undefined, '가온 2팀', '가온 10팀'];
+  for (const a of NAMES) {
+    for (const b of NAMES) {
+      assert.equal(
+        Math.sign(compareText(a, b)), Math.sign(O.compareText(a, b)),
+        `콘솔과 서버의 차례가 갈라졌다: ${JSON.stringify(a)} ↔ ${JSON.stringify(b)}`,
+      );
+    }
+  }
+  // 코드포인트 순과 눈에 띄게 다르다 — 종전 거르개가 쓰던 자가 그것이었다.
+  const cats = ['요금', 'A/S', '가입', 'Zebra', 'apple'];
+  assert.notDeepEqual([...cats].sort(), [...cats].sort(compareText), '재현이 깨졌다(코드포인트 순과 같다)');
+
+  // 줄 세우는 자리가 **전부** 그 함수를 지난다. 콘솔에 `localeCompare` 를 적은 자리는 하나뿐이다.
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  assert.equal((code.match(/\.localeCompare\(/g) || []).length, 1, '콘솔에 줄 세우는 자가 두 벌 이상 있다');
+  assert.equal(/\)\)\.sort\(\);/.test(code), false, '코드포인트 순으로 세우는 자리가 남았다');
+  assert.ok(code.includes('.sort(compareText)'), '분류 거르개가 공통 자를 지나지 않는다');
+  assert.ok(code.includes('compareText(x.name, y.name)'), '고객사 목록이 공통 자를 지나지 않는다');
+  assert.ok(code.includes('compareText(String(a), String(b))'), '표 머리칸이 공통 자를 지나지 않는다');
+  // 사본임을 밝혀 둔다 — 밝히지 않으면 다음 사람이 한쪽만 고친다.
+  assert.ok(src.includes('원본은 `src/lib/order.ts`'), '사본임을 밝히지 않는다(compareText)');
 });
