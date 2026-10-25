@@ -4,6 +4,7 @@
 import { noContactLine, type ChatReply } from '@/lib/chat';
 import { MAX_MESSAGE_LEN, cutEnd, ellipsize } from '@/lib/limits';
 import { comma } from '@/lib/num';
+import { sentenceEndAt } from '@/lib/prose';
 import { josa } from '@/lib/refusal';
 import { cleanText } from '@/lib/text';
 import { dedupeCheck, dedupeRemember, eventKey, safeEqual, verifySignature, type SignatureFailure } from '@/lib/webhookAuth';
@@ -105,6 +106,12 @@ const CUT_NOTICE = '\n…(답변이 길어 여기까지만 보내드렸어요. �
  * 쓰지 않고 상한에서 자른다(한 말풍선만 짧게 남는 모양을 만들지 않기 위해서다).
  * 한국어는 공백 없이 이어지는 문장이 길어 공백만 보면 거의 항상 실패한다 — 문장 끝을 먼저 본다.
  *
+ * 「문장 끝인가」는 **`lib/prose` 가 답한다** (DS 66-3). 종전에는 이 자리에서 마침표 하나를
+ * 문장 끝으로 읽었다 — 창 안의 마지막 점이 소수점이면(`초과 사용분은 1.5배로 계산합니다`)
+ * 앞 말풍선이 **「… 초과 사용분은 1.」** 로 끝나고 뒤 말풍선이 「5배로 계산합니다」로 시작했다.
+ * 카카오 말풍선은 한 줄씩 따로 도착하므로 앞 것만 읽은 고객은 **1배로 읽는다**(§13 — 없는 수).
+ * 근거 발췌(`lib/knowledge`)가 같은 판정을 또 한 벌 들고 있었다.
+ *
  * 마지막 길(끊을 자리를 찾지 못했을 때)은 **글자를 쪼개지 않는 자리**에서 끊는다 (DS 62-2).
  * 종전에는 `room` 을 그대로 돌려줬다 — 한국어 답변은 공백·마침표 없이 길게 이어지는 일이
  * 흔해서 이 길이 실제로 쓰이는 길이고, 상한이 이모지 가운데 떨어지면 **앞 말풍선 끝과 뒤
@@ -119,8 +126,9 @@ function breakAt(text: string, room: number): number {
   const line = win.lastIndexOf('\n');
   if (line >= floor) return line + 1;
   for (let i = win.length - 1; i >= floor; i -= 1) {
-    const c = win[i];
-    if (c === '.' || c === '!' || c === '?') return i + 1;
+    // 문장 끝에 붙은 묶음표·물음표까지 앞 말풍선에 담는다(`sentenceEndAt` 이 그 자리를 돌려준다).
+    const at = sentenceEndAt(win, i);
+    if (at) return at;
   }
   const space = win.lastIndexOf(' ');
   if (space >= floor) return space + 1;

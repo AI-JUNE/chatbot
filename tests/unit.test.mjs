@@ -4246,3 +4246,41 @@ test('수를 읽는 자가 lib/num 하나다 (DS 65-1·65-3)', () => {
   assert.match(partners, /const rate = parseNumber\(input\.feeRateBp, \{ min: 0, max: 10000, integer: true \}\);/, '수수료율이 공통 자를 지나지 않는다');
   assert.equal(/(?<!\w)Number\((?:input\.|v\.replace)/.test(stripComments(partners)), false, '수를 제 식으로 읽는 자리가 남았다');
 });
+
+/* ── 66순위 — 63차 재감사 (DS 66-1·66-2·66-3) ── */
+
+test('글의 경계를 짐작하는 자가 한 벌이다 (DS 66-1·66-2·66-3)', () => {
+  assert.ok(has('src/lib/prose.ts'), '문장 끝·제목 판정의 단일 출처가 있어야 한다');
+  const p = read('src/lib/prose.ts');
+  assert.match(p, /export function sentenceEndAt/, '문장이 끝나는 자리를 돌려주는 자가 없다');
+  assert.match(p, /export function splitSentences/, '문장을 가르는 자가 없다');
+  assert.match(p, /export function readsAsSentence/, '제목인가 본문인가를 가르는 자가 없다');
+  // 문장을 끝내지 않는 마침표 네 가지(소수·주소·약어·번호 매김)를 모두 보고 있어야 한다.
+  for (const guard of ['DIGIT.test(prev) && DIGIT.test(next)', 'ASCII_WORD.test(next)', 'LATIN.test(prev)', 'NUMBERING_HEAD']) {
+    assert.ok(p.includes(guard), `마침표 판정에서 빠졌다: ${guard}`);
+  }
+
+  // 쓰는 쪽 세 자리가 모두 그 자를 지난다.
+  assert.match(read('src/lib/knowledge.ts'), /import \{ splitSentences \} from '@\/lib\/prose';/, '근거 발췌가 공통 자를 쓰지 않는다');
+  assert.match(read('src/lib/kakao.ts'), /import \{ sentenceEndAt \} from '@\/lib\/prose';/, '말풍선 나누기가 공통 자를 쓰지 않는다');
+  const ing = read('src/lib/ingest.ts');
+  assert.match(ing, /import \{ readsAsSentence \} from '@\/lib\/prose';/, '제목 판정이 공통 자를 쓰지 않는다');
+  assert.match(ing, /NUMBERED_HEADING_RE\.test\(t\) && !readsAsSentence\(t\)/, '번호로 시작하는 본문을 제목으로 읽는다');
+
+  // 제 식으로 문장 끝을 재는 자리가 **0건**이다 — 두 벌이면 한쪽만 고쳐진다(다시 생기는 것을
+  // 막는 자리다). `prose.ts` 하나만 글자와 견준다.
+  const files = [
+    ...readdirSync(new URL('../src/lib', import.meta.url)).filter((f) => f.endsWith('.ts')).map((f) => `src/lib/${f}`),
+    'src/components/ChatWidget.tsx',
+    'src/app/admin/page.tsx',
+  ];
+  for (const f of files) {
+    if (f === 'src/lib/prose.ts') continue;
+    const body = stripComments(read(f));
+    assert.equal(
+      /===\s*'[.?!。]'|lastIndexOf\('[.?!。]'\)|endsWith\('[.?!。]'\)/.test(body),
+      false,
+      `${f}: 문장 끝을 제 식으로 잰다`,
+    );
+  }
+});

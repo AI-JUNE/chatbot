@@ -6458,3 +6458,149 @@ test('빈 환경변수를 0 으로 읽지 않는다 (DS 65-3)', opts, async () =
     P.resetPartners();
   }
 });
+
+/* ══════════ 66순위 — 63차 재감사 (DS 66-1·66-2·66-3) ══════════ */
+
+/**
+ * DS 66-1 — **본문 한 줄을 제목으로 읽어 지식베이스에서 지우던 자리.**
+ *
+ * 번호로 시작하는 줄은 전부 제목으로 읽혔고, 제목으로 읽은 줄은 조각의 **본문에 담기지
+ * 않는다**(제목 경로로만 남는다). 그래서 한국어 문서에 가장 흔한 모양 — 번호 매긴 규정·FAQ
+ * 목록 — 이 통째로 사라졌다. 「빠진 조각」(DS 58-3)도 이것을 세지 못한다: 조각이 애초에
+ * 만들어지지 않았기 때문이다.
+ */
+test('번호 매긴 목록이 지식베이스에서 사라지지 않는다 (DS 66-1)', opts, async () => {
+  const ingest = await importLib('ingest', ['knowledge', 'normalize', 'prose']);
+
+  const doc = [
+    '환불 규정',
+    '',
+    '1. 구매 후 7일 이내에는 전액 환불됩니다.',
+    '2. 7일이 지나면 사용 기간을 제외하고 환불됩니다.',
+    '3. 프로모션 상품은 환불되지 않습니다.',
+  ].join('\n');
+
+  // ① 재현 — 종전 판정(번호로 시작하면 제목)에서는 세 줄이 모두 제목이었다.
+  const OLD_NUMBERED = /^(?:제?\s?\d+(?:[.\-]\d+)*\s?(?:조|장|절)?[.)]?)\s+\S.{0,60}$/;
+  for (const line of doc.split('\n').slice(2)) {
+    assert.equal(OLD_NUMBERED.test(line), true, `재현이 깨졌다: ${line}`);
+  }
+
+  // ② 이제는 본문에 남는다 — 세 줄의 내용이 조각 안에 있어야 한다.
+  const body = ingest.chunkDocument(doc).map((c) => c.text).join('\n');
+  for (const must of ['전액 환불됩니다', '사용 기간을 제외하고', '프로모션 상품은 환불되지']) {
+    assert.ok(body.includes(must), `본문에서 사라졌다: ${must}`);
+  }
+  // 목록은 **목록으로** 남는다 — 이어 붙이면 번호가 줄바꿈을 잃고 한 덩이 글이 된다.
+  assert.match(body, /\n1\. 구매 후[^\n]*\n2\. 7일이[^\n]*\n3\. 프로모션/, '목록 항목이 한 줄로 이어 붙었다');
+
+  // ③ 목록만 있는 문서도 등록된다 — 종전에는 조각이 0개라 「본문이 너무 짧거나 키워드가
+  //    없습니다」로 거절됐다(DS 42-3 이 분해형 한글에서 들었던 그 말이다).
+  const onlyList = doc.split('\n').slice(2).join('\n');
+  const r = ingest.ingestDocument(onlyList, { title: '환불 규정' });
+  assert.ok(r.chunks >= 1, '목록만 있는 문서를 조각 0개로 읽는다');
+  assert.ok(r.candidates.length >= 1, '멀쩡한 문서가 후보 0개가 된다');
+  assert.ok(r.candidates.some((c) => c.answer.includes('프로모션 상품은 환불되지')), '목록 꼬리가 빠졌다');
+
+  // ④ 날짜로 시작하는 줄도 같은 길로 사라졌다.
+  const dated = ingest.chunkDocument('2026. 10. 25. 기준으로 요금이 바뀝니다.\n\n문의는 상담원에게 해주세요.');
+  assert.ok(
+    dated.map((c) => c.text).join('\n').includes('기준으로 요금이 바뀝니다'),
+    '날짜로 시작하는 본문이 제목으로 읽혀 사라진다',
+  );
+
+  // ⑤ **진짜 제목은 그대로** 제목이다 — 약관 조문·번호 절·짧은 이름.
+  const titled = ingest.chunkDocument(
+    [
+      '제1조 (목적)', '이 약관은 서비스 이용 조건을 정합니다.', '',
+      '1.2 설치 방법', '스니펫을 붙여 넣습니다.', '',
+      '5. 기타', '나머지는 상담원이 안내합니다.',
+    ].join('\n'),
+  );
+  assert.deepEqual(
+    titled.map((c) => c.heading),
+    ['제1조 (목적)', '1.2 설치 방법', '5. 기타'],
+    '사람이 적은 제목을 제목으로 보지 않는다',
+  );
+});
+
+/**
+ * DS 66-2 — 「근거」로 보여 주는 발췌가 **수 가운데서 끊기던 자리.**
+ *
+ * 문장을 가르는 자가 마침표 하나를 문장 끝으로 읽었다 — 소수(`1.5배`)·주소(`co.kr`)·
+ * 번호 매김(`1.`)이 모두 문장 끝이 됐다. 그 조각이 말풍선의 「근거」 줄로 뜬다:
+ * 「초과 사용분은 1.」 — 원문에 없는 수다(§13).
+ */
+test('근거 발췌가 소수점·주소 가운데서 끊기지 않는다 (DS 66-2)', opts, async () => {
+  const K = await importLib('knowledge', ['normalize', 'prose']);
+
+  // ① 재현 — 종전 식(마침표면 문장 끝)이 이 글을 여섯 조각으로 쪼갰다.
+  const naive = (text) => {
+    const out = [];
+    let buf = '';
+    for (const ch of text) {
+      buf += ch;
+      if (ch === '.' || ch === '!' || ch === '?') { if (buf.trim()) out.push(buf.trim()); buf = ''; }
+    }
+    if (buf.trim()) out.push(buf.trim());
+    return out;
+  };
+  const sample = '월 이용료는 1.5배로 적용됩니다. 자세한 내용은 www.gowon.co.kr 에서 보세요.';
+  assert.deepEqual(
+    naive(sample),
+    ['월 이용료는 1.', '5배로 적용됩니다.', '자세한 내용은 www.', 'gowon.', 'co.', 'kr 에서 보세요.'],
+    '재현이 깨졌다',
+  );
+
+  // ② 이제는 두 문장이다.
+  assert.deepEqual(K.splitSentences(sample), [
+    '월 이용료는 1.5배로 적용됩니다.',
+    '자세한 내용은 www.gowon.co.kr 에서 보세요.',
+  ]);
+  // 문장을 끝내지 않는 마침표들 — 번호 매김·날짜·약어.
+  assert.deepEqual(K.splitSentences('1. 환불 안내'), ['1. 환불 안내']);
+  assert.deepEqual(K.splitSentences('2026. 10. 25. 기준입니다.'), ['2026. 10. 25. 기준입니다.']);
+  assert.deepEqual(K.splitSentences('A.S. 접수는 평일만 가능해요.'), ['A.S. 접수는 평일만 가능해요.']);
+  // 뒤따르는 표시·묶음표는 앞 문장의 것이다(종전에는 「!」 한 글자가 한 문장이었다).
+  assert.deepEqual(K.splitSentences('정말요?! 네.'), ['정말요?!', '네.']);
+  // 줄바꿈·물음표·느낌표는 그대로 문장 끝이다(종전 동작을 지킨다).
+  assert.deepEqual(K.splitSentences('첫 줄입니다\n둘째 줄이에요!'), ['첫 줄입니다', '둘째 줄이에요!']);
+
+  // ③ 화면에 뜨는 결과 — 말풍선의 「근거」 줄.
+  const c = K.buildCitation(
+    {
+      id: 'fee', category: '요금', question: '초과 사용 요금은?',
+      keywords: ['초과', '배'],
+      answer: '기본 요금은 월 100,000원입니다.\n초과 사용분은 1.5배로 계산합니다.',
+    },
+    '초과 사용분은 1.5배로 계산합니다',
+    [{ keyword: '초과' }],
+  );
+  assert.equal(c.snippet, '초과 사용분은 1.5배로 계산합니다.', '근거가 수 가운데서 끊긴다');
+});
+
+/**
+ * DS 66-3 — 카카오 말풍선을 나누는 자리가 **같은 판정을 또 한 벌** 들고 있었다.
+ *
+ * 창 안의 마지막 마침표가 소수점이면 앞 말풍선이 「… 1.」 로 끝나고 뒤 말풍선이
+ * 「5배로 계산합니다」로 시작한다. 말풍선은 한 줄씩 따로 도착하므로 앞 것만 읽은 고객은
+ * **1배로 읽는다**. 판정을 `lib/prose` 한 곳으로 모아 근거 발췌와 같은 자를 쓴다.
+ */
+test('카카오 말풍선이 수 가운데서 끊기지 않는다 (DS 66-3)', opts, async () => {
+  const K = await importLib('kakao', ['chat', 'webhookAuth', 'prose']);
+
+  const long = `${'가'.repeat(400)}초과 사용분은 1.5배로 계산합니다${'나'.repeat(400)}`;
+  const { parts } = K.splitKakaoText(long, 600, 3);
+  assert.ok(parts.length >= 2, '나눠 담지 않았다');
+  for (const p of parts) {
+    assert.equal(/\d\.$/.test(p), false, `말풍선이 소수점에서 끊겼다: ${p.slice(-12)}`);
+  }
+  assert.equal(/^\d/.test(parts[1]), false, `뒤 말풍선이 수의 뒤쪽으로 시작한다: ${parts[1].slice(0, 12)}`);
+  // 나눠 담아도 글은 하나도 잃지 않는다(공백만 다듬는다).
+  assert.equal(parts.join('').replace(/\s/g, ''), long.replace(/\s/g, ''), '나누면서 글자를 잃었다');
+
+  // 멀쩡한 문장 끝에서는 그대로 끊는다 — 문장 끝에 붙은 묶음표까지 앞 말풍선에 담는다.
+  const sentences = `${'가'.repeat(380)}여기서 끝납니다.) ${'나'.repeat(400)}`;
+  const r2 = K.splitKakaoText(sentences, 600, 3);
+  assert.ok(r2.parts[0].endsWith('여기서 끝납니다.)'), `문장 끝에서 끊지 않았다: ${r2.parts[0].slice(-16)}`);
+});

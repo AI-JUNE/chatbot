@@ -5,6 +5,7 @@ import type { KBEntry } from '@/lib/knowledge';
 import { cutEnd, ellipsize } from '@/lib/limits';
 import { compact, toNfc } from '@/lib/normalize';
 import { compareText } from '@/lib/order';
+import { readsAsSentence } from '@/lib/prose';
 
 export const MAX_DOC_CHARS = 100_000;
 
@@ -51,13 +52,47 @@ const HEADING_RE = /^(#{1,6})\s+(.*\S)\s*$/;
 /** "1. 제목", "1.2 제목", "제1조 (목적)" 형태의 번호 제목 */
 const NUMBERED_HEADING_RE = /^(?:제?\s?\d+(?:[.\-]\d+)*\s?(?:조|장|절)?[.)]?)\s+\S.{0,60}$/;
 
+/**
+ * 이 줄이 제목인가.
+ *
+ * `#` 은 글쓴이가 손으로 적은 표시라 그대로 믿는다. **번호 매김은 믿을 수 없다** (DS 66-1) —
+ * 제목에도 붙고 목록 항목에도 붙는다. 종전에는 번호로 시작하는 줄을 전부 제목으로 읽었는데,
+ * 제목으로 읽은 줄은 `chunkDocument` 에서 **본문에 담기지 않는다**(제목 경로로만 남는다).
+ * 그래서 한국어 문서에 가장 흔한 모양 — 번호 매긴 규정·FAQ 목록 — 이 통째로 사라졌다:
+ *
+ *     환불 규정
+ *     1. 구매 후 7일 이내에는 전액 환불됩니다.   ← 세 줄 모두 제목으로 읽혀
+ *     2. 7일이 지나면 사용 기간을 제외합니다.      지식베이스에 남는 것은
+ *     3. 프로모션 상품은 환불되지 않습니다.        「환불 규정」 넉 자뿐이었다
+ *
+ * 「빠진 조각」(DS 58-3)도 이것을 세지 않는다 — 조각이 **만들어지지 않았기** 때문이다. 목록만
+ * 있는 문서는 조각이 0개가 되어 「본문이 너무 짧거나 키워드가 없습니다」로 거절됐다(DS 42-3 이
+ * 분해형 한글에서 들었던 그 말이다 — 멀쩡한 문서를 올린 운영자가 사실이 아닌 사유를 읽는다).
+ * 날짜로 시작하는 줄(`2026. 10. 25. 기준으로 …`)도 같은 길로 사라졌다.
+ *
+ * 그래서 번호 뒤에 **남은 글이 문장으로 읽히면 본문**으로 둔다(`lib/prose.readsAsSentence`).
+ * 애매하면 본문이다 — 제목을 놓치면 제목 경로 한 줄이 비지만, 본문을 제목이라 읽으면 글이
+ * 사라진다.
+ */
 function isHeadingLine(line: string): { level: number; title: string } | null {
   const md = line.match(HEADING_RE);
   if (md) return { level: md[1].length, title: md[2].trim() };
   const t = line.trim();
-  if (t && t.length <= 70 && NUMBERED_HEADING_RE.test(t)) return { level: 2, title: t };
+  if (t && t.length <= 70 && NUMBERED_HEADING_RE.test(t) && !readsAsSentence(t)) {
+    return { level: 2, title: t };
+  }
   return null;
 }
+
+/**
+ * 번호로 시작하는 **목록 항목** 줄인가 — 제목 판정을 지난 뒤에 묻는다 (DS 66-1).
+ *
+ * 왜 따로 보는가: 본문 줄은 빈 줄까지 모아 **한 줄로 이어 붙인다**(`buf.join(' ')`). 그러면
+ * 되살린 목록이 「1. … 2. … 3. …」 한 덩이가 되어, 고객이 받는 답변에서 번호가 줄바꿈을
+ * 잃는다(규정·절차는 번호가 곧 읽는 순서다). 항목 하나를 **한 문단으로** 세워 두면 조각
+ * 안에서 줄바꿈이 그대로 남고, 목록이 길면 「한 항목 길이」 기준으로 조각이 갈린다.
+ */
+const LIST_ITEM_RE = /^제?\s?\d+(?:[.\-]\d+)*\s?(?:조|장|절)?[.)]\s+\S/;
 
 function headingPath(stack: string[]): string {
   return stack.filter(Boolean).join(' > ');
@@ -122,6 +157,12 @@ export function chunkDocument(raw: string, opts: ChunkOptions = {}): DocChunk[] 
     }
     if (!line.trim()) {
       flushBuf();
+      continue;
+    }
+    // 목록 항목은 **한 문단**이다 (DS 66-1) — 이어 붙이면 번호가 줄바꿈을 잃는다.
+    if (LIST_ITEM_RE.test(line.trim())) {
+      flushBuf();
+      push(line.trim());
       continue;
     }
     buf.push(line.trim());

@@ -3,6 +3,7 @@
 // 매칭은 src/lib/normalize 의 동의어 확장·자모 오타 보정을 거친다(정확 일치 가중치가 가장 높다).
 import { ellipsize } from '@/lib/limits';
 import { MATCH_WEIGHT, compact, keywordHit, prepare, type PreparedText, type MatchKind } from '@/lib/normalize';
+import { splitSentences } from '@/lib/prose';
 
 export interface KBEntry {
   id: string;
@@ -198,25 +199,16 @@ export interface Citation {
 
 const MAX_SNIPPET = 140;
 
-/** 답변 텍스트를 문장 단위로 자른다(한국어 종결·구두점·줄바꿈 기준). */
-export function splitSentences(text: string): string[] {
-  const out: string[] = [];
-  let buf = '';
-  for (const ch of text || '') {
-    if (ch === '\n') {
-      if (buf.trim()) out.push(buf.trim());
-      buf = '';
-      continue;
-    }
-    buf += ch;
-    if (ch === '.' || ch === '!' || ch === '?' || ch === '。') {
-      if (buf.trim()) out.push(buf.trim());
-      buf = '';
-    }
-  }
-  if (buf.trim()) out.push(buf.trim());
-  return out;
-}
+/**
+ * 답변 텍스트를 문장 단위로 자른다(구두점·줄바꿈 기준).
+ *
+ * 판정은 `lib/prose` 한 곳이다 (DS 66-2) — 종전에는 이 자리에서 **마침표 하나를 문장 끝으로**
+ * 읽었다. 그래서 「초과 사용분은 1.5배로 계산합니다」가 두 문장이 되고, 고객 말풍선의 「근거」
+ * 줄에 **「초과 사용분은 1.」** 이 떴다(원문에 없는 수다 · §13). 주소가 든 답변은 「www.」·
+ * 「gowon.」·「co.」 로 쪼개져 그 조각이 근거로 뽑히기도 했다. 끊을 자리를 찾는 카카오 말풍선
+ * 나누기(`lib/kakao`)가 같은 판정을 **또 한 벌** 들고 있었고, 두 벌이라 한쪽만 고쳐졌다.
+ */
+export { splitSentences };
 
 /**
  * 답변에서 질의와 가장 관련 있는 문장을 골라 인용 근거를 만든다.
