@@ -8,11 +8,16 @@
  * 범위: 인스턴스 단위(서버리스는 인스턴스별). 전역 공유 잠금은 [승인 필요](공유 저장소 도입 후).
  * 기록하는 것: 클라이언트 키(IP)와 실패 횟수뿐. 토큰 값은 어디에도 남기지 않는다.
  */
+import { clamp, envNumber } from '@/lib/num';
 
+/**
+ * 설정값을 수로 읽는 자는 `lib/num` 하나다 (DS 65-3) — 빈 값(`ADMIN_LOCK_MINUTES=`)은
+ * **설정하지 않음**이지 0 이 아니다(0 은 아래 범위에 당겨져 잠금 시간을 최솟값으로 바꾼다).
+ * 범위 밖을 당기는 것은 종전 그대로다(정책 상수).
+ */
 function envInt(name: string, fallback: number, min: number, max: number): number {
-  const raw = Number(process.env[name]);
-  if (!Number.isFinite(raw)) return fallback;
-  return Math.min(Math.max(Math.trunc(raw), min), max);
+  const v = envNumber(name);
+  return clamp(v === null ? fallback : Math.trunc(v), min, max);
 }
 
 /** 이 횟수만큼 연속 실패하면 잠근다. */

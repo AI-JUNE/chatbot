@@ -18,7 +18,7 @@
 import { loadJson, saveJson, saveNow, savedInfo, scheduleSave, type SavedInfo } from '@/lib/storage';
 import { compact } from '@/lib/normalize';
 import { readInstant } from '@/lib/kst';
-import { comma } from '@/lib/num';
+import { comma, envNumber, parseNumber } from '@/lib/num';
 import { revOf } from '@/lib/rev';
 import {
   CHANGED_DELETE_TARGET_MESSAGE,
@@ -139,11 +139,18 @@ export function isValidDate(v: string): boolean {
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }
 
-/** 기본 수수료율(설정값). 미설정이면 null — 화면·리포트에서 "미설정"으로 표시한다. */
+/**
+ * 기본 수수료율(설정값). 미설정이면 null — 화면·리포트에서 "미설정"으로 표시한다.
+ *
+ * 설정값을 읽는 자는 `lib/num.envNumber` 하나다 (DS 65-3). 종전에는 `Number(process.env.…)`
+ * 였는데 `Number('')` 이 **0** 이라, 배포 화면에서 이 변수를 **빈 값으로 둔 것**(= 설정하지
+ * 않겠다는 가장 흔한 손짓)이 「수수료율 0%」로 읽혔다 — 자기 요율이 없는 모든 파트너가
+ * 「미설정」이 아니라 0% 로 산출되어, 정산 리포트가 「산출 완료 · 수수료 0원」을 확정 수치로
+ * 적고 「수수료율 미설정 n건」 경고도 띄우지 않았다.
+ */
 export function defaultFeeRateBp(): number | null {
-  const raw = Number(process.env.PARTNER_DEFAULT_FEE_RATE_BP);
-  if (!Number.isFinite(raw) || raw < 0 || raw > 10000) return null;
-  return Math.round(raw);
+  // 범위 밖은 **당기지 않고 미설정으로 둔다** — 잘못 적은 설정값으로 돈을 셈하지 않는다.
+  return envNumber('PARTNER_DEFAULT_FEE_RATE_BP', { min: 0, max: 10000, integer: true });
 }
 
 /** 실제 적용될 수수료율(파트너 설정 → 기본값 순). 없으면 null. */
@@ -260,15 +267,15 @@ export function upsertPartner(input: PartnerInput): PartnerResult {
   const name = clean(input.name, MAX_NAME);
   if (!name) return { ok: false, error: '파트너명을 입력해 주세요.' };
 
-  let feeRateBp: number | null = null;
-  if (input.feeRateBp !== undefined && input.feeRateBp !== null && input.feeRateBp !== '') {
-    const n = Number(input.feeRateBp);
-    if (!Number.isFinite(n) || n < 0 || n > 10000) {
-      // 화면은 %로 묻고 받는다(DS 2-12) — 거절 문장에도 내부 단위(bp)를 적지 않는다(DS 29-3).
-      return { ok: false, error: '수수료율은 0~100% 사이의 숫자로 적어주세요.' };
-    }
-    feeRateBp = Math.round(n);
+  // 수를 읽는 자는 한 곳이다 (DS 65-1) — 종전에는 `Number()` 라 `true` 가 0.01%,
+  // `[]` 가 0%(= 「요율을 정했고 그 값이 0」)로 들어왔다. 0% 는 실재하는 계약 조건이라
+  // 「미설정」과 섞이면 정산에서 가려낼 길이 없다.
+  const rate = parseNumber(input.feeRateBp, { min: 0, max: 10000, integer: true });
+  if (!rate.ok && rate.issue !== 'blank') {
+    // 화면은 %로 묻고 받는다(DS 2-12) — 거절 문장에도 내부 단위(bp)를 적지 않는다(DS 29-3).
+    return { ok: false, error: '수수료율은 0~100% 사이의 숫자로 적어주세요.' };
   }
+  const feeRateBp: number | null = rate.ok ? rate.value : null;
 
   const status: PartnerStatus = input.status === 'paused' ? 'paused' : 'active';
   const id = baseId;
@@ -374,14 +381,20 @@ export type AccountResult =
 /**
  * 월 이용료 파싱. 빈 값은 "미입력"(undefined)이며 0과 구분한다 —
  * 0원 계약(무상 파일럿)과 "아직 안 적었음"을 섞으면 정산 근거가 흐려진다.
+ *
+ * 수를 읽는 자는 `lib/num.parseNumber` 하나다 (DS 65-1). 종전에는 이 줄이 `Number()` 였는데,
+ * `Number(' ')`·`Number('\n')`·`Number([])`·`Number(false)` 는 전부 **0** 이다 — 그래서
+ * 공백 한 칸이 든 칸이 「미입력」이 아니라 **0원 계약**으로 저장되어, 정산 리포트에
+ * 「산출 완료 · 수수료 0원」으로 섰다(합계에서 빠지지도, 「월 이용료 미입력」으로 적히지도
+ * 않았다 — 근거가 갖춰진 행으로 읽혔기 때문이다). 이 파일이 지키기로 한 바로 그 구분이다.
  */
 export function parseMonthlyFee(v: unknown): { ok: true; value: number | undefined } | { ok: false; error: string } {
-  if (v === undefined || v === null || v === '') return { ok: true, value: undefined };
-  const n = typeof v === 'string' ? Number(v.replace(/[,\s]/g, '')) : Number(v);
-  if (!Number.isFinite(n) || n < 0) return { ok: false, error: '월 이용료는 0 이상의 숫자(원)여야 합니다.' };
+  const r = parseNumber(v, { min: 0, max: MAX_MONTHLY_FEE, integer: true });
+  if (r.ok) return { ok: true, value: r.value };
+  if (r.issue === 'blank') return { ok: true, value: undefined };
   // 수를 끊는 자는 `lib/num.comma` 하나다 (DS 60-3) — 런타임의 ICU 에 맡기지 않는다.
-  if (n > MAX_MONTHLY_FEE) return { ok: false, error: `월 이용료는 ${comma(MAX_MONTHLY_FEE)}원 이하여야 합니다.` };
-  return { ok: true, value: Math.round(n) };
+  if (r.issue === 'too_large') return { ok: false, error: `월 이용료는 ${comma(MAX_MONTHLY_FEE)}원 이하여야 합니다.` };
+  return { ok: false, error: '월 이용료는 0 이상의 숫자(원)여야 합니다.' };
 }
 
 export function upsertAccount(input: AccountInput): AccountResult {

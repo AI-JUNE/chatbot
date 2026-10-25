@@ -1934,9 +1934,15 @@ function missingPartnerName(id: string): string {
 function feeLabel(bp: number | null): string {
   return bp === null || bp === undefined ? '미설정' : `${(bp / 100).toFixed(2).replace(/\.?0+$/, '')}%`;
 }
-/** 화면은 %로 받고 저장은 bp(1% = 100bp)로 한다 — API 계약은 그대로다. */
+/**
+ * 화면은 %로 받고 저장은 bp(1% = 100bp)로 한다 — API 계약은 그대로다.
+ * 수를 읽는 자는 `parseNum` 하나다 (DS 65-2) — 종전의 `Number(pct)` 는 공백 한 칸을 **0%**
+ * 로 읽었다(「요율을 0% 로 정했다」와 「아직 안 적었다」는 정산에서 전혀 다른 사실이다).
+ * 읽을 수 없는 값은 NaN 으로 두어 전송 본문에서 null(미설정)이 된다.
+ */
 function pctToBp(pct: string): number {
-  return Math.round(Number(pct) * 100);
+  const r = parseNum(pct, { min: 0, max: MAX_FEE_RATE_PCT });
+  return r.ok ? Math.round(r.value * 100) : Number.NaN;
 }
 function bpToPct(bp: number): string {
   return (bp / 100).toFixed(2).replace(/\.?0+$/, '');
@@ -2149,6 +2155,51 @@ function cleanText(v: string): string {
 function blank(v: string): boolean {
   return cleanText(v) === '';
 }
+
+/**
+ * **수를 읽는 자** — 원본은 `src/lib/num.ts`(`parseNumber`) (DS 65-1·65-2).
+ * 콘솔은 lib 을 불러오지 않으므로(`cleanText`·`searchNorm`·`comma` 와 같은 기존 규약) 사본을
+ * 두고, 테스트가 같은 입력 묶음으로 두 자의 답을 대조한다.
+ *
+ * 왜 화면도 이 자를 써야 하는가: 종전에 이 화면은 `Number()` 로 쟀다. 그런데 `Number(' ')`·
+ * `Number('\n')` 은 **0** 이라, 월 이용료 칸에 공백 한 칸이 든 경우 화면은 「빈 칸이니 검사할
+ * 것 없다」며 그대로 보냈고 서버는 그것을 **0원 계약**으로 저장했다 — 그 줄은 정산 리포트에
+ * 「산출 완료 · 수수료 0원」으로 서고, 「월 이용료 미입력」으로 빠지지 않는다.
+ * 또 화면은 상한(10억 원)을 모르고 있어 자릿수가 튄 값을 통과시켰고, 서버의 거절은 그 칸
+ * 아래가 아니라 폼 맨 위 한 줄로 떨어졌다(DS 29-1 이 세운 길에서 벗어난 자리다).
+ */
+const CONSOLE_DECIMAL = /^[+-]?\d+(?:\.\d+)?$/;
+type NumIssue = 'blank' | 'not_number' | 'too_small' | 'too_large';
+type NumResult =
+  | { ok: true; value: number; issue: null }
+  | { ok: false; value: null; issue: NumIssue };
+function parseNum(v: unknown, rules: { min?: number; max?: number; integer?: boolean } = {}): NumResult {
+  const no = (issue: NumIssue): NumResult => ({ ok: false, value: null, issue });
+  let n: number;
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) return no('not_number');
+    n = v;
+  } else if (typeof v === 'string') {
+    const s = cleanText(v).replace(/[,\s]/g, '');
+    if (s === '') return no('blank');
+    if (!CONSOLE_DECIMAL.test(s)) return no('not_number');
+    n = Number(s);
+    if (!Number.isFinite(n)) return no('not_number');
+  } else if (v === undefined || v === null) {
+    return no('blank');
+  } else {
+    return no('not_number');
+  }
+  if (rules.integer) n = Math.round(n);
+  if (rules.min !== undefined && n < rules.min) return no('too_small');
+  if (rules.max !== undefined && n > rules.max) return no('too_large');
+  return { ok: true, value: n, issue: null };
+}
+
+/** 월 이용료 상한(원) — 원본은 `src/lib/partners.ts`(MAX_MONTHLY_FEE). 화면도 알고 있어야 보내기 전에 말할 수 있다. */
+const MAX_MONTHLY_FEE = 1_000_000_000;
+/** 수수료율 상한(%) — 저장은 bp(1% = 100bp)이고 서버 한계는 10000bp 다. */
+const MAX_FEE_RATE_PCT = 100;
 
 /**
  * **이 콘솔에서 「같은 말인가」를 묻는 단 하나의 자.**
@@ -2617,11 +2668,12 @@ const INSTALL_OFFSET_MAX = 200;
 /** 고객사 식별자 형식 — `public/embed.js`·`src/lib/tenants.ts` 와 같은 규칙. */
 const INSTALL_TENANT_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
-/** 0~200 사이의 정수로 자른다 — 우리가 만들어 주는 한 줄은 embed.js 가 반드시 받는 값이어야 한다. */
+/** 0~200 사이의 정수로 자른다 — 우리가 만들어 주는 한 줄은 embed.js 가 반드시 받는 값이어야 한다.
+ *  수를 읽는 자는 `parseNum` 하나다 (DS 65-2). */
 function installOffset(raw: string): number {
-  const n = Math.round(Number(raw));
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.min(n, INSTALL_OFFSET_MAX);
+  const r = parseNum(raw, { integer: true });
+  if (!r.ok || r.value <= 0) return 0;
+  return Math.min(r.value, INSTALL_OFFSET_MAX);
 }
 
 /** 고객사에 안내할 설치 스니펫. 배포 주소는 지금 보고 있는 주소를 그대로 쓴다. */
@@ -2908,8 +2960,11 @@ export default function AdminPage() {
     if (blank(imp.title)) errs.title = '문서명을 입력해 주세요. 답변에 출처로 표시됩니다.';
     if (blank(imp.text)) errs.text = '문서 본문을 붙여넣어 주세요.';
     else if (docLen(imp.text) > MAX_DOC_CHARS) errs.text = `본문이 ${comma(MAX_DOC_CHARS)}자를 넘습니다. 장을 나눠 올려주세요.`;
-    const chunk = Number(imp.maxChars);
-    if (imp.maxChars.trim() === '' || !Number.isFinite(chunk) || chunk < MIN_CHUNK_CHARS || chunk > MAX_CHUNK_CHARS) {
+    // 수를 읽는 자는 `parseNum` 하나다 (DS 65-2) — 서버도 같은 자로 읽고, 범위를 벗어난 값을
+    // 조용히 당기지 않고 거절한다(화면이 보여 준 미리보기와 등록되는 것이 달라지지 않게).
+    const chunkIn = parseNum(imp.maxChars, { min: MIN_CHUNK_CHARS, max: MAX_CHUNK_CHARS, integer: true });
+    const chunk = chunkIn.ok ? chunkIn.value : Number.NaN;
+    if (!chunkIn.ok) {
       errs.maxChars = `${MIN_CHUNK_CHARS}~${MAX_CHUNK_CHARS} 사이 숫자로 적어주세요.`;
     }
     setImpErr(errs);
@@ -3249,9 +3304,11 @@ export default function AdminPage() {
     // 서버도 같은 규칙으로 거절하지만, 어느 칸이 왜 틀렸는지는 화면에서 먼저 알린다.
     const errs: typeof pErr = {};
     if (blank(pForm.name)) errs.name = '파트너명을 입력해 주세요.';
-    if (pForm.feeRatePct.trim() !== '') {
-      const n = Number(pForm.feeRatePct);
-      if (!Number.isFinite(n) || n < 0 || n > 100) errs.feeRatePct = '수수료율은 0~100 사이의 숫자(%)여야 합니다.';
+    // 수를 읽는 자는 `parseNum` 하나다 (DS 65-2) — 빈 값만 「안 적었다」이고, 공백 한 칸·
+    // 다른 표기법(`0x64`·`1e2`)은 **0 이 아니라 오타**다.
+    const rate = parseNum(pForm.feeRatePct, { min: 0, max: MAX_FEE_RATE_PCT });
+    if (!rate.ok && rate.issue !== 'blank') {
+      errs.feeRatePct = `수수료율은 0~${MAX_FEE_RATE_PCT} 사이의 숫자(%)여야 합니다.`;
     }
     setPErr(errs);
     if (Object.keys(errs).length > 0) {
@@ -3305,9 +3362,14 @@ export default function AdminPage() {
     const date = aForm.contractedAt.trim();
     if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) errs.contractedAt = '계약일은 2026-09-01 처럼 연-월-일 형식이어야 합니다.';
     if (!date && aForm.status === 'contracted') errs.contractedAt = '계약 상태로 두려면 계약일이 필요합니다(정산 기준일).';
-    if (aForm.monthlyFeeKrw.trim() !== '') {
-      const n = Number(aForm.monthlyFeeKrw);
-      if (!Number.isFinite(n) || n < 0) errs.monthlyFeeKrw = '월 이용료는 0 이상의 숫자(원)여야 합니다.';
+    // 서버와 **같은 자·같은 한계**로 잰다 (DS 65-2) — 종전에는 공백 한 칸이 검사를 건너뛰고
+    // 그대로 보내져 **0원 계약**으로 저장됐고(정산이 「산출 완료 · 0원」으로 센다), 상한을
+    // 화면이 몰라 자릿수가 튄 값의 거절이 칸 아래가 아니라 폼 맨 위로 떨어졌다.
+    const fee = parseNum(aForm.monthlyFeeKrw, { min: 0, max: MAX_MONTHLY_FEE, integer: true });
+    if (!fee.ok && fee.issue !== 'blank') {
+      errs.monthlyFeeKrw = fee.issue === 'too_large'
+        ? `월 이용료는 ${comma(MAX_MONTHLY_FEE)}원 이하여야 합니다.`
+        : '월 이용료는 0 이상의 숫자(원)여야 합니다.';
     }
     setAErr(errs);
     if (Object.keys(errs).length > 0) {

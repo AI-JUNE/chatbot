@@ -1188,11 +1188,17 @@ test('문서 업로드의 길이 한계가 서버와 같은 값이다 (DS 6-1)',
   const docMax = /MAX_DOC_CHARS = ([\d_]+)/.exec(ingest);
   assert.ok(docMax, 'ingest 의 본문 한계를 찾지 못했다');
   assert.match(s, new RegExp(`const MAX_DOC_CHARS = ${docMax[1]};`), '본문 한계가 서버와 다르다');
+  // 「한 항목 길이」의 범위는 **라우트가 아니라 lib** 에 있다 (DS 65-1) — 라우트는 HTTP 메서드
+  // 외 export 가 금지되어 다른 곳이 가져다 쓸 수 없는 자리이고, 그 안에 손으로 적힌 동안에는
+  // 콘솔 사본과 갈라져도 아무도 알 수 없었다.
+  const lo = /export const CHUNK_CHARS_MIN = (\d+);/.exec(ingest);
+  const hi = /export const CHUNK_CHARS_MAX = (\d+);/.exec(ingest);
+  assert.ok(lo && hi, 'ingest 의 「한 항목 길이」 범위를 찾지 못했다');
   const route = read('src/app/api/admin/kb/import/route.ts');
-  const clamp = /Math\.min\(Math\.max\(Math\.trunc\(rawMax\), (\d+)\), (\d+)\)/.exec(route);
-  assert.ok(clamp, '라우트의 청크 clamp 를 찾지 못했다');
-  assert.match(s, new RegExp(`const MIN_CHUNK_CHARS = ${clamp[1]};`), '청크 최솟값이 서버와 다르다');
-  assert.match(s, new RegExp(`const MAX_CHUNK_CHARS = ${clamp[2]};`), '청크 최댓값이 서버와 다르다');
+  assert.match(route, /parseNumber\(body\.maxChars, \{ min: CHUNK_CHARS_MIN, max: CHUNK_CHARS_MAX, integer: true \}\)/, '라우트가 수를 제 식으로 읽는다');
+  assert.equal(/Math\.min\(Math\.max\(/.test(route), false, '범위를 조용히 당기는 자리가 남아 있다');
+  assert.match(s, new RegExp(`const MIN_CHUNK_CHARS = ${lo[1]};`), '청크 최솟값이 서버와 다르다');
+  assert.match(s, new RegExp(`const MAX_CHUNK_CHARS = ${hi[1]};`), '청크 최댓값이 서버와 다르다');
   // 남은 글자 수를 미리 보여 준다.
   assert.match(s, /id="kb-imp-count"/, '본문 글자 수 표시가 없다');
   assert.match(s, /aria-describedby=\{`kb-imp-count/, '글자 수가 입력과 묶여 읽히지 않는다');
@@ -3940,7 +3946,7 @@ test('수를 끊어 적는 자가 lib/num 하나다 (DS 60-3)', () => {
   // Intl 을 쓰지 않으므로 서버·브라우저·테스트가 같은 글자를 낸다.
   assert.equal(/Intl|toLocale/.test(n.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), false, 'lib/num 이 Intl 에 기댄다');
   for (const f of ['src/lib/kakao.ts', 'src/lib/refusal.ts', 'src/lib/partners.ts']) {
-    assert.match(read(f), /import \{ comma \} from '@\/lib\/num';/, `${f} 가 수를 제 식으로 적는다`);
+    assert.match(read(f), /import \{ comma(?:, [\w, ]+)? \} from '@\/lib\/num';/, `${f} 가 수를 제 식으로 적는다`);
   }
   // 콘솔은 lib 을 불러오지 않는 규약이라 사본을 들고 있다(값 대조는 tests/console.test.mjs).
   assert.match(read('src/app/admin/page.tsx'), /^function comma\(n: number\): string \{$/m, '콘솔에 사본이 없다');
@@ -4201,4 +4207,42 @@ test('호환 문자 정규화는 비교하는 자리에서만 한다 (DS 64-1)',
     assert.equal(/normalize\('NFKC'\)/.test(read(`src/lib/${f}`)), false, `src/lib/${f}: 비교용 정규화를 따로 적고 있다`);
   }
   assert.equal((stripComments(read('src/app/admin/page.tsx')).match(/normalize\('NFKC'\)/g) || []).length, 1, '콘솔에 비교용 정규화가 두 벌 이상 있다');
+});
+
+/* ══════════ 65순위 — 백로그 소진 후 62차 재감사 (DS 65-1·65-2·65-3) ══════════ */
+
+/**
+ * DS 65-1·65-3 — **수를 읽는 자가 한 곳인가.**
+ *
+ * 「정말 그렇게 읽는가」는 `tests/runtime.test.mjs`(DS 65-1·65-3)가 돌려 보고,
+ * 「다른 곳에 또 적혀 있지 않은가」는 여기서 고정한다 — 다시 생기는 것을 막는 자리다.
+ * `Number()` 자체를 금하지는 않는다(글자 한 자를 숫자로 보는 자리처럼 정당한 쓰임이 있다).
+ * 막는 것은 **바깥에서 들어온 값**(요청 본문·쿼리·환경변수)을 그것으로 읽는 일이다.
+ */
+test('수를 읽는 자가 lib/num 하나다 (DS 65-1·65-3)', () => {
+  const n = read('src/lib/num.ts');
+  assert.match(n, /export function parseNumber\(v: unknown, rules: NumRules = \{\}\): NumResult/, 'parseNumber 를 내보내지 않는다');
+  assert.match(n, /export function envNumber\(name: string, rules: NumRules = \{\}\): number \| null/, 'envNumber 를 내보내지 않는다');
+  // 빈 값과 0 을 가르는 것이 이 자의 요점이다 — 사유가 사라지면 부르는 쪽이 다시 섞는다.
+  assert.match(n, /issue: NumIssue/, '거절 사유를 돌려주지 않는다');
+  // 글자를 수로 받는 표기는 10진수 하나다(16진·지수 표기는 운영자가 금액 칸에 적을 글이 아니다).
+  assert.match(n, /const DECIMAL = \/\^\[\+-\]\?\\d\+\(\?:\\\.\\d\+\)\?\$\/;/, '받는 표기가 바뀌었다');
+
+  // 환경변수를 **제 식으로** 읽는 자리가 남지 않았다 — `Number('')` 은 0 이다.
+  const libs = readdirSync(new URL('../src/lib', import.meta.url)).filter((f) => f.endsWith('.ts'));
+  for (const f of [...libs.map((x) => `src/lib/${x}`), 'src/app/api/admin/kb/import/route.ts']) {
+    if (f === 'src/lib/num.ts') continue;
+    assert.equal(/Number\(process\.env/.test(stripComments(read(f))), false, `${f}: 설정값을 제 식으로 읽는다`);
+  }
+  for (const f of ['src/lib/chat.ts', 'src/lib/llm.ts', 'src/lib/adminAuth.ts', 'src/lib/partners.ts']) {
+    assert.match(read(f), /from '@\/lib\/num';/, `${f}: 공통 자를 불러오지 않는다`);
+  }
+
+  // 요청으로 들어오는 수도 같은 문을 지난다(본문·쿼리).
+  const http = read('src/lib/http.ts');
+  assert.match(http, /const r = parseNumber\(req\.nextUrl\.searchParams\.get\(name\)\);/, '쿼리 수가 공통 자를 지나지 않는다');
+  const partners = read('src/lib/partners.ts');
+  assert.match(partners, /const r = parseNumber\(v, \{ min: 0, max: MAX_MONTHLY_FEE, integer: true \}\);/, '월 이용료가 공통 자를 지나지 않는다');
+  assert.match(partners, /const rate = parseNumber\(input\.feeRateBp, \{ min: 0, max: 10000, integer: true \}\);/, '수수료율이 공통 자를 지나지 않는다');
+  assert.equal(/(?<!\w)Number\((?:input\.|v\.replace)/.test(stripComments(partners)), false, '수를 제 식으로 읽는 자리가 남았다');
 });

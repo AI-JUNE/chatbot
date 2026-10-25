@@ -12,6 +12,7 @@
  */
 import { clip, cut, ellipsize } from '@/lib/limits';
 import { scrub } from '@/lib/monitoring';
+import { clamp, envNumber } from '@/lib/num';
 
 export type LLMProviderName = 'anthropic' | 'openai';
 
@@ -53,10 +54,13 @@ export interface LLMProvider {
 
 export const LLM_LIVE = process.env.CHAT_LLM_LIVE === 'true';
 
+/**
+ * 설정값을 수로 읽는 자는 `lib/num` 하나다 (DS 65-3) — 빈 값(`CHAT_LLM_TIMEOUT_MS=`)은
+ * **설정하지 않음**이지 0 이 아니다. 범위 밖을 당기는 것은 종전 그대로다(예산 상수).
+ */
 function envInt(name: string, fallback: number, min: number, max: number): number {
-  const raw = Number(process.env[name]);
-  if (!Number.isFinite(raw)) return fallback;
-  return Math.min(Math.max(Math.trunc(raw), min), max);
+  const v = envNumber(name);
+  return clamp(v === null ? fallback : Math.trunc(v), min, max);
 }
 
 export interface LLMConfig {

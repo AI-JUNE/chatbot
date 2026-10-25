@@ -11,6 +11,7 @@ import { safeEqual } from '@/lib/webhookAuth';
 import { resolvePrincipal, canWrite, type Principal } from '@/lib/rbac';
 import { requiredMessage, tooLongMessage, notTextMessage } from '@/lib/refusal';
 import { cleanText } from '@/lib/text';
+import { clamp, parseNumber } from '@/lib/num';
 
 export type ErrorCode =
   | 'invalid_json'
@@ -178,11 +179,17 @@ export function reqQuery(req: NextRequest, name: string, max = 120): Field<strin
   return reqStr(req.nextUrl.searchParams.get(name) ?? undefined, name, max);
 }
 
-/** 정수 쿼리(범위 클램프). 값이 없거나 숫자가 아니면 def. */
+/**
+ * 정수 쿼리(범위 클램프). 값이 없거나 숫자가 아니면 def.
+ *
+ * 수를 읽는 자는 `lib/num.parseNumber` 하나다 (DS 65-1). 종전에는 `Number()` 라
+ * `?limit=`(빈 값)이 **0** 으로 읽혀 기본값이 아니라 **최솟값**으로 떨어졌고, `?limit=0x20`
+ * 같은 다른 표기법이 그대로 수가 됐다. 범위 밖을 당기는 것은 그대로 둔다 — 여기는 목록을
+ * 몇 줄 집어 올지의 자리이고, 그 수는 화면이 「찾은 건수」와 따로 말한다(DS 31-3).
+ */
 export function intQuery(req: NextRequest, name: string, def: number, min: number, max: number): number {
-  const raw = Number(req.nextUrl.searchParams.get(name) ?? def);
-  if (!Number.isFinite(raw)) return def;
-  return Math.min(Math.max(Math.trunc(raw), min), max);
+  const r = parseNumber(req.nextUrl.searchParams.get(name));
+  return clamp(r.ok ? Math.trunc(r.value) : def, min, max);
 }
 
 // ---- 관리자 인증 게이트 ----

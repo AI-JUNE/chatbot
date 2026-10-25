@@ -6294,3 +6294,167 @@ test('이름으로 줄을 세우는 자가 한 벌이다 (DS 64-2)', opts, async
   assert.deepEqual(r.report.partnerTotals.map((x) => x.partnerName), ['가온 2팀', '가온 10팀'], '파트너 합계도 같은 차례여야 한다');
   P.resetPartners();
 });
+
+/* ══════════ 65순위 — 62차 재감사 (DS 65-1·65-3) ══════════ */
+
+/**
+ * DS 65-1 — **수를 받는 문에 자가 없었다.**
+ *
+ * 60차가 세운 `lib/num` 은 수를 사람 글자로 **적는** 단일 출처다. 그 반대쪽 — 사람이 적은
+ * 글자를 수로 **읽는** 자리 — 에는 자가 없었고, 자리마다 `Number()` 가 손으로 적혀 있었다.
+ * `Number('')`·`Number(' ')`·`Number([])`·`Number(false)` 는 전부 **0** 이다: 비어 있는 것과
+ * 0 을 가르지 못한다. 그 둘은 이 제품에서 전혀 다른 사실이다(`lib/settlement` 의 첫 원칙이
+ * 「근거가 없으면 0으로 치지 않고 합계에서 뺀다」이다).
+ */
+test('수를 읽는 자가 빈 값과 0 을 가른다 (DS 65-1)', opts, async () => {
+  const N = await importLib('num', ['text']);
+
+  // ① 재현 — 종전 식(`Number`)이 이 값들을 **0** 이라고 답했다(이것이 결함의 크기다).
+  for (const v of ['', ' ', '\n', '\t', null, [], false]) {
+    assert.equal(Number(v), 0, `재현이 깨졌다: ${JSON.stringify(v)}`);
+  }
+  assert.equal(Number(true), 1, '재현이 깨졌다');
+  assert.equal(Number(['300000']), 300000, '재현이 깨졌다');
+  assert.equal(Number('0x1f4'), 500, '재현이 깨졌다');
+
+  // ② 빈 값은 **비어 있다**고 답한다 — 0 이 아니다.
+  for (const v of ['', '   ', '\n', '\t', '\u{200b}', '\u{ad}', null, undefined]) {
+    const r = N.parseNumber(v);
+    assert.equal(r.ok, false, `빈 값을 수로 받는다: ${JSON.stringify(v)}`);
+    assert.equal(r.issue, 'blank', `빈 값을 다른 사유로 적는다: ${JSON.stringify(v)}`);
+  }
+
+  // ③ 수가 아닌 것은 **수가 아니라고** 답한다(참/거짓·배열·객체·다른 표기법).
+  const NOT_NUMBERS = [true, false, [], ['300000'], {}, '0x1f4', '1e5', '0b11', '0o17', 'abc', '12abc', '1.2.3', 'Infinity', NaN, Infinity, '１２３', '٣٠٠'];
+  for (const v of NOT_NUMBERS) {
+    const r = N.parseNumber(v);
+    assert.equal(r.ok, false, `수가 아닌 값을 받는다: ${JSON.stringify(v)}`);
+    assert.equal(r.issue, 'not_number', `사유가 다르다: ${JSON.stringify(v)}`);
+  }
+
+  // ④ 사람이 적는 표기는 그대로 받는다(붙여 넣은 문서의 쉼표·띄어쓰기 포함).
+  for (const [v, want] of [['0', 0], ['300000', 300000], ['300,000', 300000], [' 300 000 ', 300000], ['-5', -5], ['0.4', 0.4], [12, 12]]) {
+    const r = N.parseNumber(v);
+    assert.equal(r.ok, true, `멀쩡한 값을 거절한다: ${JSON.stringify(v)}`);
+    assert.equal(r.value, want, `값이 다르다: ${JSON.stringify(v)}`);
+  }
+
+  // ⑤ 범위 밖은 **어느 쪽으로** 벗어났는지 말한다 — 부르는 쪽이 다른 문장을 써야 한다.
+  assert.equal(N.parseNumber(-1, { min: 0 }).issue, 'too_small');
+  assert.equal(N.parseNumber(10001, { min: 0, max: 10000 }).issue, 'too_large');
+  assert.equal(N.parseNumber('0.6', { integer: true }).value, 1, '정수 자리로 맞추지 않는다');
+});
+
+/**
+ * DS 65-1 — 월 이용료 칸의 **공백 한 칸**이 0원 계약이 되던 자리.
+ *
+ * 콘솔은 「빈 칸이니 검사할 것 없다」며 그대로 보냈고(`trim() !== ''` 가 거짓), 서버는
+ * `Number(' ')` 을 **0** 으로 읽어 저장했다. 그 줄은 정산 리포트에서 「월 이용료 미입력」으로
+ * 빠지지 않고 **「산출 완료 · 수수료 0원」**으로 선다 — 운영자는 0원이 계약 조건인지
+ * 누군가 칸을 비워 둔 것인지 알 길이 없다.
+ */
+test('월 이용료의 빈 칸이 0원 계약이 되지 않는다 (DS 65-1)', opts, async () => {
+  const { P, S } = await settlementLib();
+
+  // ① 받는 자 — 비어 보이는 값은 전부 「미입력」이다(0 과 다르다).
+  for (const v of ['', ' ', '\n', '\u{200b}', null, undefined]) {
+    const r = P.parseMonthlyFee(v);
+    assert.equal(r.ok, true, `${JSON.stringify(v)} 를 오류로 본다`);
+    assert.equal(r.value, undefined, `${JSON.stringify(v)} 가 금액이 됐다`);
+  }
+  // 0원 계약(무상 파일럿)은 **그대로 0 이다** — 둘을 섞지 않는다.
+  assert.equal(P.parseMonthlyFee(0).value, 0);
+  assert.equal(P.parseMonthlyFee('0').value, 0);
+  // 수가 아닌 값·다른 표기법은 거절한다(종전에는 `true`→1원, `[]`→0원, `'0x1f4'`→500원이었다).
+  for (const v of [true, [], ['300000'], '0x1f4', '1e5', 'abc']) {
+    assert.equal(P.parseMonthlyFee(v).ok, false, `${JSON.stringify(v)} 를 금액으로 받는다`);
+  }
+  // 종전 계약은 그대로다.
+  assert.equal(P.parseMonthlyFee('300,000').value, 300000);
+  assert.equal(P.parseMonthlyFee(-1).ok, false);
+  assert.equal(P.parseMonthlyFee(2_000_000_000).ok, false);
+
+  // ② 화면에 뜨는 결과 — 공백만 적힌 고객사가 「산출 완료 · 0원」으로 서지 않는다.
+  const ptr = P.upsertPartner({ name: '가온파트너스', feeRateBp: 1500 }).partner;
+  const add = (name, fee) => P.upsertAccount({
+    name, partnerId: ptr.id, source: 'partner', status: 'contracted', contractedAt: '2026-01-05',
+    ...(fee === undefined ? {} : { monthlyFeeKrw: fee }),
+  });
+  assert.equal(add('공백 한 칸', ' ').account.monthlyFeeKrw, undefined, '공백이 금액으로 저장됐다');
+  add('정말 미입력', undefined);
+  add('멀쩡한 계약', 200000);
+
+  const r = S.buildSettlement({ month: '2026-03', at: new Date('2026-03-10T00:00:00Z') });
+  assert.equal(r.ok, true);
+  assert.equal(r.report.totals.billable, 1, '근거 없는 행을 산출 대상으로 셌다');
+  assert.equal(r.report.totals.incomplete, 2, '근거 없는 행이 합계에서 빠지지 않았다');
+  assert.equal(r.report.totals.feeAmountKrw, 30000, '합계가 달라졌다');
+  const blankRow = r.report.rows.find((x) => x.accountName === '공백 한 칸');
+  assert.equal(blankRow.baseAmountKrw, null, '공백 한 칸이 0원으로 섰다');
+  assert.equal(blankRow.issue, 'no_base_amount', '빠진 까닭을 말하지 않는다');
+  assert.ok(r.report.notes.some((n) => n.includes('2개 고객사는 월 이용료 또는 수수료율이 없어')), '미산출 건수를 말하지 않는다');
+  P.resetPartners();
+});
+
+/**
+ * DS 65-1 — 수수료율도 같은 문으로 들어온다.
+ * 0% 는 **실재하는 계약 조건**이라 「미설정」과 섞이면 정산에서 가려낼 길이 없다.
+ */
+test('수수료율이 수가 아닌 값을 수로 받지 않는다 (DS 65-1)', opts, async () => {
+  const { P } = await settlementLib();
+  for (const v of [true, false, [], ['50'], '0x64', '1e2', 'abc', 10001, -1]) {
+    const r = P.upsertPartner({ name: '제이투모로우원', feeRateBp: v });
+    assert.equal(r.ok, false, `${JSON.stringify(v)} 를 수수료율로 받는다`);
+    assert.match(r.error, /0~100% 사이의 숫자/);
+  }
+  for (const v of ['', '   ', null, undefined]) {
+    const r = P.upsertPartner({ name: '제이투모로우원', feeRateBp: v });
+    assert.equal(r.ok, true, `${JSON.stringify(v)} 를 오류로 본다`);
+    assert.equal(r.partner.feeRateBp, null, `${JSON.stringify(v)} 가 0% 로 저장됐다`);
+  }
+  assert.equal(P.upsertPartner({ name: '제이투모로우원', feeRateBp: '1,500' }).partner.feeRateBp, 1500);
+  assert.equal(P.upsertPartner({ name: '제이투모로우원', feeRateBp: 0 }).partner.feeRateBp, 0, '0% 계약을 미설정으로 바꿨다');
+  P.resetPartners();
+});
+
+/**
+ * DS 65-3 — **설정값도 같은 문으로 들어온다.**
+ *
+ * 배포 화면에서 환경변수를 **빈 값으로 두는 것**은 「설정하지 않음」의 가장 흔한 손짓인데,
+ * `Number('')` 이 0 이라 그것이 「수수료율 0%」로 읽혔다 — 자기 요율이 없는 모든 파트너가
+ * 「미설정」이 아니라 0% 로 산출되고, 리포트는 「산출 완료 · 수수료 0원」을 확정 수치로 적는다
+ * (「수수료율 미설정 n건」 경고도 뜨지 않는다 — 근거가 「갖춰진」 행이기 때문이다).
+ */
+test('빈 환경변수를 0 으로 읽지 않는다 (DS 65-3)', opts, async () => {
+  const { P, S } = await settlementLib();
+  try {
+    // ① 재현 — 종전 식이 빈 값을 0 으로 읽었다.
+    process.env.PARTNER_DEFAULT_FEE_RATE_BP = '';
+    assert.equal(Number(process.env.PARTNER_DEFAULT_FEE_RATE_BP), 0, '재현이 깨졌다');
+    assert.equal(P.defaultFeeRateBp(), null, '빈 값을 0% 로 읽는다');
+    for (const v of ['   ', '15%', 'abc', '20000', '-1']) {
+      process.env.PARTNER_DEFAULT_FEE_RATE_BP = v;
+      assert.equal(P.defaultFeeRateBp(), null, `${JSON.stringify(v)} 를 요율로 받는다`);
+    }
+    process.env.PARTNER_DEFAULT_FEE_RATE_BP = '1500';
+    assert.equal(P.defaultFeeRateBp(), 1500, '멀쩡한 설정값을 버린다');
+
+    // ② 화면에 뜨는 결과 — 빈 설정으로는 「0원 확정」이 아니라 「수수료율 미설정」이다.
+    process.env.PARTNER_DEFAULT_FEE_RATE_BP = '';
+    P.resetPartners();
+    const ptr = P.upsertPartner({ name: '요율없는파트너' }).partner; // feeRateBp 미설정
+    P.upsertAccount({
+      name: '고객사', partnerId: ptr.id, source: 'partner',
+      status: 'contracted', contractedAt: '2026-01-05', monthlyFeeKrw: 100000,
+    });
+    const r = S.buildSettlement({ month: '2026-03', at: new Date('2026-03-10T00:00:00Z') });
+    assert.equal(r.ok, true);
+    assert.equal(r.report.rows[0].issue, 'no_fee_rate', '요율 없이 0원으로 산출했다');
+    assert.equal(r.report.totals.billable, 0, '근거 없는 행을 산출했다');
+    assert.equal(r.report.totals.partial, true, '합계가 일부만 반영됐다고 말하지 않는다');
+    assert.equal(r.report.defaultFeeRateBp, null, '화면이 기본 요율을 0% 라고 말한다');
+  } finally {
+    delete process.env.PARTNER_DEFAULT_FEE_RATE_BP;
+    P.resetPartners();
+  }
+});

@@ -17,6 +17,7 @@ import { appendTurn, getSession, setSlot, updateSession } from '@/lib/session';
 import { createTicket, queuePosition } from '@/lib/escalation';
 import { buildHandoffSummary, maskPii, type HandoffReason } from '@/lib/handoff';
 import { findContact } from '@/lib/pii';
+import { clamp, envNumber } from '@/lib/num';
 import { generateGroundedAnswer, type CompleteOptions, type GroundingDoc, type LLMFailureReason, type LLMMessage } from '@/lib/llm';
 import {
   AGENT_REQUEST_RE,
@@ -100,16 +101,22 @@ export function tenantContext(tenantId?: string | null): TenantContext | null {
 // 값은 운영 정책 상수다. 측정된 품질 지표가 아니며 화면에 성능 수치로 노출하지 않는다.
 // 환경변수로 테넌트별 조정이 가능하도록 열어 둔다.
 
-function envNumber(name: string, fallback: number, min: number, max: number): number {
-  const raw = Number(process.env[name]);
-  if (!Number.isFinite(raw)) return fallback;
-  return Math.min(Math.max(raw, min), max);
+/**
+ * 설정값을 수로 읽는 자는 `lib/num` 하나다 (DS 65-3) — 종전에는 네 파일에 같은 함수가
+ * 손으로 네 벌 있었고, 모두 `Number('')` 이 **0** 이라는 사실에 걸려 있었다.
+ * `CHAT_CONFIDENCE_THRESHOLD=`(빈 값)은 임계값을 0 으로 내려 **자신 없는 답이 하나도 없는
+ * 것**으로 만든다 — 자동 상담원 전환이 조용히 꺼지는 자리다.
+ * 범위 밖을 당기는 것(clamp)은 종전 그대로다: 정책 상수라 가장 가까운 허용값이 안전하다.
+ */
+function envPolicy(name: string, fallback: number, min: number, max: number): number {
+  const v = envNumber(name);
+  return clamp(v === null ? fallback : v, min, max);
 }
 
 /** 이 값 미만이면 '자신 없는 응답'으로 본다. */
-export const CONFIDENCE_THRESHOLD = envNumber('CHAT_CONFIDENCE_THRESHOLD', 0.4, 0, 1);
+export const CONFIDENCE_THRESHOLD = envPolicy('CHAT_CONFIDENCE_THRESHOLD', 0.4, 0, 1);
 /** 자신 없는 응답이 이만큼 연속되면 상담원으로 자동 전환한다. */
-export const LOW_CONFIDENCE_STREAK_LIMIT = Math.round(envNumber('CHAT_LOW_CONFIDENCE_STREAK', 2, 1, 10));
+export const LOW_CONFIDENCE_STREAK_LIMIT = Math.round(envPolicy('CHAT_LOW_CONFIDENCE_STREAK', 2, 1, 10));
 
 /** 응답 경로별 기본 신뢰도(정책 상수). */
 const SOURCE_CONFIDENCE: Record<ReplySource, number> = {

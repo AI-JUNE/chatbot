@@ -4,7 +4,8 @@
 import { NextRequest } from 'next/server';
 import { bulkUpsertKB, docOverlap, saveAdminNow } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
-import { ingestDocument, docIdPrefix, MAX_DOC_CHARS, DEFAULT_CHUNK_CHARS } from '@/lib/ingest';
+import { ingestDocument, docIdPrefix, MAX_DOC_CHARS, DEFAULT_CHUNK_CHARS, CHUNK_CHARS_MIN, CHUNK_CHARS_MAX } from '@/lib/ingest';
+import { parseNumber } from '@/lib/num';
 import { AUDIT_NAME_LEN, ellipsize } from '@/lib/limits';
 import { toNfc } from '@/lib/normalize';
 import { ok, fail, readJson, reqStr, optStr, requireAdmin, isAdminAuthed, MAX_IMPORT_BYTES } from '@/lib/http';
@@ -36,8 +37,15 @@ export async function POST(req: NextRequest) {
   const category = optStr(body.category, 'category', 40, '문서');
   if (!category.ok) return category.res;
 
-  const rawMax = Number(body.maxChars ?? DEFAULT_CHUNK_CHARS);
-  const maxChars = Number.isFinite(rawMax) ? Math.min(Math.max(Math.trunc(rawMax), 120), 2000) : DEFAULT_CHUNK_CHARS;
+  // 수를 읽는 자는 `lib/num.parseNumber` 하나다 (DS 65-1). 종전에는 `Number()` 로 읽고
+  // 범위를 **조용히 당겼다** — 「한 항목 길이」는 운영자가 고른 값이고, 그 값으로 나눈 결과를
+  // 미리보기에서 눈으로 확인하는 자리다(DS 44-2). 다른 값으로 나눠 놓고 아무 말도 하지 않으면
+  // 화면이 보여 준 것과 등록되는 것이 달라진다. 비어 있으면 기본값, 틀렸으면 그렇게 말한다.
+  const chunk = parseNumber(body.maxChars, { min: CHUNK_CHARS_MIN, max: CHUNK_CHARS_MAX, integer: true });
+  if (!chunk.ok && chunk.issue !== 'blank') {
+    return fail('invalid_input', `한 항목 길이는 ${CHUNK_CHARS_MIN}~${CHUNK_CHARS_MAX} 사이 숫자로 적어주세요.`);
+  }
+  const maxChars = chunk.ok ? chunk.value : DEFAULT_CHUNK_CHARS;
 
   /**
    * 나눈 조각과 **빠진 조각**을 함께 받는다 (DS 58-3).

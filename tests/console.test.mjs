@@ -510,7 +510,8 @@ test('파트너·귀속이 요약 KPI·고객사/파트너 표·우측 폼·상�
   assert.match(t, /수수료율\(%\)/, '수수료율은 %로 입력');
   // 검증·변환 로직
   const h = src.slice(src.indexOf('const submitPartner = async'), src.indexOf('const removePartner = async'));
-  assert.match(h, /n < 0 \|\| n > 100/, '수수료율 % 범위 검사');
+  // 수를 읽는 자는 `parseNum` 하나다 (DS 65-2) — 종전의 `Number()` 는 공백 한 칸을 0 으로 읽었다.
+  assert.match(h, /parseNum\(pForm\.feeRatePct, \{ min: 0, max: MAX_FEE_RATE_PCT \}\)/, '수수료율 % 범위 검사');
   assert.match(h, /feeRateBp: pForm\.feeRatePct\.trim\(\) === '' \? null : pctToBp\(pForm\.feeRatePct\)/, '저장은 bp — API 계약 유지');
   assert.match(h, /aForm\.source === 'partner' && !aForm\.partnerId/, '파트너 유치면 파트너 필수');
   assert.match(h, /aForm\.status === 'contracted'/, '계약 상태면 계약일 필수');
@@ -3349,12 +3350,18 @@ test('업로드 미리보기가 등록되지 않는 조각을 말한다 (DS 58-3
 /** 설치 스니펫을 만드는 자를 떼어내 실제로 돌린다(상수까지 함께 — 상한·형식이 그 안에 있다). */
 async function loadInstall() {
   await loadConsole();
-  const konst = [/const INSTALL_OFFSET_MAX = \d+;/, /const INSTALL_TENANT_RE = \/.+\/;/].map((re) => {
+  // 여백 칸도 **수를 읽는 자**(`parseNum`)를 지난다 (DS 65-2) — 그 자와 그것이 쓰는 표까지 함께 뗀다.
+  const konst = [
+    /const INSTALL_OFFSET_MAX = \d+;/,
+    /const INSTALL_TENANT_RE = \/.+\/;/,
+    /const CONSOLE_INVISIBLE = \/.+\/gu;/,
+    /const CONSOLE_DECIMAL = \/.+\/;/,
+  ].map((re) => {
     const m = re.exec(cachedJs);
     assert.ok(m, `${re} 선언을 찾지 못했다`);
     return m[0];
   });
-  const fns = ['installOffset', 'installSnippet'].map((n) => {
+  const fns = ['cleanText', 'parseNum', 'installOffset', 'installSnippet'].map((n) => {
     const i = cachedJs.indexOf(`function ${n}(`);
     assert.ok(i >= 0, `${n} 선언을 찾지 못했다`);
     const end = cachedJs.indexOf('\n}', i);
@@ -3765,4 +3772,65 @@ test('콘솔이 이름으로 줄을 세우는 자가 서버와 같다 (DS 64-2)'
   assert.ok(code.includes('compareText(String(a), String(b))'), '표 머리칸이 공통 자를 지나지 않는다');
   // 사본임을 밝혀 둔다 — 밝히지 않으면 다음 사람이 한쪽만 고친다.
   assert.ok(src.includes('원본은 `src/lib/order.ts`'), '사본임을 밝히지 않는다(compareText)');
+});
+
+/* ══════════ 65순위 — 62차 재감사 (DS 65-2) ══════════ */
+
+/**
+ * DS 65-2 — 콘솔이 **수를 서버와 다르게 읽었다.**
+ *
+ * 화면은 `Number()` 로 쟀다. `Number(' ')` 은 0 이라, 월 이용료 칸에 공백 한 칸이 든 경우
+ * 화면은 「빈 칸이니 검사할 것 없다」며 그대로 보냈고 서버는 그것을 **0원 계약**으로 저장했다
+ * (정산 리포트에 「산출 완료 · 수수료 0원」으로 선다 · DS 65-1). 또 화면은 상한(10억 원)을
+ * 모르고 있어 자릿수가 튄 값을 통과시켰고, 서버의 거절은 그 칸 아래가 아니라 폼 맨 위
+ * 한 줄로 떨어졌다(DS 29-1 이 세운 길에서 벗어난 자리다).
+ *
+ * 콘솔은 lib 을 불러오지 않으므로 사본을 떼어내 **답까지 대조**한다.
+ */
+test('콘솔이 수를 읽는 자가 서버와 같다 (DS 65-2)', opts, async () => {
+  const { parseNum } = await loadConsoleFns(['cleanText', 'parseNum'], ['CONSOLE_INVISIBLE', 'CONSOLE_DECIMAL']);
+  const N = await importLib('num', ['text']);
+
+  const SAMPLES = [
+    '', ' ', '   ', '\n', '\t', '\u{200b}', '\u{ad}', ' \u{200b} ', null, undefined,
+    true, false, [], ['300000'], {}, NaN, Infinity, -Infinity,
+    '0', '0.4', '0.6', '-1', '-0.5', '12', '300000', '300,000', ' 300 000 ', '1,500',
+    '0x1f4', '1e5', '0b11', '0o17', 'abc', '12abc', '1.2.3', 'Infinity', '１２３', '٣٠٠', '+5', '.5',
+    0, 0.4, -1, 1_000_000_000, 1_000_000_001, 10000, 10001,
+  ];
+  const RULES = [{}, { min: 0 }, { min: 0, max: 100 }, { min: 0, max: 1_000_000_000, integer: true }, { integer: true }];
+  for (const rules of RULES) {
+    for (const v of SAMPLES) {
+      const a = parseNum(v, rules);
+      const b = N.parseNumber(v, rules);
+      assert.deepEqual(
+        { ok: a.ok, value: a.value, issue: a.issue },
+        { ok: b.ok, value: b.value, issue: b.issue },
+        `사본이 lib 과 다른 답을 낸다: ${JSON.stringify(v)} / ${JSON.stringify(rules)}`,
+      );
+    }
+  }
+
+  // 종전 식 재현 — `Number()` 는 이 값들을 **0** 이라고 답했고, 화면은 그것을 그대로 보냈다.
+  for (const v of ['', ' ', '\n']) {
+    assert.equal(Number(v), 0, `재현이 깨졌다: ${JSON.stringify(v)}`);
+    assert.equal(parseNum(v).issue, 'blank', `아무것도 없는 칸을 0 으로 읽는다: ${JSON.stringify(v)}`);
+  }
+
+  // 수를 받는 칸 **세 곳이 모두** 그 자를 지나고, 상한은 서버와 같은 값이다.
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  assert.match(src, /parseNum\(aForm\.monthlyFeeKrw, \{ min: 0, max: MAX_MONTHLY_FEE, integer: true \}\)/, '월 이용료가 공통 자를 지나지 않는다');
+  assert.match(src, /parseNum\(pForm\.feeRatePct, \{ min: 0, max: MAX_FEE_RATE_PCT \}\)/, '수수료율이 공통 자를 지나지 않는다');
+  assert.match(src, /parseNum\(imp\.maxChars, \{ min: MIN_CHUNK_CHARS, max: MAX_CHUNK_CHARS, integer: true \}\)/, '한 항목 길이가 공통 자를 지나지 않는다');
+  const partners = readFileSync(new URL('../src/lib/partners.ts', import.meta.url), 'utf8');
+  const serverMax = /const MAX_MONTHLY_FEE = ([\d_]+);/.exec(partners);
+  assert.ok(serverMax, '서버의 월 이용료 상한을 찾지 못했다');
+  assert.match(src, new RegExp(`const MAX_MONTHLY_FEE = ${serverMax[1]};`), '월 이용료 상한이 서버와 다르다');
+
+  // 수를 제 식으로 읽는 자리가 폼 검사에 남지 않았다(다시 생기는 것을 막는 자리다).
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  const left = code.match(/Number\((?:aForm|pForm|imp)\.\w+\)/g) || [];
+  assert.deepEqual(left, [], `폼 값을 Number() 로 읽는 자리가 남았다: ${left.join(' / ')}`);
+  // 사본임을 밝혀 둔다 — 밝히지 않으면 다음 사람이 한쪽만 고친다.
+  assert.ok(src.includes('원본은 `src/lib/num.ts`(`parseNumber`)'), '사본임을 밝히지 않는다(parseNum)');
 });

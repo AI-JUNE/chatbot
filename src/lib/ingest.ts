@@ -17,6 +17,21 @@ export const DOC_HEAD_LEN = 40;
 export const DEFAULT_CHUNK_CHARS = 500;
 export const MIN_CHUNK_CHARS = 40;
 
+/**
+ * 운영자가 고를 수 있는 **「한 항목 길이」의 범위** (DS 65-1).
+ *
+ * 바로 위 `MIN_CHUNK_CHARS` 와는 **다른 수**다 — 그쪽은 「이보다 짧은 조각은 앞 조각에
+ * 붙인다」는 내부 기준이고, 이쪽은 화면이 묻고 운영자가 적는 값의 한계다. 이름이 비슷해
+ * 서로를 가렸다.
+ *
+ * 종전에는 이 두 수가 라우트 안에 `Math.min(Math.max(…, 120), 2000)` 으로 손으로 적혀
+ * 있었고 콘솔에 또 한 벌 적혀 있었다. 라우트는 HTTP 메서드·설정 외 export 가 금지되어
+ * (★ 안전 원칙) **다른 곳이 가져다 쓸 수 없는 자리**다 — 38차가 웹 발화 상한에서 본 것과
+ * 같은 자리이고, 그래서 상한이 자리마다 손으로 적히면 갈라지는지 아무도 알 수 없다.
+ */
+export const CHUNK_CHARS_MIN = 120;
+export const CHUNK_CHARS_MAX = 2000;
+
 export interface DocChunk {
   /** 문서 내 순번(1부터) */
   index: number;
@@ -55,7 +70,7 @@ function headingPath(stack: string[]): string {
  * 3) minChars 미만 조각은 직전 청크에 흡수한다(문맥 파편화 방지).
  */
 export function chunkDocument(raw: string, opts: ChunkOptions = {}): DocChunk[] {
-  const maxChars = Math.max(120, opts.maxChars ?? DEFAULT_CHUNK_CHARS);
+  const maxChars = Math.max(CHUNK_CHARS_MIN, opts.maxChars ?? DEFAULT_CHUNK_CHARS);
   const minChars = Math.max(10, opts.minChars ?? MIN_CHUNK_CHARS);
   // 유니코드 정규화를 **자르기 전에** 한다 — 분해형 한글은 한 글자가 코드 2~3개라,
   // 먼저 자르면 ① 글자 수 상한이 실제보다 일찍 걸리고 ② 자른 자리가 음절 한가운데가 되어
