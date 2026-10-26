@@ -6604,3 +6604,94 @@ test('카카오 말풍선이 수 가운데서 끊기지 않는다 (DS 66-3)', op
   const r2 = K.splitKakaoText(sentences, 600, 3);
   assert.ok(r2.parts[0].endsWith('여기서 끝납니다.)'), `문장 끝에서 끊지 않았다: ${r2.parts[0].slice(-16)}`);
 });
+
+/* ══════════ 67순위 — 64차 재감사 (DS 67-1·67-2) ══════════ */
+
+/**
+ * DS 67-1·67-2 — **비율을 백분율로 적는 자**가 없어, 반올림이 양 끝에서 거짓말을 했다.
+ *
+ * `Math.round(x * 100)` 는 999/1000 을 「100%」로, 1/1000 을 「0%」로 적는다. 비율 글자에서
+ * 그 두 수는 예외적이다 — 운영자는 「100%」를 비율이 아니라 **「전부」라는 사실**로 읽고
+ * 그대로 보고서에 옮겨 적는다. §13 이 금한 「없는 수」가 이것이다.
+ */
+test('비율 글자가 0%·100% 를 지어내지 않는다 (DS 67-1·67-2)', opts, async () => {
+  const N = await importLib('num', ['text']);
+
+  // ① 종전 식 재현 — 화면이 쓰고 있던 그 한 줄이다(재현되지 않으면 이 검증은 아무것도 지키지 않는다).
+  const naive = (part, whole) => `${Math.round((part / whole) * 100)}%`;
+  assert.equal(naive(999, 1000), '100%', '재현이 깨졌다');
+  assert.equal(naive(199, 200), '100%', '재현이 깨졌다');
+  assert.equal(naive(1, 1000), '0%', '재현이 깨졌다');
+
+  // ② 새 자 — 0% 와 100% 는 실제로 0 과 전부일 때만, 그 둘에 닿는 값은 한 자리를 더 내준다.
+  for (const [part, whole, want] of [
+    [0, 10, '0%'],
+    [10, 10, '100%'],
+    [999, 1000, '99.9%'],
+    [199, 200, '99.5%'],
+    [1, 1000, '0.1%'],
+    [4, 1000, '0.4%'],
+    [9999, 10000, '99.9% 초과'],
+    [1, 100000, '0.1% 미만'],
+    // 가운데 값은 종전 그대로 정수다 — 읽는 사람의 기준을 흔들지 않는다.
+    [5, 10, '50%'],
+    [874, 1000, '87%'],
+    [1, 3, '33%'],
+  ]) {
+    assert.equal(N.percentLabel(part, whole), want, `${part}/${whole}`);
+  }
+
+  // ③ 모수가 없으면 글자도 없다 — 0% 로 단정하지 않는다(부르는 쪽이 「측정 중」으로 적는다).
+  for (const [part, whole] of [
+    [0, 0], [1, 0], [3, -1], [-1, 10],
+    [Number.NaN, 10], [1, Number.NaN], [1, Infinity], [Infinity, 10],
+  ]) {
+    assert.equal(N.percentLabel(part, whole), null, `${part}/${whole} 에 비율을 지어낸다`);
+  }
+
+  // ④ 화면에 뜨는 결과 — **실제 평가 저장소**를 돌린다(DS 67-2).
+  process.env.ADMIN_PERSIST = 'false'; // 테스트가 로컬 파일을 건드리지 않게 한다
+  const F = await importLib('feedback', ['storage', 'logger', 'monitoring', 'refusal', 'order', 'num']);
+  F.resetFeedback();
+  for (let i = 0; i < 200; i += 1) {
+    F.recordFeedback({ sessionHash: `u${i}`, verdict: 'up', citation: '요금 안내' });
+  }
+  F.recordFeedback({ sessionHash: 'd1', verdict: 'down', citation: '요금 안내' });
+  const sum = F.feedbackSummary();
+  assert.equal(sum.total, 201);
+  assert.equal(sum.up, 200);
+  assert.equal(sum.down, 1);
+  // 기계가 보는 칸은 그대로다(기존 API 계약) — 그래서 **화면이 그것을 적으면** 안 된다.
+  assert.equal(sum.helpfulRate, 100, 'API 계약(정수 반올림)이 바뀌었다');
+  assert.equal(N.percentLabel(sum.up, sum.total), '99.5%', '「아쉬워요 1건」이 비율에서 사라진다');
+  F.resetFeedback();
+
+  // ⑤ 같은 일을 **실제 대화 기록**으로 (DS 67-1) — 자동완결률.
+  const C = await importLib('convlog', ['storage', 'logger', 'monitoring', 'pii', 'limits', 'kst', 'order', 'num']);
+  C.resetLogs();
+  const turn = (i, auto) => ({
+    sessionId: `s${i}`,
+    channel: 'web',
+    tenant: null,
+    message: '요금이 궁금해요',
+    reply: '안내드립니다',
+    intent: 'fee',
+    source: auto ? 'kb' : 'fallback',
+    escalate: !auto,
+  });
+  for (let i = 0; i < 199; i += 1) C.logTurn(turn(i, true));
+  C.logTurn(turn(199, false));
+  const st = C.convStats();
+  assert.equal(st.totalTurns, 200);
+  assert.equal(st.autoHandled, 199);
+  assert.equal(st.escalatedTurns, 1);
+  assert.equal(naive(st.autoHandled, st.totalTurns), '100%', '재현이 깨졌다');
+  assert.equal(
+    N.percentLabel(st.autoHandled, st.totalTurns),
+    '99.5%',
+    '상담원으로 넘어간 한 건이 「자동완결률 100%」 안으로 사라진다',
+  );
+  // 서버가 미리 반올림해 둔 `autoRate` 로 세도 같은 거짓말이 나온다 — 화면은 두 수로 센다.
+  assert.equal(`${Math.round(st.autoRate * 100)}%`, '100%', '재현이 깨졌다');
+  C.resetLogs();
+});

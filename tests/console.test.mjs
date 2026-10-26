@@ -1685,7 +1685,10 @@ test('고객이 누른 평가가 대시보드에 모이고, 0건을 0%로 단정
   const dash = src.slice(src.indexOf("{tab === 'dash' && ("), src.indexOf('{/* ── 최근 대화 ── */}'));
   assert.ok(dash.includes('<h2 style={S.h2}>답변 평가</h2>'), '대시보드에 평가 카드가 없다');
   assert.match(dash, /stats\.feedback && stats\.feedback\.total > 0/, '평가 0건에서도 비율을 그린다');
-  assert.match(dash, /stats\.feedback\.helpfulRate === null \? MEASURING/, '표본이 없는데 비율을 단정한다');
+  // 비율은 받은 두 수로 적는다 (DS 67-2) — 서버의 `helpfulRate` 는 이미 정수로 반올림된 값이라
+  // 199/200 이 「100%」로 온다. 표본이 없으면 `percentLabel` 이 null 을 주고 「측정 중」이 된다.
+  assert.match(dash, /percentLabel\(stats\.feedback\.up, stats\.feedback\.total\) \?\? MEASURING/, '표본이 없는데 비율을 단정한다');
+  assert.equal(dash.includes('`${stats.feedback.helpfulRate}%`'), false, '반올림된 수를 그대로 적는다');
   assert.ok(dash.includes('보완이 필요한 자료'), '👎가 많은 자료 목록이 없다');
   assert.ok(dash.includes('평가에는 대화 내용이 들어 있지 않습니다'), '무엇을 기록하는지 밝히지 않는다');
   // 보완 목록은 그 자료가 있는 곳으로 데려간다 — 건수만 보여 주면 고칠 길이 없다.
@@ -3833,4 +3836,103 @@ test('콘솔이 수를 읽는 자가 서버와 같다 (DS 65-2)', opts, async ()
   assert.deepEqual(left, [], `폼 값을 Number() 로 읽는 자리가 남았다: ${left.join(' / ')}`);
   // 사본임을 밝혀 둔다 — 밝히지 않으면 다음 사람이 한쪽만 고친다.
   assert.ok(src.includes('원본은 `src/lib/num.ts`(`parseNumber`)'), '사본임을 밝히지 않는다(parseNum)');
+});
+
+/* ══════════ 67순위 — 64차 재감사 (DS 67-1·67-2·67-3) ══════════ */
+
+/**
+ * DS 67-1·67-2 — 콘솔이 **비율을 손으로 반올림**했다.
+ *
+ * `Math.round(x * 100)` 는 999/1000 을 「100%」로, 1/1000 을 「0%」로 적는다. 자동완결률 KPI
+ * 두 자리와 답변 평가 카드가 모두 그 식이었고, 바로 옆 괄호·알약에는 사라진 그 한 건이
+ * 적혀 있었다(「전체 1,000쌍 중 999쌍」·「아쉬워요 1건」). 콘솔은 lib 을 불러오지 않으므로
+ * 사본을 떼어내 **글자까지 대조**한다.
+ */
+test('콘솔이 비율을 적는 자가 서버와 같다 (DS 67-1·67-2)', opts, async () => {
+  const { percentLabel } = await loadConsoleFns(['percentLabel'], ['PERCENT_UNDER', 'PERCENT_OVER']);
+  const N = await importLib('num', ['text']);
+
+  const PAIRS = [
+    [0, 0], [0, 10], [1, 1], [10, 10], [11, 10],
+    [1, 1000], [4, 1000], [5, 1000], [999, 1000], [199, 200], [9999, 10000], [1, 100000],
+    [1, 2], [1, 3], [2, 3], [5, 10], [874, 1000], [1234, 5678], [499, 500], [1, 500],
+    [-1, 10], [1, 0], [3, -1], [Number.NaN, 10], [1, Number.NaN], [1, Infinity], [Infinity, 10],
+  ];
+  for (const [part, whole] of PAIRS) {
+    assert.equal(
+      percentLabel(part, whole),
+      N.percentLabel(part, whole),
+      `사본이 lib 과 다른 답을 낸다: ${part}/${whole}`,
+    );
+  }
+  // 「미만」·「초과」 글자도 두 쪽이 같아야 한다 — 한쪽만 고치면 화면 글자가 갈라진다.
+  const lib = readFileSync(new URL('../src/lib/num.ts', import.meta.url), 'utf8');
+  for (const name of ['PERCENT_UNDER', 'PERCENT_OVER']) {
+    const want = new RegExp(`const ${name} = '([^']+)'`).exec(lib);
+    assert.ok(want, `lib 에서 ${name} 을 찾지 못했다`);
+    assert.match(
+      readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8'),
+      new RegExp(`const ${name} = '${want[1]}'`),
+      `${name} 글자가 서버와 다르다`,
+    );
+  }
+
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // 비율을 적는 **세 자리 모두** 그 자를 지난다(같은 지표가 두 탭에 있다).
+  assert.equal(
+    (src.match(/percentLabel\(stats\.conversation\.autoHandled, (?:stats\.conversation\.totalTurns|turnsTotal)\)/g) || []).length,
+    2,
+    '자동완결률 두 자리가 공통 자를 지나지 않는다',
+  );
+  assert.match(src, /percentLabel\(stats\.feedback\.up, stats\.feedback\.total\)/, '도움됨 비율이 공통 자를 지나지 않는다');
+  // 비율을 제 식으로 적는 자리가 **0건**인가 — 다시 생기는 것을 막는 자리다.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  const hand = code.match(/Math\.round\([^)]*\* 100\)\}%/g) || [];
+  assert.deepEqual(hand, [], `비율을 손으로 반올림하는 자리가 남았다: ${hand.join(' / ')}`);
+  // 사본임을 밝혀 둔다 — 밝히지 않으면 다음 사람이 한쪽만 고친다.
+  assert.ok(src.includes('원본은 `src/lib/num.ts`(`percentLabel`)'), '사본임을 밝히지 않는다(percentLabel)');
+});
+
+/**
+ * DS 67-3 — **비율을 길이로 바꾸는 자리**가 제각각이었다.
+ *
+ * 「많이 묻는 주제」 막대는 `Math.max(6, …)` 로 바닥을 두었는데 추세 차트의 두 막대에는 없었다 —
+ * 7일 최대가 300건인 주의 1건짜리 날은 `Math.round(1 / 300 * 100) = 0` 이라 막대가 그려지지
+ * 않고, 수를 적어 주지 않는 「상담원 제안」 몫은 통째로 사라진다.
+ */
+test('0 이 아닌 막대가 사라지지 않는다 (DS 67-3)', opts, async () => {
+  const { barLen } = await loadConsoleFns(['barLen']);
+
+  // ① 종전 식 재현 — 1건인 날의 막대 높이가 **0** 이었다.
+  const naive = (part, whole, full) => (whole > 0 ? Math.round((part / whole) * full) : 0);
+  assert.equal(naive(1, 300, 100), 0, '재현이 깨졌다');
+  assert.equal(naive(2, 300, 100), 1, '재현이 깨졌다');
+
+  // ② 0 은 0 이고(없는 것을 있다고 하지 않는다), 0 이 아니면 적어도 바닥만큼 보인다.
+  assert.equal(barLen(0, 300, 100, 2), 0, '대화가 없는 날에 막대를 그린다');
+  assert.equal(barLen(1, 300, 100, 2), 2, '1건인 날의 막대가 사라진다');
+  assert.equal(barLen(1, 1000000, 100, 2), 2, '아주 작은 몫도 보여야 한다');
+  assert.equal(barLen(150, 300, 100, 2), 50, '가운데 값이 종전과 달라졌다');
+  assert.equal(barLen(300, 300, 100, 2), 100, '최댓값이 꽉 차지 않는다');
+  // 전체를 넘지 않고, 모수가 없으면 길이도 없다.
+  assert.equal(barLen(400, 300, 100, 2), 100, '막대가 칸을 넘는다');
+  for (const [p, w] of [[1, 0], [1, -1], [-1, 10], [Number.NaN, 10], [1, Number.NaN]]) {
+    assert.equal(barLen(p, w, 100, 2), 0, `${p}/${w} 에 길이를 지어낸다`);
+  }
+  // 「많이 묻는 주제」가 종전부터 쓰던 6% 바닥은 그대로다(보이는 모습이 바뀌지 않는다).
+  assert.equal(barLen(1, 300, 100, 6), 6);
+  assert.equal(barLen(300, 300, 100, 6), 100);
+
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  // 막대 세 자리가 모두 그 자를 지난다 — 추세 차트의 대화·상담원 제안, 「많이 묻는 주제」.
+  const chart = src.slice(src.indexOf('function TrendChart('), src.indexOf('interface TurnView'));
+  assert.match(chart, /const h = barLen\(d\.turns, max, full, TREND_BAR_MIN\);/, '대화 막대가 공통 자를 지나지 않는다');
+  assert.match(chart, /const eh = Math\.min\(h, barLen\(d\.escalated, max, full, TREND_BAR_MIN\)\);/, '상담원 제안 막대가 공통 자를 지나지 않거나 전체 막대를 넘는다');
+  assert.match(src, /barLen\(t\.count, max, 100, TOPIC_BAR_MIN\)/, '주제 막대가 공통 자를 지나지 않는다');
+  // 길이를 제 식으로 셈하는 자리가 **0건**인가.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  const hand = code.match(/Math\.round\(\([^)]*\/ max\) \* (?:full|100)\)/g) || [];
+  assert.deepEqual(hand, [], `막대 길이를 손으로 셈하는 자리가 남았다: ${hand.join(' / ')}`);
+  // 스크린리더가 읽는 글은 막대가 아니라 수다 — 그 줄은 종전 그대로다(막대 바닥이 수를 바꾸지 않는다).
+  assert.match(chart, /aria-label=\{`최근 7일 일자별 대화 건수 — \$\{label\}`\}/, '그래프가 수를 말하지 않는다');
 });

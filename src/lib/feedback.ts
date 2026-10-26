@@ -90,7 +90,15 @@ export interface FeedbackSummary {
   total: number;
   up: number;
   down: number;
-  /** 도움됨 비율(%). 평가가 0건이면 null — 화면에서 「측정 중」으로 표시한다. */
+  /**
+   * 도움됨 비율(%) — **정수로 반올림한 수**다. 평가가 0건이면 null.
+   *
+   * 이 값을 사람이 읽는 글자로 그대로 적지 않는다 (DS 67-2): 199/200 이면 여기에 `100` 이
+   * 들어오고, 화면이 그대로 적으면 「100%」가 되어 **아쉬워요 1건이 사라진다**(옆 알약은
+   * 그 1건을 적고 있다). 사람이 읽는 글자는 `up`·`total` 두 수로 `lib/num.percentLabel` 이
+   * 적는다 — 0% 와 100% 는 실제로 0 과 전부일 때만 쓴다. 이 칸은 **기계가 보는 요약**으로
+   * 남긴다(기존 API 계약이라 값을 바꾸지 않는다).
+   */
   helpfulRate: number | null;
   /** 👎가 많은 근거 순 상위 목록(개선 대상). */
   topDown: FeedbackTarget[];

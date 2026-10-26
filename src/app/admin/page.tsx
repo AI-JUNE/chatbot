@@ -359,7 +359,10 @@ interface OpsStats {
     total: number;
     up: number;
     down: number;
-    /** 도움됨 비율(%). 평가 0건이면 null. */
+    /**
+     * 도움됨 비율(%) — 서버가 **정수로 반올림한** 수다. 평가 0건이면 null.
+     * 화면은 이 값을 적지 않는다 (DS 67-2) — `percentLabel(up, total)` 로 직접 적는다.
+     */
     helpfulRate: number | null;
     /**
      * 👎가 많은 근거(=보완 대상) 순 상위 목록.
@@ -537,6 +540,57 @@ function comma(n: number): string {
   const digits = sign ? head.slice(1) : head;
   return `${sign}${digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${tail}`;
 }
+
+/**
+ * **비율을 백분율로 적는 자** — 원본은 `src/lib/num.ts`(`percentLabel`)다 (DS 67-1·67-2).
+ * 콘솔은 lib 을 불러오지 않으므로(`comma`·`parseNum`·`cleanText` 와 같은 기존 규약) 사본을
+ * 두고, 테스트가 같은 입력 묶음으로 두 자의 답을 글자까지 대조한다.
+ *
+ * 왜 화면도 이 자를 써야 하는가: 종전에 이 화면은 `Math.round(x * 100)` 로 적었다. 그 식은
+ * **양 끝에서 거짓말을 한다** — 1000쌍 중 999쌍을 챗봇이 마무리했으면 「자동완결률 100%」가
+ * 되어 상담원으로 넘어간 한 건이 사라지고, 반대로 1쌍만 마무리했으면 「0%」가 되어 그 한 건이
+ * 사라진다. 운영자는 「100%」를 비율이 아니라 **「전부」라는 사실**로 읽고 그대로 보고서에
+ * 옮겨 적는다(§13 이 금한 「없는 수」다). 그래서 0% 와 100% 는 실제로 0 과 전부일 때만 적는다.
+ */
+const PERCENT_UNDER = '0.1% 미만';
+const PERCENT_OVER = '99.9% 초과';
+function percentLabel(part: number, whole: number): string | null {
+  if (!Number.isFinite(part) || !Number.isFinite(whole)) return null;
+  if (whole <= 0 || part < 0) return null;
+  if (part === 0) return '0%';
+  if (part >= whole) return '100%';
+  const pct = (part / whole) * 100;
+  const n = Math.round(pct);
+  if (n > 0 && n < 100) return `${n}%`;
+  const one = Math.round(pct * 10) / 10;
+  if (one <= 0) return PERCENT_UNDER;
+  if (one >= 100) return PERCENT_OVER;
+  return `${one}%`;
+}
+
+/**
+ * **비율을 길이로 바꾸는 자** — 막대 하나의 길이다 (DS 67-3).
+ *
+ * 왜 한 자로 모으는가: 이 콘솔에는 비율로 길이를 정하는 막대가 세 자리 있었고 셋이 서로 달랐다.
+ * 「많이 묻는 주제」 막대는 `Math.max(6, …)` 로 **바닥**을 두었는데(1건짜리 주제도 보인다),
+ * 추세 차트의 두 막대에는 그 바닥이 없었다 — 7일 최대가 300건인 주 안에서 1건인 날은
+ * `Math.round(1 / 300 * 100) = 0` 이라 **막대가 그려지지 않는다**. 대화 수는 막대 위에 글자로
+ * 적어 주므로 바닥에 떠 있는 「1」로 읽을 수는 있지만, 색으로만 구분되는 **「상담원 제안」 몫은
+ * 적어 주는 수가 없어 통째로 사라진다** — 그 날 상담원에게 넘어간 대화가 그래프에서 0건이 된다.
+ * 눈으로 훑는 운영자에게 그래프는 「언제 일이 있었나」를 보는 자리다.
+ *
+ * 0 은 0 이다(없는 것을 있다고 하지 않는다). 0 이 아닌 값은 **적어도 `min` 만큼** 보인다 —
+ * 작은 값이 그만큼 길어 보이는 것은 아는 왜곡이고, 정확한 수는 막대 옆·`aria-label` 에 적는다
+ * (「많이 묻는 주제」가 이미 택한 그 거래다). 모수가 없으면 길이도 없다.
+ */
+function barLen(part: number, whole: number, full: number, min: number): number {
+  if (!Number.isFinite(part) || !Number.isFinite(whole) || part <= 0 || whole <= 0) return 0;
+  return Math.min(full, Math.max(min, Math.round((part / whole) * full)));
+}
+/** 추세 차트 막대의 바닥 — 높이 100단위(viewBox) 기준 2단위. 1건인 날이 사라지지 않을 만큼. */
+const TREND_BAR_MIN = 2;
+/** 「많이 묻는 주제」 막대의 바닥 — 칸 너비의 6%(종전부터 이 화면이 쓰던 값이다). */
+const TOPIC_BAR_MIN = 6;
 
 /**
  * **한국 날짜** 'YYYY-MM-DD' — 날짜만 적는 칸(귀속 이력 타임라인)이 쓴다 (DS 55-2).
@@ -1510,10 +1564,13 @@ function TrendChart({ daily }: { daily: DayView[] }) {
         ))}
         {daily.map((d, i) => {
           const full = H - pad.t - pad.b;
-          const h = max > 0 ? Math.round((d.turns / max) * full) : 0;
+          // 비율을 길이로 바꾸는 자는 한 곳이다 (DS 67-3) — 종전에는 이 두 줄에 바닥이 없어
+          // 7일 최대가 300건인 주의 1건짜리 날이 **막대 없이** 그려졌고, 수를 적어 주지 않는
+          // 「상담원 제안」 몫은 통째로 사라졌다. 넘겨 받은 몫은 전체 막대를 넘지 않는다.
+          const h = barLen(d.turns, max, full, TREND_BAR_MIN);
           const x = pad.l + slot * i + (slot - barW) / 2;
           const y = pad.t + full - h;
-          const eh = max > 0 ? Math.round((d.escalated / max) * full) : 0;
+          const eh = Math.min(h, barLen(d.escalated, max, full, TREND_BAR_MIN));
           // 기록이 없는 날은 **빈 칸(=0)으로 두지 않는다** — 바닥에 점선을 긋고 「—」로 적는다.
           // 색이 아니라 글자·선이라 고대비·흑백 인쇄에서도 남는다(SortTh 의 글리프와 같은 규칙).
           const gap = d.coverage === 'none';
@@ -4974,7 +5031,12 @@ export default function AdminPage() {
               />
               <KpiCard
                 label="자동완결률"
-                value={stats.conversation.totalTurns > 0 ? `${Math.round(stats.conversation.autoRate * 100)}%` : MEASURING}
+                /* 비율을 적는 자는 한 곳이다 (DS 67-1) — 종전 식(`Math.round(autoRate * 100)`)은
+                   999/1000 을 「100%」로 적어 상담원으로 넘어간 한 건을 지웠다. 셈도 서버가
+                   미리 반올림해 둔 `autoRate` 가 아니라 **괄호 안에 적는 그 두 수**로 한다. */
+                value={stats.conversation.totalTurns > 0
+                  ? percentLabel(stats.conversation.autoHandled, stats.conversation.totalTurns) ?? MEASURING
+                  : MEASURING}
                 empty={stats.conversation.totalTurns === 0}
                 note={
                   stats.conversation.totalTurns > 0
@@ -5103,7 +5165,8 @@ export default function AdminPage() {
                         {t.label || UNNAMED_TOPIC}
                       </span>
                       <div style={{ flex: 1, background: 'var(--brand-50)', borderRadius: 999, height: 10, minWidth: 60 }}>
-                        <div style={{ width: `${Math.max(6, Math.round((t.count / max) * 100))}%`, background: 'var(--brand)', borderRadius: 999, height: 10 }} />
+                        {/* 바닥을 두는 까닭은 추세 차트와 같다 (DS 67-3) — 자는 한 곳이다. */}
+                        <div style={{ width: `${barLen(t.count, max, 100, TOPIC_BAR_MIN)}%`, background: 'var(--brand)', borderRadius: 999, height: 10 }} />
                       </div>
                       <span style={{ ...S.tag, width: 40, textAlign: 'right' }}>{t.count}건</span>
                     </div>
@@ -5209,7 +5272,10 @@ export default function AdminPage() {
                 <>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 30, fontWeight: 800, letterSpacing: '-.02em', fontVariantNumeric: 'tabular-nums' }}>
-                      {stats.feedback.helpfulRate === null ? MEASURING : `${stats.feedback.helpfulRate}%`}
+                      {/* 서버의 `helpfulRate` 는 **이미 정수로 반올림된** 값이라 199/200 이
+                          「100%」로 온다 (DS 67-2) — 바로 옆 알약이 「아쉬워요 1건」이라고
+                          적고 있는데도 그렇다. 화면은 받은 두 수로 직접 적는다. */}
+                      {percentLabel(stats.feedback.up, stats.feedback.total) ?? MEASURING}
                     </span>
                     <span style={{ fontSize: 13, color: 'var(--sub)' }}>도움이 됐다는 응답</span>
                     <span className="ac-pill" style={TONE.ok}>도움됐어요 {comma(stats.feedback.up)}건</span>
@@ -6037,7 +6103,8 @@ export default function AdminPage() {
           at: (t: TicketView) => t.createdAt,
         }, `${escFilter}|${escQuery}`);
         const turnsTotal = stats?.conversation.totalTurns ?? 0;
-        const autoRate = stats && turnsTotal > 0 ? `${Math.round(stats.conversation.autoRate * 100)}%` : MEASURING;
+        // 같은 지표가 두 탭에 있다 — 적는 자도 하나다 (DS 67-1).
+        const autoRate = (stats && turnsTotal > 0 ? percentLabel(stats.conversation.autoHandled, turnsTotal) : null) ?? MEASURING;
         const FILTERS: { key: 'all' | TicketView['status']; label: string; n: number }[] = [
           { key: 'all', label: '전체', n: ticketTotal },
           { key: 'open', label: '대기', n: totals.open },
@@ -7216,7 +7283,10 @@ export default function AdminPage() {
                       <dt>주제</dt><dd>{t.intentLabel || UNNAMED_TOPIC}</dd>
                       <dt>근거</dt><dd>{sourceView(t.source)}{t.citation ? ` · ${t.citation.source}` : ''}</dd>
                       {t.citation && (<><dt>인용</dt><dd style={{ color: 'var(--sub)' }}>“{t.citation.snippet}”</dd></>)}
-                      {t.confidence !== undefined && (<><dt>확신도</dt><dd>{Math.round(t.confidence * 100)}% <span style={{ color: 'var(--mut)' }}>(엔진 판정값)</span></dd></>)}
+                      {/* 비율을 적는 자는 한 곳이다 (DS 67-1) — 엔진 값은 0.01 자리로 이미
+                          떨어져 있어 종전 식도 거짓말을 하지 않았지만, 같은 일을 두 벌로 두면
+                          다음에 값의 자릿수가 바뀔 때 이 자리만 남는다. */}
+                      {t.confidence !== undefined && (<><dt>확신도</dt><dd>{percentLabel(t.confidence, 1) ?? MEASURING} <span style={{ color: 'var(--mut)' }}>(엔진 판정값)</span></dd></>)}
                     </dl>
                   </div>
                 ))

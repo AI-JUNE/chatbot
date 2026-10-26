@@ -4284,3 +4284,29 @@ test('글의 경계를 짐작하는 자가 한 벌이다 (DS 66-1·66-2·66-3)',
     );
   }
 });
+
+/* ── 64차 재감사 — 비율을 백분율로 적는 자리 (DS 67-1·67-2) ── */
+test('비율을 백분율로 적는 자가 한 곳에 있다 (DS 67-1·67-2)', () => {
+  const n = read('src/lib/num.ts');
+  assert.match(n, /export function percentLabel/, '비율을 글자로 적는 자가 없다');
+  assert.match(n, /export const PERCENT_UNDER/, '0% 에 닿은 값을 적는 말이 없다');
+  assert.match(n, /export const PERCENT_OVER/, '100% 에 닿은 값을 적는 말이 없다');
+  // 0% 와 100% 는 실제로 0 과 전부일 때만 — 그 두 줄이 판정의 전부다.
+  assert.ok(n.includes("if (part === 0) return '0%';"), '0% 를 반올림으로 적는다');
+  assert.ok(n.includes("if (part >= whole) return '100%';"), '100% 를 반올림으로 적는다');
+
+  // 서버가 미리 반올림해 둔 칸은 **기계가 보는 칸**임을 적어 둔다(화면이 그대로 적으면 거짓말이다).
+  assert.match(read('src/lib/feedback.ts'), /lib\/num\.percentLabel/, 'helpfulRate 가 화면 글자로 쓰일 수 있다');
+
+  /**
+   * 사람이 읽는 **글자**를 손으로 반올림하는 자리가 0건인가.
+   * 막대 **길이**는 글자가 아니다 — 길이는 바닥을 두고 센다(DS 67-3). 그래서 `width:` 가
+   * 같은 줄에 있는 자리만 남는다(그 줄은 눈에 보이는 길이이고 수는 옆에 글자로 적는다).
+   */
+  for (const f of ['src/app/admin/page.tsx', 'src/components/ChatWidget.tsx', 'src/app/page.tsx']) {
+    for (const line of read(f).split('\n')) {
+      if (!/Math\.round\([^\n]*\* 100\)\}%/.test(line)) continue;
+      assert.match(line, /width:/, `${f}: 비율 글자를 손으로 반올림한다 — ${line.trim()}`);
+    }
+  }
+});
