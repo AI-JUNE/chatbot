@@ -1,11 +1,34 @@
-/**
- * 재감사에서 가설을 돌려 보던 **임시 스크립트의 잔재**입니다.
- *
- * 내용은 모두 정식 테스트로 옮겼습니다 — `tests/runtime.test.mjs`(DS 66-1·66-2·66-3 —
- * 번호 매긴 목록이 지식베이스에 남는지, 근거 발췌·카카오 말풍선이 소수점·주소 가운데서
- * 끊기지 않는지를 실제로 돌린다)·`tests/unit.test.mjs`(DS 66-x — 문장 끝·제목 판정을
- * 제 식으로 재는 자리가 0건인지 소스로 고정한다).
- * 이 파일은 `node --test "tests/*.test.mjs"` 대상이 아닙니다
- * (자동 실행 세션에서 파일 삭제가 허용되지 않아 지우지 못했습니다 — 그냥 지우면 됩니다).
- */
-export {};
+/** 64차 재감사 가설 확인용 임시 스크립트 — 끝나면 설명 주석으로 되돌린다. */
+import { importLib } from './_compile.mjs';
+
+const S = await importLib('slots', ['normalize', 'handoff', 'kst', 'refusal']);
+const NOW = new Date('2026-09-03T01:00:00Z'); // KST 2026-09-03 10:00
+const DT = { key: 'datetime', label: '희망 일시', kind: 'datetime', hint: '예: 내일 오후 2시', required: true };
+
+const show = (label, v) => console.log(label.padEnd(34), JSON.stringify(v));
+
+console.log('── ① 없는 날짜 ──');
+show('2월 31일 2시', S.parseDateTimeParts('2월 31일 2시', NOW));
+show('4/31 14시', S.parseDateTimeParts('4/31 14시', NOW));
+show('2026-02-30 14:00', S.parseDateTimeParts('2026-02-30 14:00', NOW));
+show('2027-02-29 14:00', S.parseDateTimeParts('2027-02-29 14:00', NOW));
+show('validate 2월 31일', S.validateSlot(DT, '2월 31일 오후 2시', NOW));
+show('validate 2027-02-30', S.validateSlot(DT, '2027-02-30 14:00', NOW));
+
+console.log('── ② 시 뒤 숫자 ──');
+show('내일 오후 2시 4명이요', S.parseDateTimeParts('내일 오후 2시 4명이요', NOW));
+show('내일 2시 10명', S.parseDateTimeParts('내일 2시 10명', NOW));
+show('내일 오후 2시 (정상)', S.parseDateTimeParts('내일 오후 2시', NOW));
+show('내일 오후 2시 30분 (정상)', S.parseDateTimeParts('내일 오후 2시 30분', NOW));
+show('내일 14:30 (정상)', S.parseDateTimeParts('내일 14:30', NOW));
+show('내일 2시 반 (정상)', S.parseDateTimeParts('내일 2시 반', NOW));
+show('validate 2시 4명', S.validateSlot(DT, '내일 오후 2시 4명이요', NOW));
+
+console.log('── ③ 오전·오후 ──');
+show('내일 밤 12시', S.parseDateTimeParts('내일 밤 12시', NOW));
+show('내일 낮 12시', S.parseDateTimeParts('내일 낮 12시', NOW));
+show('오후는 안 되고 오전 10시', S.parseDateTimeParts('내일 오후는 안 되고 오전 10시', NOW));
+show('오전 말고 오후 3시', S.parseDateTimeParts('내일 오전 말고 오후 3시', NOW));
+show('내일 저녁 12시', S.parseDateTimeParts('내일 저녁 12시', NOW));
+show('내일 오전 12시', S.parseDateTimeParts('내일 오전 12시', NOW));
+show('내일 새벽 2시 (정상)', S.parseDateTimeParts('내일 새벽 2시', NOW));
