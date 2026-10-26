@@ -52,6 +52,21 @@ export function compareYmd(a: KstYmd, b: KstYmd): number {
   return a.y !== b.y ? a.y - b.y : a.m !== b.m ? a.m - b.m : a.d - b.d;
 }
 
+/**
+ * **달력에 있는 날인가** — 「2월 31일」·「2026년 2월 30일」은 없는 날이다 (DS 68-1).
+ *
+ * `normalizeYmd` 와 쌍이다. 저쪽은 **날짜를 셈하는** 자리의 자다(「모레」 = 오늘+2 → 달을 넘긴다)
+ * — 넘겨 주는 것이 하는 일이다. 이쪽은 **사람이 말한 날을 받는** 자리의 자다: 거기서 넘기면
+ * 고객이 말하지 않은 날이 접수된다(「2월 31일 오후 2시」가 「3월 3일 오후 2시」로 확정됐다).
+ * 두 일을 한 함수에 맡길 수 없어 묻는 자를 따로 둔다 — 넘길 것인가 되물을 것인가는
+ * **부르는 쪽**이 아는 사실이다.
+ */
+export function isRealYmd(y: number, m: number, d: number): boolean {
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return false;
+  const t = normalizeYmd(y, m, d);
+  return t.y === y && t.m === m && t.d === d;
+}
+
 /** 한국 시간 기준 오늘 날짜 'YYYY-MM-DD'. */
 export function kstDate(at: Date = new Date()): string {
   return ymdToString(kstYmd(at));

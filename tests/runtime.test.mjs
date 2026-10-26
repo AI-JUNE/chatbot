@@ -6695,3 +6695,173 @@ test('비율 글자가 0%·100% 를 지어내지 않는다 (DS 67-1·67-2)', opt
   assert.equal(`${Math.round(st.autoRate * 100)}%`, '100%', '재현이 깨졌다');
   C.resetLogs();
 });
+
+/* ══════════ 68순위 — 65차 재감사 (DS 68-1·68-2·68-3) ══════════ */
+
+/**
+ * DS 68-1 — **달력에 없는 날을 가까운 있는 날로 옮겨 접수하던 자리.**
+ *
+ * 날짜를 셈하는 자(`kst.normalizeYmd`)는 넘겨 주는 것이 제 일이다(「모레」 = 오늘+2). 그 자를
+ * **사람이 말한 날을 받는** 자리에서도 썼기 때문에, 「2월 31일 오후 2시」가 3월 3일 오후 2시로
+ * 확정돼 고객에게 되읽히고 접수번호까지 받았다 — 고객이 말하지 않은 날이다(§13).
+ * 연도를 적은 쪽(`2026-02-30`)은 검사조차 없어 **없는 날이 그대로** 운영자 화면에 섰다.
+ */
+test('달력에 없는 날은 다른 날로 옮기지 않고 되묻는다 (DS 68-1)', opts, async () => {
+  const S = await slotsLib();
+  const K = await eng('kst');
+
+  // ① 종전 식 재현 — 날짜 셈하는 자가 「2월 31일」을 넘겨 준다(그 값이 그대로 확정됐다).
+  assert.deepEqual(K.normalizeYmd(2026, 2, 31), { y: 2026, m: 3, d: 3 }, '재현이 깨졌다');
+  assert.deepEqual(K.normalizeYmd(2027, 2, 29), { y: 2027, m: 3, d: 1 }, '재현이 깨졌다');
+
+  // ② 묻는 자는 넘기지 않고 「있는 날인가」만 답한다 — 둘은 다른 일이다.
+  for (const [y, m, d] of [[2026, 2, 28], [2028, 2, 29], [2026, 12, 31], [2026, 9, 30]]) {
+    assert.equal(K.isRealYmd(y, m, d), true, `${y}-${m}-${d} 가 없는 날로 읽힌다`);
+  }
+  for (const [y, m, d] of [[2026, 2, 29], [2026, 2, 30], [2027, 2, 29], [2026, 4, 31], [2026, 13, 1], [2026, 9, 31]]) {
+    assert.equal(K.isRealYmd(y, m, d), false, `${y}-${m}-${d} 를 있는 날로 읽는다`);
+  }
+
+  // ③ 파서 — 없는 날은 `date` 가 비고, **무엇을 말했는지**는 남는다(「못 알아들었다」와 다른 사실).
+  const noDay = S.parseDateTimeParts('2월 31일 오후 2시', FIXED_NOW);
+  assert.equal(noDay.date, null, '없는 날이 날짜로 확정됐다');
+  assert.equal(noDay.impossible, '2월 31일');
+  assert.equal(noDay.time, '14:00', '알아들은 시각까지 함께 잃으면 안 된다');
+  assert.equal(S.parseDateTimeParts('2026-02-30 14:00', FIXED_NOW).impossible, '2026년 2월 30일');
+  assert.equal(S.parseDateTimeParts('4/31 14시', FIXED_NOW).impossible, '4월 31일');
+  // 윤년이 아닌 해의 2월 29일 — 올해도 내년도 없는 날이다(연도를 적지 않은 쪽).
+  assert.equal(S.parseDateTimeParts('2월 29일 오후 2시', FIXED_NOW).impossible, '2월 29일');
+  // 윤년을 적어 말하면 그대로 받는다(없는 날만 막는다).
+  assert.equal(S.parseDateTimeParts('2028-02-29 14:00', FIXED_NOW).date, '2028-02-29');
+  // 멀쩡한 날은 종전 그대로 — 「지났으면 내년」 보정도 그대로다.
+  assert.equal(S.parseDateTimeParts('9월 10일 14시', FIXED_NOW).date, '2026-09-10');
+  assert.equal(S.parseDateTimeParts('1월 5일', FIXED_NOW).date, '2027-01-05');
+  assert.equal(S.parseDateTimeParts('9월 10일 14시', FIXED_NOW).impossible, undefined, '멀쩡한 날에 칸이 붙었다');
+
+  // ④ 화면에 뜨는 결과 — 접수되지 않고, 어느 날이 없는 날인지 말한다.
+  const refused = S.validateSlot(DT_SLOT, '2월 31일 오후 2시', FIXED_NOW);
+  assert.equal(refused.ok, false, '없는 날로 예약이 접수된다');
+  assert.match(refused.message, /^2월 31일은 달력에 없는 날이에요\./, refused.message);
+  assert.match(refused.message, /날짜를 다시 알려주세요/, '다음에 할 일을 말해야 한다');
+  assert.deepEqual(refused.parts, { date: null, time: '14:00' }, '알아들은 시각은 들고 있어야 한다');
+  assert.equal(/을\(를\)|이\(가\)|은\(는\)/.test(refused.message), false, '괄호 조사가 남았다');
+
+  // ⑤ 들고 있던 반쪽 날짜로 메우지 않는다 — 고객은 방금 **다른 날**을 말했다(없는 날일 뿐이다).
+  const withCarry = S.validateSlot(DT_SLOT, '2월 31일', FIXED_NOW, { date: '2026-09-04', time: '14:00' });
+  assert.equal(withCarry.ok, false, '앞 턴의 날짜로 확정했다');
+  assert.match(withCarry.message, /달력에 없는 날/);
+
+  // ⑥ 폼을 실제로 돌려도 다음 항목으로 넘어가지 않는다(같은 항목을 다시 묻는다).
+  const form = S.getForm('reservation');
+  let st = S.startForm(form).state;
+  st = S.applyInput(form, st, '홍길동', FIXED_NOW).state;
+  const r = S.applyInput(form, st, '2026-02-30 오후 2시', FIXED_NOW);
+  assert.equal(r.kind, 'invalid');
+  assert.equal(r.state.asked, 'datetime', '없는 날로 확정하고 연락처를 물었다');
+  assert.equal(r.state.values.datetime, undefined);
+  assert.match(r.message, /달력에 없는 날/);
+});
+
+/**
+ * DS 68-2 — **「시」 뒤의 맨 수를 분으로 읽던 자리.**
+ *
+ * 예약 말투에서 그 자리에 오는 수는 분보다 인원·개수일 때가 많다 — 「내일 오후 2시 4명이요」가
+ * 오후 **2시 4분**으로 확정됐다. 고객은 2시를 말했고 접수에는 2시 4분이 적힌다.
+ */
+test('「시」 뒤의 맨 수를 분으로 읽지 않는다 (DS 68-2)', opts, async () => {
+  const S = await slotsLib();
+
+  // ① 종전 식 재현 — 분 표시가 없어도 분으로 읽었다.
+  const naive = (t) => {
+    const hm = t.match(/(\d{1,2})\s*[:시]\s*(?:(\d{1,2})\s*(?:분)?|(반))?/);
+    const mnt = hm[3] ? 30 : hm[2] === undefined || hm[2] === '' ? 0 : Number(hm[2]);
+    return `${String(Number(hm[1])).padStart(2, '0')}:${String(mnt).padStart(2, '0')}`;
+  };
+  assert.equal(naive('오후 2시 4명이요'), '02:04', '재현이 깨졌다');
+  assert.equal(naive('2시 10명'), '02:10', '재현이 깨졌다');
+
+  // ② 분은 **분이라고 적힌 것만** 분이다.
+  for (const [input, want] of [
+    ['내일 오후 2시 4명이요', '14:00'],
+    ['내일 2시 10명', '02:00'],
+    ['내일 오후 2시 2분', '14:02'],
+    ['내일 오후 2시30분', '14:30'],
+    ['내일 오후 2시 30분', '14:30'],
+    ['내일 2시 반', '02:30'],
+    ['내일 2시반', '02:30'],
+    ['내일 14:30', '14:30'],
+    ['내일 오후 2시', '14:00'],
+    ['내일 오후 2:05', '14:05'],
+  ]) {
+    assert.equal(S.parseDateTimeParts(input, FIXED_NOW).time, want, input);
+  }
+
+  // ③ 화면에 뜨는 결과 — 고객이 말한 시각으로 접수된다.
+  assert.deepEqual(
+    S.validateSlot(DT_SLOT, '내일 오후 2시 4명이요', FIXED_NOW),
+    { ok: true, value: '2026-09-04 14:00' },
+    '고객이 말하지 않은 분이 접수에 적힌다',
+  );
+});
+
+/**
+ * DS 68-3 — **오전·오후를 문장 어디서든 주워 쓰던 자리.**
+ *
+ * `/오후|저녁|밤|pm/i.test(t)` 는 그 낱말이 **어느 수에 딸린 것인지** 묻지 않는다. 그래서
+ * 「오후는 안 되고 오전 10시요」가 오후 10시로 확정됐다 — 고객이 안 된다고 말한 반나절이다.
+ * 「낮」은 어느 표에도 없어 「낮 2시」가 새벽 2시였고, 「밤 12시」는 어느 가지에도 걸리지 않아
+ * **정오**로 확정됐다.
+ */
+test('오전·오후는 그 시각에 딸린 것만 본다 (DS 68-3)', opts, async () => {
+  const S = await slotsLib();
+
+  // ① 종전 식 재현 — 문장 전체에서 찾으므로 어느 수의 것인지 모른다.
+  const naive = (t, h) => {
+    const pm = /오후|저녁|밤|pm/i.test(t);
+    const am = /오전|아침|새벽|am/i.test(t);
+    let v = h;
+    if (pm && v < 12) v += 12;
+    if (am && v === 12) v = 0;
+    return v;
+  };
+  assert.equal(naive('오후는 안 되고 오전 10시', 10), 22, '재현이 깨졌다');
+  assert.equal(naive('낮 2시', 2), 2, '재현이 깨졌다');
+  assert.equal(naive('밤 12시', 12), 12, '재현이 깨졌다');
+
+  // ② 수 **앞의 가장 가까운** 가림말을 쓴다.
+  for (const [input, want] of [
+    ['내일 오후는 안 되고 오전 10시', '10:00'],
+    ['내일 오전 말고 오후 3시', '15:00'],
+    ['내일 오후 2시', '14:00'],
+    ['내일 오전 9시', '09:00'],
+    ['내일 새벽 2시', '02:00'],
+    ['내일 아침 9시', '09:00'],
+    ['내일 저녁 7시', '19:00'],
+    // 「낮」은 1~6시만 오후로 본다 — 「낮 11시」는 오전이다.
+    ['내일 낮 2시', '14:00'],
+    ['내일 낮 11시', '11:00'],
+    ['내일 낮 12시', '12:00'],
+    ['내일 정오 12시', '12:00'],
+    // 12시의 반나절 — 오전 12시는 자정, 밤 9시는 21시.
+    ['내일 오전 12시', '00:00'],
+    ['내일 밤 9시', '21:00'],
+  ]) {
+    assert.equal(S.parseDateTimeParts(input, FIXED_NOW).time, want, input);
+  }
+
+  // ③ 「밤 12시」·「자정」은 그 날이 **끝나는** 자리다 — 다음 날 0시다.
+  assert.deepEqual(S.parseDateTimeParts('오늘 밤 12시', FIXED_NOW), { date: '2026-09-04', time: '00:00' });
+  assert.deepEqual(S.parseDateTimeParts('내일 밤 12시', FIXED_NOW), { date: '2026-09-05', time: '00:00' });
+
+  // ④ 화면에 뜨는 결과 — 고객이 안 된다고 말한 반나절로 접수되지 않는다.
+  assert.deepEqual(
+    S.validateSlot(DT_SLOT, '내일 오후는 안 되고 오전 10시요', FIXED_NOW),
+    { ok: true, value: '2026-09-04 10:00' },
+    '고객이 안 된다고 말한 반나절로 접수된다',
+  );
+  // 「낮 2시」가 새벽 2시로 접수되면 지난 때로 거절되거나 **한밤중 예약**이 된다.
+  assert.deepEqual(
+    S.validateSlot(DT_SLOT, '내일 낮 2시', FIXED_NOW),
+    { ok: true, value: '2026-09-04 14:00' },
+  );
+});

@@ -1,34 +1,13 @@
-/** 64차 재감사 가설 확인용 임시 스크립트 — 끝나면 설명 주석으로 되돌린다. */
-import { importLib } from './_compile.mjs';
-
-const S = await importLib('slots', ['normalize', 'handoff', 'kst', 'refusal']);
-const NOW = new Date('2026-09-03T01:00:00Z'); // KST 2026-09-03 10:00
-const DT = { key: 'datetime', label: '희망 일시', kind: 'datetime', hint: '예: 내일 오후 2시', required: true };
-
-const show = (label, v) => console.log(label.padEnd(34), JSON.stringify(v));
-
-console.log('── ① 없는 날짜 ──');
-show('2월 31일 2시', S.parseDateTimeParts('2월 31일 2시', NOW));
-show('4/31 14시', S.parseDateTimeParts('4/31 14시', NOW));
-show('2026-02-30 14:00', S.parseDateTimeParts('2026-02-30 14:00', NOW));
-show('2027-02-29 14:00', S.parseDateTimeParts('2027-02-29 14:00', NOW));
-show('validate 2월 31일', S.validateSlot(DT, '2월 31일 오후 2시', NOW));
-show('validate 2027-02-30', S.validateSlot(DT, '2027-02-30 14:00', NOW));
-
-console.log('── ② 시 뒤 숫자 ──');
-show('내일 오후 2시 4명이요', S.parseDateTimeParts('내일 오후 2시 4명이요', NOW));
-show('내일 2시 10명', S.parseDateTimeParts('내일 2시 10명', NOW));
-show('내일 오후 2시 (정상)', S.parseDateTimeParts('내일 오후 2시', NOW));
-show('내일 오후 2시 30분 (정상)', S.parseDateTimeParts('내일 오후 2시 30분', NOW));
-show('내일 14:30 (정상)', S.parseDateTimeParts('내일 14:30', NOW));
-show('내일 2시 반 (정상)', S.parseDateTimeParts('내일 2시 반', NOW));
-show('validate 2시 4명', S.validateSlot(DT, '내일 오후 2시 4명이요', NOW));
-
-console.log('── ③ 오전·오후 ──');
-show('내일 밤 12시', S.parseDateTimeParts('내일 밤 12시', NOW));
-show('내일 낮 12시', S.parseDateTimeParts('내일 낮 12시', NOW));
-show('오후는 안 되고 오전 10시', S.parseDateTimeParts('내일 오후는 안 되고 오전 10시', NOW));
-show('오전 말고 오후 3시', S.parseDateTimeParts('내일 오전 말고 오후 3시', NOW));
-show('내일 저녁 12시', S.parseDateTimeParts('내일 저녁 12시', NOW));
-show('내일 오전 12시', S.parseDateTimeParts('내일 오전 12시', NOW));
-show('내일 새벽 2시 (정상)', S.parseDateTimeParts('내일 새벽 2시', NOW));
+/**
+ * 재감사 가설 확인용 **임시** 스크립트 자리 — 돌려 보고 나면 이 주석만 남긴다.
+ *
+ * 쓰는 법: `importLib('<모듈>', [의존 모듈…])` 로 `src/lib` 을 컴파일해 그대로 불러
+ * 값을 찍어 본다(`node tests/_probe.mjs`). 테스트 파일이 아니므로 `node --test` 는 읽지 않는다.
+ *
+ * 왜 비워 두는가: 여기 남은 코드는 **어느 회차의 가설인지 알 수 없는 글**이 된다. 가설이
+ * 결함으로 확인되면 그 재현은 `tests/*.test.mjs` 로 옮겨 적고(「종전 식 재현」 줄이 그것이다),
+ * 아니면 재감사 기록의 「고치지 않은 것」에 적는다 — 둘 중 하나로 끝난다.
+ *
+ * 마지막 쓰임: 65차 재감사(DS 68-1·68-2·68-3) — 예약 접수가 고객이 말한 때를 알아듣는 자리.
+ * 그때 받아 낸 값은 `tests/runtime.test.mjs` 의 「종전 식 재현」 줄에 그대로 옮겨 적었다.
+ */

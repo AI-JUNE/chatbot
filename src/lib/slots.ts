@@ -18,7 +18,7 @@
 import { maskPii } from '@/lib/handoff';
 import { findContact } from '@/lib/pii';
 import { compact, keywordHit, prepare } from '@/lib/normalize';
-import { compareYmd, kstTime, kstYmd, normalizeYmd, ymdToString } from '@/lib/kst';
+import { compareYmd, isRealYmd, kstTime, kstYmd, normalizeYmd, ymdToString } from '@/lib/kst';
 import { josa } from '@/lib/refusal';
 
 /** 슬롯 값의 종류. 종류마다 검증·정규화 규칙이 다르다. */
@@ -61,6 +61,15 @@ export const MAX_SLOT_RETRIES = 3;
 export interface DateTimeParts {
   date: string | null;
   time: string | null;
+  /**
+   * 고객이 말한 날이 **달력에 없는 날**일 때, 그 날을 고객이 말한 그대로 (DS 68-1).
+   *
+   * 「못 알아들었다」(둘 다 null)와 다른 사실이다 — 무엇을 말했는지는 알고, 그 날이 없다는
+   * 것까지 안다. 그래서 되묻는 문장도 다르다(「날짜·시간을 알아보지 못했어요」가 아니라
+   * 「2월 31일은 달력에 없는 날이에요」). 이 칸이 있으면 `date` 는 반드시 null 이다 —
+   * 없는 날을 **가까운 있는 날로 옮기지 않는다**(그 날은 고객이 말한 날이 아니다).
+   */
+  impossible?: string;
 }
 
 /** 진행 중인 수집 상태. 세션(src/lib/session.ts)에 그대로 저장된다. */
@@ -231,6 +240,64 @@ function pad(n: number): string {
 }
 
 /**
+ * 「몇 시」의 **분**은 분이라고 적힌 것만 분이다 (DS 68-2).
+ *
+ * 종전 식(`(\d{1,2})\s*[:시]\s*(?:(\d{1,2})\s*(?:분)?|(반))?`)은 「시」 뒤의 **맨 수**를 분으로
+ * 읽었다. 그런데 예약 말투에서 그 자리에 오는 수는 분보다 **인원·개수**일 때가 훨씬 많다 —
+ * 「내일 오후 2시 4명이요」가 **오후 2시 4분**으로, 「내일 2시 10명」이 **2시 10분**으로 확정됐다.
+ * 고객은 2시를 말했고 접수에는 2시 4분이 적힌다(§13 — 우리가 만든 수다).
+ *
+ * 사람이 분을 말할 때는 거의 늘 「분」을 붙이거나(「2시 30분」) 「반」이라 하거나(「2시 반」)
+ * 콜론으로 적는다(「14:30」). 세 가지만 분으로 받는다 — 놓치는 쪽의 손해는 고객이 분을 한 번 더
+ * 말하는 것이고, 단정하는 쪽의 손해는 말하지 않은 시각으로 접수되는 것이다.
+ */
+const HOUR_KO = /(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분|\s*(반))?/;
+const HOUR_COLON = /(\d{1,2})\s*:\s*(\d{1,2})/;
+
+/**
+ * 「몇 시」에 딸린 때 가림말의 종류 (DS 68-3).
+ *  - `am` 오전·아침·새벽 — 12시는 자정(0시)
+ *  - `pm` 오후·저녁 — 12시 미만이면 12를 더한다
+ *  - `night` 밤·자정 — 12시는 **그 날이 끝나는 자리**(다음 날 0시)
+ *  - `day` 낮·정오 — 1~6시만 오후로 본다(「낮 2시」=14시 · 「낮 11시」=11시 · 「정오 12시」=12시)
+ */
+type Meridiem = 'am' | 'pm' | 'night' | 'day';
+
+const MERIDIEM_RE = /오전|아침|새벽|자정|오후|저녁|정오|낮|밤/g;
+const MERIDIEM_KIND: Record<string, Meridiem> = {
+  오전: 'am', 아침: 'am', 새벽: 'am',
+  오후: 'pm', 저녁: 'pm',
+  자정: 'night', 밤: 'night',
+  정오: 'day', 낮: 'day',
+};
+
+/**
+ * 그 시각에 **딸린** 가림말을 고른다 (DS 68-3).
+ *
+ * 종전에는 문장 **어디에든** 「오후」가 있으면 오후로 읽었다(`/오후|저녁|밤|pm/i.test(t)`).
+ * 그래서 「오후는 안 되고 오전 10시요」가 **오후 10시**로 확정됐다 — 고객이 안 된다고 말한
+ * 바로 그 반나절로 접수된다. 「낮」은 어느 표에도 없어 「낮 2시」가 **새벽 2시**였다.
+ *
+ * 고르는 차례: 수 바로 뒤의 `am`·`pm`(가장 또렷한 표시) → 수 **앞의 가장 가까운** 가림말
+ * → (앞에 없으면) 뒤의 첫 가림말. 앞을 먼저 보는 까닭은 한국어가 「오후 2시」처럼 앞에
+ * 붙이는 말이어서다 — 뒤에 있는 말은 다른 수의 것일 때가 많다.
+ */
+function meridiemFor(text: string, from: number, to: number): Meridiem | null {
+  const ascii = /^\s*([ap])\.?\s?m\.?/i.exec(text.slice(to));
+  if (ascii) return ascii[1].toLowerCase() === 'p' ? 'pm' : 'am';
+  let before: Meridiem | null = null;
+  let after: Meridiem | null = null;
+  for (const m of text.matchAll(MERIDIEM_RE)) {
+    const kind = MERIDIEM_KIND[m[0]];
+    if (!kind) continue;
+    const at = m.index ?? 0;
+    if (at < from) before = kind;
+    else if (after === null) after = kind;
+  }
+  return before ?? after;
+}
+
+/**
  * 한국어 날짜·시간 표현에서 **알아들은 쪽만** 뽑는다(둘 다 못 찾으면 둘 다 null).
  * 지원: 오늘/내일/모레(내일모레)/글피 · YYYY-MM-DD · M/D · M월 D일 · HH시(분·반) · 오전·오후 · HH:MM
  *
@@ -249,21 +316,36 @@ export function parseDateTimeParts(input: string, now: Date = new Date()): DateT
   if (!t) return { date: null, time: null };
 
   let date: string | null = null;
+  /** 달력에 없는 날을 말했다 — 「못 알아들었다」와 다른 사실이다 (DS 68-1). */
+  let impossible: string | null = null;
   const iso = t.match(/(20\d{2})[-./](\d{1,2})[-./](\d{1,2})/);
   const md = t.match(/(?:^|[^\d])(\d{1,2})\s*(?:월|[/.\-])\s*(\d{1,2})\s*(?:일)?/);
   if (iso) {
     const y = Number(iso[1]);
     const m = Number(iso[2]);
     const d = Number(iso[3]);
-    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) date = `${y}-${pad(m)}-${pad(d)}`;
+    // 연도까지 적은 날은 **그 날이 달력에 있을 때만** 받는다 (DS 68-1) — 종전에는 「1~12월·
+    // 1~31일」만 보고 `2026-02-30` 을 그대로 실어 보냈다(운영자 화면에 없는 날이 접수로 선다).
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      if (isRealYmd(y, m, d)) date = `${y}-${pad(m)}-${pad(d)}`;
+      else impossible = `${y}년 ${m}월 ${d}일`;
+    }
   } else if (md) {
     const m = Number(md[1]);
     const d = Number(md[2]);
     if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
       // 연도 미기재 — 이미 지난 날짜면 내년으로 본다(예약은 미래가 기본).
+      //
+      // **없는 날을 넘기지 않는다** (DS 68-1): 종전에는 `normalizeYmd` 가 「2월 31일」을
+      // 3월 3일로 넘겨 주었고, 그 날이 그대로 확정돼 고객에게 되읽혔다. 달력에 있는 해만
+      // 고르고(윤년 2월 29일은 올해·내년에 없을 수 있다), 하나도 없으면 되묻는다.
       const today = kstYmd(now);
-      const cand = normalizeYmd(today.y, m, d);
-      date = ymdToString(compareYmd(cand, today) < 0 ? normalizeYmd(today.y + 1, m, d) : cand);
+      const years = [today.y, today.y + 1].filter((y) => isRealYmd(y, m, d));
+      if (!years.length) impossible = `${m}월 ${d}일`;
+      else {
+        const y = years.find((yy) => compareYmd({ y: yy, m, d }, today) >= 0) ?? years[years.length - 1];
+        date = ymdToString({ y, m, d });
+      }
     }
   } else {
     for (const [re, offset] of RELATIVE_DAYS) {
@@ -280,18 +362,34 @@ export function parseDateTimeParts(input: string, now: Date = new Date()): DateT
   // 봇은 그것을 「오후 2시」라고 되읽었다(30분 당겨진 약속이 접수된다). 「시」 바로 뒤의 「반」만
   // 본다. 「3시 반납」 같은 말은 30분으로 읽히지만, 그 값은 **되읽어 주므로** 고객이 고칠 수 있다
   // — 조용히 2시 00분으로 적어 두는 쪽(종전)이 고칠 기회조차 없다.
-  const hm = t.match(/(\d{1,2})\s*[:시]\s*(?:(\d{1,2})\s*(?:분)?|(반))?/);
+  //
+  // 「시」 꼴과 콜론 꼴을 **따로** 본다 (DS 68-2) — 한 식으로 `[:시]` 를 묶으면 「시」 뒤의 맨 수가
+  // 분이 된다. 둘 다 걸리면 **앞에 있는 것**을 쓴다(종전 식도 왼쪽부터 찾았다).
+  const ko = t.match(HOUR_KO);
+  const colon = t.match(HOUR_COLON);
+  const hm = !ko ? colon : !colon ? ko : (ko.index ?? 0) <= (colon.index ?? 0) ? ko : colon;
   if (hm) {
-    let h = Number(hm[1]);
-    const mnt = hm[3] ? 30 : hm[2] === undefined || hm[2] === '' ? 0 : Number(hm[2]);
-    const pm = /오후|저녁|밤|pm/i.test(t);
-    const am = /오전|아침|새벽|am/i.test(t);
-    if (pm && h < 12) h += 12;
-    if (am && h === 12) h = 0;
-    if (h >= 0 && h <= 23 && mnt >= 0 && mnt <= 59) time = `${pad(h)}:${pad(mnt)}`;
+    const spoken = Number(hm[1]);
+    let h = spoken;
+    const mnt = hm === ko ? (hm[3] ? 30 : hm[2] === undefined ? 0 : Number(hm[2])) : Number(hm[2]);
+    const from = hm.index ?? 0;
+    const half = meridiemFor(t, from, from + hm[0].length);
+    if (half === 'pm' && h < 12) h += 12;
+    else if (half === 'am' && h === 12) h = 0;
+    else if (half === 'night') h = h === 12 ? 0 : h < 12 ? h + 12 : h;
+    else if (half === 'day' && h >= 1 && h <= 6) h += 12;
+    if (h >= 0 && h <= 23 && mnt >= 0 && mnt <= 59) {
+      time = `${pad(h)}:${pad(mnt)}`;
+      // 「밤 12시」·「자정」은 그 날이 **끝나는** 자리다 — 자정은 다음 날 0시다 (DS 68-3).
+      // 종전에는 `pm && h < 12` 에 걸리지 않아 **정오**로 확정됐다(「오늘 밤 12시」가 점심때다).
+      if (half === 'night' && spoken === 12 && date) {
+        const [y, m, d] = date.split('-').map(Number);
+        date = ymdToString(normalizeYmd(y, m, d + 1));
+      }
+    }
   }
 
-  return { date, time };
+  return { date, time, ...(impossible ? { impossible } : {}) };
 }
 
 /**
@@ -384,6 +482,23 @@ export function validateSlot(slot: SlotSpec, input: string, now: Date = new Date
   if (slot.kind === 'datetime') {
     // 이번 입력에서 알아들은 쪽이 먼저고, 비어 있는 쪽만 앞 턴에서 알아들은 값으로 메운다.
     const got = parseDateTimeParts(raw, now);
+
+    /**
+     * 달력에 없는 날은 **가까운 있는 날로 옮기지 않는다** (DS 68-1).
+     *
+     * 들고 있던 반쪽 날짜로 메우지도 않는다 — 고객은 방금 **다른 날**을 말했고(그 날이 없을
+     * 뿐이다), 앞 턴의 날짜로 확정하면 말하지 않은 날로 접수된다. 알아들은 **시각**은 들고
+     * 있는다(DS 30-2 의 규칙 그대로 — 모르는 쪽만 다시 묻는다).
+     */
+    if (got.impossible) {
+      const time = got.time ?? carry?.time ?? null;
+      return {
+        ok: false,
+        message: `${josa(got.impossible, '은', '는')} 달력에 없는 날이에요. 날짜를 다시 알려주세요. ${slot.hint}`,
+        ...(time ? { parts: { date: null, time } } : {}),
+      };
+    }
+
     const date = got.date ?? carry?.date ?? null;
     const time = got.time ?? carry?.time ?? null;
 

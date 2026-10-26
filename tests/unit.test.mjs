@@ -4310,3 +4310,45 @@ test('비율을 백분율로 적는 자가 한 곳에 있다 (DS 67-1·67-2)', (
     }
   }
 });
+
+/* ── 65차 재감사 — 고객이 말한 때를 알아듣는 자리 (DS 68-1·68-2·68-3) ── */
+
+test('사람이 말한 날은 달력에 있는 날만 받는다 (DS 68-1)', () => {
+  const k = read('src/lib/kst.ts');
+  assert.match(k, /export function isRealYmd/, '「달력에 있는 날인가」를 묻는 자가 없다');
+  // 넘겨 주는 자(`normalizeYmd`)와 묻는 자가 **다른 일**임을 주석이 말해야 한다(다음 사람이
+  // 같은 자를 양쪽에 쓰지 않게 — 그 한 번이 「2월 31일 → 3월 3일」로 접수된 자리다).
+  assert.match(k, /DS 68-1/, '두 자의 쓰임을 가른 근거가 적혀 있지 않다');
+
+  const s = stripComments(read('src/lib/slots.ts'));
+  assert.match(s, /isRealYmd/, '사람이 말한 날을 받는 자리가 달력을 묻지 않는다');
+  // 연도를 적은 쪽·적지 않은 쪽 **둘 다** 지난다.
+  assert.match(s, /if \(isRealYmd\(y, m, d\)\) date =/, '연도를 적은 날이 달력을 지나지 않는다');
+  assert.match(s, /\.filter\(\(y\) => isRealYmd\(y, m, d\)\)/, '연도 미기재 날이 달력을 지나지 않는다');
+  // 없는 날은 **옮기지 않는다** — 그 사실을 들고 나가는 칸이 있어야 되묻는 문장이 달라진다.
+  assert.match(s, /impossible\?: string/, '「없는 날」과 「못 알아들었다」가 같은 값이 된다');
+  assert.match(read('src/lib/slots.ts'), /달력에 없는 날이에요/, '어느 날이 없는 날인지 말하지 않는다');
+});
+
+test('시각 판정이 그 수에 딸린 것만 본다 (DS 68-2·68-3)', () => {
+  const body = stripComments(read('src/lib/slots.ts'));
+
+  // ① 분은 분 표시가 있을 때만 — 「시」와 콜론을 한 식으로 묶으면 뒤의 맨 수가 분이 된다.
+  assert.equal(/\[:시\]/.test(body), false, '「시」와 콜론을 한 식으로 묶어 맨 수를 분으로 읽는다');
+  assert.match(body, /const HOUR_KO = /, '「몇 시」 꼴을 따로 보는 식이 없다');
+  assert.match(body, /const HOUR_COLON = /, '콜론 꼴을 따로 보는 식이 없다');
+  assert.ok(body.includes('(?:\\s*(\\d{1,2})\\s*분|\\s*(반))?'), '분 표시(분·반)를 요구하지 않는다');
+
+  // ② 반나절은 **문장 전체**에서 줍지 않는다 — 그 수 앞의 가장 가까운 말만 본다.
+  assert.equal(
+    /\/[^/\n]*오후[^/\n]*\/i?\.test\(/.test(body),
+    false,
+    '반나절을 문장 전체에서 찾는다(다른 수의 것이 섞인다)',
+  );
+  assert.match(body, /function meridiemFor\(text: string, from: number, to: number\)/, '딸린 가림말을 고르는 자가 없다');
+  assert.match(body, /const half = meridiemFor\(t, from, from \+ hm\[0\]\.length\)/, '시각 판정이 그 자를 지나지 않는다');
+  // 종전 표에 없어 통째로 틀렸던 두 낱말이 들어 있어야 한다(「낮 2시」=새벽 2시 · 「밤 12시」=정오).
+  for (const word of ['낮', '정오', '밤', '자정', '아침', '새벽', '저녁']) {
+    assert.ok(body.includes(`${word}:`), `반나절 표에서 빠졌다: ${word}`);
+  }
+});
