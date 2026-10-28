@@ -3936,3 +3936,51 @@ test('0 이 아닌 막대가 사라지지 않는다 (DS 67-3)', opts, async () =
   // 스크린리더가 읽는 글은 막대가 아니라 수다 — 그 줄은 종전 그대로다(막대 바닥이 수를 바꾸지 않는다).
   assert.match(chart, /aria-label=\{`최근 7일 일자별 대화 건수 — \$\{label\}`\}/, '그래프가 수를 말하지 않는다');
 });
+
+/* ══════════ 68차 재감사 (DS 71-3) ══════════ */
+
+/**
+ * DS 71-3 — 「대화 상세」가 **받아 온 창**을 대화의 길이라고 적던 자리.
+ *
+ * 이 콘솔이 들고 있는 것은 전체 기록이 아니라 최근 한 묶음이다. 종전에는 그중 이 대화의 것을
+ * 골라 「주고받은 메시지 n쌍」이라 적고, 그 토막의 첫 시각을 대화가 시작된 때처럼 적었다 —
+ * 바쁜 날에는 스무 번 주고받은 대화가 「3쌍」으로 뜬다. 서랍 하나는 열어 봐야 보이는 화면이라
+ * 정적 렌더로 닿지 않으므로, **그 서랍의 글**을 소스에서 떼어 본다(DS 67-3 의 차트와 같은 방식).
+ */
+test('대화 상세가 받아 온 토막을 대화 전체라고 적지 않는다 (DS 71-3)', opts, async () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const start = src.indexOf('function ConversationDrawer(');
+  assert.ok(start > 0, '대화 상세 서랍을 찾지 못했다');
+  const drawer = src.slice(start, src.indexOf('function TicketDrawer(', start));
+
+  // ① 토막인지 **서버가 말한 수**로 가린다(화면이 제 식으로 어림하지 않는다).
+  assert.match(drawer, /kept: number;/, '보관 수를 받지 않는다');
+  assert.match(drawer, /const partial = kept > turns\.length;/, '토막인지 가리지 않는다');
+
+  // ② 수를 적는 자리가 셋 모두 그 판정을 지난다 — 알약·머리글 시각·본문 고지.
+  assert.match(drawer, /\{partial \? `최근 \$\{turns\.length\}쌍 · 보관 \$\{kept\}쌍` : `주고받은 메시지 \$\{turns\.length\}쌍`\}/, '알약이 토막을 전체라고 적는다');
+  assert.match(drawer, /\$\{partial \? '…' : ''\}\$\{timeLabel\(first\)\}/, '토막의 첫 시각을 대화가 시작된 때처럼 적는다');
+  assert.ok(drawer.includes('이 화면에는 최근 {turns.length}쌍만 들어 있습니다.'), '빠진 대화가 있다는 사실을 적지 않는다');
+
+  // ③ 고지는 **말풍선 위**에 있다 — 스크롤 맨 위가 대화의 시작이 아니다.
+  const log = drawer.indexOf('role="log"');
+  const notice = drawer.indexOf('이 화면에는 최근');
+  const bubbles = drawer.indexOf('{turns.map((t) => (');
+  assert.ok(log < notice && notice < bubbles, '고지가 말풍선 아래에 있다');
+
+  // ④ 전부 들고 있을 때는 **아무 말도 덧붙이지 않는다**(모든 대화에 고지를 세우지 않는다).
+  assert.match(drawer, /\{partial && \(/, '토막이 아닐 때도 고지를 그린다');
+
+  // ⑤ 지킬 수 없는 약속을 버튼 이름에 적지 않는다 — 접수 서랍의 「대화 전체 보기」가 그 자리였다.
+  assert.equal(src.includes('대화 전체 보기'), false, '「전체」라고 적은 버튼이 남아 있다');
+  assert.ok(src.includes('>이 대화 보기</button>'), '대화로 가는 길이 사라졌다');
+
+  // ⑥ 「최근 대화」 머리의 수도 **서버가 말한 것**이다 — 창 크기를 적어 두던 자리다.
+  assert.equal(src.includes('>최대 30건<'), false, '창 크기를 화면에 적는다');
+  assert.ok(src.includes('`전체 ${comma(turnPage.total)}건 중 최근 ${comma(turnPage.shown)}건`'), '전체 몇 건인지 적지 않는다');
+  // 아직 받지 못했을 때만 쓰는 수는 **서버 기본값과 같아야 한다**(콘솔은 lib 을 불러오지 않는다).
+  const convlog = readFileSync(new URL('../src/lib/convlog.ts', import.meta.url), 'utf8');
+  const def = Number((convlog.match(/export const TURN_PAGE_DEFAULT = (\d+);/) || [])[1]);
+  assert.ok(def > 0, '서버 기본값을 찾지 못했다');
+  assert.equal(Number((src.match(/const TURN_PAGE_STEP = (\d+);/) || [])[1]), def, '콘솔의 묶음 크기가 서버 기본값과 다르다');
+});

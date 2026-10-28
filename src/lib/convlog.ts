@@ -204,6 +204,51 @@ export function listTurns(limit = 50): ChatTurnLog[] {
   return logs.slice(-limit).reverse().map((l) => ({ ...l }));
 }
 
+/** 한 번에 내려보내는 대화 기록 수의 기본값·상한 (DS 71-3). */
+export const TURN_PAGE_DEFAULT = 30;
+export const TURN_PAGE_MAX = 200;
+
+export interface TurnPage {
+  /** 내려보낼 턴(최신순). */
+  turns: ChatTurnLog[];
+  /** 보관 중인 전체 턴 수 — **보여 준 수를 전체라고 말하지 않는다**(DS 31-3·43-3). */
+  total: number;
+  /** 이번에 적용한 상한. */
+  limit: number;
+  /** 전체를 담지 못했는가. */
+  truncated: boolean;
+}
+
+/**
+ * 대화 기록 한 묶음 (DS 71-3) — 접수 목록(`escalation.queryTickets`)과 같은 모양이다.
+ *
+ * 종전에는 관리 콘솔 API 가 `listTurns(30)` 한 줄로 **전체 기록 중 최근 30건**을 실어 보냈고,
+ * 콘솔의 「대화 상세」는 그중 그 대화의 것만 골라 「주고받은 메시지 n쌍」이라고 적었다 —
+ * 그 수는 대화의 길이가 아니라 **우리가 받아 온 창의 크기**다. 창구가 「전체 몇 건 중 몇 건을
+ * 보냈는가」를 함께 말해야 화면이 그 사실을 적을 수 있다.
+ */
+export function queryTurns(limit: number = TURN_PAGE_DEFAULT): TurnPage {
+  const n = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), TURN_PAGE_MAX) : TURN_PAGE_DEFAULT;
+  return { turns: listTurns(n), total: logs.length, limit: n, truncated: logs.length > n };
+}
+
+/**
+ * 보관 중인 기록에서 **이 대화에 남아 있는 턴 수** (DS 71-3).
+ *
+ * 화면이 「보여 준 수」를 대화 전체라고 말하지 않게 하는 값이다. 한도(`MAX_LOGS`)에 밀려
+ * 버려진 앞쪽은 여기에도 없다 — 그래서 이름이 「보관된 수」이고, 「언제부터 들고 있는가」는
+ * `turnRetention()` 이 따로 말한다(DS 43-1).
+ */
+export function sessionTurnCounts(ids: readonly string[]): Record<string, number> {
+  const want = new Set(ids);
+  const out: Record<string, number> = {};
+  for (const l of logs) {
+    if (!want.has(l.sessionId)) continue;
+    out[l.sessionId] = (out[l.sessionId] ?? 0) + 1;
+  }
+  return out;
+}
+
 /** 전체 로그(시간순, 메모리 보존분 최대 500건) — CSV 내보내기용. */
 export function listAllTurns(): ChatTurnLog[] {
   return logs.map((l) => ({ ...l }));

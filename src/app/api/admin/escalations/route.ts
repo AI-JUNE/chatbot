@@ -2,7 +2,7 @@
 // 인증: lib/http requireAdmin. 시크릿은 Vercel 환경변수로만.
 import { NextRequest } from 'next/server';
 import { queryTickets, updateTicket, getTicket, escalationStats, ticketRev, ESCALATION_STATUSES, STATUS_LABELS, TICKET_PAGE_DEFAULT, TICKET_PAGE_MAX, EscalationStatus } from '@/lib/escalation';
-import { convStats, listTurns, unansweredQuestions } from '@/lib/convlog';
+import { convStats, queryTurns, sessionTurnCounts, unansweredQuestions, TURN_PAGE_DEFAULT, TURN_PAGE_MAX } from '@/lib/convlog';
 import { feedbackSummary } from '@/lib/feedback';
 import { intentLabel, intentLabelMap } from '@/lib/intents';
 import { piiKindLabels } from '@/lib/pii';
@@ -58,22 +58,35 @@ export async function GET(req: NextRequest) {
       feedback: feedbackSummary(kbLabelMap()),
     },
     ...(withLogs
-      ? {
-          recentTurns: listTurns(30).map((t) => ({
-            ...t,
-            intentLabel: intentLabel(t.intent, labels),
-            tenantLabel: tenantLabel(t.tenant ?? null),
-            // 가린 종류의 이름 — 운영자가 `***-****-****` 를 보고 「고객이 그렇게 쓴 것인지
-            // 우리가 가린 것인지」 알 수 있어야 한다 (DS 39-1).
-            piiLabels: piiKindLabels(t.piiKinds),
-          })),
-          // 「기본 안내 n건」이라는 수를 **무엇을 더 써야 하는지**로 바꾸는 목록(DS 32-2).
-          // 고객사별로 갈라 센다(DS 36-1) — 고칠 자료가 있는 곳이 고객사마다 다르다.
-          unanswered: (() => {
-            const u = unansweredQuestions(8);
-            return { ...u, items: u.items.map((i) => ({ ...i, tenantLabel: tenantLabel(i.tenant) })) };
-          })(),
-        }
+      ? (() => {
+          // 대화 기록도 **전부 싣지 않는다** — 접수 목록과 같은 모양으로 「전체 몇 건 중 몇 건」을
+          // 함께 말한다 (DS 71-3). 종전에는 창 크기(30)만 있고 전체 수가 없어서, 콘솔의
+          // 「대화 상세」가 **받아 온 만큼**을 「주고받은 메시지 n쌍」이라고 적었다.
+          const page = queryTurns(intQuery(req, 'turns', TURN_PAGE_DEFAULT, 1, TURN_PAGE_MAX));
+          return {
+            recentTurns: page.turns.map((t) => ({
+              ...t,
+              intentLabel: intentLabel(t.intent, labels),
+              tenantLabel: tenantLabel(t.tenant ?? null),
+              // 가린 종류의 이름 — 운영자가 `***-****-****` 를 보고 「고객이 그렇게 쓴 것인지
+              // 우리가 가린 것인지」 알 수 있어야 한다 (DS 39-1).
+              piiLabels: piiKindLabels(t.piiKinds),
+            })),
+            /** 「전체 몇 건 중 몇 건을 보냈는가」 (DS 71-3 — 접수의 `ticketPage` 와 같은 모양). */
+            turnPage: { total: page.total, shown: page.turns.length, limit: page.limit, truncated: page.truncated },
+            /**
+             * 실어 보낸 창에 보이는 대화마다 **보관 중인 턴이 몇인가** (DS 71-3).
+             * 「대화 상세」가 자기가 받은 수를 대화 전체라고 말하지 않게 하는 값이다.
+             */
+            sessionTurns: sessionTurnCounts(page.turns.map((t) => t.sessionId)),
+            // 「기본 안내 n건」이라는 수를 **무엇을 더 써야 하는지**로 바꾸는 목록(DS 32-2).
+            // 고객사별로 갈라 센다(DS 36-1) — 고칠 자료가 있는 곳이 고객사마다 다르다.
+            unanswered: (() => {
+              const u = unansweredQuestions(8);
+              return { ...u, items: u.items.map((i) => ({ ...i, tenantLabel: tenantLabel(i.tenant) })) };
+            })(),
+          };
+        })()
       : {}),
   });
 }

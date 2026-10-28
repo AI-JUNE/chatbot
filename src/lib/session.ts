@@ -28,6 +28,16 @@ export interface SessionContext {
   handoffReason?: HandoffReason;
   /** 이관 요약에 넣을 최근 대화(최대 SESSION_TURN_BUFFER턴) */
   turns?: SessionTurn[];
+  /**
+   * 이 대화에서 **주고받은 메시지 전부**의 수 (DS 71-2).
+   *
+   * `turns` 는 최근 12턴만 들고 있어 그 길이로는 대화의 길이를 알 수 없다 — 종전에는 이관
+   * 요약이 그 길이를 그대로 「주고받은 메시지: 12개」라고 적어, 쉰 마디를 나눈 대화도 열세
+   * 마디를 나눈 대화도 상담원에게 **같은 수**로 갔다. 버린 턴은 되돌릴 수 없지만 **몇 마디
+   * 였는지는 셀 수 있다** — 세는 값만 따로 든다(DS 43-1 이 대화 기록에서 「언제부터 들고
+   * 있는가」를 따로 든 것과 같은 자리다).
+   */
+  turnTotal?: number;
   /** 수집한 슬롯(연락처 등) — 요약 생성 시 마스킹된다. 영구 저장은 [승인 필요] */
   slots?: Record<string, string>;
   /** 진행 중인 멀티턴 슬롯 수집 상태(예약 접수·장애 신고 등). 완료·취소 시 비운다. */
@@ -141,11 +151,14 @@ export function updateSession(sessionId: string, patch: Partial<Omit<SessionCont
   store.set(key, { ...prev, ...patch, updatedAt: Date.now() });
 }
 
-/** 최근 대화 버퍼에 1턴 추가(오래된 턴은 버린다). */
+/**
+ * 최근 대화 버퍼에 1턴 추가(오래된 턴은 버린다).
+ * 버리더라도 **세어는 둔다** — 그 수가 이관 요약의 「주고받은 메시지」다 (DS 71-2).
+ */
 export function appendTurn(sessionId: string, turn: SessionTurn): void {
   const ctx = getSession(sessionId);
   const turns = [...(ctx.turns ?? []), turn].slice(-SESSION_TURN_BUFFER);
-  updateSession(sessionId, { turns });
+  updateSession(sessionId, { turns, turnTotal: (ctx.turnTotal ?? 0) + 1 });
 }
 
 /** 슬롯 병합(빈 값은 무시). */

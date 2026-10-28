@@ -9,6 +9,7 @@
 import { CHANNEL_LABELS, intentLabel } from '@/lib/intents';
 import { SUMMARY_LINE_LEN, SUMMARY_TEXT_LEN, clip, ellipsize } from '@/lib/limits';
 import { maskKindLabel, maskPii, type MaskResult } from '@/lib/pii';
+import { oneLine } from '@/lib/text';
 
 // 마스킹 규칙은 `@/lib/pii` 하나에만 있다 (DS 39-3). 이 파일이 규칙을 들고 있던 동안에는
 // 요약 쪽만 고쳐지고 외부로 나가는 쪽(`monitoring.scrub`)은 그대로였다.
@@ -50,14 +51,16 @@ function shortId(id: string, len: number): string {
 export interface SummaryLine {
   at: string;
   speaker: Speaker;
-  text: string; // 마스킹 완료
+  /** 마스킹 완료 + **한 줄로 모은** 글 (DS 71-1) — 이 평문은 한 줄이 한 마디다. */
+  text: string;
   intent?: string;
 }
 
 export interface SummarySlot {
   key: string;
   label: string;
-  value: string; // 마스킹 완료
+  /** 마스킹 완료 + **한 줄로 모은** 값 (DS 71-1). */
+  value: string;
   masked: boolean;
 }
 
@@ -74,7 +77,16 @@ export interface HandoffSummary {
   tenantLabelKo?: string;
   reason: HandoffReason;
   reasonLabelKo: string;
+  /**
+   * **이 대화에서 주고받은 메시지 전부**의 수 (DS 71-2).
+   *
+   * 종전에는 `input.turns.length` 였다 — 그런데 그 배열은 세션이 들고 있는 **최근 몇 턴**
+   * (`session.SESSION_TURN_BUFFER` = 12)이라, 열세 마디가 넘는 대화는 **언제나 12개**로 적혔다.
+   * 상담원이 전화를 걸기 전에 읽는 수가 대화의 길이가 아니라 우리 버퍼의 크기였다(§13).
+   */
   turnCount: number;
+  /** 그중 이 요약의 「직전 대화」에 **담지 못한** 메시지 수 (DS 71-2). 0 이면 전부 담겼다. */
+  omittedTurns: number;
   lastIntent?: string;
   /** 직전 주제의 표시명(`@/lib/intents`). 평문 요약은 코드가 아니라 이 값을 보여준다. */
   lastIntentLabelKo?: string;
@@ -96,7 +108,13 @@ export interface SummaryInput {
   /** 고객사 표시명(등록된 테넌트에서 온 접수일 때만). 비면 요약에 그 줄을 넣지 않는다. */
   tenantLabel?: string;
   reason: HandoffReason;
+  /** 세션이 들고 있는 **최근** 대화(`session.SESSION_TURN_BUFFER` 턴). 대화 전체가 아니다. */
   turns: { at: string; speaker: Speaker; text: string; intent?: string }[];
+  /**
+   * 이 대화에서 주고받은 **메시지 전부**의 수 (DS 71-2) — 세션이 세어 둔 값(`session.turnTotal`).
+   * 모르면 비워 둔다: 그때는 들고 있는 턴 수가 우리가 아는 전부다(지어내지 않는다).
+   */
+  totalTurns?: number;
   /** 수집한 슬롯(연락처 등). 값은 요약 생성 시 마스킹된다. */
   slots?: Record<string, string>;
   /** 시나리오상 받아야 하지만 아직 없는 슬롯 키. */
@@ -133,9 +151,11 @@ export function buildHandoffSummary(input: SummaryInput): HandoffSummary {
   const collectedSlots: SummarySlot[] = Object.entries(input.slots ?? {})
     .filter(([key, value]) => !key.startsWith('__') && String(value ?? '').trim())
     .map(([key, value]) => {
+      // **가린 뒤에 모은다** (DS 71-1) — 먼저 모으면 줄 끝에 걸친 번호 앞뒤에 표시가 끼어들어
+      // 가리는 규칙이 그 번호를 놓친다(`lib/convlog` 의 「가린 뒤에 자른다」와 같은 차례다).
       const m = maskPii(String(value));
       for (const k of m.hits) kinds.add(k);
-      return { key, label: labelOf(key, input.slotLabels), value: m.text, masked: m.masked };
+      return { key, label: labelOf(key, input.slotLabels), value: oneLine(m.text), masked: m.masked };
     });
 
   const collected = new Set(collectedSlots.map((s) => s.key));
@@ -146,10 +166,15 @@ export function buildHandoffSummary(input: SummaryInput): HandoffSummary {
   const recentTurns: SummaryLine[] = window.map((t) => {
     const m = maskPii(t.text);
     for (const k of m.hits) kinds.add(k);
-    return { at: t.at, speaker: t.speaker, text: m.text, ...(t.intent ? { intent: t.intent } : {}) };
+    // 한 마디는 **한 줄**이다 (DS 71-1) — 고객이 친 줄바꿈도, 우리 폼 질문의 줄바꿈도 모은다.
+    return { at: t.at, speaker: t.speaker, text: oneLine(m.text), ...(t.intent ? { intent: t.intent } : {}) };
   });
 
   const lastIntent = [...input.turns].reverse().find((t) => t.intent)?.intent;
+
+  // 들고 있는 턴보다 적은 수를 전체라고 적지 않는다 — 부르는 쪽이 세어 둔 값이 없으면
+  // 들고 있는 것이 우리가 아는 전부다 (DS 71-2).
+  const turnCount = Math.max(input.totalTurns ?? 0, input.turns.length);
 
   const summary: HandoffSummary = {
     sessionId: input.sessionId,
@@ -158,7 +183,8 @@ export function buildHandoffSummary(input: SummaryInput): HandoffSummary {
     channel: input.channel,
     reason: input.reason,
     reasonLabelKo: HANDOFF_REASON_LABELS[input.reason],
-    turnCount: input.turns.length,
+    turnCount,
+    omittedTurns: Math.max(0, turnCount - recentTurns.length),
     collectedSlots,
     pendingSlots,
     pendingSlotLabels: pendingSlots.map((k) => labelOf(k, input.slotLabels)),
@@ -227,7 +253,14 @@ export function renderSummaryText(s: HandoffSummary, limit = SUMMARY_TEXT_LEN): 
   // 기본 구성(고원)에는 넣지 않는다 — 덧붙일 사실이 없는 줄을 모든 요약에 세우지 않는다.
   if (s.tenantLabelKo) L.push(`고객사: ${s.tenantLabelKo}`);
   L.push(`이관 사유: ${s.reasonLabelKo}`);
-  L.push(`주고받은 메시지: ${s.turnCount}개`);
+  /**
+   * **몇 마디를 주고받았고, 그중 몇 마디가 아래에 있는가** (DS 71-2).
+   *
+   * 담지 못한 말이 있다는 사실은 머리글에 적는다 — 「직전 대화」 묶음 안에 적으면 예산에 걸려
+   * 가장 먼저 빠지는 줄이 된다(`fitTurnLines` 는 오래된 쪽부터 버린다). 전부 담겼으면 아무
+   * 말도 하지 않는다: 덧붙일 사실이 없는 괄호를 모든 요약에 세우지 않는다.
+   */
+  L.push(`주고받은 메시지: ${s.turnCount}개${s.omittedTurns > 0 ? ` (이 요약에는 최근 ${s.recentTurns.length}개)` : ''}`);
   if (s.lastIntentLabelKo) L.push(`직전 주제: ${s.lastIntentLabelKo}`);
 
   L.push('수집 정보');

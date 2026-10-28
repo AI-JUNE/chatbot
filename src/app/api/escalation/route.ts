@@ -115,6 +115,8 @@ export async function POST(req: NextRequest) {
     channel: ctx.channel ?? 'web',
     reason: reasonCode,
     turns: ctx.turns ?? [],
+    // 「주고받은 메시지」는 세션이 **세어 둔 수**다 — 들고 있는 턴 수가 아니다 (DS 71-2).
+    ...(ctx.turnTotal ? { totalTurns: ctx.turnTotal } : {}),
     slots,
     pendingSlots: slots.contact ? [] : ['contact'],
     // 「직전 주제」에 운영자가 만든 규칙 이름을 쓴다 — 요약은 운영자가 그대로 읽는 평문이다.

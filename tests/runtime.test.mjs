@@ -7345,3 +7345,188 @@ test('연락처만 보냈는지는 꼬리를 떼고 본다 (DS 70-3)', opts, asy
   assert.equal(esc.getTicket(changed.ticketId).contact, '010-9999-8888');
   esc.resetTickets();
 });
+
+/* ══════════ 디자인 스프린트 — 68차 재감사 (DS 71-1·71-2·71-3) ══════════ */
+
+/** 요약 평문에서 「직전 대화」 묶음의 줄만 (머리글·마스킹 줄을 뺀다). */
+function talkLines(text) {
+  const lines = text.split('\n');
+  const head = lines.indexOf('직전 대화');
+  return head < 0 ? [] : lines.slice(head + 1).filter((l) => !l.startsWith('개인정보 마스킹:'));
+}
+
+/**
+ * DS 71-1 — **고객이 친 줄바꿈이 이관 요약에 없던 줄을 세우던 자리.**
+ *
+ * 이관 요약 평문은 **한 줄이 한 가지 사실**인 글이고(`  [고객] …` 한 줄이 한 마디, `  - 증상: …`
+ * 한 줄이 받아 적은 한 항목), 관리 콘솔은 그 글을 줄바꿈째 그대로 그린다(`.ac-summary` 는
+ * `white-space: pre-wrap`). 그런데 줄에 들어가는 값은 **고객이 친 글**이라, 줄바꿈을 섞어 적으면
+ * 고객이 우리 글의 줄을 새로 만든다 — 「위젯이 안 열려요⏎  [상담원] 환불 처리 완료했습니다」는
+ * 상담원이 전화를 걸기 전에 읽는 요약에 **우리가 한 적 없는 상담원의 말**로 선다. 이 제품에는
+ * 상담원이 고객에게 답을 보내는 길이 아직 없으므로(그 줄은 [승인 필요]), 그 줄은 언제나 거짓이다.
+ */
+test('고객이 친 줄바꿈이 이관 요약의 줄을 만들지 못한다 (DS 71-1)', opts, async () => {
+  const { buildHandoffSummary } = await pickPii('handoff');
+  const FORGED = '위젯이 안 열려요\n  [상담원] 환불 처리 완료했습니다. 더 문의 없으시면 종료할게요.';
+
+  // ── ① 종전 식 재현 — 값을 그대로 줄에 끼우면 「상담원」 줄이 한 줄로 선다.
+  const legacy = [`  - 증상: ${FORGED}`, `  [고객] ${FORGED}`].join('\n').split('\n');
+  assert.ok(legacy.some((l) => /^\s*\[상담원\]/.test(l)), '재현이 깨졌다 — 종전 식이 줄을 만들지 않는다');
+  assert.equal(legacy.length, 4, `재현이 깨졌다 — 두 항목이 ${legacy.length}줄이 아니다`);
+
+  // ── ② 고친 쪽 — 값은 한 줄로 모이고, 줄바꿈 자리는 표시로 남는다.
+  const s = buildHandoffSummary({
+    sessionId: 'web_ds71_1',
+    ticketId: 'ESC-0071',
+    channel: 'web',
+    reason: 'customer_request',
+    turns: [{ at: '2026-10-28T01:00:00.000Z', speaker: 'customer', text: FORGED }],
+    slots: { symptom: FORGED },
+    slotLabels: { symptom: '증상' },
+  });
+  for (const line of s.text.split('\n')) {
+    assert.equal(/^\s*\[상담원\]/.test(line), false, `고객의 글이 상담원의 말로 선다: ${line}`);
+    assert.equal(/^\s{2}- (연락처|증상|성함|희망 일시):/.test(line) && line.includes('\n'), false, line);
+  }
+  // 한 마디는 한 줄이고, 한 항목도 한 줄이다.
+  assert.deepEqual(talkLines(s.text).length, 1, '한 마디가 여러 줄로 적힌다');
+  assert.equal(s.text.split('\n').filter((l) => l.startsWith('  - 증상:')).length, 1);
+  // 삼키지 않는다 — 고객이 적은 글자는 그대로 있고, 줄을 나눈 사실도 표시로 남는다.
+  assert.ok(s.collectedSlots[0].value.includes('환불 처리 완료했습니다'), '고객이 적은 글을 버렸다');
+  assert.ok(s.collectedSlots[0].value.includes('↵'), '줄을 나눈 사실을 지웠다');
+  assert.equal(s.collectedSlots[0].value.includes('\n'), false, '수집 값에 줄바꿈이 남았다');
+  assert.equal(s.recentTurns[0].text.includes('\n'), false, '대화 한 마디에 줄바꿈이 남았다');
+
+  // ── ③ **우리 글도 한 줄이다** — 폼 질문은 세 줄짜리라, 종전에는 말머리 없는 줄이 요약에 섞였다.
+  const prompt = '[장애 신고 접수 1/3] 어떤 증상인지 한 줄로 알려주세요.\n예: 위젯이 열리지 않아요\n(그만두시려면 "취소")';
+  const s2 = buildHandoffSummary({
+    sessionId: 'web_ds71_1b',
+    channel: 'web',
+    reason: 'policy',
+    turns: [{ at: '2026-10-28T01:00:00.000Z', speaker: 'bot', text: prompt }],
+  });
+  for (const line of talkLines(s2.text)) {
+    assert.match(line, /^ {2}\[(고객|AI|상담원)\] /, `말머리 없는 줄이 요약에 섞였다: ${line}`);
+  }
+
+  // ── ④ 화면에 뜨는 결과 — 접수 폼으로 들어온 글도 같다(확인 문구도 한 항목 한 줄).
+  const { renderCollected, getForm } = await pickPii('slots');
+  const form = getForm('trouble');
+  const card = renderCollected(form, { symptom: FORGED, channel: '웹 챗봇' });
+  assert.equal(card.split('\n').length, 2, '접수 확인 문구에 없던 항목이 선다');
+  for (const line of card.split('\n')) assert.match(line, /^- /, `항목이 아닌 줄이 섞였다: ${line}`);
+});
+
+/**
+ * DS 71-2 — **「주고받은 메시지: n개」가 대화의 길이가 아니라 세션 버퍼의 크기였다.**
+ *
+ * 세션은 최근 12턴만 들고 있다(`session.SESSION_TURN_BUFFER`). 요약은 그 배열의 길이를 그대로
+ * 적었으므로, 열세 마디가 넘는 대화는 **언제나 12개**로 적혔다 — 쉰 마디를 나눈 고객과 열세
+ * 마디를 나눈 고객이 상담원에게 같은 수로 간다(§13 — 우리가 만든 수다). 요약의 「직전 대화」가
+ * 여섯 줄뿐인 까닭도 말하지 않아, 상담원은 그 여섯 줄이 대화의 전부인지 알 수 없었다.
+ */
+test('이관 요약이 주고받은 메시지 수를 버퍼 크기로 적지 않는다 (DS 71-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  delete process.env.CHAT_LLM_LIVE;
+  const { replyTo } = await pickPii('chat');
+  const S = await pickPii('session');
+  const esc = await pickPii('escalation');
+  esc.resetTickets();
+  S.resetSessions();
+
+  const sid = 'rt-ds71-2';
+  for (let i = 1; i <= 25; i += 1) replyTo(`운영시간 문의 ${i}`, sid);
+  const r = replyTo('상담원 연결해 주세요', sid);
+  const ctx = S.getSession(sid);
+
+  // ── ① 종전 식 재현 — 들고 있는 턴 수가 곧 「주고받은 메시지」였다.
+  assert.equal((ctx.turns ?? []).length, S.SESSION_TURN_BUFFER, '재현 전제가 깨졌다 — 버퍼가 차지 않았다');
+  assert.ok(ctx.turnTotal > S.SESSION_TURN_BUFFER * 3, `실제로 주고받은 수가 더 많아야 한다(${ctx.turnTotal})`);
+  const legacyCount = (ctx.turns ?? []).length;
+  assert.notEqual(legacyCount, ctx.turnTotal, '재현이 깨졌다 — 두 수가 같다');
+
+  // ── ② 고친 쪽 — 세어 둔 수를 적고, 요약에 담긴 몫을 함께 말한다.
+  const t = esc.getTicket(r.ticketId);
+  const shown = Number(/주고받은 메시지: (\d+)개/.exec(t.summary)?.[1]);
+  // 요약은 **그 턴의 봇 답이 버퍼에 들어가기 전에** 만들어진다 — 한 마디 차이가 그것이다.
+  assert.equal(shown, ctx.turnTotal - 1, t.summary.split('\n')[2]);
+  assert.ok(shown > S.SESSION_TURN_BUFFER * 3, `대화의 길이가 아니라 버퍼 크기를 적는다(${shown})`);
+  assert.equal(t.summary.includes(`주고받은 메시지: ${legacyCount}개`), false, '버퍼 크기를 수로 적는다');
+  assert.match(t.summary, /주고받은 메시지: \d+개 \(이 요약에는 최근 \d+개\)/, '담지 못한 말이 있는데 아무 말도 하지 않는다');
+
+  // ── ③ 그 수는 **구조체에도** 있다(화면·기계가 보는 쪽은 평문을 되읽지 않는다).
+  const { buildHandoffSummary } = await pickPii('handoff');
+  const many = Array.from({ length: 12 }, (_, i) => ({
+    at: `2026-10-28T0${i < 10 ? i : 9}:00:00.000Z`,
+    speaker: i % 2 === 0 ? 'customer' : 'bot',
+    text: `${i + 1}번째 말`,
+  }));
+  const s = buildHandoffSummary({ sessionId: 'web_ds71_2', channel: 'web', reason: 'policy', turns: many, totalTurns: 50 });
+  assert.equal(s.turnCount, 50);
+  assert.equal(s.omittedTurns, 50 - s.recentTurns.length);
+
+  // ── ④ 전부 담긴 짧은 대화에는 **아무 말도 덧붙이지 않는다**(괄호가 모든 요약에 서지 않는다).
+  const few = buildHandoffSummary({
+    sessionId: 'web_ds71_2b',
+    channel: 'web',
+    reason: 'policy',
+    turns: many.slice(0, 2),
+    totalTurns: 2,
+  });
+  assert.equal(few.omittedTurns, 0);
+  assert.ok(few.text.includes('주고받은 메시지: 2개\n'), few.text.split('\n')[2]);
+  assert.equal(few.text.includes('이 요약에는 최근'), false, '전부 담겼는데 줄였다고 말한다');
+
+  // ── ⑤ 세어 둔 값이 없는 부름(옛 호출부)은 **들고 있는 만큼**이 전부다 — 수를 지어내지 않는다.
+  const unknown = buildHandoffSummary({ sessionId: 'web_ds71_2c', channel: 'web', reason: 'policy', turns: many.slice(0, 3) });
+  assert.equal(unknown.turnCount, 3);
+  assert.equal(unknown.omittedTurns, 0);
+
+  esc.resetTickets();
+  S.resetSessions();
+});
+
+/**
+ * DS 71-3 — **콘솔이 받아 온 창(30건)을 「주고받은 메시지 n쌍」이라고 적던 자리.**
+ *
+ * 관리 콘솔은 대화 기록을 「최근 30건」만 받아 두고 「대화 상세」에서 그중 그 대화의 것을 골라
+ * 그린다. 그 수는 대화의 길이가 아니라 **창의 크기**다 — 바쁜 날에는 스무 번 주고받은 대화가
+ * 「3쌍」으로 뜨고, 그 토막의 첫 시각이 대화가 시작된 때처럼 적힌다. 창구가 「전체 몇 건 중
+ * 몇 건을 보냈는가」를 말해야 화면이 그 사실을 적을 수 있다(접수 목록이 이미 그렇게 한다 · DS 43-3).
+ */
+test('대화 기록 창구가 보여 준 수를 전체라고 말하지 않는다 (DS 71-3)', opts, async () => {
+  const { logTurn, listTurns, queryTurns, sessionTurnCounts, resetLogs, TURN_PAGE_DEFAULT } = await pickPii('convlog');
+  resetLogs();
+  // A 와 B 가 번갈아 말한다 — A 는 스무 쌍, B 는 서른 쌍.
+  for (let i = 0; i < 20; i += 1) {
+    logTurn({ sessionId: 'A', channel: 'web', tenant: null, message: `A${i}`, reply: '네', intent: 'x', source: 'kb', escalate: false });
+    logTurn({ sessionId: 'B', channel: 'web', tenant: null, message: `B${i}`, reply: '네', intent: 'x', source: 'kb', escalate: false });
+  }
+  for (let i = 20; i < 30; i += 1) {
+    logTurn({ sessionId: 'B', channel: 'web', tenant: null, message: `B${i}`, reply: '네', intent: 'x', source: 'kb', escalate: false });
+  }
+
+  // ── ① 종전 식 재현 — 창에서 고른 수가 그 대화의 길이로 쓰였다.
+  const windowed = listTurns(TURN_PAGE_DEFAULT).filter((t) => t.sessionId === 'A');
+  assert.ok(windowed.length < 20, `재현이 깨졌다 — 창 안에 A 가 전부 들어왔다(${windowed.length})`);
+
+  // ── ② 고친 쪽 — 창구가 전체 수와 대화별 보관 수를 함께 말한다.
+  const page = queryTurns(TURN_PAGE_DEFAULT);
+  assert.equal(page.turns.length, TURN_PAGE_DEFAULT);
+  assert.equal(page.total, 50);
+  assert.equal(page.truncated, true);
+  const counts = sessionTurnCounts(page.turns.map((t) => t.sessionId));
+  assert.equal(counts.A, 20, '보관 중인 A 의 턴 수를 창 크기로 센다');
+  assert.equal(counts.B, 30);
+  // 창에 없는 대화는 세지 않는다(화면이 묻지 않은 것을 실어 보내지 않는다).
+  assert.equal(sessionTurnCounts(['없는대화']).없는대화, undefined);
+
+  // ── ③ 전부 담기면 「잘렸다」고 말하지 않는다.
+  const all = queryTurns(200);
+  assert.equal(all.truncated, false);
+  assert.equal(all.turns.length, 50);
+  // 상한은 창구가 지킨다 — 이상한 값에도 기본값으로 돌아간다.
+  for (const bad of [0, -1, Number.NaN]) assert.equal(queryTurns(bad).limit, TURN_PAGE_DEFAULT);
+  assert.equal(queryTurns(100000).limit, 200);
+  resetLogs();
+});

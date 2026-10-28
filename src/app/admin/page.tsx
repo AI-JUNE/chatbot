@@ -388,6 +388,15 @@ const TICKET_PAGE_MAX = 1000;
 interface TicketPageView { total: number; shown: number; limit: number; truncated: boolean }
 
 /**
+ * 대화 기록을 한 번에 얼마나 불러오는가 (DS 71-3) — 서버 기본값(`convlog.TURN_PAGE_DEFAULT`)과
+ * 같은 수다. **아직 받지 못했을 때만** 쓴다(받고 나면 서버가 말한 전체 수를 적는다).
+ */
+const TURN_PAGE_STEP = 30;
+
+/** 서버가 말하는 대화 기록의 모수 — `@/lib/convlog` 의 `TurnPage` 와 같은 모양. */
+type TurnPageView = TicketPageView;
+
+/**
  * 그 날의 수를 얼마나 믿을 수 있는가 — 서버 `@/lib/convlog` 의 `DayCoverage` 와 같은 어휘다 (DS 43-1).
  * (콘솔은 lib 을 불러오지 않으므로 옮겨 적고 테스트가 두 쪽을 대조한다 — `NO_CITATION_LABEL` 과 같은 방식.)
  */
@@ -854,12 +863,21 @@ function ConfirmDialog({ req }: { req: ConfirmReq }) {
   );
 }
 
-/** 최근 대화 상세 서랍 — 같은 대화(세션)의 흐름 전체·주제·근거·상담원 전환 여부를 보여준다. */
+/**
+ * 최근 대화 상세 서랍 — 같은 대화(세션)의 주제·근거·상담원 전환 여부를 보여준다.
+ *
+ * **이 화면에 들어 있는 만큼만 보여 준다** (DS 71-3). 콘솔은 전체 기록이 아니라 최근 한 묶음을
+ * 받아 두고 그중 이 대화의 것을 고른다 — 종전에는 그렇게 고른 수를 「주고받은 메시지 n쌍」이라
+ * 적고 그 토막의 첫 시각을 대화가 시작된 때처럼 적었다. 보관된 수(`kept`)가 더 많으면
+ * **그 사실을 적는다**(DS 31-3·43-3 과 같은 규칙 — 보여 준 수를 전체라고 말하지 않는다).
+ */
 function ConversationDrawer({
-  sessionId, turns, ticket, onClose, onOpenTicket, closeRef,
+  sessionId, turns, kept, ticket, onClose, onOpenTicket, closeRef,
 }: {
   sessionId: string;
   turns: TurnView[];
+  /** 서버가 보관 중인 이 대화의 턴 수. 모르면 0 — 그때는 받은 만큼이 우리가 아는 전부다. */
+  kept: number;
   ticket: TicketView | undefined;
   onClose: () => void;
   onOpenTicket: () => void;
@@ -877,6 +895,8 @@ function ConversationDrawer({
   const tenantName = turns[0]?.tenantLabel || UNNAMED_TENANT;
   const first = turns[0]?.at;
   const last = turns[turns.length - 1]?.at;
+  /** 보관된 것보다 적게 받았는가 — 그러면 아래 말풍선은 **대화의 뒷토막**이다 (DS 71-3). */
+  const partial = kept > turns.length;
 
   // 초점 순환(Tab/Shift+Tab 이 서랍 밖으로 나가지 않는다). ESC 는 부모가 처리한다.
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -905,9 +925,10 @@ function ConversationDrawer({
         <div className="ac-drawer-head">
           <div style={{ minWidth: 0 }}>
             <h2 id="ac-drawer-title" style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-.01em' }}>대화 상세</h2>
+            {/* 토막만 들고 있으면 시각 앞에 「…」를 세운다 — 그 시각은 대화가 시작된 때가 아니다(DS 71-3). */}
             <p style={{ fontSize: 12, color: 'var(--mut)', marginTop: 2 }}>
               대화 {shortSession(sessionId)} · {tenantName} · {CHANNEL_LABELS[channel] || channel || '채널 미상'}
-              {first && last ? ` · ${timeLabel(first)}${first !== last ? ` ~ ${timeLabel(last)}` : ''}` : ''}
+              {first && last ? ` · ${partial ? '…' : ''}${timeLabel(first)}${first !== last ? ` ~ ${timeLabel(last)}` : ''}` : ''}
             </p>
           </div>
           <button ref={closeRef} type="button" className="ac-iconbtn" onClick={onClose} aria-label="상세 닫기">
@@ -916,7 +937,8 @@ function ConversationDrawer({
         </div>
 
         <div className="ac-drawer-meta">
-          <span className="ac-pill">주고받은 메시지 {turns.length}쌍</span>
+          {/* 보여 준 수를 대화 전체라고 말하지 않는다 (DS 71-3). */}
+          <span className="ac-pill">{partial ? `최근 ${turns.length}쌍 · 보관 ${kept}쌍` : `주고받은 메시지 ${turns.length}쌍`}</span>
           <span className="ac-pill" style={escalated ? TONE.warn : TONE.ok}>
             {escalated ? '상담원 제안됨' : '자동 응대로 완료'}
           </span>
@@ -926,6 +948,13 @@ function ConversationDrawer({
         </div>
 
         <div ref={bodyRef} className="ac-drawer-body" role="log" aria-label="대화 내용" {...scrollFocusProps(bodyScrolls)}>
+          {/* 앞선 대화가 이 화면에 없다는 사실을 **말풍선 위에** 적는다 — 스크롤 맨 위가 대화의
+              시작이 아니다(DS 71-3). 보관 한도에 밀린 앞쪽은 서버에도 없다(DS 43-1). */}
+          {partial && (
+            <p style={{ fontSize: 12.5, color: 'var(--sub)', background: 'var(--bg)', border: '1px solid var(--line)', borderRadius: 10, padding: '8px 10px', marginBottom: 12 }}>
+              이 화면에는 최근 {turns.length}쌍만 들어 있습니다. 이 대화로 보관 중인 기록은 {kept}쌍입니다.
+            </p>
+          )}
           {turns.map((t) => (
             <div key={t.id} className="ac-turn">
               <div className="ac-bubble ac-bubble-user">
@@ -1085,8 +1114,9 @@ function TicketDrawer({
           {(t.status === 'resolved' || t.status === 'canceled') && (
             <button type="button" {...busyBtn(busy, busy)} onClick={() => onStatus('open')}>다시 열기</button>
           )}
+          {/* 「전체」라고 적지 않는다 — 이 콘솔이 들고 있는 것은 최근 한 묶음뿐이다(DS 71-3). */}
           {hasConversation && (
-            <button type="button" className="ac-linkbtn" onClick={onOpenConversation}>대화 전체 보기</button>
+            <button type="button" className="ac-linkbtn" onClick={onOpenConversation}>이 대화 보기</button>
           )}
           <button type="button" style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={onClose}>닫기</button>
         </div>
@@ -3132,6 +3162,14 @@ export default function AdminPage() {
   const [tickets, setTickets] = useState<TicketView[]>([]);
   const [stats, setStats] = useState<OpsStats | null>(null);
   const [recentTurns, setRecentTurns] = useState<TurnView[]>([]);
+  /**
+   * 대화마다 **보관 중인 턴 수** — 서버가 붙여 보낸다 (DS 71-3).
+   * 이 화면이 받아 온 것은 전체 기록 중 최근 한 묶음뿐이라, 「대화 상세」가 자기가 받은 수를
+   * 대화 전체라고 말하지 않으려면 이 값이 필요하다. 옛 응답에는 없다(그때는 말하지 않았다).
+   */
+  const [sessionTurns, setSessionTurns] = useState<Record<string, number>>({});
+  /** 「최근 대화」가 전체 몇 건 중 몇 건인가 — 서버가 말한 값 (DS 71-3). 옛 응답에는 없다. */
+  const [turnPage, setTurnPage] = useState<TurnPageView | null>(null);
   /** 자료에 없어 답하지 못한 질문(DS 32-2). 아직 받지 못했으면 null — 0건과 구분한다. */
   const [unanswered, setUnanswered] = useState<UnansweredView | null>(null);
 
@@ -3234,6 +3272,8 @@ export default function AdminPage() {
         setTicketPage(data.ticketPage ?? null);
         setStats(data.stats);
         setRecentTurns(data.recentTurns || []);
+        setSessionTurns(data.sessionTurns || {});
+        setTurnPage(data.turnPage ?? null);
         setUnanswered(data.unanswered || null);
         setEscSyncAt(Date.now());
       }
@@ -5362,9 +5402,17 @@ export default function AdminPage() {
 
           {/* ── 최근 대화 ── */}
           <section style={S.card}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12 }}>
+            {/* 글이 길어졌으므로 375px 에서 접힌다 — 고정 너비가 없다(DS 71-3). */}
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
               <h2 style={S.h2}>최근 대화</h2>
-              <span style={S.tag}>최대 30건</span>
+              {/* 창 크기를 적던 자리 — 서버가 말한 전체 수로 바꾼다 (DS 71-3). 옛 응답에는 없다. */}
+              <span style={S.tag}>
+                {turnPage
+                  ? turnPage.truncated
+                    ? `전체 ${comma(turnPage.total)}건 중 최근 ${comma(turnPage.shown)}건`
+                    : `전체 ${comma(turnPage.total)}건`
+                  : `최대 ${TURN_PAGE_STEP}건`}
+              </span>
             </div>
             {recentTurns.length === 0 && phase.esc !== 'done' ? (
               <LoadState phase={phase.esc} busy="최근 대화를 불러오는 중입니다" fail="최근 대화를 불러오지 못했습니다" onRetry={() => loadEsc()} rows={5} />
@@ -7500,6 +7548,7 @@ export default function AdminPage() {
             .filter((t) => t.sessionId === drawerSession)
             .slice()
             .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())}
+          kept={sessionTurns[drawerSession] ?? 0}
           ticket={tickets.find((tk) => tk.sessionId === drawerSession)}
           onClose={closeDrawer}
           onOpenTicket={() => {

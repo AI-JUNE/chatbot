@@ -407,6 +407,8 @@ function summaryFor(
     ...(ctx.tenantId ? { tenantLabel: tenantLabel(ctx.tenantId) } : {}),
     reason,
     turns: ctx.turns ?? [],
+    // 「주고받은 메시지」는 **세어 둔 수**다 — 들고 있는 턴 수(최대 12)가 아니다 (DS 71-2).
+    ...(ctx.turnTotal ? { totalTurns: ctx.turnTotal } : {}),
     slots: ctx.slots ?? {},
     pendingSlots: pending,
     // 운영자가 만든 규칙으로 답한 대화면 그 규칙 이름을 요약의 「직전 주제」에 쓴다(코드 `cr_…` 대신).

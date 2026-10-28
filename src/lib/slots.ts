@@ -18,6 +18,7 @@
 import { maskPii } from '@/lib/handoff';
 import { takeContact } from '@/lib/pii';
 import { compact } from '@/lib/normalize';
+import { oneLine } from '@/lib/text';
 import { interpretControl, pickChoice, pickNumber, type Control } from '@/lib/choice';
 import { compareYmd, isRealYmd, kstTime, kstYmd, normalizeYmd, ymdToString } from '@/lib/kst';
 import { CONTACT_SHAPE_MESSAGE, josa, phoneShapeMessage } from '@/lib/refusal';
@@ -561,11 +562,17 @@ export function promptFor(form: FormSpec, slot: SlotSpec, opts: { retryMessage?:
   return lines.join('\n');
 }
 
-/** 수집 결과 확인 문구 — 개인정보 슬롯은 마스킹해 보여준다. */
+/**
+ * 수집 결과 확인 문구 — 개인정보 슬롯은 마스킹해 보여준다.
+ *
+ * **한 항목이 한 줄이다** (DS 71-1) — 값은 고객이 친 글이라 줄바꿈이 섞여 오고, 섞이면 이
+ * 목록에 고객이 적은 줄이 **우리가 받아 적은 항목처럼** 선다(「- 연락처: …」를 손으로 적을 수
+ * 있다). 접수에 실제로 붙은 값과 다른 글을 확인 문구가 보여 주지 않게 한 줄로 모은다.
+ */
 export function renderCollected(form: FormSpec, values: Record<string, string>): string {
   const lines = form.slots
     .filter((s) => values[s.key])
-    .map((s) => `- ${s.label}: ${s.pii ? maskPii(values[s.key]).text : values[s.key]}`);
+    .map((s) => `- ${s.label}: ${oneLine(s.pii ? maskPii(values[s.key]).text : values[s.key])}`);
   return lines.length ? lines.join('\n') : '- 접수 내용 없음';
 }
 

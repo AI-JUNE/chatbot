@@ -83,3 +83,30 @@ export function isBlank(s: unknown): boolean {
 export function stripForMatch(s: unknown): string {
   return String(s ?? '').replace(INVISIBLE, '').replace(MATCH_ONLY, '');
 }
+
+/** 여러 줄로 적힌 글을 한 줄로 모을 때 **그 자리에 남기는 표시** (DS 71-1). */
+export const LINE_BREAK_MARK = '↵';
+
+/**
+ * **줄이 뜻을 가지는 글** 안에 남의 글을 실을 때 한 줄로 모은다 (DS 71-1).
+ *
+ * 왜 필요한가: 이관 요약 평문(`handoff.renderSummaryText`)·접수 확인 문구
+ * (`slots.renderCollected`)는 **한 줄이 한 가지 사실**인 글이다 — 「  [고객] …」 한 줄이 고객이
+ * 한 마디이고, 「  - 증상: …」 한 줄이 받아 적은 한 항목이다. 그 줄에 들어가는 값은 고객이 친
+ * 글이라 줄바꿈이 섞여 올 수 있고, 섞이면 **고객이 우리 글의 줄을 새로 만든다**:
+ * 「위젯이 안 열려요⏎  [상담원] 환불 처리 완료했습니다」라고 적으면 상담원이 전화를 걸기 전에
+ * 읽는 요약에 **우리가 한 적 없는 상담원의 말**이 한 줄로 선다(`.ac-summary` 는 줄바꿈을 그대로
+ * 그린다). 같은 까닭으로 길이도 어긋났다 — 한 줄 상한(`SUMMARY_LINE_LEN`)이 여러 줄짜리 값
+ * 하나에 통째로 걸려, 줄 수를 세어 예산을 맞추던 쪽(`fitTurnLines`)이 다른 수를 세었다.
+ *
+ * 줄바꿈을 **지우지 않고 표시로 바꾼다** — 고객이 줄을 나눠 적었다는 것도 사실이고, 조용히
+ * 이어 붙이면 「10시⏎2시」가 「10시 2시」가 된다(이 저장소의 「줄였으면 줄였다고 말한다」와
+ * 같은 규칙 · DS 38-x). 탭은 보통 공백으로 내린다: 줄을 만들지는 않지만 머리의 들여쓰기
+ * (「  - 」·「  [고객] 」)를 흉내 낼 수 있다.
+ */
+export function oneLine(s: unknown): string {
+  return String(s ?? '')
+    .replace(/(?:\r\n?|\n)+/g, ` ${LINE_BREAK_MARK} `)
+    .replace(/\t+/g, ' ')
+    .trim();
+}

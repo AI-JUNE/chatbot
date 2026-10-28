@@ -4478,3 +4478,92 @@ test('연락처를 받아 적는 자가 한 벌이다 (DS 70-1·70-2·70-3)', ()
   assert.match(pii, /const CONTACT_TAIL =/, '꼬리 목록이 한 곳에 없다');
   assert.equal(/t\.replace\(\/\\s\+\/g, ''\) === c\.replace/.test(chat), false, '종전 「글자까지 같을 때만」 식이 남아 있다');
 });
+
+/* ══════════ 디자인 스프린트 — 68차 재감사 (DS 71-1·71-2·71-3) ══════════ */
+
+/**
+ * DS 71-1 — 남의 글을 **한 줄로 모으는 자**가 한 곳인가.
+ *
+ * 「정말 그렇게 모이는가」는 `tests/runtime.test.mjs` 가 돌려서 본다. 여기서 고정하는 것은
+ * 줄이 뜻을 가지는 글(이관 요약 평문·접수 확인 문구)에 값을 끼우는 자리가 **전부 그 자를
+ * 지나는 것**이다 — 한 자리라도 빠지면 그 자리에서만 고객이 우리 글의 줄을 만든다.
+ */
+test('줄이 뜻을 가지는 글에 끼우는 값은 한 줄로 모은다 (DS 71-1)', () => {
+  const text = stripComments(read('src/lib/text.ts'));
+  const handoff = stripComments(read('src/lib/handoff.ts'));
+  const slots = stripComments(read('src/lib/slots.ts'));
+
+  // ① 모으는 자와 그 표시는 `lib/text` 한 곳이다.
+  assert.match(text, /export const LINE_BREAK_MARK = /, '줄바꿈 표시가 한 곳에 없다');
+  assert.match(text, /export function oneLine\(s: unknown\): string/, '한 줄로 모으는 자를 내보내지 않는다');
+
+  // ② 요약은 **가린 뒤에** 모은다(먼저 모으면 줄 끝에 걸친 번호를 규칙이 놓친다).
+  assert.match(handoff, /import \{ oneLine \} from '@\/lib\/text';/, '요약이 공통 자를 가져오지 않는다');
+  assert.match(handoff, /value: oneLine\(m\.text\)/, '수집 값을 한 줄로 모으지 않는다');
+  assert.match(handoff, /text: oneLine\(m\.text\)/, '대화 한 마디를 한 줄로 모으지 않는다');
+  for (const m of handoff.match(/oneLine\([^)]*\)/g) || []) {
+    assert.match(m, /oneLine\(m\.text\)/, `마스킹을 지나지 않은 값을 모은다: ${m}`);
+  }
+
+  // ③ 접수 확인 문구도 같은 자를 지난다 — 한 항목이 한 줄이다.
+  assert.match(slots, /import \{ oneLine \} from '@\/lib\/text';/, '확인 문구가 공통 자를 가져오지 않는다');
+  assert.match(slots, /`- \$\{s\.label\}: \$\{oneLine\(/, '확인 문구가 값을 그대로 끼운다');
+
+  // ④ 자리마다 제 식으로 줄바꿈을 지우지 않는다(지우면 「10시⏎2시」가 「10시2시」가 된다).
+  for (const [name, body] of [['handoff', handoff], ['slots', slots]]) {
+    assert.equal(/replace\(\/\\n\/g, ''\)/.test(body), false, `${name} 이 줄바꿈을 조용히 지운다`);
+  }
+});
+
+/**
+ * DS 71-2 — 「주고받은 메시지」는 **세어 둔 수**인가(버퍼 길이가 아니라).
+ */
+test('이관 요약의 메시지 수는 세션이 세어 둔 값에서 온다 (DS 71-2)', () => {
+  const session = stripComments(read('src/lib/session.ts'));
+  const handoff = stripComments(read('src/lib/handoff.ts'));
+  const chat = stripComments(read('src/lib/chat.ts'));
+  const route = stripComments(read('src/app/api/escalation/route.ts'));
+
+  // ① 세는 자리는 턴을 쌓는 자리 하나다 — 버려도 수는 남는다.
+  assert.match(session, /turnTotal\?: number;/, '주고받은 수를 세는 칸이 없다');
+  assert.match(session, /updateSession\(sessionId, \{ turns, turnTotal: \(ctx\.turnTotal \?\? 0\) \+ 1 \}\);/, '턴을 쌓으면서 세지 않는다');
+
+  // ② 요약은 **버퍼 길이를 수로 적지 않는다**.
+  assert.equal(/turnCount: input\.turns\.length/.test(handoff), false, '종전 식(버퍼 길이)이 남아 있다');
+  assert.match(handoff, /const turnCount = Math\.max\(input\.totalTurns \?\? 0, input\.turns\.length\);/, '세어 둔 수를 쓰지 않는다');
+  assert.match(handoff, /omittedTurns: Math\.max\(0, turnCount - recentTurns\.length\)/, '담지 못한 수를 세지 않는다');
+
+  // ③ 요약을 만드는 **두 자리 모두** 세어 둔 수를 넘긴다(한쪽만 넘기면 창구마다 다른 수가 간다).
+  for (const [name, body] of [['chat', chat], ['escalation route', route]]) {
+    assert.match(body, /totalTurns: ctx\.turnTotal/, `${name} 이 세어 둔 수를 넘기지 않는다`);
+  }
+});
+
+/**
+ * DS 71-3 — 콘솔이 **받아 온 창**을 대화의 길이라고 말하지 않는가.
+ */
+test('대화 기록 창구와 화면이 보여 준 수를 전체라고 말하지 않는다 (DS 71-3)', () => {
+  const convlog = stripComments(read('src/lib/convlog.ts'));
+  const route = stripComments(read('src/app/api/admin/escalations/route.ts'));
+  const page = stripComments(read('src/app/admin/page.tsx'));
+
+  // ① 묶음을 만드는 자는 저장소에 있다 — 접수 목록(`queryTickets`)과 같은 모양이다.
+  assert.match(convlog, /export function queryTurns\(limit: number = TURN_PAGE_DEFAULT\): TurnPage/, '대화 기록 묶음을 만드는 자가 없다');
+  assert.match(convlog, /export function sessionTurnCounts\(ids: readonly string\[\]\): Record<string, number>/, '대화별 보관 수를 세는 자가 없다');
+  assert.match(convlog, /export const TURN_PAGE_DEFAULT = 30;/, '창 크기에 이름이 없다');
+
+  // ② 라우트는 창 크기만 보내지 않는다 — 전체 수와 대화별 보관 수를 함께 보낸다.
+  assert.equal(/listTurns\(30\)/.test(route), false, '종전 식(이름 없는 30)이 남아 있다');
+  assert.match(route, /const page = queryTurns\(intQuery\(req, 'turns', TURN_PAGE_DEFAULT, 1, TURN_PAGE_MAX\)\);/, '라우트가 묶음 자를 쓰지 않는다');
+  assert.match(route, /turnPage: \{ total: page\.total, shown: page\.turns\.length, limit: page\.limit, truncated: page\.truncated \}/, '전체 몇 건인지 말하지 않는다');
+  assert.match(route, /sessionTurns: sessionTurnCounts\(page\.turns\.map\(\(t\) => t\.sessionId\)\)/, '대화별 보관 수를 보내지 않는다');
+
+  // ③ 화면은 받은 수를 대화 전체라고 적지 않는다.
+  // 빈 중괄호는 `stripComments` 가 걷어 간다(JSX 주석 자리) — 앞머리만 본다.
+  assert.match(page, /setSessionTurns\(data\.sessionTurns \|\| /, '콘솔이 대화별 보관 수를 받지 않는다');
+  assert.match(page, /const partial = kept > turns\.length;/, '토막인지 가리지 않는다');
+  assert.match(page, /partial \? `최근 \$\{turns\.length\}쌍 · 보관 \$\{kept\}쌍` : `주고받은 메시지 \$\{turns\.length\}쌍`/, '토막을 전체라고 적는다');
+  assert.ok(page.includes('이 화면에는 최근 {turns.length}쌍만 들어 있습니다.'), '빠진 대화가 있다는 사실을 적지 않는다');
+  // 지킬 수 없는 약속을 버튼 이름에 적지 않는다 — 콘솔은 대화 「전체」를 들고 있지 않다.
+  assert.equal(page.includes('대화 전체 보기'), false, '「전체」라고 적은 버튼이 남아 있다');
+});
