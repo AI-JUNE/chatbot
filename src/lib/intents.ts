@@ -19,6 +19,8 @@ const ENGINE_LABELS: Record<string, string> = {
   contact_captured: '연락처 받음',
   contact_updated: '연락처 변경',
   contact_skipped: '연락처 없이 진행',
+  // 제안 목록에 없는 번호를 고른 턴 (DS 69-1) — 「분류 전」과 다른 사실이다(고르기는 통했다).
+  suggestion_out_of_range: '없는 번호 선택',
   error: '연결 오류',
 };
 

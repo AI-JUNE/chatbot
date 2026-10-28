@@ -17,7 +17,8 @@
 // [승인 필요] 관리 콘솔에서 폼을 편집·추가하는 기능, 수집 결과의 외부 업무시스템 전송.
 import { maskPii } from '@/lib/handoff';
 import { findContact } from '@/lib/pii';
-import { compact, keywordHit, prepare } from '@/lib/normalize';
+import { compact } from '@/lib/normalize';
+import { interpretControl, pickChoice, pickNumber, type Control } from '@/lib/choice';
 import { compareYmd, isRealYmd, kstTime, kstYmd, normalizeYmd, ymdToString } from '@/lib/kst';
 import { josa } from '@/lib/refusal';
 
@@ -185,11 +186,16 @@ export function stepInfo(form: FormSpec, key: string): { step: number; total: nu
 
 // ---- 제어어(취소·이전·건너뛰기) ----
 
-const CANCEL_RE = /^(취소|그만|중단|안 ?할래|안할래|처음으로|처음부터|나가기|종료|cancel|stop)\s*[.!]?$/i;
-const BACK_RE = /^(이전|뒤로|back|다시|잘못 ?(입력|눌렀))\s*[.!]?$/i;
-const SKIP_RE = /^(건너뛰|건너뛰기|스킵|skip|없어요|없습니다|괜찮아요|괜찮습니다|생략)\s*[.!]?$/i;
-
-export type Control = 'cancel' | 'back' | 'skip' | 'value';
+/**
+ * 빠져나가는 말을 가리는 자는 **`lib/choice` 한 곳**이다 (DS 69-3).
+ *
+ * 종전에는 이 파일과 `lib/chat` 에 한 벌씩 있었고 말 목록이 서로 달랐다 — 폼 쪽은 「아니요」·
+ * 「나중에」를 몰랐고, 연락처 수집 턴 쪽은 「생략」을 몰랐으며 그쪽 식은 **문장 어디서든** 걸려
+ * 고객의 보통 질문을 건너뛰기로 삼켰다. 같은 제품이 같은 질문을 하면서 받아 주는 말이 둘로
+ * 갈려 있던 자리다.
+ */
+export { interpretControl };
+export type { Control };
 
 /**
  * 수집 중에도 "사람과 이야기하고 싶다"는 요청은 최우선으로 존중한다.
@@ -197,14 +203,6 @@ export type Control = 'cancel' | 'back' | 'skip' | 'value';
  * "연결이 안 돼요" 같은 증상 설명이 이관으로 새는 것을 막기 위해 좁은 패턴만 본다.
  */
 export const AGENT_REQUEST_RE = /(상담원|상담사|(사람|직원|담당자)\s*(이랑|하고|과|와)?\s*(연결|바꿔|바꾸|통화))/;
-
-export function interpretControl(text: string): Control {
-  const t = (text || '').trim();
-  if (CANCEL_RE.test(t)) return 'cancel';
-  if (BACK_RE.test(t)) return 'back';
-  if (SKIP_RE.test(t)) return 'skip';
-  return 'value';
-}
 
 // ---- 값 검증 ----
 
@@ -429,26 +427,19 @@ function isPastKst(date: string, time: string, now: Date): boolean {
   return time < kstTime(now);
 }
 
-/** 선택지 매칭 — 번호("2", "2번")와 표기(동의어·오타 허용) 양쪽을 받는다. */
+/**
+ * 선택지 매칭 — 번호(「2」·「2번」·「2번이요」·「②」·「두 번째」)와 표기(동의어·오타 허용) 양쪽을 받는다.
+ *
+ * 고르는 자는 **`lib/choice` 한 곳**이다 (DS 69-1·69-2) — 종전에는 번호를 읽는 식이 이 파일과
+ * `chat.parsePick` 에 한 벌씩 있었고(둘 다 `^([1-9])\s*(번|\.)?$`), 말로 고르는 쪽은 **먼저
+ * 걸리는 선택지**를 돌려줬다. 돌려주는 값은 종전과 같다(고른 선택지 또는 null) — 「알아들었는데
+ * 그런 번호가 없다」를 따로 말해야 하는 자리는 `validateSlot` 이다.
+ */
 export function matchChoice(choices: string[], input: string): string | null {
-  const t = (input || '').trim();
-  const num = t.match(/^([1-9])\s*(번|\.)?$/);
-  if (num) {
-    const i = Number(num[1]);
-    return i >= 1 && i <= choices.length ? choices[i - 1] : null;
-  }
-  const pre = prepare(t);
-  if (!pre.compact) return null;
-  for (const c of choices) {
-    if (compact(c) === pre.compact) return c;
-  }
-  for (const c of choices) {
-    // 선택지 전체가 아니라 의미 단어(공백 분리)로도 고를 수 있게 한다("카톡" → "카카오톡").
-    for (const word of c.split(/\s+/)) {
-      if (word.length >= 2 && keywordHit(pre.compact, pre.jamo, word).kind !== 'none') return c;
-    }
-  }
-  return null;
+  const num = pickNumber(input, choices.length);
+  if (num.kind === 'picked') return choices[num.number - 1];
+  if (num.kind === 'out_of_range') return null;
+  return pickChoice(choices, input);
 }
 
 /**
@@ -519,7 +510,19 @@ export function validateSlot(slot: SlotSpec, input: string, now: Date = new Date
 
   if (slot.kind === 'choice') {
     const choices = slot.choices ?? [];
-    const picked = matchChoice(choices, raw);
+    /**
+     * **없는 번호를 「못 알아들었다」고 하지 않는다** (DS 69-1).
+     *
+     * 선택지가 넷인데 「5번」이라고 답한 고객은 번호로 고르는 길을 **제대로 쓴** 사람이다 —
+     * 그에게 「발생 채널을 알아보지 못했어요」는 사실이 아니고, 무엇이 잘못됐는지도 말해 주지
+     * 않는다(29차의 「거절은 무엇이 틀렸는지 밝힌다」). 알아들은 수를 되읽어 준다.
+     */
+    const num = pickNumber(raw, choices.length);
+    if (num.kind === 'picked') return { ok: true, value: choices[num.number - 1] };
+    if (num.kind === 'out_of_range') {
+      return { ok: false, message: `${num.number}번 선택지는 없어요. ${renderChoices(choices)} 중에서 골라주세요.` };
+    }
+    const picked = pickChoice(choices, raw);
     if (picked) return { ok: true, value: picked };
     return { ok: false, message: `${josa(slot.label, '을', '를')} 알아보지 못했어요. ${renderChoices(choices)} 중에서 골라주세요.` };
   }

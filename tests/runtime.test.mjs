@@ -2398,16 +2398,29 @@ test('위젯 카드로 접수한 뒤의 질문이 연락처로 읽히지 않는�
     return ticket;
   };
 
-  // ① 보통 질문이 「건너뛰기」로 읽혀 **질문이 사라진다**.
+  /**
+   * ① 보통 질문이 「건너뛰기」로 읽혀 **질문이 사라진다**.
+   *
+   * 종전 식은 문장 **어디서든** 걸렸고(아래에 그대로 다시 적는다), 그래서 연락처를 묻는 상태가
+   * 남아 있으면 「…없어요?」가 건너뛰기로 읽혔다. 69차가 그 식을 한 벌로 모으며 **보내온 글이
+   * 그 말뿐일 때만** 고른 것으로 바꿨으므로(DS 69-3), 이제는 묻는 상태가 남아 있어도 질문이
+   * 사라지지 않는다 — 두 겹 모두 지키는 것이 이 검증의 뜻이다.
+   */
+  const OLD_SKIP_RE = /(건너뛰|괜찮|없어요|없습니다|아니요|아니오|나중에|스킵|skip)/i;
+  assert.equal(OLD_SKIP_RE.test('환불 수수료는 없어요?'), true, '종전 식이 보통 질문을 건너뛰기로 읽던 것이 재현되지 않는다');
+
   setup('rt-ds35-skip-old', false);
   const skipOld = replyTo('환불 수수료는 없어요?', 'rt-ds35-skip-old');
-  assert.equal(skipOld.intent, 'contact_skipped', '이 결함이 재현되지 않으면 이 검증은 아무것도 지키지 않는다');
+  assert.notEqual(skipOld.intent, 'contact_skipped', '연락처를 묻는 상태가 보통 질문을 삼킨다 (DS 69-3)');
 
   setup('rt-ds35-skip-new', true);
   const skipNew = replyTo('환불 수수료는 없어요?', 'rt-ds35-skip-new');
   assert.notEqual(skipNew.intent, 'contact_skipped', '카드가 끝낸 질문을 대화창이 다시 묻는다');
   // 「건너뛰기」로 읽혔을 때만 나가는 말 — 문구는 DS 45-1 에서 바뀌었고, 검사의 뜻은 그대로다.
   assert.equal(skipNew.reply.includes('접수는 그대로 남아 있어요'), false, '질문은 사라지고 접수 안내만 남는다');
+  // 그 상태에서 **진짜 건너뛰기**는 그대로 통한다(막는 쪽으로 기울이지 않았다).
+  setup('rt-ds35-skip-real', false);
+  assert.equal(replyTo('건너뛰기', 'rt-ds35-skip-real').intent, 'contact_skipped', '건너뛰기가 통하지 않는다');
 
   // ② 질문에 섞인 **남의 번호**가 고객의 연락처로 저장된다(상담원은 그 번호로 전화한다).
   const old = setup('rt-ds35-num-old', false);
@@ -2596,9 +2609,16 @@ test('이미 받은 연락처를 서버가 다시 묻지 않는다 (DS 37-1)', o
   assert.notEqual(other.intent, 'contact_captured', '고객이 주지 않은 번호를 연락처로 받아 적는다');
   assert.equal(esc.getTicket(first.ticketId).contact, '010-1234-5678', '고객이 남긴 연락처가 남의 번호로 덮였다');
 
-  // ④ 종전 동작(조건 없이 묻기)에서는 ②③이 실제로 일어난다 — 재현되지 않으면 ②③은 아무것도 지키지 않는다.
+  /**
+   * ④ 종전 동작(조건 없이 묻기)에서는 ③이 실제로 일어난다 — 재현되지 않으면 ③은 아무것도 지키지 않는다.
+   *
+   * ②(보통 질문이 건너뛰기로 읽히는 것)는 **묻는 상태를 켜 두어도** 이제 일어나지 않는다 —
+   * 69차가 그 판정을 「보내온 글이 그 말뿐일 때만」으로 좁혔다(DS 69-3). 그래서 종전 식을
+   * 여기에 다시 적어 재현을 고정하고, 지금 엔진은 두 겹 모두 지키는지를 본다.
+   */
   updateSession(sid, { awaitingContact: true });
-  assert.equal(replyTo('환불 수수료는 없어요?', sid).intent, 'contact_skipped', '이 결함이 재현되지 않는다');
+  assert.equal(/(건너뛰|괜찮|없어요|없습니다|아니요|아니오|나중에|스킵|skip)/i.test('환불 수수료는 없어요?'), true, '종전 식의 재현이 깨졌다');
+  assert.notEqual(replyTo('환불 수수료는 없어요?', sid).intent, 'contact_skipped', '묻는 상태가 보통 질문을 삼킨다 (DS 69-3)');
   updateSession(sid, { awaitingContact: true });
   assert.equal(replyTo('매장 번호 02-123-4567로 전화했는데 안 받아요', sid).intent, 'contact_captured', '이 결함이 재현되지 않는다');
   assert.equal(esc.getTicket(first.ticketId).contact, '02-123-4567', '덮어쓰기가 재현되지 않는다');
@@ -6864,4 +6884,218 @@ test('오전·오후는 그 시각에 딸린 것만 본다 (DS 68-3)', opts, asy
     S.validateSlot(DT_SLOT, '내일 낮 2시', FIXED_NOW),
     { ok: true, value: '2026-09-04 14:00' },
   );
+});
+
+/* ══════════ 디자인 스프린트 — 66차 재감사 (DS 69-1·69-2·69-3) ══════════ */
+
+/** 고르기 판정만 돌리는 묶음 — `lib/choice` 는 `lib/normalize` 외에 의존하지 않는다. */
+const choiceLib = () => importLib('choice', ['normalize']);
+
+/** 장애 신고 폼의 선택지 — 폼 정의를 건드리지 않고 choice 검증만 돌린다. */
+const CH = ['웹 챗봇', '카카오톡', '전화 콜봇', '기타'];
+const CH_SLOT = { key: 'channel', label: '발생 채널', kind: 'choice', choices: CH, prompt: '어느 채널에서 발생했나요?', hint: '번호(1~4)로 답하셔도 돼요' };
+
+/**
+ * DS 69-1 — 봇이 「번호로 답하셔도 돼요」라고 안내한 그 줄에서 **번호를 못 알아듣던 자리**.
+ *
+ * 번호를 읽는 식이 두 벌이었다(`chat.parsePick`·`slots.matchChoice`) — 둘 다
+ * `^([1-9])\s*(번|\.)?$` 라서 「2번이요」·「2)」·「②」·「두 번째」·「3번으로」가 전부 떨어졌다.
+ * 떨어진 뒤가 더 나쁘다: 폼에서는 재시도 횟수가 올라 세 번이면 상담원으로 넘어가고, 폴백
+ * 제안에서는 그 글자가 **새 질문**이 되어 또 한 번 폴백이 돌아온다.
+ */
+test('고객이 번호로 고른 것을 알아듣는다 (DS 69-1)', opts, async () => {
+  const C = await choiceLib();
+  const S = await slotsLib();
+
+  // ① 종전 식 재현 — 「번호로 답하셔도 돼요」라고 적어 놓고 받지 않던 표기들.
+  const naive = (t, max) => {
+    const m = t.match(/^([1-9])\s*(번|\.)?$/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return n >= 1 && n <= max ? n : null;
+  };
+  for (const t of ['2번이요', '2번요', '2)', '(2)', '②', '두 번째', '두번째', '첫째', '3번으로', '4번 주세요']) {
+    assert.equal(naive(t, 4), null, `재현이 깨졌다 — 종전 식이 ${t} 를 받았다`);
+  }
+  assert.equal(naive('2', 4), 2, '멀쩡한 표기의 재현이 깨졌다');
+
+  // ② 새 자의 답 — 값으로 고정한다.
+  for (const [t, want] of [
+    ['2', 2], ['2번', 2], ['2.', 2], ['2번이요', 2], ['2번요', 2], ['2)', 2], ['(2)', 2], ['②', 2],
+    ['두 번째', 2], ['두번째', 2], ['첫째', 1], ['첫번째', 1], ['3번으로', 3], ['4번 주세요', 4], [' 2 ', 2],
+  ]) {
+    assert.deepEqual(C.pickNumber(t, 4), { kind: 'picked', number: want }, t);
+  }
+  // 수가 섞인 **보통 말**은 고르기가 아니다 (DS 68-2 와 같은 선 — 문장 속의 수는 값이다).
+  for (const t of ['2시요', '2명이요', '2만원', '2개 주세요', '전화 2대', '']) {
+    assert.deepEqual(C.pickNumber(t, 4), { kind: 'none' }, t);
+  }
+  // 알아들었는데 **그런 번호가 없는** 것은 다른 사실이다.
+  assert.deepEqual(C.pickNumber('5번', 4), { kind: 'out_of_range', number: 5 });
+  assert.deepEqual(C.pickNumber('10', 4), { kind: 'out_of_range', number: 10 });
+  assert.deepEqual(C.pickNumber('0번', 4), { kind: 'out_of_range', number: 0 });
+
+  // ③ 화면에 뜨는 결과 — 폼이 「2번이요」로 다음 항목으로 넘어간다(재질문이 아니다).
+  const trouble = S.getForm('trouble');
+  let st = S.startForm(trouble).state;
+  st = S.applyInput(trouble, st, '위젯이 열리지 않아요', FIXED_NOW).state;
+  const picked = S.applyInput(trouble, st, '2번이요', FIXED_NOW);
+  assert.equal(picked.kind, 'progress', '고객이 고른 번호가 재질문으로 떨어진다');
+  assert.equal(picked.state.values.channel, '카카오톡');
+  assert.equal(picked.state.retries, 0, '고른 번호가 실패로 세어진다 — 세 번이면 상담원으로 넘어간다');
+
+  // ④ 없는 번호에는 **알아들은 수를 되읽어** 거절한다(「알아보지 못했어요」가 아니다).
+  const over = S.validateSlot(CH_SLOT, '5번', FIXED_NOW);
+  assert.equal(over.ok, false);
+  assert.match(over.message, /^5번 선택지는 없어요\./, '없는 번호를 못 알아들었다고 말한다');
+  assert.match(over.message, /1\) 웹 챗봇 2\) 카카오톡 3\) 전화 콜봇 4\) 기타/, '무엇을 고를 수 있는지 말하지 않는다');
+  // 종전 계약은 그대로다 — `matchChoice` 는 고른 선택지 또는 null 이다.
+  assert.equal(S.matchChoice(CH, '5'), null, '범위 밖 번호를 골라 준다');
+  assert.equal(S.matchChoice(CH, '2번이요'), '카카오톡');
+});
+
+/**
+ * DS 69-1(이어서) — 폴백 제안의 번호. 엔진을 **실제로 돌려** 본다.
+ *
+ * 종전에는 「1번이요」가 지식베이스 질의가 되어 또 한 번 폴백이 돌아왔다 — 고객이 보기에
+ * 고르기가 통째로 먹히지 않는다(바로 위에서 번호로 답하라고 안내한 그 목록이다).
+ */
+test('폴백 제안의 번호가 새 질문이 되지 않는다 (DS 69-1)', opts, async () => {
+  const { chat, session, question } = await seedLLMFixture();
+  delete process.env.CHAT_LLM_LIVE;
+
+  // 전제 — 폴백이 제안 목록을 내밀고 「번호로 답하셔도 돼요」라고 적는다.
+  const sid = 'rt-ds69-pick';
+  const fb = chat.replyTo(question, sid);
+  const many = (session.getSession(sid).pendingSuggestions ?? []).length;
+  assert.ok(many >= 1, '제안이 뜨지 않으면 이 검증은 아무것도 지키지 않는다');
+  assert.match(fb.reply, /번호\(1~/, '번호로 답하라고 안내하지 않는다');
+
+  // ① 「1번이요」가 그 제안의 답으로 처리된다.
+  const chosen = chat.replyTo('1번이요', sid);
+  assert.notEqual(chosen.source, 'fallback', '고른 번호가 새 질문으로 처리된다');
+  assert.equal(session.getSession(sid).pendingSuggestions, undefined, '고른 뒤에도 제안이 남아 있다');
+
+  // ② 목록에 없는 번호 — 새 질문으로 보내지 않고, 몇 번까지 있는지 말하고 제안을 그대로 든다.
+  const sid2 = 'rt-ds69-over';
+  chat.replyTo(question, sid2);
+  const over = chat.replyTo('9번', sid2);
+  assert.equal(over.intent, 'suggestion_out_of_range');
+  assert.match(over.reply, new RegExp(`^9번은 목록에 없어요\\. 1~${many} 중에서`));
+  assert.equal((over.suggestions ?? []).length, many, '고를 목록이 사라졌다');
+  assert.equal((session.getSession(sid2).pendingSuggestions ?? []).length, many, '다음 턴에 고를 수 없게 된다');
+
+  // ③ 그 턴은 **답한 턴이 아니다** — 자신 없는 응답이 쌓여 상담원으로 넘어가는 사다리를
+  //    초기화하지 않는다(`context` 의 0.9 로 적으면 못 찾는 고객이 사다리에서 떨어진다).
+  assert.equal(over.confidence < chat.CONFIDENCE_THRESHOLD, true, '답하지 못한 턴을 확신한 턴으로 적는다');
+  assert.equal(over.escalate, true, '연속 저신뢰가 상담원 접수로 이어지지 않는다');
+  assert.ok(over.ticketId, '고르기를 못 찾는 고객이 사람에게 닿지 못한다');
+});
+
+/**
+ * DS 69-2 — 말로 고르면 **엉뚱한 선택지**가 걸리던 자리.
+ *
+ * 종전 `matchChoice` 는 선택지를 차례로 훑다 **먼저 걸리는 것**을 돌려줬다. 동의어 표에서
+ * 「챗봇」의 짝에 한 글자 `봇` 이 들어 있어, 「콜봇이요」가 목록 첫 줄인 「웹 챗봇」에 걸렸다 —
+ * 고객이 말한 적 없는 채널로 접수되고, 운영자는 그 채널을 보고 장애를 찾는다.
+ */
+test('말로 고른 선택지가 목록 앞줄에 가로채이지 않는다 (DS 69-2)', opts, async () => {
+  const C = await choiceLib();
+  const S = await slotsLib();
+  const N = await importLib('normalize');
+
+  // ① 종전 식 재현 — 먼저 걸리는 선택지가 이긴다.
+  const naive = (choices, input) => {
+    const pre = N.prepare(input);
+    for (const c of choices) if (N.compact(c) === pre.compact) return c;
+    for (const c of choices) {
+      for (const w of c.split(/\s+/)) {
+        if (w.length >= 2 && N.keywordHit(pre.compact, pre.jamo, w).kind !== 'none') return c;
+      }
+    }
+    return null;
+  };
+  for (const t of ['콜봇이요', '콜봇', '음성봇', '보이스봇', '전화봇이요']) {
+    assert.equal(naive(CH, t), '웹 챗봇', `재현이 깨졌다 — 종전 식이 ${t} 를 다르게 읽었다`);
+  }
+  // 가로채는 까닭은 **한 글자 동의어**다(그 한 글자와 두 글자가 같은 무게였다).
+  const cp = N.compact('콜봇이요');
+  assert.deepEqual(N.keywordHit(cp, N.decomposeJamo(cp), '챗봇'), { kind: 'synonym', term: '봇' });
+
+  // ② 새 자는 **가장 잘 맞는** 하나를 고른다.
+  for (const [t, want] of [
+    ['콜봇이요', '전화 콜봇'], ['콜봇', '전화 콜봇'], ['음성봇', '전화 콜봇'], ['보이스봇', '전화 콜봇'],
+    ['전화봇이요', '전화 콜봇'], ['전화', '전화 콜봇'], ['전화요', '전화 콜봇'],
+    ['카톡', '카카오톡'], ['카카오', '카카오톡'], ['챗봇', '웹 챗봇'], ['기타', '기타'], ['기타요', '기타'],
+  ]) {
+    assert.equal(C.pickChoice(CH, t), want, t);
+  }
+  // 가리는 것이 없으면 고르지 않는다(되묻는다) — 한 글자 낱말로는 고르지 않는 기준도 종전과 같다.
+  for (const t of ['몰라요', '웹', '잘 모르겠어요', '']) {
+    assert.equal(C.pickChoice(CH, t), null, t);
+  }
+  // 둘을 똑같이 가리키면 고르지 않는다 — 틀리게 고르는 것보다 한 번 더 묻는 쪽이 가볍다.
+  assert.equal(C.pickChoice(['환불 문의', '환불 취소'], '환불'), null, '비긴 자리에서 앞줄을 골라 준다');
+
+  // ③ 화면에 뜨는 결과 — 고객이 말한 채널로 접수된다.
+  assert.deepEqual(S.validateSlot(CH_SLOT, '콜봇이요', FIXED_NOW), { ok: true, value: '전화 콜봇' });
+  const trouble = S.getForm('trouble');
+  let st = S.startForm(trouble).state;
+  st = S.applyInput(trouble, st, '전화가 끊겨요', FIXED_NOW).state;
+  const done = S.applyInput(trouble, st, '콜봇이요', FIXED_NOW);
+  assert.equal(done.state.values.channel, '전화 콜봇', '고객이 말한 적 없는 채널로 접수된다');
+});
+
+/**
+ * DS 69-3 — 「건너뛰기」 판정이 **두 벌**이고, 한쪽은 문장 어디서든 걸렸다.
+ *
+ * `chat.SKIP_RE` 는 `^…$` 가 없어 연락처를 묻는 턴의 **보통 질문**을 삼켰다 — 「환불 규정
+ * 없어요?」·「괜찮은 요금제 있나요?」가 건너뛰기로 읽히고, 고객의 질문은 답도 없이 「네,
+ * 알겠습니다」로 끝났다. 말 목록도 서로 달라 폼 쪽은 「아니요」를, 연락처 수집 턴 쪽은
+ * 「생략」을 몰랐다 — 같은 질문(「원치 않으시면 "건너뛰기"」)에 받아 주는 말이 둘이었다.
+ */
+test('건너뛰기는 그 말만 보냈을 때만 건너뛰기다 (DS 69-3)', opts, async () => {
+  const C = await choiceLib();
+  const S = await slotsLib();
+
+  // ① 종전 식 두 벌 재현 — 한쪽은 문장 어디서든 걸리고, 다른 쪽은 아는 말이 적다.
+  const oldChat = /(건너뛰|괜찮|없어요|없습니다|아니요|아니오|나중에|스킵|skip)/i;
+  const oldForm = /^(건너뛰|건너뛰기|스킵|skip|없어요|없습니다|괜찮아요|괜찮습니다|생략)\s*[.!]?$/i;
+  for (const t of ['환불 규정 없어요?', '괜찮은 요금제 있나요?', '아직 답이 없어요', '배송 안내 없습니다만?']) {
+    assert.equal(oldChat.test(t), true, `재현이 깨졌다 — 종전 식이 ${t} 를 삼키지 않았다`);
+    assert.equal(C.interpretControl(t), 'value', `보통 질문이 건너뛰기로 읽힌다: ${t}`);
+  }
+  // 두 벌이 서로 달랐다는 사실 자체를 고정한다.
+  assert.equal(oldForm.test('아니요'), false, '재현이 깨졌다 — 폼 쪽이 「아니요」를 알고 있었다');
+  assert.equal(oldChat.test('생략'), false, '재현이 깨졌다 — 연락처 턴 쪽이 「생략」을 알고 있었다');
+
+  // ② 새 자는 두 쪽이 알던 말을 **모두** 받는다(줄이지 않았다).
+  for (const t of ['건너뛰기', '건너뛰', '건너뛸게요', '스킵', 'SKIP', '생략', '없어요', '없습니다', '없음',
+    '아니요', '아니오', '아뇨', '괜찮아요', '괜찮습니다', '됐어요', '필요 없어요', '나중에', '나중에요', '없어요.']) {
+    assert.equal(C.interpretControl(t), 'skip', t);
+  }
+  assert.equal(C.isSkip('건너뛰기'), true);
+  assert.equal(C.isSkip('환불 규정 없어요?'), false);
+  // 취소·이전은 종전 그대로다(한 벌로 모으면서 뜻이 바뀌지 않았다).
+  for (const t of ['취소', '그만', '중단', '처음부터', 'cancel', 'stop', '그만할게요']) {
+    assert.equal(C.interpretControl(t), 'cancel', t);
+  }
+  for (const t of ['이전', '뒤로', 'back', '다시']) {
+    assert.equal(C.interpretControl(t), 'back', t);
+  }
+  assert.equal(C.interpretControl('취소 수수료가 얼마예요?'), 'value', '보통 질문이 폼을 중단시킨다');
+  assert.equal(C.interpretControl('다시 전화해 주세요'), 'value', '보통 말이 앞 항목으로 되돌린다');
+
+  // ③ 화면에 뜨는 결과 — 선택 항목에서 「아니요」가 건너뛰기로 통한다(종전에는 연락처로 검증됐다).
+  const trouble = S.getForm('trouble');
+  let st = S.startForm(trouble).state;
+  st = S.applyInput(trouble, st, '위젯이 열리지 않아요', FIXED_NOW).state;
+  st = S.applyInput(trouble, st, '2번', FIXED_NOW).state;
+  const skipped = S.applyInput(trouble, st, '아니요', FIXED_NOW);
+  assert.equal(skipped.kind, 'complete', '건너뛸 수 있는 항목에서 「아니요」가 재질문으로 떨어진다');
+  assert.equal('contact' in skipped.values, false, '건너뛴 항목에 값이 들어 있다');
+  // 꼭 필요한 항목은 종전처럼 건너뛸 수 없다고 말한다.
+  const needed = S.applyInput(trouble, S.startForm(trouble).state, '아니요', FIXED_NOW);
+  assert.equal(needed.kind, 'invalid');
+  assert.match(needed.message, /건너뛸 수 없어요/);
 });

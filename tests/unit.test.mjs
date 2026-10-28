@@ -73,7 +73,10 @@ test('연락처 추출은 전화번호와 이메일을 모두 지원한다', () 
 });
 
 test('건너뛰기 의사표현을 인식한다', () => {
-  assert.match(read('src/lib/chat.ts'), /SKIP_RE/);
+  // 가리는 자는 `lib/choice` 한 곳이다 (DS 69-3) — 종전에는 이 파일에 `SKIP_RE` 가 한 벌,
+  // `lib/slots` 에 또 한 벌 있었고 말 목록까지 달랐다.
+  assert.match(read('src/lib/chat.ts'), /isSkip\(text\)/);
+  assert.match(read('src/lib/choice.ts'), /export function isSkip/);
 });
 
 test('응답 출처(source)가 분류되어 있다', () => {
@@ -3256,7 +3259,12 @@ test('접수번호를 알리는 자리가 모두 바뀐 사실을 말한다 (DS 
   // 조사는 번호를 읽는 소리에 맞춘다(DS 61-2) — 종전에는 `${prevId}는` 이라 「ESC-0001는」이었다.
   assert.match(s, /앞서 안내드린 접수번호 \$\{josa\(prevId, '은', '는'\)\} 더 진행되지 않아 새로 접수했어요/, '앞 번호가 끝났다는 사실을 말하지 않는다');
   // 까닭은 말하지 않는다 — `created` 만으로는 완료인지 취소인지(또는 복원인지) 알 수 없다.
-  const fn = s.slice(s.indexOf('function renumberedLine('), s.indexOf("/** 폴백 제안 번호 선택"));
+  // 끊는 자리는 바로 다음 함수의 머리말이다 — 종전에는 「폴백 제안 번호 선택」 주석이었는데,
+  // 그 식은 `lib/choice` 로 옮겨 가며 사라졌다(DS 69-1). 못 찾으면 파일 전체를 보게 되므로
+  // (그러면 이 검증은 아무것도 지키지 않는다) 자리를 찾았는지 먼저 센다.
+  const tail = s.indexOf('/**\n * 이 대화가 어느 고객사(테넌트)의 위젯에서 왔는가');
+  assert.ok(tail > 0, '끊는 자리를 찾지 못했다 — 함수 범위를 좁히지 못하면 아래 검증이 헛돈다');
+  const fn = s.slice(s.indexOf('function renumberedLine('), tail);
   assert.equal(/완료|취소/.test(fn), false, '알 수 없는 까닭을 지어낸다');
   assert.match(fn, /if \(!created \|\| !prevId \|\| prevId === nextId\) return '';/, '번호가 그대로인데도 바뀌었다고 말한다');
 
@@ -4351,4 +4359,55 @@ test('시각 판정이 그 수에 딸린 것만 본다 (DS 68-2·68-3)', () => {
   for (const word of ['낮', '정오', '밤', '자정', '아침', '새벽', '저녁']) {
     assert.ok(body.includes(`${word}:`), `반나절 표에서 빠졌다: ${word}`);
   }
+});
+
+/* ── 66차 재감사 — 고객이 무엇을 골랐는지 알아듣는 자리 (DS 69-1·69-2·69-3) ── */
+
+test('고르기를 알아듣는 자가 한 벌이다 (DS 69-1·69-2·69-3)', () => {
+  const choice = read('src/lib/choice.ts');
+  assert.match(choice, /export function pickNumber/, '번호를 읽는 자가 없다');
+  assert.match(choice, /export function pickChoice/, '말로 고른 것을 가리는 자가 없다');
+  assert.match(choice, /export function interpretControl/, '빠져나가는 말을 가리는 자가 없다');
+  assert.match(choice, /export function isSkip/, '건너뛰기를 묻는 자가 없다');
+  // `lib/normalize` 외에는 의존하지 않는다 — 엔진·폼 양쪽이 같은 자를 쓰기 위해서다.
+  const imports = choice.match(/from '@\/lib\/[\w-]+'/g) ?? [];
+  assert.deepEqual([...new Set(imports)], ["from '@/lib/normalize'"], 'choice 가 다른 모듈에 의존한다');
+
+  const slots = stripComments(read('src/lib/slots.ts'));
+  const chat = stripComments(read('src/lib/chat.ts'));
+
+  // ① 번호를 **손으로** 읽는 자리가 0건이다(종전에는 두 벌이었다).
+  for (const [name, body] of [['slots', slots], ['chat', chat]]) {
+    assert.equal(/\^\(\[1-9\]\)/.test(body), false, `${name} 에 번호를 손으로 읽는 식이 남아 있다`);
+    assert.equal(/parsePick/.test(body), false, `${name} 에 번호 판정 사본이 남아 있다`);
+  }
+  assert.match(slots, /const num = pickNumber\(input, choices\.length\)/, '선택지 매칭이 공통 자를 지나지 않는다');
+  assert.match(slots, /const num = pickNumber\(raw, choices\.length\)/, '선택지 검증이 공통 자를 지나지 않는다');
+  assert.match(chat, /const pick = pickNumber\(text, pending\.length\)/, '폴백 제안 번호가 공통 자를 지나지 않는다');
+  // 「알아들었는데 그런 번호가 없다」를 두 자리 모두 말한다(「못 알아들었다」와 다른 사실이다).
+  assert.match(slots, /num\.kind === 'out_of_range'/, '폼이 없는 번호를 못 알아들었다고 말한다');
+  assert.match(chat, /pick\.kind === 'out_of_range'/, '제안 목록이 없는 번호를 새 질문으로 보낸다');
+  assert.match(read('src/lib/intents.ts'), /suggestion_out_of_range: '없는 번호 선택'/, '새 인텐트에 사람이 읽는 이름이 없다');
+
+  // ② 말로 고르는 쪽은 **먼저 걸리는 것**을 돌려주지 않는다 — 점수를 견주고 비기면 고르지 않는다.
+  assert.match(choice, /return tied \? null : best;/, '비긴 자리에서 앞줄을 골라 준다');
+  assert.match(choice, /hit\.term\.length >= 2 \? 2 : 1/, '걸린 표기의 길이를 재지 않는다(한 글자 동의어가 이긴다)');
+  assert.equal(/for \(const c of choices\) \{[\s\S]{0,200}return c;/.test(slots), false, 'slots 에 먼저 걸리는 선택지를 돌려주는 사본이 남아 있다');
+
+  // ③ 빠져나가는 말은 `lib/choice` 밖에 적혀 있지 않다 — 두 벌이면 말 목록이 갈린다.
+  for (const [name, body] of [['slots', slots], ['chat', chat]]) {
+    for (const re of ['SKIP_RE', 'CANCEL_RE', 'BACK_RE']) {
+      assert.equal(new RegExp(`const ${re}`).test(body), false, `${name} 에 ${re} 사본이 남아 있다`);
+    }
+  }
+  assert.match(chat, /if \(isSkip\(text\)\)/, '연락처 수집 턴이 공통 자를 지나지 않는다');
+  assert.match(slots, /const control = interpretControl\(text\)/, '폼이 공통 자를 지나지 않는다');
+  // 두 쪽이 알던 말을 모두 받는다(한 벌로 모으면서 줄이지 않았다).
+  for (const word of ['건너뛰기', '스킵', 'skip', '생략', '없어요', '아니요', '아니오', '괜찮', '나중에']) {
+    assert.ok(choice.includes(word), `건너뛰기 말 목록에서 빠졌다: ${word}`);
+  }
+  // 세 판정 모두 **보내온 글이 그 말뿐일 때만** 고른 것으로 본다.
+  assert.ok(choice.includes('^(?:취소|'), '취소 판정이 문장 어디서든 걸린다');
+  assert.ok(choice.includes('^(?:이전|'), '이전 판정이 문장 어디서든 걸린다');
+  assert.ok(choice.includes('^(?:건너뛰기|'), '건너뛰기 판정이 문장 어디서든 걸린다');
 });

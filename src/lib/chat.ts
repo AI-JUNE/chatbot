@@ -18,6 +18,7 @@ import { createTicket, queuePosition } from '@/lib/escalation';
 import { buildHandoffSummary, maskPii, type HandoffReason } from '@/lib/handoff';
 import { findContact } from '@/lib/pii';
 import { clamp, envNumber } from '@/lib/num';
+import { isSkip, pickNumber } from '@/lib/choice';
 import { generateGroundedAnswer, type CompleteOptions, type GroundingDoc, type LLMFailureReason, type LLMMessage } from '@/lib/llm';
 import {
   AGENT_REQUEST_RE,
@@ -128,6 +129,16 @@ const SOURCE_CONFIDENCE: Record<ReplySource, number> = {
   empty: 1,
 };
 
+/**
+ * 제안 목록까지 내민 폴백의 확신도 — **임계 아래**다(질문에 답한 턴이 아니다).
+ *
+ * 목록에 없는 번호를 고른 턴도 같은 수를 쓴다 (DS 69-1). 그 턴에 우리가 한 일은 「몇 번까지
+ * 있다」를 말한 것뿐이고 고객의 질문에는 아직 답하지 못했다 — `context`(0.9)로 적으면 자신
+ * 없는 응답이 쌓여 상담원으로 넘어가는 사다리(`maybeAutoEscalate`)가 **초기화된다.** 고르기를
+ * 못 찾아 헤매는 고객은 사람에게 닿아야 한다.
+ */
+const SUGGESTED_FALLBACK_CONFIDENCE = 0.25;
+
 /** 정책상 상담원이 처리해야 하는 인텐트(고객 '요청'이 아니라 회사 정책으로 넘기는 경우). */
 const POLICY_INTENTS = new Set(['complaint', 'urgent']);
 
@@ -217,7 +228,17 @@ export function shadowOfRule(keywords: readonly string[], selfIntent = ''): Rule
 }
 
 // ---- 연락처 수집(에스컬레이션 후속 턴) ----
-const SKIP_RE = /(건너뛰|괜찮|없어요|없습니다|아니요|아니오|나중에|스킵|skip)/i;
+
+/**
+ * 「건너뛰기」를 가리는 자는 `lib/choice` 한 곳이다 (DS 69-3).
+ *
+ * 종전 식(`/(건너뛰|괜찮|없어요|없습니다|아니요|아니오|나중에|스킵|skip)/i`)은 **문장 어디서든**
+ * 걸렸다. 그래서 연락처를 묻는 턴에서 고객이 하는 보통 질문이 건너뛰기로 읽혔다 — 「환불 규정
+ * 없어요?」·「괜찮은 요금제 있나요?」·「배송 안내 없습니다만?」이 전부 그 길로 갔고, 답 대신
+ * 「네, 알겠습니다. 접수는 그대로 남아 있어요」가 돌아왔다(고객의 질문은 어디에도 남지 않는다).
+ * 폼 쪽 판정(`slots.interpretControl`)은 같은 일을 하면서 **말 목록이 달랐다** — 그쪽은
+ * 「생략」을 알고 「아니요」를 몰랐다.
+ */
 
 /**
  * 메시지에서 전화번호/이메일 추출. 없으면 null.
@@ -320,14 +341,6 @@ function renumberedLine(prevId: string | undefined, nextId: string, created: boo
   if (!created || !prevId || prevId === nextId) return '';
   // 조사는 **번호를 읽는 소리**에 맞춘다 (DS 61-2) — 「ESC-0001은」·「ESC-0002는」.
   return ` 앞서 안내드린 접수번호 ${josa(prevId, '은', '는')} 더 진행되지 않아 새로 접수했어요.`;
-}
-
-/** 폴백 제안 번호 선택("1", "2번", "3.") 파싱. 범위 밖이면 null. */
-function parsePick(text: string, max: number): number | null {
-  const m = text.match(/^([1-9])\s*(번|\.)?$/);
-  if (!m) return null;
-  const n = Number(m[1]);
-  return n >= 1 && n <= max ? n : null;
 }
 
 /**
@@ -587,7 +600,7 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
         ...(q ? { queue: q } : {}),
       };
     }
-    if (SKIP_RE.test(text)) {
+    if (isSkip(text)) {
       updateSession(sessionId, { awaitingContact: false });
       return {
         // 접수는 남는다는 사실은 그대로 두고, **창을 지키면 답이 온다**는 말만 거둔다 (DS 45-1).
@@ -632,17 +645,43 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
     };
   }
 
-  // 0-b) 직전 폴백 제안의 번호 선택("1", "2번") 처리
+  /**
+   * 0-b) 직전 폴백 제안의 번호 선택 — 읽는 자는 `lib/choice` 한 곳이다 (DS 69-1).
+   *
+   * 종전에는 이 자리에 `^([1-9])\s*(번|\.)?$` 가 손으로 적혀 있었고 접수 폼의 선택지
+   * (`slots.matchChoice`)에 같은 식이 한 벌 더 있었다. 둘 다 바로 윗줄에서 「번호(1~3)로
+   * 답하셔도 돼요」라고 안내해 놓고 「2번이요」·「2)」·「②」·「두 번째」·「3번으로」를 못
+   * 알아들어, 고객이 고른 번호가 **새 질문**으로 처리됐다(지식베이스에 「2번이요」라고 물은
+   * 것이 되어 다시 폴백이 돌아온다).
+   */
   const pending = ctx.pendingSuggestions ?? [];
   if (pending.length) {
-    const pick = parsePick(text, pending.length);
-    if (pick !== null) {
-      const chosen = pending[pick - 1];
+    const pick = pickNumber(text, pending.length);
+    if (pick.kind === 'picked') {
+      const chosen = pending[pick.number - 1];
       const entry = entriesFor(tenant).find((e) => e.id === chosen.id);
       updateSession(sessionId, { pendingSuggestions: undefined });
       if (entry) return kbReply(entry, chosen.question);
       // 편집으로 항목이 사라진 경우 — 원래 질문 문구로 재처리
       return computeReply(chosen.question, sessionId, tenant);
+    }
+    /**
+     * 알아들었는데 **그런 번호가 없다** — 고객을 새 질문 쪽으로 보내지 않는다 (DS 69-1).
+     *
+     * 목록이 셋인데 「5번」이라고 답하면 종전에는 그 글자가 지식베이스 질의가 되어 또 한 번
+     * 폴백이 돌아왔다(고객이 보기에 고르기가 통째로 먹히지 않는다). 제안은 그대로 들고 있고,
+     * 몇 번까지 있는지만 말한다.
+     */
+    if (pick.kind === 'out_of_range') {
+      return {
+        reply: `${pick.number}번은 목록에 없어요. 1~${pending.length} 중에서 골라주시거나, 궁금한 점을 다시 적어 주세요.`,
+        intent: 'suggestion_out_of_range',
+        escalate: false,
+        source: 'context',
+        // 답한 턴이 아니다 — 폴백과 같은 수를 써서 상담원 사다리를 초기화하지 않는다.
+        confidence: SUGGESTED_FALLBACK_CONFIDENCE,
+        suggestions: pending,
+      };
     }
   }
 
@@ -746,7 +785,7 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
     : suggestions.length
     ? '정확한 답을 찾지 못했어요. 혹시 아래 질문 중 찾으시는 내용이 있나요? 번호(1~' + suggestions.length + ')로 답하셔도 돼요. 없다면 "상담원"이라고 입력해 주세요.'
     : '아직 제가 정확히 이해하지 못했어요. 조금 더 구체적으로 말씀해 주시거나, 상담원 연결을 원하시면 "상담원"이라고 입력해 주세요.';
-  const fallbackConfidence = suggestions.length ? 0.25 : SOURCE_CONFIDENCE.fallback;
+  const fallbackConfidence = suggestions.length ? SUGGESTED_FALLBACK_CONFIDENCE : SOURCE_CONFIDENCE.fallback;
 
   // 3) LLM 경로 — 실제 생성은 비동기 진입점(replyToAsync)에서 수행한다.
   //    여기서는 "LLM을 시도할 자리"임을 source로만 표시하고, reply에는 실패 시 그대로 쓸 결정적 폴백을 담는다.
