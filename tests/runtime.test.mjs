@@ -7099,3 +7099,249 @@ test('건너뛰기는 그 말만 보냈을 때만 건너뛰기다 (DS 69-3)', op
   assert.equal(needed.kind, 'invalid');
   assert.match(needed.message, /건너뛸 수 없어요/);
 });
+
+/* ══════════ 디자인 스프린트 — 67차 재감사 (DS 70-1·70-2·70-3) ══════════ */
+
+/** 종전 전화번호 식 — 아스키 하이픈·공백·점만 알던 구분자와 세 묶음 앞가지. */
+const LEGACY_PHONE = /\b0\d{1,2}[-\s.]?\d{3,4}[-\s.]?\d{4}\b(?![\w.+-]*@)/;
+/** 종전 계좌 식 — 가장 넓은 규칙(전화번호가 떨어지면 이쪽이 집어 간다). */
+const LEGACY_ACCOUNT = /\b\d{2,4}-?\d{2,6}-?\d{2,6}(?:-?\d{2,6})?\b/;
+
+/**
+ * DS 70-1 — **전각으로 적은 연락처가 가려지지도, 받아 적히지도 않던 자리.**
+ *
+ * `lib/pii` 의 규칙은 전부 아스키(`\d`·`\w`)로 적혀 있었다. 전각 영숫자·기호는 한글(HWP)·
+ * PDF·사내 시스템에서 붙여 넣은 글과 전각 입력 상태의 자판에서 그대로 들어오는데, 그렇게
+ * 적힌 번호에는 **한 줄도 걸리지 않았다**:
+ *  - `０１０－１２３４－５６７８` 은 `hits` 가 비어 있다 — 대화 기록·이관 요약·CSV 를 지나
+ *    `scrub` 로 **서버 로그·오류 리포트·외부 LLM 호출 본문**까지 원문으로 간다.
+ *  - 같은 번호를 받아 적는 쪽도 못 알아본다 — 접수 폼에서 「형식을 알아보지 못했어요」가
+ *    돌아오고 세 번이면 상담원 이관이다.
+ *  - 섞어 적은 `０１０12345678` 은 뒤쪽만 **계좌 규칙**에 걸려 「계좌번호」로 집계됐다.
+ */
+test('전각으로 적은 연락처도 가리고 받아 적는다 (DS 70-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  delete process.env.CHAT_LLM_LIVE;
+  const { maskPii, findContact, takeContact, foldWidth, PHONE_MATCH_PATTERN } = await pickPii('pii');
+  const { scrub } = await pickPii('monitoring');
+  const { replyTo } = await pickPii('chat');
+  const { validateSlot, getForm, slotOf } = await pickPii('slots');
+  const esc = await pickPii('escalation');
+
+  const WIDE = '０１０－１２３４－５６７８';
+  const MIXED = '０１０12345678';
+  const WIDE_MAIL = 'hong＠example.com';
+  const DASHES = ['010‐1234‐5678', '010‑1234‑5678', '010–1234–5678', '010−1234−5678'];
+
+  // ── ① 종전 식 재현 — 전각은 한 줄도 걸리지 않고, 섞어 적은 것은 **계좌**가 집어 간다.
+  for (const s of [WIDE, MIXED, WIDE_MAIL, ...DASHES]) {
+    assert.equal(LEGACY_PHONE.test(s), false, `재현이 깨졌다 — 종전 식이 ${s} 를 잡았다`);
+  }
+  assert.equal(LEGACY_ACCOUNT.test(MIXED), true, '재현이 깨졌다 — 종전에 계좌 규칙이 이것을 집어 가지 않았다');
+  assert.equal(LEGACY_ACCOUNT.test(WIDE), false, '재현이 깨졌다 — 종전에 이 글이 가려지고 있었다');
+
+  // ── ② 접는 자는 **글자 수를 바꾸지 않는다** — 자리가 밀리면 가린 구간이 어긋난다.
+  for (const s of [WIDE, MIXED, WIDE_MAIL, '주문번호 １２３４ 확인', '가온파트너스']) {
+    assert.equal(foldWidth(s).length, s.length, `접으면서 글자 수가 바뀌었다: ${s}`);
+  }
+  assert.equal(foldWidth(WIDE), '010-1234-5678');
+  assert.equal(foldWidth(WIDE_MAIL), 'hong@example.com');
+  assert.equal(foldWidth(foldWidth(WIDE)), foldWidth(WIDE), '두 번 접으면 값이 달라진다');
+
+  // ── ③ 이제 가린다 — **종류까지** 바로 적고(「계좌번호」가 아니다), 한 가지 모양으로 적는다.
+  for (const s of [WIDE, MIXED, ...DASHES]) {
+    const m = maskPii(s);
+    assert.equal(m.text, '010-****-5678', `가린 모양이 표기에 따라 달라진다: ${s}`);
+    assert.deepEqual(m.hits, ['phone'], `가린 종류가 전화번호가 아니다: ${s}`);
+    assert.equal(maskPii(s, 'opaque').text, '01*-****-****', s);
+    assert.equal(scrub(s).includes('1234'), false, `밖으로 나가는 글에 번호가 그대로 실린다: ${s}`);
+  }
+  assert.deepEqual(maskPii(WIDE_MAIL).hits, ['email']);
+  assert.equal(maskPii(WIDE_MAIL).text, 'ho***@example.com');
+
+  // ── ④ 받아 적는 쪽과 가리는 쪽이 **같은 폭**이다 — 받아 적은 값은 반드시 가려진다.
+  for (const s of [WIDE, MIXED, WIDE_MAIL, ...DASHES]) {
+    const got = takeContact(s);
+    assert.equal(got.ok, true, `멀쩡한 연락처를 받지 못한다: ${s}`);
+    assert.equal(maskPii(got.value).masked, true, `받아 적을 수는 있는데 가리지 못한다: ${s}`);
+  }
+  for (const s of [WIDE, MIXED, ...DASHES]) {
+    assert.ok(new RegExp(PHONE_MATCH_PATTERN).test(foldWidth(s)), `공통 식이 받아 적는 모양을 놓친다: ${s}`);
+  }
+  // 저장하는 값은 **모은 쪽**이다 — 같은 번호가 창구마다 다른 모양으로 남지 않는다.
+  assert.deepEqual(findContact(WIDE), { kind: 'phone', value: '010-1234-5678' });
+  assert.deepEqual(findContact(MIXED), { kind: 'phone', value: '01012345678' });
+  assert.deepEqual(findContact(WIDE_MAIL), { kind: 'email', value: 'hong@example.com' });
+
+  // ── ⑤ 화면에 뜨는 결과 — 접수 폼이 받고, 대화창이 받아 적은 값을 되읽는다.
+  const contactSlot = slotOf(getForm('reservation'), 'contact');
+  assert.deepEqual(validateSlot(contactSlot, WIDE), { ok: true, value: '010-1234-5678' });
+  assert.deepEqual(validateSlot(contactSlot, WIDE_MAIL), { ok: true, value: 'hong@example.com' });
+  esc.resetTickets();
+  const sid = 'rt-ds70-1';
+  replyTo('상담원 연결해 주세요', sid);
+  const turn = replyTo(WIDE, sid);
+  assert.equal(turn.intent, 'contact_captured', '전각으로 적은 번호가 연락처로 읽히지 않는다');
+  assert.equal(esc.getTicket(turn.ticketId).contact, '010-1234-5678', '접수에 전각 원문이 들어간다');
+  assert.ok(turn.reply.includes('010-****-5678'), '무엇을 받아 적었는지 말하지 않는다');
+  esc.resetTickets();
+});
+
+/**
+ * DS 70-2 — **자리 수를 세지 않아 닿을 수 없는 번호가 접수되던 자리.**
+ *
+ * 받아 적는 쪽은 모양만 보았다. `010-123-4567`(열 자리)·`0101234567`·`0123456789`(배정된 적
+ * 없는 앞가지)가 그대로 접수의 연락처 칸에 들어갔고, 되읽는 문구는 가운데를 가리므로
+ * (`010-****-4567`) 고객은 빠진 자리를 볼 수 없었다 — 「상담원이 순서대로 연락드릴게요」까지
+ * 들은 채 오지 않는 전화를 기다리고, 상담원은 결번으로 전화를 건다(DS 45-1·§13).
+ *
+ * 재는 자가 **두 벌**이기도 했다. 위젯 카드의 사본(`validContact`)은 `^[0-9][0-9\s()+-]{7,}$`
+ * + 아홉 자리였으므로 `123456789` 를 통과시켰고, 접수 창구(`/api/escalation`)는 연락처를
+ * **길이만** 보고 그대로 저장했다 — 그 값을 되읽는 문구는 가리는 쪽에서 계좌번호로 읽혀
+ * 「남겨 주신 연락처(***-****-****)로…」가 된다. 반대로 안심번호(`0507-…`)·인터넷전화
+ * (`0303-…`)는 열두 자리라 **양쪽에서 막혔다**.
+ */
+test('닿을 수 없는 전화번호는 받아 적지 않고 까닭을 말한다 (DS 70-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  delete process.env.CHAT_LLM_LIVE;
+  const { maskPii, findContact, takeContact, checkPhone } = await pickPii('pii');
+  const { replyTo } = await pickPii('chat');
+  const { validateSlot, getForm, slotOf } = await pickPii('slots');
+  const esc = await pickPii('escalation');
+
+  // ── ① 종전 식 재현 — 모양만 보면 자리 하나가 빠진 번호도, 없는 앞가지도 통과한다.
+  for (const s of ['010-123-4567', '0101234567', '0123456789', '099-9999-9999']) {
+    assert.equal(LEGACY_PHONE.test(s), true, `재현이 깨졌다 — 종전 식이 ${s} 를 막았다`);
+    assert.ok(findContact(s), `모양을 가리는 자가 ${s} 를 번호로 보지 않는다 — 전제가 깨졌다`);
+  }
+  // 위젯 사본의 종전 식은 **0 으로 시작하지도 않는** 아홉 자리를 통과시켰다.
+  const legacyWidget = (t) => /^[0-9][0-9\s()+-]{7,}$/.test(t) && t.replace(/\D/g, '').length >= 9;
+  assert.equal(legacyWidget('123456789'), true, '재현이 깨졌다 — 위젯 사본이 이것을 막고 있었다');
+  assert.equal(findContact('123456789'), null, '서버가 이것을 연락처로 안다 — 전제가 깨졌다');
+  // 그 값이 접수에 저장되면 되읽는 문구는 **계좌번호 자리표시자**가 된다.
+  assert.equal(maskPii('123456789').text, '***-****-****');
+  assert.deepEqual(maskPii('123456789').hits, ['account']);
+  // 두 벌은 **반대 방향으로도** 갈려 있었다 — 열두 자리 안심번호·인터넷전화는 위젯 카드를
+  // 통과하는데 서버는 연락처로 알아보지 못했다(그 값은 계좌번호로 가려져 저장·되읽기된다).
+  for (const s of ['0507-1234-5678', '0303-1234-5678']) {
+    assert.equal(legacyWidget(s), true, `재현이 깨졌다 — 위젯 사본이 ${s} 를 막고 있었다`);
+    assert.equal(LEGACY_PHONE.test(s), false, `재현이 깨졌다 — 종전 식이 ${s} 를 받았다`);
+    assert.deepEqual(maskPii(s).hits, ['phone'], `${s} 를 지금도 계좌번호로 읽는다 — 고침이 닿지 않았다`);
+  }
+
+  // ── ② 새 자의 답 — 받는 번호와 거절하는 번호를 값으로 고정한다.
+  for (const s of ['010-1234-5678', '01012345678', '010 1234 5678', '02-123-4567', '0212345678',
+    '031-123-4567', '070-1234-5678', '0507-1234-5678', '0303-1234-5678', '011-123-4567', '080-123-4567']) {
+    assert.equal(takeContact(s).ok, true, `멀쩡한 번호를 거절한다: ${s}`);
+    assert.equal(checkPhone(s).issue, null, s);
+  }
+  for (const [s, issue, head] of [
+    ['010-123-4567', 'digits', '010'], ['0101234567', 'digits', '010'], ['070-123-4567', 'digits', '070'],
+    ['0123456789', 'prefix', '012'], ['099-9999-9999', 'prefix', '099'],
+    ['015-123-4567', 'prefix', '015'], ['0351234567', 'prefix', '035'],
+  ]) {
+    const got = takeContact(s);
+    assert.equal(got.ok, false, `닿을 수 없는 번호를 받아 적는다: ${s}`);
+    assert.equal(got.kind, 'phone', `번호인 것조차 모른다고 말한다: ${s}`);
+    assert.equal(got.issue, issue, s);
+    assert.equal(got.head, head, s);
+  }
+  // 연락처를 **찾지 못한 것**은 또 다른 사실이다(까닭을 말할 것이 없다).
+  for (const s of ['아무개', '', '내일 전화주세요', '01012345678901']) {
+    assert.deepEqual(takeContact(s), { ok: false, kind: null }, s);
+  }
+  // 가리는 쪽은 **좁히지 않았다** — 앞가지를 모르는 번호도 그대로 가린다(못 가리면 밖으로 나간다).
+  assert.deepEqual(maskPii('0123456789').hits, ['phone']);
+  assert.deepEqual(maskPii('010-123-4567').hits, ['phone']);
+
+  // ── ③ 거절은 **무엇이 틀렸는지** 밝힌다 — 자리 수와 앞가지가 서로 다른 말을 한다.
+  const contactSlot = slotOf(getForm('reservation'), 'contact');
+  const short = validateSlot(contactSlot, '010-123-4567');
+  assert.equal(short.ok, false);
+  assert.match(short.message, /^010 번호는 11자리인데 10자리로 적어 주셨어요\./, `자리 수를 말하지 않는다: ${short.message}`);
+  const unknown = validateSlot(contactSlot, '0123456789');
+  assert.match(unknown.message, /^012로 시작하는 전화번호는 없어요\./, `앞가지를 말하지 않는다: ${unknown.message}`);
+  assert.equal(/형식을 알아보지 못/.test(short.message + unknown.message), false, '모양을 못 알아들었다고 뭉친다');
+  // 모양조차 찾지 못한 자리의 문장은 종전 그대로다 — 가운데 묶음이 세 자리도 못 되는
+  // `02-12-3456` 은 모양 자체가 아니라서 이 문장으로 떨어진다(자리 수를 셀 것이 없다).
+  for (const s of ['아무개', '02-12-3456']) {
+    assert.match(validateSlot(contactSlot, s).message, /연락처 형식을 알아보지 못했어요/, s);
+  }
+  // 거절 문장에는 번호 전체가 되읽히지 않는다 — 앞가지와 자리 수만 적는다.
+  assert.equal(short.message.includes('4567'), false, `거절 문장에 번호가 그대로 실린다: ${short.message}`);
+
+  // ── ④ 화면에 뜨는 결과 — 접수에 붙지 않고, 묻는 상태는 그대로 켜져 있다.
+  esc.resetTickets();
+  const sid = 'rt-ds70-2';
+  replyTo('상담원 연결해 주세요', sid);
+  const bad = replyTo('010-123-4567', sid);
+  assert.equal(bad.intent, 'contact_shape', '닿을 수 없는 번호가 연락처로 등록된다');
+  assert.match(bad.reply, /010 번호는 11자리인데 10자리/, '무엇이 틀렸는지 말하지 않는다');
+  assert.equal(esc.getTicket(bad.ticketId).contact, undefined, '접수에 결번이 붙었다');
+  // 바로 다음 턴에 고친 번호를 보내면 그것이 붙는다(한 번 거절하고 길을 닫지 않는다).
+  const fixed = replyTo('010-1234-5678', sid);
+  assert.equal(fixed.intent, 'contact_captured', '고친 번호를 받지 못한다');
+  assert.equal(esc.getTicket(fixed.ticketId).contact, '010-1234-5678');
+  // 접수 뒤 **번호만** 보낸 길도 같은 자를 쓴다 — 접수는 그대로 남아 있다고 말한다.
+  const after = replyTo('010-123-4567', sid);
+  assert.equal(after.intent, 'contact_shape');
+  assert.match(after.reply, /접수번호 .+은 그대로 남아 있어요/, '접수가 어떻게 됐는지 말하지 않는다');
+  assert.equal(esc.getTicket(fixed.ticketId).contact, '010-1234-5678', '거절한 턴이 접수의 연락처를 덮었다');
+  esc.resetTickets();
+});
+
+/**
+ * DS 70-3 — 「전화번호나 이메일**만** 보내 주세요」라고 안내해 놓고 **꼬리가 붙으면 못 받던 자리.**
+ *
+ * 종전 판정은 보낸 글이 연락처와 **한 글자도 다르지 않을 때만** 연락처로 보았다. 그래서
+ * 「010-1234-5678이요」·「010-1234-5678.」·「hong@example.com 입니다」가 모두 떨어졌고, 그 글은
+ * 지식베이스 질문이 되어 **폴백**이 돌아왔다 — 바로 그 줄에서 하라고 한 일을 한 고객에게
+ * 「잘 모르겠어요」가 간다(DS 69-x 가 번호 고르기에서 본 것과 같은 자리).
+ */
+test('연락처만 보냈는지는 꼬리를 떼고 본다 (DS 70-3)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  delete process.env.CHAT_LLM_LIVE;
+  const { takeContactOnly } = await pickPii('pii');
+  const { isOnlyContact, replyTo } = await pickPii('chat');
+  const esc = await pickPii('escalation');
+
+  const TAILED = ['010-1234-5678이요', '010-1234-5678.', '010-1234-5678요', '010-1234-5678입니다',
+    '010-1234-5678이에요', '010-1234-5678 입니다', 'hong@example.com 입니다', 'hong@example.com이요',
+    '010-1234-5678!', '01012345678로', '0212345678으로'];
+
+  // ── ① 종전 식 재현 — 꼬리 한 글자에 전부 떨어진다.
+  const legacyOnly = (t, c) => Boolean(c) && t.trim().replace(/\s+/g, '') === c.replace(/\s+/g, '');
+  for (const t of TAILED) {
+    const c = takeContactOnly(t).value;
+    assert.ok(c, `전제가 깨졌다 — 새 자도 ${t} 를 못 읽는다`);
+    assert.equal(legacyOnly(t, c), false, `재현이 깨졌다 — 종전 식이 ${t} 를 받았다`);
+  }
+
+  // ── ② 새 자는 꼬리를 떼고 본다.
+  for (const t of TAILED) assert.equal(isOnlyContact(t), true, t);
+  for (const t of ['010-1234-5678', '01012345678', '010 1234 5678', '010.1234.5678', 'hong@example.com']) {
+    assert.equal(isOnlyContact(t), true, `멀쩡한 표기가 떨어진다: ${t}`);
+  }
+  // ── ③ **앞에 붙은 글은 받지 않는다** — DS 35-3 이 닫은 자리를 다시 열지 않는다.
+  for (const t of ['매장 번호 02-123-4567로 전화했는데 안 받아요', '제 번호는 010-1234-5678이에요',
+    '010-1234-5678 / hong@example.com', '010-1234-5678 말고 다른 번호로요', '고객센터가 02-123-4567 맞나요?',
+    '건너뛰기', '없어요', '']) {
+    assert.equal(isOnlyContact(t), false, `문장에 섞인 번호를 연락처로 받는다: ${t}`);
+  }
+
+  // ── ④ 화면에 뜨는 결과 — 접수 뒤 꼬리를 붙여 보낸 번호가 그 접수의 연락처가 된다.
+  esc.resetTickets();
+  const sid = 'rt-ds70-3';
+  replyTo('상담원 연결해 주세요', sid);
+  const first = replyTo('010-1234-5678', sid);
+  assert.equal(first.intent, 'contact_captured');
+  const changed = replyTo('010-9999-8888이요', sid);
+  assert.equal(changed.intent, 'contact_updated', '바꿔 달라는 번호가 지식베이스 질문이 된다');
+  assert.equal(esc.getTicket(changed.ticketId).contact, '010-9999-8888');
+  assert.ok(changed.reply.includes('010-****-8888'), '무엇으로 바꿨는지 말하지 않는다');
+  // 문장에 섞인 남의 번호는 여전히 접수의 연락처를 덮지 않는다.
+  const asked = replyTo('매장 번호 02-123-4567로 전화했는데 안 받아요', sid);
+  assert.notEqual(asked.intent, 'contact_updated', '문장에 섞인 번호가 연락처를 덮어쓴다');
+  assert.equal(esc.getTicket(changed.ticketId).contact, '010-9999-8888');
+  esc.resetTickets();
+});

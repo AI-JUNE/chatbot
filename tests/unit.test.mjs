@@ -2740,7 +2740,9 @@ test('접수 안내가 조건 없이 연락처를 묻지 않는다 (DS 37-1)', (
   assert.match(s, /maskPii\(ticket\.contact\)\.text/, '연락처 원문을 그대로 되돌려 적는다');
   // 묻지 않는 대신 열어 둔 길 — **보낸 것이 연락처뿐일 때만** 받는다(문장에 섞인 번호는 DS 35-3).
   assert.match(s, /export function isOnlyContact/, '연락처만 보낸 경우를 가르는 함수가 없다');
-  assert.match(s, /if \(ctx\.ticketId && isOnlyContact\(text\)\) \{/, '접수 뒤 연락처 변경 경로가 없다');
+  // 가르는 자는 `pii.takeContactOnly` 한 곳이고(DS 70-3), 그 길은 **열린 접수가 있을 때만** 선다.
+  assert.match(s, /return takeContactOnly\(text\)\.kind !== null;/, '연락처만 보낸 경우를 제 식으로 가른다');
+  assert.match(s, /const only = openTicketId \? takeContactOnly\(text\) : null;/, '접수 뒤 연락처 변경 경로가 없다');
   // 새 인텐트에도 이름이 있어야 운영자 화면에 코드가 뜨지 않는다(DS 22-x).
   assert.match(read('src/lib/intents.ts'), /contact_updated: '연락처 변경'/, '새 인텐트에 이름이 없다');
 });
@@ -3414,8 +3416,14 @@ test('끝난 접수를 가리는 어휘가 창구마다 어긋나지 않는다 (
 test('전화번호 모양은 받아 적는 쪽과 가리는 쪽이 한 벌로 쓴다 (DS 52-1)', () => {
   const pii = read('src/lib/pii.ts');
   // ① 구분자 집합과 패턴 원문이 **여기 한 곳**에 있다.
-  assert.match(pii, /export const PHONE_SEP = '\[-\\\\s\.\]';/, '구분자 집합이 한 곳에 적혀 있지 않다');
-  assert.match(pii, /export const PHONE_PATTERN = `0\\\\d\{1,2\}\$\{PHONE_SEP\}\?\\\\d\{3,4\}\$\{PHONE_SEP\}\?\\\\d\{4\}`;/, '패턴 원문이 없다');
+  //    구분자에는 붙임표 꼴이 모두 들어 있다(PDF·HWP 의 U+2010·U+2011, 메일의 U+2013 · DS 70-1).
+  assert.match(pii, /export const PHONE_SEP = '\[-\\\\s\.\\\\u2010\\\\u2011\\\\u2013\\\\u2212\]';/, '구분자 집합이 한 곳에 적혀 있지 않다');
+  //    앞가지가 네 자리인 갈래(안심번호 `0507`·인터넷전화 `0303`)까지 한 식에 있다 (DS 70-2).
+  assert.match(
+    pii,
+    /export const PHONE_PATTERN =\s*`\(\?:\(\?:050\\\\d\|0303\)\$\{PHONE_SEP\}\?\\\\d\{3,4\}\$\{PHONE_SEP\}\?\\\\d\{4\}\|0\\\\d\{1,2\}\$\{PHONE_SEP\}\?\\\\d\{3,4\}\$\{PHONE_SEP\}\?\\\\d\{4\}\)`;/,
+    '패턴 원문이 없다',
+  );
   // ② 가리는 규칙이 그 원문을 쓴다 — 하이픈·공백만 아는 식이 되살아나지 않았다.
   //    경계·관문까지 담은 식도 **한 곳**에 있다(`PHONE_MATCH_PATTERN` · DS 53-1).
   assert.match(pii, /export const PHONE_MATCH_PATTERN = `\\\\b\$\{PHONE_PATTERN\}\\\\b\(\?!\[\\\\w\.\+-\]\*@\)`;/, '경계·관문을 담은 식이 한 곳에 없다');
@@ -3425,8 +3433,8 @@ test('전화번호 모양은 받아 적는 쪽과 가리는 쪽이 한 벌로 �
   // ③ 받아 적는 쪽은 패턴을 **직접 적지 않는다** — 셋 모두 `findContact` 하나를 쓴다(DS 53-1).
   const chat = read('src/lib/chat.ts');
   const slots = read('src/lib/slots.ts');
-  assert.match(chat, /import \{ findContact \} from '@\/lib\/pii';/, '받아 적는 쪽이 고르는 자를 끌어오지 않는다');
-  assert.match(slots, /import \{ findContact \} from '@\/lib\/pii';/, '접수 폼이 고르는 자를 끌어오지 않는다');
+  assert.match(chat, /import \{[^}]*\bfindContact\b[^}]*\} from '@\/lib\/pii';/, '받아 적는 쪽이 고르는 자를 끌어오지 않는다');
+  assert.match(slots, /import \{[^}]*\btakeContact\b[^}]*\} from '@\/lib\/pii';/, '접수 폼이 고르는 자를 끌어오지 않는다');
   for (const [name, src] of [['chat', chat], ['slots', slots]]) {
     assert.equal(/01\[016789\]/.test(src), false, `손으로 적은 전화번호 패턴이 남아 있다: ${name}`);
     assert.equal(/\\d\{3,4\}/.test(src), false, `전화번호 패턴 사본이 남아 있다: ${name}`);
@@ -4007,9 +4015,9 @@ test('조사를 고르는 자가 lib/refusal 하나다 (DS 61-1)', () => {
   // ㄹ 받침은 「으」로 시작하는 짝에서만 받침 없는 쪽이다 — 그 예외가 한 곳에 있다.
   assert.match(r, /withBatchim\.startsWith\('으'\)/, 'ㄹ 받침 예외가 없다');
 
-  // 서버에서 글을 만드는 쪽은 lib 을 불러온다.
+  // 서버에서 글을 만드는 쪽은 lib 을 불러온다(같은 묶음에서 거절 문장도 함께 가져온다 · DS 70-2).
   for (const f of ['src/lib/chat.ts', 'src/lib/kakao.ts', 'src/lib/slots.ts', 'src/lib/retention.ts']) {
-    assert.match(read(f), /import \{ josa[ ,}]/, `${f} 가 조사를 제 식으로 고른다`);
+    assert.match(read(f), /import \{[^}]*\bjosa\b[^}]*\} from '@\/lib\/refusal';/, `${f} 가 조사를 제 식으로 고른다`);
   }
   // 콘솔·위젯은 lib 을 불러오지 않는 규약이라 사본을 들고 있다
   // (값 대조는 tests/console.test.mjs · tests/widget.test.mjs).
@@ -4410,4 +4418,63 @@ test('고르기를 알아듣는 자가 한 벌이다 (DS 69-1·69-2·69-3)', () 
   assert.ok(choice.includes('^(?:취소|'), '취소 판정이 문장 어디서든 걸린다');
   assert.ok(choice.includes('^(?:이전|'), '이전 판정이 문장 어디서든 걸린다');
   assert.ok(choice.includes('^(?:건너뛰기|'), '건너뛰기 판정이 문장 어디서든 걸린다');
+});
+
+/* ══════════ 디자인 스프린트 — 67차 재감사 (DS 70-1·70-2·70-3) ══════════ */
+
+/**
+ * DS 70-1·70-2·70-3 — 연락처를 **받아 적는 자가 한 벌**인가.
+ *
+ * 「정말 그렇게 받는가」는 `tests/runtime.test.mjs` 가 돌려서 본다(위젯 사본 대조는
+ * `tests/widget.test.mjs`). 여기서 고정하는 것은 자가 **다시 갈라지지 않는 것**이다 —
+ * 종전에는 모양을 보는 자(`pii`)·화면이 재는 자(위젯 카드)·아무것도 재지 않는 자리
+ * (접수 API) 셋이 같은 값에 서로 다른 답을 냈다.
+ */
+test('연락처를 받아 적는 자가 한 벌이다 (DS 70-1·70-2·70-3)', () => {
+  const pii = stripComments(read('src/lib/pii.ts'));
+  const chat = stripComments(read('src/lib/chat.ts'));
+  const slots = stripComments(read('src/lib/slots.ts'));
+  const route = stripComments(read('src/app/api/escalation/route.ts'));
+
+  // ① 전각을 모으는 자가 `pii` 한 곳이고, 가리는 쪽·받아 적는 쪽이 **둘 다** 그것을 지난다.
+  assert.match(pii, /export function foldWidth\(input: string\): string/, '전각을 모으는 자를 내보내지 않는다');
+  assert.match(pii, /let out = foldWidth\(input\);/, '가리는 쪽이 전각을 모으지 않는다');
+  assert.match(pii, /const t = foldWidth\(text\);/, '받아 적는 쪽이 전각을 모으지 않는다');
+  // 모으는 것은 **글자 하나가 글자 하나로** 바뀌는 범위뿐이다(자리가 밀리면 가린 구간이 어긋난다).
+  assert.match(pii, /const FULLWIDTH_ASCII = new RegExp\('\[\\\\uff01-\\\\uff5e\]', 'g'\);/, '접는 범위가 한 곳에 적혀 있지 않다');
+
+  // ② 자리 수를 세는 표가 `pii` 한 곳에 있다 — 받아 적는 쪽에 사본이 없다.
+  assert.match(pii, /const PHONE_PLANS: readonly \(readonly \[RegExp, readonly number\[\]\]\)\[\]/, '자리 수 표가 없다');
+  assert.match(pii, /export function checkPhone\(value: string\): PhoneCheck/, '자리 수를 세는 자를 내보내지 않는다');
+  assert.match(pii, /export function takeContact\(text: string\): ContactTake/, '받아 적는 자를 내보내지 않는다');
+  assert.match(pii, /export function takeContactOnly\(text: string\): ContactTake/, '연락처뿐인지 가리는 자를 내보내지 않는다');
+  for (const [name, body] of [['chat', chat], ['slots', slots], ['route', route]]) {
+    assert.equal(/01\[16789\]|\{9, 10\}|\[11\]\]/.test(body), false, `${name} 에 자리 수 표 사본이 남아 있다`);
+    assert.equal(/replace\(\/\\D\/g, ''\)\.length/.test(body), false, `${name} 이 자리 수를 제 식으로 센다`);
+  }
+
+  // ③ 받아 적는 자리 **셋 모두**가 그 자를 지난다(엔진 두 길·폼·접수 API).
+  assert.match(chat, /const got = takeContact\(text\);/, '연락처 수집 턴이 공통 자를 지나지 않는다');
+  assert.match(chat, /const only = openTicketId \? takeContactOnly\(text\) : null;/, '연락처만 보낸 길이 공통 자를 지나지 않는다');
+  assert.match(slots, /const got = takeContact\(raw\);/, '접수 폼이 공통 자를 지나지 않는다');
+  assert.match(route, /const took = contact\.value \? takeContact\(contact\.value\) : null;/, '접수 API 가 연락처를 재지 않는다');
+  // 접수 API 는 **재서 통과한 값**을 저장한다(고객이 보낸 원문이 아니다).
+  assert.match(route, /const taken = took\?\.ok \? took\.value : '';/, '접수 API 가 원문을 그대로 저장한다');
+  assert.match(route, /contact: taken \|\| undefined,/, '접수에 재지 않은 값이 붙는다');
+
+  // ④ 거절 문장은 `lib/refusal` 한 곳에서 온다 — 세 자리가 같은 말을 한다.
+  const refusal = stripComments(read('src/lib/refusal.ts'));
+  assert.match(refusal, /export function phoneShapeMessage\(/, '번호 거절 문장이 한 곳에 없다');
+  assert.match(refusal, /export const CONTACT_SHAPE_MESSAGE = /, '연락처 거절 문장이 한 곳에 없다');
+  for (const [name, body] of [['chat', chat], ['slots', slots], ['route', route]]) {
+    assert.ok(body.includes('phoneShapeMessage'), `${name} 이 거절 문장을 제 글로 적는다`);
+    assert.ok(body.includes('CONTACT_SHAPE_MESSAGE'), `${name} 이 연락처 거절 문장을 제 글로 적는다`);
+    assert.equal(/형식을 알아보지 못했어요/.test(body), false, `${name} 에 거절 문장 사본이 남아 있다`);
+  }
+  // 새 인텐트에도 이름이 있어야 운영자 화면에 코드가 뜨지 않는다(DS 22-x).
+  assert.match(read('src/lib/intents.ts'), /contact_shape: '연락처 형식 안내'/, '새 인텐트에 이름이 없다');
+
+  // ⑤ 꼬리를 떼는 자도 `pii` 한 곳이다 — 종전 「한 글자도 다르지 않을 때만」 식이 남지 않았다.
+  assert.match(pii, /const CONTACT_TAIL =/, '꼬리 목록이 한 곳에 없다');
+  assert.equal(/t\.replace\(\/\\s\+\/g, ''\) === c\.replace/.test(chat), false, '종전 「글자까지 같을 때만」 식이 남아 있다');
 });

@@ -116,6 +116,27 @@ export function tooLongMessage(field: string, max: number): string {
   return name ? `${josa(name, '은', '는')} ${limit}` : `${limit} 길이를 줄여 다시 시도해 주세요.`;
 }
 
+/**
+ * **연락처를 받지 못한 까닭** — 세 가지가 서로 다른 말을 한다 (DS 70-2).
+ *
+ * 한 문장으로 뭉치면 고칠 수가 없다(QUALITY_BAR §1 「어느 항목이 왜 틀렸는지」). 자리 하나가
+ * 빠진 번호에 「형식을 알아보지 못했어요」라고 하면 고객은 **같은 번호를 다시 적는다** — 모양은
+ * 맞았고 자리 수가 틀렸으니, 틀린 것이 무엇인지 말해 주어야 고칠 수 있다.
+ *
+ * 번호 전체를 되읽지 않는다 — 앞가지와 자리 수만 적는다. 이 문장은 고객 말풍선·접수 폼·
+ * 접수 API 거절에 **같은 말로** 쓰이고, 그 글은 대화 기록에 그대로 남는다.
+ */
+export function phoneShapeMessage(issue: 'prefix' | 'digits', head: string, plan: readonly number[], length: number): string {
+  if (issue === 'prefix') {
+    // 조사는 **앞가지를 읽는 소리**에 맞춘다 — 「010으로」·「012로」(DS 61-2 의 자 그대로).
+    return `${josa(head, '으로', '로')} 시작하는 전화번호는 없어요. 휴대폰(010)·지역번호(02·031)·인터넷전화(070) 중 하나로 알려주세요.`;
+  }
+  return `${head} 번호는 ${plan.join('·')}자리인데 ${length}자리로 적어 주셨어요. 번호를 다시 확인해 주세요.`;
+}
+
+/** 전화번호도 이메일도 찾지 못한 자리 — 무엇을 받는지 먼저 말한다. */
+export const CONTACT_SHAPE_MESSAGE = '연락처 형식을 알아보지 못했어요. 전화번호 또는 이메일로 알려주세요.';
+
 /** 글자가 아닌 값이 온 자리(정상 화면에서는 생기지 않는다 — 그래도 코드 어휘를 보이지 않는다). */
 export function notTextMessage(field: string): string {
   const name = fieldLabel(field);

@@ -12,11 +12,11 @@ import { RULES, type Rule } from '@/lib/rules';
 import { keywordHit, prepare } from '@/lib/normalize';
 import { listKB, getRuleOverride, listCustomRules, matchCustomRule } from '@/lib/adminStore';
 import { intentLabelMap } from '@/lib/intents';
-import { josa } from '@/lib/refusal';
+import { CONTACT_SHAPE_MESSAGE, josa, phoneShapeMessage } from '@/lib/refusal';
 import { appendTurn, getSession, setSlot, updateSession } from '@/lib/session';
 import { createTicket, queuePosition } from '@/lib/escalation';
 import { buildHandoffSummary, maskPii, type HandoffReason } from '@/lib/handoff';
-import { findContact } from '@/lib/pii';
+import { findContact, takeContact, takeContactOnly, type ContactTake } from '@/lib/pii';
 import { clamp, envNumber } from '@/lib/num';
 import { isSkip, pickNumber } from '@/lib/choice';
 import { generateGroundedAnswer, type CompleteOptions, type GroundingDoc, type LLMFailureReason, type LLMMessage } from '@/lib/llm';
@@ -249,26 +249,48 @@ export function shadowOfRule(keywords: readonly string[], selfIntent = ''): Rule
  * 고객이 남긴 `0212345678@example.com` 을 이쪽은 「전화번호 0212345678」로 받아 적고,
  * 가리는 쪽은 「이메일」로 읽었다. 저장된 것은 **고객이 준 적 없는 번호**이고, 이 경로의 답변은
  * 저장한 값을 되읽지 않아 고칠 기회조차 없었다(상담원은 그 번호로 전화한다 · DS 35-3·§13).
+ *
+ * **접수에 적는 값은 여기서 끝나지 않는다** (DS 70-2) — 이 함수는 「이 글에 연락처 모양이
+ * 있는가」만 답한다(가리는 쪽과 같은 폭이어야 하는 질문이다). 「그 모양을 접수에 적어도
+ * 되는가」는 자리 수·앞가지를 세는 `pii.takeContact` 가 답하고, 엔진의 두 길(연락처 수집 턴·
+ * 연락처만 보낸 턴)과 접수 폼·접수 API 가 모두 그 자를 지난다.
  */
 export function extractContact(text: string): string | null {
   return findContact(text)?.value ?? null;
 }
 
 /**
- * 이 메시지가 **연락처 하나뿐**인가 (DS 37-1).
+ * 이 메시지가 **연락처 하나뿐**인가 (DS 37-1 · DS 70-3).
  *
  * 서버가 먼저 묻지 않았는데 연락처를 받아 적는 자리는 여기 하나다. 그래서 「문장에 번호가
  * 섞여 있다」가 아니라 **「보낸 것이 번호뿐이다」**를 조건으로 둔다 — 「매장 번호 02-123-4567로
  * 전화했는데 안 받아요」가 고객의 연락처로 저장되던 자리(DS 35-3)를 다시 열지 않기 위해서다.
- * 조금이라도 다른 글자가 섞이면 받지 않는다: 틀리게 받아 적는 것보다 못 알아듣는 쪽이 낫다
+ * 조금이라도 다른 말이 섞이면 받지 않는다: 틀리게 받아 적는 것보다 못 알아듣는 쪽이 낫다
  * (못 알아들으면 고객이 다시 말하지만, 틀리게 적으면 아무도 모른 채 다른 사람에게 전화한다).
+ *
+ * 가리는 자는 `pii.takeContactOnly` 한 곳이다 (DS 70-3) — 종전에는 이 자리에서 **보낸 글과
+ * 번호가 한 글자도 다르지 않을 때만** 연락처로 보았다. 그래서 바로 그 줄에서 「전화번호나
+ * 이메일만 보내 주세요」라고 안내해 놓고 「010-1234-5678이요」·「010-1234-5678.」·
+ * 「hong@example.com 입니다」를 못 알아들었고, 그 글은 지식베이스 질문이 되어 폴백이 돌아왔다.
+ * 조사·종결·문장부호는 **꼬리**로 보고, 앞에 붙은 글은 종전처럼 받지 않는다.
  */
 export function isOnlyContact(text: string): boolean {
-  const t = (text || '').trim();
-  if (!t) return false;
-  const c = extractContact(t);
-  if (!c) return false;
-  return t.replace(/\s+/g, '') === c.replace(/\s+/g, '');
+  return takeContactOnly(text).kind !== null;
+}
+
+/**
+ * 연락처를 받지 못한 턴의 말풍선 — 폼·접수 API 와 **같은 말**을 쓴다 (DS 70-2).
+ *
+ * 「형식을 알아보지 못했어요」와 「자리 수가 맞지 않아요」는 다른 사실이다. 자리 하나가 빠진
+ * 번호에 앞 문장을 쓰면 고객은 같은 번호를 다시 적는다 — 모양은 맞았고 자리 수가 틀렸으므로
+ * 무엇이 틀렸는지 말해 주어야 고칠 수 있다(29차의 「거절은 무엇이 틀렸는지 밝힌다」).
+ */
+function contactRefusal(got: ContactTake): string {
+  return got.ok
+    ? ''
+    : got.kind === 'phone'
+      ? phoneShapeMessage(got.issue, got.head, got.plan, got.length)
+      : CONTACT_SHAPE_MESSAGE;
 }
 
 /**
@@ -569,7 +591,8 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
 
   // 0-a) 연락처 수집 대기 중이면 이번 턴을 연락처/건너뛰기로 우선 해석
   if (ctx.awaitingContact) {
-    const contact = extractContact(text);
+    const got = takeContact(text);
+    const contact = got.ok ? got.value : null;
     if (contact) {
       // 열린 티켓에 연락처 첨부(세션당 열린 티켓 재사용) — 영구 저장은 [승인 필요]
       setSlot(sessionId, 'contact', contact);
@@ -600,6 +623,25 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
         ...(q ? { queue: q } : {}),
       };
     }
+    /**
+     * **번호인 것은 알아들었는데 닿을 수 없는 모양**이면 그 사실을 말하고 다시 묻는다 (DS 70-2).
+     *
+     * 종전에는 모양만 보아 `010-123-4567`(열 자리)을 그대로 접수에 붙이고 「상담원이 순서대로
+     * 연락드릴게요」까지 말했다 — 되읽는 문구는 가운데를 가리므로(`010-****-4567`) 고객은 자리
+     * 하나가 빠진 것을 볼 수 없고, 상담원은 결번으로 전화를 건다. 묻는 상태(`awaitingContact`)는
+     * **그대로 켜 둔다**: 바로 다음 턴에 고친 번호를 보내면 그것이 접수에 붙는다(보통 질문을
+     * 보내면 아래 「연락처도 건너뛰기도 아니면」으로 떨어져 상태가 거둬진다 · DS 35-3).
+     */
+    if (got.kind === 'phone') {
+      return {
+        reply: `${contactRefusal(got)} 다른 연락처로 받으시려면 이메일을 보내 주셔도 돼요. (원치 않으시면 "건너뛰기")`,
+        intent: 'contact_shape',
+        escalate: false,
+        source: 'context',
+        confidence: SOURCE_CONFIDENCE.context,
+        ...(ctx.ticketId ? { ticketId: ctx.ticketId } : {}),
+      };
+    }
     if (isSkip(text)) {
       updateSession(sessionId, { awaitingContact: false });
       return {
@@ -619,8 +661,28 @@ function computeReply(message: string, sessionId = 'anon', tenant: TenantContext
   // 0-a2) 접수한 뒤에 **연락처만** 보내면 그 접수의 연락처로 받는다 (DS 37-1).
   //       서버는 이미 받은 연락처를 다시 캐묻지 않는다(위 contactTail) — 그래서 마음이 바뀐
   //       사람이 번호만 보내는 길을 대신 열어 둔다. 조건은 「보낸 것이 연락처뿐」이다.
-  if (ctx.ticketId && isOnlyContact(text)) {
-    const contact = extractContact(text) as string;
+  const openTicketId = ctx.ticketId ?? '';
+  const only = openTicketId ? takeContactOnly(text) : null;
+  if (only && only.kind === 'phone' && !only.ok) {
+    /**
+     * 번호**만** 보냈는데 자리 수가 맞지 않으면 **그 사실을 말한다** (DS 70-2).
+     *
+     * 종전에는 이 길이 모양만 보아 열 자리 010 번호를 접수에 붙이고 「연락처를 …으로 바꿨어요」
+     * 라고 답했다. 이제 거절하는데, 거절한 턴이 아무 말 없이 지식베이스로 넘어가면 고객은
+     * 「잘 모르겠어요」를 받는다 — 바로 그 줄에서 「전화번호나 이메일만 보내 주세요」라고 안내한
+     * 자리이므로(`contactTail`·`noContactLine`), 무엇이 틀렸는지 여기서 말한다.
+     */
+    return {
+      reply: `${contactRefusal(only)} 접수번호 ${josa(openTicketId, '은', '는')} 그대로 남아 있어요.`,
+      intent: 'contact_shape',
+      escalate: false,
+      source: 'context',
+      ticketId: openTicketId,
+      confidence: SOURCE_CONFIDENCE.context,
+    };
+  }
+  if (only?.ok) {
+    const contact = only.value;
     const before = ctx.slots?.contact;
     setSlot(sessionId, 'contact', contact);
     const reasonCode = ctx.handoffReason ?? 'customer_request';

@@ -380,25 +380,88 @@ const headerBtn: CSSProperties = {
 /** 초점을 가둘 수 있는 요소들(포커스 트랩용). */
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
-/** 연락처 형식 검사 — 전화번호 또는 이메일. 서버도 길이를 다시 검증한다. */
+/**
+ * 연락처 판정 — 원본은 `src/lib/pii.ts`(`takeContact`·`PHONE_PLANS`) (DS 70-2).
+ *
+ * 이 파일은 `@/lib` 을 하나도 import 하지 않으므로(위 `cleanText` 와 같은 까닭) 사본을 두고
+ * **테스트가 두 자의 판정을 같은 값으로 대조한다**(DS 42-1 의 방식 그대로).
+ *
+ * 종전 사본은 서버와 **다른 답**을 냈다: `/^[0-9][0-9\s()+-]{7,}$/` + 아홉 자리였으므로
+ *  - `123456789` — 0 으로 시작하지 않는 아홉 자리가 **통과했다**. 서버는 그것을 연락처로 알지
+ *    못하는데 접수 창구(`/api/escalation`)는 길이만 보고 그대로 저장했고, 되읽는 문구는
+ *    가리는 쪽에서 **계좌번호**로 읽어 「남겨 주신 연락처(***-****-****)로…」가 됐다.
+ *  - `0507-1234-5678`(안심번호)·`0303-…` 은 **막혔다**(열두 자리).
+ *  - `010-123-4567` 처럼 자리 하나가 빠진 번호는 양쪽을 다 통과했다 — 상담원은 결번으로
+ *    전화를 걸고, 고객은 오지 않는 연락을 기다린다.
+ *
+ * 전각으로 적은 번호를 아스키로 모으는 것도 서버와 같다(`pii.foldWidth` · DS 70-1).
+ * 문장은 자리마다 다르다(여기는 칸 아래 인라인, 서버는 말풍선·거절) — **판정이 같다.**
+ */
+const PHONE_SEP_W = '[-\\s.\\u2010\\u2011\\u2013\\u2212]';
+const PHONE_RE_W = new RegExp(
+  `^(?:(?:050\\d|0303)${PHONE_SEP_W}?\\d{3,4}${PHONE_SEP_W}?\\d{4}|0\\d{1,2}${PHONE_SEP_W}?\\d{3,4}${PHONE_SEP_W}?\\d{4})$`,
+);
+const EMAIL_RE_W = /^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$/;
+const PHONE_PLANS_W: [RegExp, number[]][] = [
+  [/^010/, [11]],
+  [/^01[16789]/, [10, 11]],
+  [/^02/, [9, 10]],
+  [/^0(?:3[1-3]|4[1-4]|5[1-5]|6[1-4])/, [10, 11]],
+  [/^070/, [11]],
+  [/^(?:050\d|0303)/, [11, 12]],
+  [/^080/, [9, 10, 11]],
+];
+
+/**
+ * 전각 영숫자·기호를 아스키로 — 글자 수는 바뀌지 않는다(`pii.foldWidth` 사본).
+ * 표기는 코드포인트로만 적는다(글자를 그대로 적으면 이 줄이 전각 글자를 품는다).
+ */
+const FULLWIDTH_ASCII_W = new RegExp('[\\uff01-\\uff5e]', 'g');
+function foldWidth(v: string): string {
+  return (v || '').replace(FULLWIDTH_ASCII_W, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+}
+
+/** 「알아들었는데 닿을 수 없다」의 까닭 — 없으면 null(`pii.checkPhone` 사본). */
+function phoneIssue(t: string): { issue: 'prefix' | 'digits'; head: string; plan: number[] } | null {
+  const digits = t.replace(/\D/g, '');
+  const found = PHONE_PLANS_W.find(([re]) => re.test(digits));
+  if (!found) return { issue: 'prefix', head: digits.slice(0, 3), plan: [] };
+  const [re, plan] = found;
+  if (plan.includes(digits.length)) return null;
+  return { issue: 'digits', head: re.exec(digits)?.[0] ?? digits.slice(0, 3), plan };
+}
+
+/** 연락처 형식 검사 — 전화번호 또는 이메일. 서버도 같은 자로 다시 검증한다(DS 70-2). */
 export function validContact(v: string): boolean {
-  const t = cleanText(v);
-  if (t.length < 5 || t.length > 100) return false;
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(t)) return true;
-  return /^[0-9][0-9\s()+-]{7,}$/.test(t) && t.replace(/\D/g, '').length >= 9;
+  const t = foldWidth(cleanText(v));
+  if (!t || t.length > 100) return false;
+  if (EMAIL_RE_W.test(t)) return true;
+  return PHONE_RE_W.test(t) && phoneIssue(t) === null;
 }
 
 /**
  * 연락처가 왜 통과하지 못했는지 사람 말로 돌려준다(통과하면 빈 문자열).
  * 버튼을 잠가 두기만 하면 **무엇이 틀렸는지** 알 수 없다 — QUALITY_BAR §1
  * 「잘못된 입력에 어느 항목이 왜 틀렸는지 인라인으로 알려준다」.
+ *
+ * 「자리 수가 맞지 않는다」와 「없는 앞가지다」를 **다른 말로** 적는다 (DS 70-2) — 한 문장으로
+ * 뭉치면 고칠 수가 없다. 자리 하나가 빠진 번호에 「형식이 아닙니다」라고 하면 고객은 같은
+ * 번호를 다시 적는다(모양은 맞았고 자리 수가 틀렸다).
  */
 export function contactError(v: string): string {
-  const t = cleanText(v);
+  const t = foldWidth(cleanText(v));
   if (!t) return '연락 받으실 전화번호나 이메일을 입력해 주세요. 남기지 않으시려면 「연락처 없이 접수」를 눌러 주세요.';
   if (validContact(t)) return '';
   if (t.length > 100) return '연락처가 너무 깁니다. 전화번호나 이메일 주소 하나만 남겨 주세요.';
   if (t.includes('@')) return '이메일 주소 형식이 아닙니다. name@example.com 처럼 입력해 주세요.';
+  if (PHONE_RE_W.test(t)) {
+    const bad = phoneIssue(t);
+    if (bad?.issue === 'prefix') {
+      // 조사는 앞가지를 읽는 소리에 맞춘다 — 「010으로」·「012로」(`josa` 사본 · DS 61-2).
+      return `${josa(bad.head, '으로', '로')} 시작하는 전화번호는 없습니다. 휴대폰(010)·지역번호(02·031)·인터넷전화(070) 중 하나로 입력해 주세요.`;
+    }
+    if (bad) return `${bad.head} 번호는 ${bad.plan.join('·')}자리입니다. 010-0000-0000 처럼 자리 수를 확인해 주세요.`;
+  }
   if (/\d/.test(t)) return '전화번호 자릿수가 맞지 않습니다. 010-0000-0000 처럼 입력해 주세요.';
   return '전화번호(010-0000-0000) 또는 이메일(name@example.com) 형식으로 입력해 주세요.';
 }

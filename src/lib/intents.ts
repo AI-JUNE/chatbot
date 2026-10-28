@@ -21,6 +21,9 @@ const ENGINE_LABELS: Record<string, string> = {
   contact_skipped: '연락처 없이 진행',
   // 제안 목록에 없는 번호를 고른 턴 (DS 69-1) — 「분류 전」과 다른 사실이다(고르기는 통했다).
   suggestion_out_of_range: '없는 번호 선택',
+  // 번호인 것은 알아들었는데 **닿을 수 없는 모양**이던 턴 (DS 70-2) — 「연락처 없이 진행」이
+  // 아니다(고객은 남기려 했다). 운영자가 이 이름으로 묶어 보면 자리 수를 틀리는 자리가 보인다.
+  contact_shape: '연락처 형식 안내',
   error: '연결 오류',
 };
 

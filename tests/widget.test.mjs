@@ -1879,3 +1879,66 @@ test('위젯이 비었는지 재는 자가 서버와 같다 (DS 63-3)', opts, as
   // ③ 보관하는 임시 입력에도 같은 자를 쓴다(빈 칸을 되살리지 않는다).
   assert.equal(/!text\.trim\(\) \|\| text\.length > DRAFT_MAX_CHARS/.test(src), false, '임시 보관이 trim 으로 판정한다');
 });
+
+/* ══════════ 67차 재감사 (DS 70-2) ══════════ */
+
+/**
+ * DS 70-2 — 접수 카드가 **서버와 다른 자로** 연락처를 쟀다.
+ *
+ * 종전 사본은 `/^[0-9][0-9\s()+-]{7,}$/` + 아홉 자리였다. 그래서 두 방향으로 갈려 있었다:
+ *  - `123456789`(0 으로 시작하지 않는 아홉 자리)가 **카드를 통과했다** — 서버는 그것을 연락처로
+ *    알지 못하는데 접수 창구는 길이만 보고 저장했고, 되읽는 문구는 가리는 쪽에서 계좌번호로
+ *    읽혀 「남겨 주신 연락처(***-****-****)로…」가 됐다.
+ *  - `010-123-4567` 처럼 자리 하나가 빠진 번호는 **양쪽을 다 통과했다**(상담원은 결번으로 전화).
+ *  - 안심번호 `0507-1234-5678`·인터넷전화 `0303-…` 은 카드는 받고 서버는 받지 못했다.
+ *
+ * 위젯은 lib 을 불러오지 않으므로(클라이언트 묶음 · `josa`·`cleanText` 와 같은 규약) 사본을
+ * 떼어내 돌려 **판정을 값으로 대조한다**. 문장은 자리마다 다르다(여기는 칸 아래 인라인,
+ * 서버는 말풍선·거절) — 같아야 하는 것은 「받는가 / 받지 않는가」와 「왜」다.
+ */
+test('연락처를 재는 자가 서버와 같다 (DS 70-2)', opts, async () => {
+  const m = await loadModule();
+  const P = await importLib('pii');
+
+  // ── ① 종전 사본 재현 — 두 방향으로 갈려 있었다.
+  const legacy = (v) => {
+    const t = m.cleanText(v);
+    if (t.length < 5 || t.length > 100) return false;
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(t)) return true;
+    return /^[0-9][0-9\s()+-]{7,}$/.test(t) && t.replace(/\D/g, '').length >= 9;
+  };
+  for (const v of ['123456789', '010-123-4567', '0123456789', '0507-1234-5678']) {
+    assert.equal(legacy(v), true, `재현이 깨졌다 — 종전 사본이 ${v} 를 막고 있었다`);
+  }
+  assert.equal(P.takeContact('123456789').kind, null, '서버가 이것을 연락처로 안다 — 전제가 깨졌다');
+
+  // ── ② 사본과 lib 의 **판정이 같다**(갈라지면 「눌러도 안 되는데 까닭은 다른」 상태가 된다).
+  const SAMPLES = [
+    '010-1234-5678', '01012345678', '010 1234 5678', '010.1234.5678', '02-123-4567', '0212345678',
+    '031-123-4567', '070-1234-5678', '0507-1234-5678', '0303-1234-5678', '011-123-4567', '080-123-4567',
+    '010-123-4567', '0101234567', '070-123-4567', '0123456789', '099-9999-9999', '015-123-4567',
+    '123456789', '1588-1234', '02-12-3456', '+82-10-1234-5678', '０１０－１２３４－５６７８', '０１０12345678',
+    'hong@example.com', 'hong＠example.com', 'HONG@Example.COM', 'name@example', 'a@b.c', '아무개', '010-12',
+  ];
+  for (const v of SAMPLES) {
+    const want = P.takeContact(m.cleanText(v));
+    // lib 은 **문장 속에서도** 찾는 자라, 칸 하나를 받는 여기서는 「그 칸이 연락처뿐인가」로 견준다.
+    const only = P.takeContactOnly(m.cleanText(v));
+    assert.equal(m.validContact(v), only.ok === true, `사본과 lib 의 판정이 갈라진다: ${v} (lib=${JSON.stringify(only)})`);
+    assert.equal(m.contactError(v) === '', only.ok === true, `판정과 안내가 어긋난다: ${v}`);
+    if (want.kind === 'phone' && !want.ok) {
+      // 까닭도 같다 — 자리 수와 앞가지는 다른 말을 한다(한 문장으로 뭉치면 고칠 수가 없다).
+      const msg = m.contactError(v);
+      assert.match(msg, want.issue === 'digits' ? /자리/ : /시작하는 전화번호는 없습니다/, `까닭이 다르다: ${v} → ${msg}`);
+      assert.ok(msg.startsWith(want.head), `어느 번호를 말하는지 밝히지 않는다: ${v} → ${msg}`);
+    }
+  }
+
+  // ── ③ 사본임을 밝히고, 원본을 가리킨다(다음 사람이 두 자를 함께 고칠 수 있게).
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  assert.match(src, /원본은 `src\/lib\/pii\.ts`/, '사본임을 밝히지 않는다');
+  // 종전 식은 **주석 밖에** 남아 있지 않다(주석은 센 자리가 아니다 — 거기에는 재현으로 적혀 있다).
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  assert.equal(/\[0-9\\s\(\)\+-\]\{7,\}/.test(code), false, '종전 식이 남아 있다');
+  assert.match(code, /const PHONE_PLANS_W/, '자리 수를 세는 표가 사본에 없다');
+});

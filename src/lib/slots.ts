@@ -16,11 +16,11 @@
 //
 // [승인 필요] 관리 콘솔에서 폼을 편집·추가하는 기능, 수집 결과의 외부 업무시스템 전송.
 import { maskPii } from '@/lib/handoff';
-import { findContact } from '@/lib/pii';
+import { takeContact } from '@/lib/pii';
 import { compact } from '@/lib/normalize';
 import { interpretControl, pickChoice, pickNumber, type Control } from '@/lib/choice';
 import { compareYmd, isRealYmd, kstTime, kstYmd, normalizeYmd, ymdToString } from '@/lib/kst';
-import { josa } from '@/lib/refusal';
+import { CONTACT_SHAPE_MESSAGE, josa, phoneShapeMessage } from '@/lib/refusal';
 
 /** 슬롯 값의 종류. 종류마다 검증·정규화 규칙이 다르다. */
 export type SlotKind = 'text' | 'contact' | 'datetime' | 'choice';
@@ -458,16 +458,23 @@ export function validateSlot(slot: SlotSpec, input: string, now: Date = new Date
 
   if (slot.kind === 'contact') {
     /**
-     * 고르는 자는 **가리는 쪽에 한 벌**로 있다(`pii.findContact` · DS 53-1).
+     * 고르는 자는 **가리는 쪽에 한 벌**로 있다(`pii.takeContact` · DS 53-1 · DS 70-2).
      *
      * 종전에는 이 자리에 전화번호·이메일 패턴이 손으로 한 번 더 적혀 있었다 — 엔진의 연락처
      * 수집(`chat.extractContact`)·가리는 쪽(`pii`)과 함께 **세 벌**이었고, 이쪽 사본에는
      * 가리는 쪽이 쓰는 경계(`\b`)도 관문(`@` 가 붙으면 전화번호가 아니다)도 없었다. 그래서
      * 접수 폼의 연락처 칸은 `0212345678@example.com` 을 「전화번호 0212345678」로 받아 적었다.
+     *
+     * **자리 수가 맞지 않는 번호는 거절하고 그 사실을 말한다** (DS 70-2) — 종전에는 모양만
+     * 보아 `010-123-4567`(열 자리)을 그대로 접수했고, 되읽는 문구가 가운데를 가리므로
+     * (`010-****-4567`) 고객은 빠진 자리를 볼 길이 없었다.
      */
-    const found = findContact(raw);
-    if (found) return { ok: true, value: found.value };
-    return { ok: false, message: `연락처 형식을 알아보지 못했어요. 전화번호 또는 이메일로 알려주세요. ${slot.hint}` };
+    const got = takeContact(raw);
+    if (got.ok) return { ok: true, value: got.value };
+    if (got.kind === 'phone') {
+      return { ok: false, message: `${phoneShapeMessage(got.issue, got.head, got.plan, got.length)} ${slot.hint}` };
+    }
+    return { ok: false, message: `${CONTACT_SHAPE_MESSAGE} ${slot.hint}` };
   }
 
   if (slot.kind === 'datetime') {

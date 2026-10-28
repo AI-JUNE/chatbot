@@ -8,6 +8,8 @@ import { tenantLabel } from '@/lib/tenants';
 import { listCustomRules } from '@/lib/adminStore';
 import { getSession, updateSession, isSharedSessionKey, newVisitorSessionId } from '@/lib/session';
 import { rateGuard } from '@/lib/ratelimit';
+import { takeContact } from '@/lib/pii';
+import { CONTACT_SHAPE_MESSAGE, phoneShapeMessage } from '@/lib/refusal';
 import { ok, fail, readJson, optStr, reqQuery, withRequestId } from '@/lib/http';
 import { startRequest, hashId } from '@/lib/logger';
 
@@ -57,6 +59,35 @@ export async function POST(req: NextRequest) {
     rl.end({ status: 400, code: 'invalid_input' });
     return withRequestId(contact.res, rl.requestId);
   }
+  /**
+   * **접수에 붙는 연락처를 서버가 잰다** (DS 70-2).
+   *
+   * 종전에 이 창구는 연락처를 **길이만** 보고 그대로 저장했다 — 재는 자는 위젯 카드 안에만
+   * 있었고(`ChatWidget.validContact`), 그 자는 서버가 아는 연락처와 **다른 답**을 냈다:
+   * `123456789`(0 으로 시작하지 않는 아홉 자리)는 카드를 통과해 접수의 연락처 칸에 들어가고,
+   * `contactOnFile: true` 가 되어 위젯은 「남겨 주신 연락처로 연락드릴게요」라고 말한다. 그
+   * 값을 되읽는 문구(`chat.contactTail`)는 가리는 쪽에서 **계좌번호**로 읽어
+   * 「남겨 주신 연락처(***-****-****)로…」가 된다 — 고객에게도 운영자에게도 뜻이 없는 글이고,
+   * 상담원이 걸 수 있는 번호도 아니다. 자리 수가 맞지 않는 번호(`010-123-4567`)는 양쪽을 다
+   * 통과했다.
+   *
+   * 재는 자를 `pii.takeContact` 한 벌로 모으고(폼·엔진·이 창구가 같은 자를 쓴다), 거절 문장은
+   * `refusal` 한 곳에서 가져온다 — 위젯은 같은 규칙의 **사본**을 들고 있어 보내기 전에 그 칸
+   * 아래에서 먼저 말한다(테스트가 두 자를 같은 값으로 대조한다 · DS 42-1).
+   */
+  const took = contact.value ? takeContact(contact.value) : null;
+  if (took && !took.ok) {
+    rl.end({ status: 400, code: 'invalid_input' });
+    return withRequestId(
+      fail(
+        'invalid_input',
+        took.kind === 'phone'
+          ? phoneShapeMessage(took.issue, took.head, took.plan, took.length)
+          : CONTACT_SHAPE_MESSAGE,
+      ),
+      rl.requestId,
+    );
+  }
 
   // 이관 요약은 세션 문맥(최근 대화·수집 슬롯)에서 규칙 기반으로 생성한다. 본문은 마스킹을 통과한다.
   const reasonCode = toReasonCode(reason.value);
@@ -70,7 +101,13 @@ export async function POST(req: NextRequest) {
    * (운영자 화면과 이관 요약에 그대로 그려지는 값이다).
    */
   const tenant = ctx.tenantId ?? null;
-  const slots = { ...(ctx.slots ?? {}), ...(contact.value ? { contact: contact.value } : {}) };
+  /**
+   * 저장하는 것은 **받아 적은 값**이다 (DS 70-1·70-2) — 전각으로 적힌 번호는 아스키로 모이고
+   * 공백 구분자는 떨어진다. 엔진이 받아 적는 값과 같은 모양이어야 운영자 화면·CSV·되읽는
+   * 문구가 한 가지 모양만 읽는다(`pii.findContact` 의 규약 그대로).
+   */
+  const taken = took?.ok ? took.value : '';
+  const slots = { ...(ctx.slots ?? {}), ...(taken ? { contact: taken } : {}) };
   const summary = buildHandoffSummary({
     sessionId: sessionId,
     ...(tenant ? { tenantLabel: tenantLabel(tenant) } : {}),
@@ -89,7 +126,7 @@ export async function POST(req: NextRequest) {
     tenant,
     reason: reason.value,
     message: message.value,
-    contact: contact.value || undefined,
+    contact: taken || undefined,
     summary,
   });
   updateSession(sessionId, {
@@ -110,7 +147,7 @@ export async function POST(req: NextRequest) {
      * 남겼든 남기지 않기로 했든 카드가 그 질문을 끝냈으므로, 대화창은 다시 묻지 않는다.
      */
     awaitingContact: false,
-    ...(contact.value ? { slots } : {}),
+    ...(taken ? { slots } : {}),
   });
 
   const q = queuePosition(ticket.id);
