@@ -74,13 +74,21 @@ export async function POST(req: NextRequest) {
     action: 'rule.custom.upsert',
     target: result.rule.intent,
     // 운영자가 적은 규칙 이름 — 줄일 때 **줄였다고 적는다** (DS 62-3).
-    detail: `${result.created ? '생성' : '수정'}: ${ellipsize(result.rule.label, AUDIT_NAME_LEN)}`,
+    // 아무것도 바뀌지 않은 저장을 「수정」이라 적지 않는다 (DS 72-3).
+    detail: `${result.duplicate ? '같은 내용이 이미 있어 새로 만들지 않음' : result.created ? '생성' : '수정'}: ${ellipsize(result.rule.label, AUDIT_NAME_LEN)}`,
     authed: isAdminAuthed(req),
   });
   // 저장은 됐지만 **쓰이지 않을** 수 있다 — 그 사실을 저장한 자리에서 바로 말한다(DS 44-3).
   // 같은 자리에서 **보관되었는지**도 함께 말한다 — 「저장되었습니다」가 가리키는 것이
   // 화면 속 메모리뿐일 수 있다(DS 47-1).
-  return ok({ rule: customRuleView(result.rule), created: result.created, shadowedBy: customRuleView(result.rule).shadowedBy, saved: saveAdminNow() });
+  return ok({
+    rule: customRuleView(result.rule),
+    created: result.created,
+    // 「다시 시도」가 만들려던 쌍둥이를 막았다 (DS 72-3) — 화면이 다른 말을 적는다.
+    ...(result.duplicate ? { duplicate: true } : {}),
+    shadowedBy: customRuleView(result.rule).shadowedBy,
+    saved: saveAdminNow(),
+  });
 }
 
 // 커스텀 룰 삭제: DELETE /api/admin/rules?intent=cr_xxx

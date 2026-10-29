@@ -309,7 +309,13 @@ test('지식베이스가 표(검색·카테고리 필터)+우측 편집 폼으�
   assert.match(src, /askConfirm\(\{[\s\S]{0,200}이 안내 자료를 삭제할까요/, '삭제는 확인을 거친다');
   // 저장 토스트 — 끝났다고 말하는 한 문(`flashSaved`)을 지난다. 그 문은 서버가 보낸 보관
   // 결과를 함께 받아, 디스크에 닿지 않았으면 같은 문장에 그 사실을 적는다 (DS 47-1).
-  assert.match(src, /flashSaved\(editingId \? '수정되었습니다\.' : '추가되었습니다\.', data\.saved\)/, '저장 토스트');
+  // 72차(DS 72-3)에 「이미 같은 내용이 있어 새로 만들지 않았다」가 같은 문을 지나게 됐다 —
+  // 지나는 문(`flashSaved`)과 함께 보내는 값(`data.saved`)은 종전 그대로다.
+  assert.match(
+    src,
+    /flashSaved\(data\.duplicate \? duplicateSavedText\('자료'\) : editingId \? '수정되었습니다\.' : '추가되었습니다\.', data\.saved\)/,
+    '저장 토스트',
+  );
   const mobile = css.slice(css.indexOf('@media (max-width:900px){'));
   assert.match(mobile, /\.ac-split,\.ac-split-test\{grid-template-columns:minmax\(0,1fr\)\}/, '좁은 화면에서는 한 단');
   assert.match(mobile, /\.ac-col-wide\{display:none\}/, '좁은 화면에서는 키워드 열을 감춘다');
@@ -366,7 +372,12 @@ test('시나리오 룰이 「조건 → 응답」 카드 빌더와 미리보기�
   assert.match(src, /askConfirm\(\{[\s\S]{0,200}이 규칙을 삭제할까요/, '삭제는 확인을 거친다');
   assert.match(src, /target: target\?\.label \?\? intent/, '지우는 대상을 밝힌다');
   // 저장 토스트 — 자료 쪽과 같은 문(`flashSaved`)을 지난다 (DS 47-1).
-  assert.match(src, /flashSaved\(crEditing \? '규칙을 수정했습니다\.' : '규칙을 추가했습니다\.', data\.saved/, '저장 토스트');
+  // 72차(DS 72-3) — 쌍둥이를 막은 저장도 같은 문을 지난다(아래 ⑥ 와 같은 규칙).
+  assert.match(
+    src,
+    /flashSaved\([\s\S]{0,220}duplicateSavedText\('규칙'\) : crEditing \? '규칙을 수정했습니다\.' : '규칙을 추가했습니다\.',\s*\n\s*data\.saved/,
+    '저장 토스트',
+  );
   // 내부 용어(intent·정규식·커스텀 룰)가 화면 문자열에 남지 않는다
   for (const leak of ['커스텀 룰', '정규식', '패턴: /', '({r.intent}', '>{r.intent}']) {
     assert.equal(t.includes(leak), false, `내부 용어 노출: ${leak}`);
@@ -2130,8 +2141,11 @@ test('평가가 어느 자료에 대한 것인지 id 로 오간다 (DS 43-2)', o
   assert.match(route, /resolveKb\(kbId\.value, kbLabelMap\(\)\)/, '라우트가 자료 id 를 버린다');
   // ③ 묶음 열쇠가 id 우선이다 — 라벨로만 묶으면 이름을 고칠 때마다 줄이 갈라진다.
   //    (DS 58-2 가 이름을 되돌리지 못한 복원분을 `lost:` 한 줄로 가른 뒤에도 id 가 먼저다.)
-  assert.match(lib, /const key = e\.kbId\s*\n?\s*\? `id:\$\{e\.kbId\}`/, '평가를 라벨로 묶는다');
-  assert.match(lib, /: `label:\$\{e\.citation \|\| NO_CITATION_LABEL\}`/, '이름이 있는 평가를 라벨로 묶지 않는다');
+  //    72차(DS 72-2)에 그 식이 **접수 쪽과 한 벌**이 되었다(`targetKey`) — 묶는 자가 두 벌이면
+  //    화면에서 한 줄인 것이 저장에서는 두 건이 된다. 열쇠의 순서(id 먼저)는 종전 그대로다.
+  assert.match(lib, /function targetKey\(e: \{ kbId\?: string; citation\?: string \}\): string \{\n  if \(e\.kbId\) return `id:\$\{e\.kbId\}`;/, '평가를 라벨로 묶는다');
+  assert.match(lib, /return e\.citation \? `label:\$\{e\.citation\}` : '';/, '이름이 있는 평가를 라벨로 묶지 않는다');
+  assert.match(lib, /const key = targetKey\(e\) \|\| \(e\.citationLost \? 'lost:' : `label:\$\{NO_CITATION_LABEL\}`\);/, '집계가 묶는 자를 따로 적어 두었다');
   // ④ 이름 규칙이 근거 라벨과 같다 — 운영자가 답변 아래에서 본 그 이름이 목록에 떠야 한다.
   assert.match(knowledge, /source: entry\.source\?\.trim\(\) \|\| entry\.question,/, '근거 라벨 규칙이 바뀌었다');
   assert.match(tenantKB, /const label = \(e\.source \|\| ''\)\.trim\(\) \|\| \(e\.question \|\| ''\)\.trim\(\);/, '목록의 이름 규칙이 근거 라벨과 어긋난다');
@@ -2657,14 +2671,16 @@ test('쓰기 응답이 보관 결과를 싣고 화면이 그 사실을 말한다
 
   // ④ 저장·삭제를 말하는 자리는 전부 그 문을 지난다 — 한 자리라도 빠지면 그 화면만 거짓이 된다.
   assert.equal(/\bflash\('삭제되었습니다/.test(src), false, '자료 삭제가 보관 결과를 보지 않는다');
+  // 네 자리는 72차(DS 72-3)에 「이미 같은 내용이 있다」를 같은 문장 안에서 가른다 — 지나는
+  // 문과 함께 보내는 보관 결과는 종전 그대로다(검사의 뜻은 바뀌지 않았다).
   for (const sig of [
-    /flashSaved\(editingId \? '수정되었습니다/,
+    /flashSaved\(data\.duplicate \? duplicateSavedText\('자료'\) : editingId \? '수정되었습니다/,
     /flashSaved\('삭제되었습니다\.', data\.saved/,
     /flashSaved\('기본 지식베이스로 초기화했습니다\.', data\.saved/,
-    /flashSaved\(crEditing \? '규칙을 수정했습니다/,
+    /duplicateSavedText\('규칙'\) : crEditing \? '규칙을 수정했습니다[\s\S]{0,80}data\.saved/,
     /flashSaved\('규칙을 삭제했습니다\.', data\.saved/,
-    /flashSaved\(data\.created \? '파트너를 등록했습니다/,
-    /flashSaved\(data\.created \? '고객사를 등록했습니다/,
+    /duplicateSavedText\('파트너'\) : data\.created \? '파트너를 등록했습니다[\s\S]{0,120}data\.saved/,
+    /duplicateSavedText\('고객사'\) : data\.created \? '고객사를 등록했습니다[\s\S]{0,120}data\.saved/,
     /flashSaved\('파트너를 삭제했습니다\.', data\.saved/,
   ]) assert.match(src, sig, `보관 결과를 보지 않는 저장 안내가 있다: ${sig}`);
   // 복원은 「모두 덮어씁니다」라고 말하고 확인까지 받은 자리다 — 그것이 디스크까지 갔는지 말한다.

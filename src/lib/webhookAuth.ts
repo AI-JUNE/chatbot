@@ -1,17 +1,30 @@
 /**
- * 웹훅 인증 공통 모듈 — HMAC 서명 검증 · 리플레이 차단 · 재시도(중복 전달) 멱등 처리.
+ * 웹훅 인증 공통 모듈 — HMAC 서명 검증 · 리플레이 차단.
  *
  * 왜 필요한가
  * - 스킬 URL은 공개 엔드포인트다. 토큰만으로는 본문 위·변조를 막지 못한다.
- * - 채널 플랫폼은 응답이 늦으면 **같은 이벤트를 다시 보낸다**. 그대로 처리하면
- *   티켓이 중복 접수되고 대화 로그가 두 번 쌓인다. 같은 이벤트는 같은 응답을 돌려줘야 한다.
  *
  * 원칙
  * - 시크릿은 환경변수에서만 읽는다(하드코딩 금지). 미설정이면 검증을 '미구성'으로 명확히 구분한다.
  * - 비교는 항상 상수 시간(timingSafeEqual). 길이 차이로도 정보가 새지 않도록 해시 후 비교한다.
  * - 서명·시크릿 값은 어떤 로그·응답에도 남기지 않는다.
+ *
+ * 재시도(중복 전달) 멱등 처리는 **`@/lib/idem` 한 곳**으로 내렸다 (DS 72-1) — 그 판정은 서명과
+ * 아무 상관이 없는 일인데 이 파일에 있었던 탓에, 웹 창구(`/api/chat`·`/api/feedback`)는 같은
+ * 일을 할 자를 **가져다 쓸 생각조차 하지 못했다**(발화 상한이 `route.ts` 에 있어 카카오가 쓸 수
+ * 없었던 것과 같은 모양 · DS 38-1). 부르던 쪽이 바뀌지 않게 이름은 여기서도 그대로 내보낸다.
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+
+export {
+  DEFAULT_DEDUPE_TTL_MS,
+  dedupeCheck,
+  dedupeRelease,
+  dedupeRemember,
+  eventKey,
+  resetDedupe,
+  type DedupeRecord,
+} from '@/lib/idem';
 
 /** 프로세스마다 새로 만드는 비교용 키 — 길이·내용 어느 쪽으로도 타이밍이 새지 않게 한다. */
 const COMPARE_KEY = randomBytes(32);
@@ -84,64 +97,6 @@ export function verifySignature(input: VerifyInput): SignatureResult {
   return safeEqual(presented, expected) ? { ok: true } : { ok: false, reason: 'mismatch' };
 }
 
-// ---- 재시도(중복 전달) 멱등 처리 ----
-
-export interface DedupeRecord {
-  at: number;
-  response?: unknown;
-}
-
-/** 인스턴스 단위 캐시. 서버리스는 인스턴스별이므로 완전한 전역 멱등은 [승인 필요](공유 저장소 도입 후). */
-const seen = new Map<string, DedupeRecord>();
-const MAX_KEYS = 2000;
-export const DEFAULT_DEDUPE_TTL_MS = 60_000;
-
-/** 이벤트 식별 키 — 원문(발화·사용자 id)을 그대로 남기지 않도록 해시한다. */
-export function eventKey(parts: Array<string | undefined | null>): string {
-  return createHmac('sha256', COMPARE_KEY).update(parts.map((p) => p ?? '').join('|')).digest('hex').slice(0, 32);
-}
-
-function sweep(store: Map<string, DedupeRecord>, now: number, ttlMs: number): void {
-  for (const [k, v] of store) if (now - v.at > ttlMs) store.delete(k);
-  while (store.size >= MAX_KEYS) {
-    const first = store.keys().next().value;
-    if (first === undefined) break;
-    store.delete(first);
-  }
-}
-
-/**
- * 중복 전달 검사 — 처음 보는 이벤트면 자리를 예약(duplicate:false)하고,
- * TTL 내 재전달이면 duplicate:true 와 (있다면) 이전 응답을 돌려준다.
- */
-export function dedupeCheck(
-  key: string,
-  opts: { now?: number; ttlMs?: number; store?: Map<string, DedupeRecord> } = {},
-): { duplicate: boolean; response?: unknown } {
-  const store = opts.store ?? seen;
-  const now = opts.now ?? Date.now();
-  const ttl = opts.ttlMs ?? DEFAULT_DEDUPE_TTL_MS;
-  sweep(store, now, ttl);
-
-  const hit = store.get(key);
-  if (hit && now - hit.at <= ttl) {
-    return hit.response === undefined ? { duplicate: true } : { duplicate: true, response: hit.response };
-  }
-  store.set(key, { at: now });
-  return { duplicate: false };
-}
-
-/** 처리 결과를 기록해 재전달 시 같은 응답을 돌려줄 수 있게 한다. */
-export function dedupeRemember(
-  key: string,
-  response: unknown,
-  opts: { now?: number; store?: Map<string, DedupeRecord> } = {},
-): void {
-  const store = opts.store ?? seen;
-  store.set(key, { at: opts.now ?? Date.now(), response });
-}
-
-/** 테스트·재기동용 초기화. */
-export function resetDedupe(): void {
-  seen.clear();
-}
+// ---- 재시도(중복 전달) 멱등 처리는 `@/lib/idem` 이 한다 (DS 72-1) ----
+// 위의 `export { … } from '@/lib/idem'` 가 그 이름들을 그대로 다시 내보낸다 — 저장소도 판정도
+// 한 벌이다(두 벌이면 같은 재전달을 창구마다 다르게 읽는다).

@@ -3532,13 +3532,18 @@ test('보관 경계보다 앞선 날은 「0건」이 아니라 「기록 없음
 test('평가는 자료 id 로 묶이고 이름은 지금 KB 에서 붙인다 (DS 43-2)', opts, async () => {
   process.env.ADMIN_PERSIST = 'false';
   const F = await importLib('feedback', ['storage', 'logger', 'monitoring', 'refusal']);
-  const down = (kbId, citation) => F.recordFeedback({ sessionHash: 'h1', verdict: 'down', citation, kbId });
+  /**
+   * 평가를 보낸 **사람**을 함께 적는다 — 72차(DS 72-2)부터 같은 사람의 같은 자료 평가는 한
+   * 건이다(「다시 시도」가 두 건을 쌓던 자리다). 이 테스트가 세는 것은 **여러 사람의 평가가
+   * 한 자료로 묶이는가**이므로, 사람을 갈라 적는다 — 검사의 뜻은 한 자리도 바뀌지 않았다.
+   */
+  const down = (kbId, citation, who = 'h1') => F.recordFeedback({ sessionHash: who, verdict: 'down', citation, kbId });
 
   // ① 이름을 고친 자료 — 종전 식(라벨 열쇠)에서는 두 줄로 갈라진다.
   F.resetFeedback();
-  down('kb_refund', '환불 규정');
-  down('kb_refund', '환불 규정');
-  down('kb_refund', '환불·교환 규정'); // 운영자가 대표 질문을 고친 뒤 들어온 평가
+  down('kb_refund', '환불 규정', 'h1');
+  down('kb_refund', '환불 규정', 'h2');
+  down('kb_refund', '환불·교환 규정', 'h3'); // 운영자가 대표 질문을 고친 뒤 들어온 평가
   assert.equal(new Set(['환불 규정', '환불 규정', '환불·교환 규정']).size, 2,
     '종전 식에서도 한 줄이다 — 재현이 아무것도 지키지 않는다');
 
@@ -3571,9 +3576,10 @@ test('평가는 자료 id 로 묶이고 이름은 지금 KB 에서 붙인다 (DS
   assert.equal(s.topDown[0].missing, undefined, '모르는 것을 지워졌다고 말한다');
 
   // ⑤ 옛 기록(자료 id 없음)은 라벨로 묶인 채 둔다 — 그때는 「어느 자료인지 모른다」다.
+  //    두 사람의 평가다(한 사람의 두 번은 72차부터 한 건이다 · DS 72-2).
   F.resetFeedback();
   F.recordFeedback({ sessionHash: 'h', verdict: 'down', citation: '옛 라벨' });
-  F.recordFeedback({ sessionHash: 'h', verdict: 'down', citation: '옛 라벨' });
+  F.recordFeedback({ sessionHash: 'h2', verdict: 'down', citation: '옛 라벨' });
   s = F.feedbackSummary({});
   assert.equal(s.topDown.length, 1);
   assert.equal(s.topDown[0].down, 2);
@@ -7529,4 +7535,263 @@ test('대화 기록 창구가 보여 준 수를 전체라고 말하지 않는다
   for (const bad of [0, -1, Number.NaN]) assert.equal(queryTurns(bad).limit, TURN_PAGE_DEFAULT);
   assert.equal(queryTurns(100000).limit, 200);
   resetLogs();
+});
+
+/* ══════════ 디자인 스프린트 — 69차 재감사 (DS 72-1·72-2·72-3) ══════════ */
+
+/**
+ * 69차 재감사 — **이미 받은 것을 또 받았을 때**.
+ *
+ * 이 제품은 「요청이 닿았는지 모를 때 다시 보내는 길」을 여러 번 열었다(DS 5-5·23-1·33-1·5-10).
+ * 그런데 **받는 쪽**에 「이미 받았다」를 가리는 자는 카카오 창구 하나뿐이었다 — 웹에서는 같은
+ * 말·같은 평가·같은 저장이 두 번째 사실을 만들었다. 세 건 모두 아래에서 돌려서 재현한다.
+ *
+ * 한 묶음으로 컴파일한다 — 열쇠를 적는 쪽(`idem`)과 두 번 처리되던 쪽(엔진·평가·저장소)이
+ * 같은 상태를 봐야 한다(`pickPii` 와 같은 모양).
+ */
+const DUP_GROUP = [
+  'chat', 'idem', 'session', 'escalation', 'handoff', 'adminStore', 'storage', 'logger', 'monitoring',
+  'knowledge', 'normalize', 'rules', 'slots', 'llm', 'tenantKB', 'ingest', 'convlog', 'limits', 'pii',
+  'feedback', 'partners', 'settlement',
+];
+const pickDup = (name) => importLib(name, DUP_GROUP.filter((n) => n !== name));
+
+/**
+ * DS 72-1 — 「다시 보내기」가 같은 말을 **두 번 처리**했다.
+ *
+ * 기한이 지나 끊은 요청도 서버에서는 끝까지 처리된다(DS 23-1). 그 뒤의 「다시 보내기」는
+ * 새 요청이었으므로 대화 기록이 두 줄, 세션 턴이 두 칸 늘고, **접수 폼은 두 칸 나아가
+ * 앞 항목의 답이 다음 항목의 답으로 들어갔다** — 이름을 적은 사람이 날짜를 틀린 것이 된다.
+ */
+test('같은 말이 다시 들어와도 두 번 처리되지 않는다 (DS 72-1)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  delete process.env.CHAT_LLM_LIVE;
+  const { replyTo } = await pickDup('chat');
+  const S = await pickDup('session');
+  const esc = await pickDup('escalation');
+  const idem = await pickDup('idem');
+  esc.resetTickets();
+  S.resetSessions();
+  idem.resetDedupe();
+
+  // ── ① 종전 식 재현 — 열쇠가 없으면 같은 말이 두 번 처리된다.
+  const a = 'rt-ds72-1-a';
+  replyTo('예약하고 싶어요', a);
+  const first = replyTo('홍길동', a);
+  assert.equal(first.intent, 'form:reservation:datetime', '재현 전제가 깨졌다 — 폼이 시작되지 않았다');
+  const again = replyTo('홍길동', a);
+  assert.equal(again.intent, 'form:reservation:datetime:retry', '재현이 깨졌다 — 두 번째가 그냥 넘어갔다');
+  assert.match(again.reply, /날짜·시간을 알아보지 못했어요/, '성함이 날짜 칸의 답으로 들어가지 않는다');
+  assert.equal(S.getSession(a).form.retries, 1, '이름을 적은 사람이 날짜를 틀린 것이 된다');
+  assert.equal(S.getSession(a).turnTotal, 6, '주고받은 말이 두 마디 늘어난다');
+
+  // ── ② 고친 쪽 — 창구가 **한 번 쓰는 열쇠**로 가린다(판정·저장은 `lib/idem` 한 곳).
+  //    라우트가 하는 일을 그대로 적는다(그 배선 자체는 unit.test.mjs DS 72-1 이 소스로 고정한다).
+  const b = 'rt-ds72-1-b';
+  const serve = (text, msgId) => {
+    const key = idem.eventKey(['chat', b, msgId]);
+    const dup = idem.dedupeCheck(key);
+    if (dup.duplicate) return dup.response ?? { pending: true };
+    const r = replyTo(text, b);
+    idem.dedupeRemember(key, r);
+    return r;
+  };
+  serve('예약하고 싶어요', 'm1');
+  const r2 = serve('홍길동', 'm2');
+  const r3 = serve('홍길동', 'm2'); // 기한이 지나 누른 「다시 보내기」
+  assert.equal(r3.reply, r2.reply, '다시 보낸 말에 다른 답이 돌아온다');
+  assert.equal(r3.intent, r2.intent);
+  assert.equal(S.getSession(b).form.asked, 'datetime', '폼이 두 칸 나아갔다');
+  assert.equal(S.getSession(b).form.retries ?? 0, 0, '앞 항목의 답이 다음 항목의 답으로 들어갔다');
+  assert.equal(S.getSession(b).turnTotal, 4, '다시 보낸 말이 대화 길이에 더해진다');
+
+  // 열쇠가 다르면 **새 말**이다 — 같은 글자를 두 번 보내는 것은 고객의 자유다.
+  const r4 = serve('홍길동', 'm3');
+  assert.equal(r4.intent, 'form:reservation:datetime:retry', '열쇠가 달라도 두 번째 말을 삼킨다');
+
+  // ── ③ 아직 답이 없는 사이에 다시 오면 **답을 지어내지 않는다**(예약만 있고 적어 둔 답이 없다).
+  const pend = idem.eventKey(['chat', b, 'm9']);
+  assert.equal(idem.dedupeCheck(pend).duplicate, false, '처음 온 요청을 재전달로 본다');
+  assert.deepEqual(idem.dedupeCheck(pend), { duplicate: true }, '처리 중인 요청의 답을 지어낸다');
+  // 답을 만들지 못했으면 자리를 거둔다 — 한 번의 오류가 그 말풍선의 길을 막지 않는다.
+  idem.dedupeRelease(pend);
+  assert.equal(idem.dedupeCheck(pend).duplicate, false, '거둔 자리가 그대로 남아 있다');
+
+  // ── ④ 열쇠는 **세션과 함께** 묶인다 — 남의 열쇠를 적어 보내도 남의 답을 받아 가지 못한다.
+  assert.notEqual(idem.eventKey(['chat', 'A', 'm1']), idem.eventKey(['chat', 'B', 'm1']));
+  // 원문(세션·발화)이 열쇠에 그대로 남지 않는다(기록에 원문을 남기지 않는 규약과 같은 자리).
+  const k = idem.eventKey(['chat', 'web_abc', 'm1']);
+  assert.match(k, /^[0-9a-f]{32}$/);
+  assert.equal(k.includes('web_abc'), false, '열쇠에 세션 원문이 남는다');
+
+  // ── ⑤ 기한이 지나면 다시 처음 온 요청이다(끝없이 쌓아 두지 않는다).
+  const t0 = 1_000_000;
+  const k2 = idem.eventKey(['chat', b, 'm10']);
+  assert.equal(idem.dedupeCheck(k2, { now: t0 }).duplicate, false);
+  idem.dedupeRemember(k2, { reply: '적어 둔 답' }, { now: t0 });
+  assert.deepEqual(idem.dedupeCheck(k2, { now: t0 + 1000 }), { duplicate: true, response: { reply: '적어 둔 답' } });
+  assert.equal(idem.dedupeCheck(k2, { now: t0 + idem.DEFAULT_DEDUPE_TTL_MS + 1 }).duplicate, false);
+  idem.resetDedupe();
+});
+
+/**
+ * DS 72-2 — 평가 「다시 시도」가 평가를 **두 건**으로 쌓았다.
+ *
+ * 위젯은 평가 전송이 실패하면 「다시 시도」를 내민다(DS 33-1). 그 요청은 앞 요청이 이미 서버에
+ * 닿은 뒤일 수 있다 — 그러면 👎 가 두 건이 되어 「보완이 필요한 자료」의 수가 사람 수보다
+ * 커지고(그 수로 상위 5줄을 세운다 · DS 32-1), 도움됨 비율이 한 번 누름을 두 번 센다(§13).
+ */
+test('같은 사람의 같은 평가는 다시 보내도 한 건이다 (DS 72-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const F = await pickDup('feedback');
+  F.resetFeedback();
+
+  // ── ① 종전 식 재현 — 묶는 자가 없으면 그대로 쌓인다(그때의 식을 그대로 적는다).
+  const legacy = [];
+  const legacyRecord = (sessionHash, verdict) => legacy.push({ sessionHash, verdict, kbId: 'kb_refund' });
+  legacyRecord('h1', 'down');
+  legacyRecord('h1', 'down');
+  assert.equal(legacy.length, 2, '재현이 깨졌다 — 종전 식도 한 건이었다');
+  assert.equal(legacy.filter((e) => e.verdict === 'down').length, 2, '한 사람의 한 번 누름이 두 번 세어진다');
+
+  // ── ② 고친 쪽 — 같은 사람·같은 자료면 **마지막 값만** 남는다.
+  const send = (verdict, who = 'h1') =>
+    F.recordFeedback({ sessionHash: who, verdict, citation: '환불 규정', kbId: 'kb_refund' });
+  const one = send('down');
+  const two = send('down'); // 「다시 시도」
+  assert.equal(one.ok && two.ok, true);
+  assert.equal(F.listFeedback(10).length, 1, '같은 평가가 두 건으로 쌓인다');
+  assert.equal(two.entry.id, one.entry.id, '같은 평가에 새 번호를 붙인다');
+  let s = F.feedbackSummary({ kb_refund: '환불 규정' });
+  assert.equal(s.total, 1, '평가 건수가 사람이 누른 수보다 크다');
+  assert.equal(s.down, 1);
+  assert.equal(s.topDown[0].down, 1, '보완 목록의 수가 사람 수보다 크다');
+
+  // ── ③ 마음을 바꿔 누르면 **바꾼 값**이 그 사람의 의견이다(두 의견을 함께 세지 않는다).
+  send('up');
+  s = F.feedbackSummary({ kb_refund: '환불 규정' });
+  assert.equal(s.total, 1);
+  assert.equal(s.up, 1);
+  assert.equal(s.down, 0);
+  assert.equal(s.helpfulRate, 100);
+  assert.equal(s.topDown.length, 0, '고친 의견이 보완 목록에 그대로 남는다');
+
+  // ── ④ 판정이 넓지 않다 — 다른 사람·다른 자료는 따로 센다.
+  send('down', 'h2');
+  F.recordFeedback({ sessionHash: 'h1', verdict: 'down', citation: '배송 안내', kbId: 'kb_ship' });
+  s = F.feedbackSummary({ kb_refund: '환불 규정', kb_ship: '배송 안내' });
+  assert.equal(s.total, 3, '다른 사람·다른 자료의 평가를 하나로 묶는다');
+  assert.equal(s.down, 2);
+  assert.equal(s.topDown.length, 2);
+
+  // ── ⑤ **어느 자료인지 모르는** 평가는 묶지 않는다 — 서로 다른 답변이 한 줄로 뭉친다.
+  F.resetFeedback();
+  F.recordFeedback({ sessionHash: 'h9', verdict: 'down', citation: '' });
+  F.recordFeedback({ sessionHash: 'h9', verdict: 'down', citation: '' });
+  assert.equal(F.listFeedback(10).length, 2, '모르는 것끼리 한 건으로 뭉친다');
+  assert.equal(F.feedbackSummary({}).down, 2);
+
+  // ── ⑥ **복원이 고친 것을 되살리지 않는다** — 고치기 전 저장분(두 건)은 한 건으로 들어온다.
+  const legacySnap = {
+    version: 1,
+    savedAt: '2026-10-29T00:00:00.000Z',
+    seq: 9,
+    entries: [
+      { id: 'F-000008', sessionHash: 'h1', verdict: 'down', citation: '환불 규정', kbId: 'kb_refund', channel: 'web', at: '2026-10-28T01:00:00.000Z' },
+      { id: 'F-000009', sessionHash: 'h1', verdict: 'up', citation: '환불 규정', kbId: 'kb_refund', channel: 'web', at: '2026-10-28T02:00:00.000Z' },
+    ],
+  };
+  const r = F.importFeedback(legacySnap);
+  assert.equal(r.ok, true);
+  assert.equal(r.count, 1, '복원이 같은 사람의 같은 평가를 두 건으로 되살린다');
+  const restored = F.listFeedback(10);
+  assert.equal(restored[0].verdict, 'up', '마지막 의견이 아니라 처음 의견이 남는다');
+  assert.equal(restored[0].id, 'F-000008', '복원이 처음 번호를 버린다');
+  F.resetFeedback();
+});
+
+/**
+ * DS 72-3 — 콘솔 저장의 「다시 시도」가 **쌍둥이**를 만들었다.
+ *
+ * 저장 실패 안내(DS 5-10)와 요청 기한(DS 23-2)이 있는 화면에서, 다시 누른 저장은 새 식별자를
+ * 받아 같은 것을 한 벌 더 만든다. 자료가 두 벌이면 하나만 고쳐도 **다른 쪽이 계속 답하고**,
+ * 고객사가 두 줄이면 정산이 **같은 계약을 두 번** 센다.
+ */
+test('저장을 다시 눌러도 같은 것이 두 벌 생기지 않는다 (DS 72-3)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const A = await pickDup('adminStore');
+  const P = await pickDup('partners');
+  A.resetKB();
+  P.resetPartners();
+
+  // ── ① 안내 자료 — 같은 내용을 두 번 보내도 한 벌이다(식별자도 그대로).
+  const before = A.listKB().length;
+  const body = { category: '요금', question: '환불 규정이 어떻게 되나요?', answer: '7일 이내 전액 환불됩니다.', keywords: '환불, 취소' };
+  const first = A.upsertKB(body);
+  assert.equal(first.ok && first.created, true, '첫 저장이 자료를 만들지 않았다');
+  const second = A.upsertKB(body); // 「다시 시도」
+  assert.equal(second.ok, true);
+  assert.equal(second.created, false, '같은 자료를 한 벌 더 만든다');
+  assert.equal(second.duplicate, true, '새로 만들지 않았다는 사실을 말하지 않는다');
+  assert.equal(second.entry.id, first.entry.id, '같은 자료에 새 식별자가 붙는다');
+  assert.equal(A.listKB().length, before + 1, `같은 자료가 두 벌 생긴다(${A.listKB().length - before}벌)`);
+
+  // 한 글자라도 다르면 **다른 자료**다 — 판정이 넓지 않다.
+  const third = A.upsertKB({ ...body, answer: '7일 이내 전액 환불됩니다. 단, 사용분은 제외합니다.' });
+  assert.equal(third.created, true, '내용이 다른 자료를 쌍둥이로 본다');
+  assert.equal(third.duplicate, undefined);
+  // 수정은 종전 그대로다(쌍둥이 판정이 고치는 길을 막지 않는다).
+  const edited = A.upsertKB({ id: first.entry.id, answer: '환불은 7일 이내에만 가능합니다.' });
+  assert.equal(edited.ok && edited.created, false);
+  assert.equal(edited.duplicate, undefined, '고친 저장을 「이미 있다」고 말한다');
+  assert.equal(edited.entry.answer, '환불은 7일 이내에만 가능합니다.');
+
+  // ── ② 내가 만든 규칙 — 뒤에 만든 쌍둥이는 **영영 걸리지 않는다**(DS 44-3 과 같은 자리).
+  const rules = A.listCustomRules().length;
+  const rule = { label: '배송 문의', keywords: '배송, 택배', reply: '평일 2~3일 걸립니다.' };
+  const r1 = A.upsertCustomRule(rule);
+  assert.equal(r1.ok && r1.created, true);
+  const r2 = A.upsertCustomRule(rule);
+  assert.equal(r2.created, false);
+  assert.equal(r2.duplicate, true);
+  assert.equal(r2.rule.intent, r1.rule.intent, '같은 규칙에 새 식별자가 붙는다');
+  assert.equal(A.listCustomRules().length, rules + 1, '같은 규칙이 두 벌 생긴다');
+  A.deleteCustomRule(r1.rule.intent);
+
+  // ── ③ 파트너 — 순번도 올리지 않는다(번호가 건너뛰면 운영자는 사라진 파트너를 찾는다).
+  const p1 = P.upsertPartner({ name: '제이투모로우원', feeRateBp: 1000, managerName: '김담당' });
+  assert.equal(p1.ok && p1.created, true);
+  const p2 = P.upsertPartner({ name: '제이투모로우원', feeRateBp: 1000, managerName: '김담당' });
+  assert.equal(p2.created, false);
+  assert.equal(p2.duplicate, true);
+  assert.equal(p2.partner.id, p1.partner.id);
+  assert.equal(P.listPartners().length, 1, '같은 파트너가 두 줄이 된다');
+  const p3 = P.upsertPartner({ name: '다른파트너', feeRateBp: 500 });
+  assert.equal(p3.partner.id, 'PTR-0002', `쌍둥이를 막으며 순번이 건너뛰었다(${p3.partner.id})`);
+
+  // ── ④ 고객사 — 두 줄이면 정산이 같은 계약을 두 번 센다.
+  const acc = {
+    name: '(주)고원', partnerId: p1.partner.id, source: 'partner',
+    status: 'contracted', contractedAt: '2026-09-01', monthlyFeeKrw: 300000,
+  };
+  const a1 = P.upsertAccount(acc);
+  assert.equal(a1.ok && a1.created, true);
+  const a2 = P.upsertAccount(acc); // 「다시 시도」
+  assert.equal(a2.created, false);
+  assert.equal(a2.duplicate, true);
+  assert.equal(a2.account.id, a1.account.id);
+  assert.equal(P.queryAccounts().length, 1, '같은 고객사가 두 줄이 된다');
+  const rollup = P.rollupByPartner().find((x) => x.partnerId === p1.partner.id);
+  assert.equal(rollup.total, 1, '정산 대상 고객사가 두 번 세어진다');
+  assert.equal(rollup.contracted, 1);
+  // 귀속 이력의 사유 문구는 모습에서 빼 두었다 — 사유만 다르게 다시 보내도 한 줄이다.
+  const a3 = P.upsertAccount({ ...acc, attributionNote: '다시 눌러 보냄' });
+  assert.equal(a3.duplicate, true, '사유 문구가 다르면 다른 고객사로 본다');
+  assert.equal(P.queryAccounts().length, 1);
+  // 한 칸이라도 다르면 다른 고객사다(이름이 다른 계약은 따로 남는다).
+  const a4 = P.upsertAccount({ ...acc, name: '(주)고원 2호점' });
+  assert.equal(a4.created, true);
+  assert.equal(P.queryAccounts().length, 2);
+  P.resetPartners();
+  A.resetKB();
 });

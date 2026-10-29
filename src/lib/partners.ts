@@ -220,6 +220,23 @@ export function partnerRev(p: Partner): string {
 }
 
 /**
+ * **식별자를 뺀 「내용의 모습」** — 「이미 같은 것이 있는가」를 가리는 자 (DS 72-3).
+ *
+ * 콘솔의 저장 실패 「다시 시도」가 **같은 고객사·파트너를 두 건** 만들던 자리다. 여기서는
+ * 자료보다 무겁다: 고객사가 두 줄이면 정산 리포트의 「대상 고객사」가 두 번 세어지고 월 이용료가
+ * 두 번 더해진다(수수료 합계는 그 합에서 나온다 · DS 2-13). 재는 자는 동시 편집 관문과 **같은
+ * 식**이고 식별자만 뺀다(DS 42-2).
+ */
+function accountContentRev(a: Account): string {
+  return accountRev({ ...a, id: '' });
+}
+
+/** 파트너의 「내용의 모습」 — 고객사 쪽과 같은 규칙이다 (DS 72-3). */
+function partnerContentRev(p: Partner): string {
+  return partnerRev({ ...p, id: '' });
+}
+
+/**
  * 저장 직전 관문 — 내가 보던 것이 그 사이 지워졌거나 바뀌었으면 거절한다 (DS 46-1).
  * `adminStore` 의 같은 이름 함수와 같은 규칙이다: `baseRev` 를 보내지 않으면 종전처럼
  * 그대로 갈아 끼운다(복원·일괄 처리처럼 겨룰 상대가 없는 자리).
@@ -248,7 +265,8 @@ export interface PartnerInput {
 }
 
 export type PartnerResult =
-  | { ok: true; partner: Partner; created: boolean }
+  /** `duplicate` — 이미 같은 내용이 있어 새로 만들지 않았다 (DS 72-3 · 자료 쪽과 같은 규약). */
+  | { ok: true; partner: Partner; created: boolean; duplicate?: true }
   /** `conflict` 는 **입력이 틀린 것이 아니라** 그 사이 다른 화면에서 바뀐 것이다 (DS 46-1). */
   | { ok: false; error: string; conflict?: 'gone' | 'changed'; current?: Partner };
 
@@ -293,9 +311,8 @@ export function upsertPartner(input: PartnerInput): PartnerResult {
     return { ok: true, partner: { ...existing }, created: false };
   }
 
-  partnerSeq += 1;
-  const partner: Partner = {
-    id: `PTR-${String(partnerSeq).padStart(4, '0')}`,
+  const draft: Partner = {
+    id: '',
     name,
     status,
     feeRateBp,
@@ -304,6 +321,12 @@ export function upsertPartner(input: PartnerInput): PartnerResult {
     createdAt: now(),
     updatedAt: now(),
   };
+  // 이미 같은 내용의 파트너가 있으면 **쌍둥이를 만들지 않는다** (DS 72-3) — 순번도 올리지 않는다
+  // (번호가 건너뛰면 운영자는 사라진 파트너를 찾는다).
+  const twin = partners.find((p) => partnerContentRev(p) === partnerContentRev(draft));
+  if (twin) return { ok: true, partner: { ...twin }, created: false, duplicate: true };
+  partnerSeq += 1;
+  const partner: Partner = { ...draft, id: `PTR-${String(partnerSeq).padStart(4, '0')}` };
   partners.push(partner);
   persist();
   return { ok: true, partner: { ...partner }, created: true };
@@ -375,7 +398,8 @@ export interface AccountInput {
 }
 
 export type AccountResult =
-  | { ok: true; account: Account; created: boolean }
+  /** `duplicate` — 이미 같은 내용이 있어 새로 만들지 않았다 (DS 72-3 · 파트너 쪽과 같은 규약). */
+  | { ok: true; account: Account; created: boolean; duplicate?: true }
   | { ok: false; error: string; conflict?: 'gone' | 'changed'; current?: Account };
 
 /**
@@ -487,9 +511,8 @@ export function upsertAccount(input: AccountInput): AccountResult {
     return { ok: true, account: cloneAccount(existing), created: false };
   }
 
-  accountSeq += 1;
-  const account: Account = {
-    id: `ACC-${String(accountSeq).padStart(4, '0')}`,
+  const draft: Account = {
+    id: '',
     name,
     partnerId,
     source,
@@ -511,6 +534,12 @@ export function upsertAccount(input: AccountInput): AccountResult {
     createdAt: now(),
     updatedAt: now(),
   };
+  // 이미 같은 내용의 고객사가 있으면 **쌍둥이를 만들지 않는다** (DS 72-3) — 귀속 이력은 모습에서
+  // 빼 두었으므로(`accountRev`) 사유 문구가 달라도 같은 고객사로 읽는다. 순번은 올리지 않는다.
+  const twin = accounts.find((a) => accountContentRev(a) === accountContentRev(draft));
+  if (twin) return { ok: true, account: cloneAccount(twin), created: false, duplicate: true };
+  accountSeq += 1;
+  const account: Account = { ...draft, id: `ACC-${String(accountSeq).padStart(4, '0')}` };
   accounts.push(account);
   persist();
   return { ok: true, account: cloneAccount(account), created: true };

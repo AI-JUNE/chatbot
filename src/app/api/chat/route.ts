@@ -8,6 +8,7 @@ import { resolvedTenantId } from '@/lib/tenants';
 import { isSharedSessionKey, newVisitorSessionId } from '@/lib/session';
 import { rateGuard } from '@/lib/ratelimit';
 import { MAX_MESSAGE_LEN } from '@/lib/limits';
+import { REQUEST_KEY_LEN, dedupeCheck, dedupeRelease, dedupeRemember, eventKey } from '@/lib/idem';
 import { ok, readJson, optStr, withRequestId } from '@/lib/http';
 import { captureError } from '@/lib/monitoring';
 import { startRequest, hashId } from '@/lib/logger';
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest) {
     return withRequestId(limited, rl.requestId);
   }
 
-  const parsed = await readJson<{ message?: unknown; sessionId?: unknown; tenant?: unknown }>(req);
+  const parsed = await readJson<{ message?: unknown; sessionId?: unknown; tenant?: unknown; msgId?: unknown }>(req);
   if (!parsed.ok) {
     rl.end({ status: parsed.res.status, code: 'invalid_json' });
     return withRequestId(parsed.res, rl.requestId);
@@ -53,6 +54,20 @@ export async function POST(req: NextRequest) {
     rl.end({ status: 400, code: 'invalid_input' });
     return withRequestId(ten.res, rl.requestId);
   }
+  /**
+   * **이 말풍선이 보내는 요청의 한 번 쓰는 열쇠** (DS 72-1).
+   *
+   * 위젯은 보낸 말마다 열쇠를 하나 만들고, 기한이 지나 「다시 보내기」를 누르면 **같은 열쇠**로
+   * 다시 보낸다 — 그것이 「처음 보내는 말」과 「닿았는지 모르는 말」을 가르는 유일한 단서다.
+   * 종전에는 그 단서가 없어 서버가 같은 말을 두 번 처리했다: 대화 기록이 두 줄, 세션 턴이 두
+   * 칸, 그리고 접수 폼은 **두 칸 나아가 앞 항목의 답이 다음 항목의 답으로 들어갔다**.
+   * 열쇠를 보내지 않는 호출자(기존 계약)는 종전 그대로 동작한다.
+   */
+  const mid = optStr(parsed.data.msgId, 'msgId', REQUEST_KEY_LEN, '');
+  if (!mid.ok) {
+    rl.end({ status: 400, code: 'invalid_input' });
+    return withRequestId(mid.res, rl.requestId);
+  }
 
   const message = msg.value;
   const tenantId = ten.value || null;
@@ -69,6 +84,42 @@ export async function POST(req: NextRequest) {
   const sessionId = isSharedSessionKey(sid.value) ? newVisitorSessionId('web') : sid.value;
   const sessionHash = hashId(sessionId);
 
+  /**
+   * 같은 말을 또 받았는가 — 판정·저장은 `@/lib/idem` 한 곳이다 (DS 72-1).
+   * 열쇠는 **세션과 함께** 묶는다: 열쇠만으로 묶으면 남의 말풍선 열쇠를 적어 보낸 요청이
+   * 남의 답을 받아 간다(세션 식별자는 이 대화의 유일한 열쇠다 · DS 49-3·51-2).
+   */
+  const dupKey = mid.value ? eventKey(['chat', sessionId, mid.value]) : '';
+  if (dupKey) {
+    const dup = dedupeCheck(dupKey);
+    if (dup.duplicate) {
+      // 답을 이미 만들어 두었으면 **그 답을 그대로** 돌려준다 — 기록·세션 턴을 다시 올리지 않는다.
+      // 적어 둔 것은 이 라우트가 만든 응답 본문 하나뿐이다(아래 `dedupeRemember(dupKey, payload)`).
+      if (dup.response && typeof dup.response === 'object') {
+        rl.end({ status: 200, code: 'duplicate_delivery', sessionHash, channel: 'web' });
+        return withRequestId(ok(dup.response as Record<string, unknown>), rl.requestId);
+      }
+      /**
+       * 아직 처리 중이다 — **없는 답을 지어내지 않고** 사실을 말한다.
+       * 「잠시 뒤 다시 보내 주세요」는 지킬 수 있는 길이다(같은 열쇠로 다시 오면 그때는 답이
+       * 기다리고 있다). 이 턴은 대화 기록에 적지 않는다 — 고객이 한 말이 아니라 전달 사고다.
+       */
+      rl.end({ status: 200, code: 'duplicate_pending', sessionHash, channel: 'web' });
+      return withRequestId(
+        ok({
+          sessionId,
+          reply: '앞서 보내 주신 말씀을 아직 처리하고 있어요. 잠시 뒤 다시 보내 주시면 그 답을 보여드릴게요.',
+          intent: 'duplicate',
+          intentLabel: intentLabel('duplicate'),
+          escalate: false,
+          source: 'context' as const,
+          confidence: 1,
+        }),
+        rl.requestId,
+      );
+    }
+  }
+
   // 응답 시간 측정 — 답을 만드는 데 걸린 서버 처리 시간만 잰다(네트워크 왕복 제외).
   const startedAt = Date.now();
   let result;
@@ -76,6 +127,9 @@ export async function POST(req: NextRequest) {
     result = await replyToAsync(message, sessionId, tenantId ? { tenantId } : {});
   } catch (e) {
     // 대화 엔진 오류는 모니터링·로그에 남기되, 고객에게는 안전한 안내로 응답한다(오류를 삼키지 않는다).
+    // 답을 만들지 못했으므로 **예약한 자리를 거둔다** (DS 72-1) — 그러지 않으면 「다시 보내기」가
+    // 「아직 처리하고 있어요」에 걸려, 한 번의 오류가 그 말풍선의 길을 1분 동안 막는다.
+    if (dupKey) dedupeRelease(dupKey);
     await captureError(e, { route: '/api/chat', method: 'POST', requestId: rl.requestId });
     rl.end({
       status: 200,
@@ -134,8 +188,9 @@ export async function POST(req: NextRequest) {
   });
   // `intentLabel` 은 **운영자 화면용 표시명**이다(관리 콘솔 「응답 테스트 → 왜 이렇게 답했나」).
   // 위젯은 이 값을 쓰지 않는다 — 고객 화면에 주제를 드러내지 않는다(기존 계약 그대로, 필드만 추가).
-  return withRequestId(
-    ok({ sessionId, ...result, intentLabel: intentLabel(result.intent, intentLabelMap(listCustomRules())) }),
-    rl.requestId,
-  );
+  const payload = { sessionId, ...result, intentLabel: intentLabel(result.intent, intentLabelMap(listCustomRules())) };
+  // 같은 열쇠로 다시 오면 **이 답을 그대로** 돌려준다 (DS 72-1) — 재전달이 두 번째 사실을
+  // 만들지 않는다(카카오 창구가 이미 그렇게 한다 · `rememberKakaoResponse`).
+  if (dupKey) dedupeRemember(dupKey, payload);
+  return withRequestId(ok(payload), rl.requestId);
 }

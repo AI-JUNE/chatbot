@@ -59,9 +59,29 @@ export function kbRev(e: KBEntry): string {
   return revOf({ id: e.id, category: e.category, question: e.question, keywords: e.keywords, answer: e.answer, source: e.source });
 }
 
+/**
+ * **식별자를 뺀 「내용의 모습」** — 「이미 같은 것이 있는가」를 가리는 자 (DS 72-3).
+ *
+ * 왜 필요한가: 콘솔의 저장은 실패하면 「다시 시도」를 내민다(DS 5-10). 그 요청은 기한이 지나
+ * 끊긴 것일 수 있고(DS 23-2) 서버에서는 끝까지 처리된 뒤다 — 다시 누르면 새 식별자가 붙어
+ * **같은 자료가 두 건** 생겼다. 자료가 두 벌이면 하나만 고쳐도 **다른 쪽이 계속 답하고**
+ * (엔진은 점수가 높은 한 건만 쓴다), 평가는 두 줄로 갈라진다(DS 43-2 가 묶어 둔 그 목록이다).
+ *
+ * 재는 자를 새로 만들지 않는다 — **같은 식에서 식별자만 뺀다**(DS 42-2 「같은 말을 재는 자는
+ * 한 벌」). 그래서 동시 편집 관문(`kbRev`)과 영영 어긋나지 않는다.
+ */
+function kbContentRev(e: KBEntry): string {
+  return kbRev({ ...e, id: '' });
+}
+
 /** 커스텀 규칙 한 건의 모습 — `kbRev` 와 같은 규칙이다(만든 시각은 바뀌지 않으므로 뺀다). */
 export function customRuleRev(r: CustomRule): string {
   return revOf({ intent: r.intent, label: r.label, keywords: r.keywords, reply: r.reply, escalate: r.escalate, enabled: r.enabled });
+}
+
+/** 규칙의 「내용의 모습」 — 자료 쪽(`kbContentRev`)과 같은 규칙이다 (DS 72-3). */
+function customRuleContentRev(r: CustomRule): string {
+  return customRuleRev({ ...r, intent: '' });
 }
 
 /** 저장 직전 관문 — 내가 보던 것이 그 사이 지워졌거나 바뀌었으면 거절한다 (DS 46-1). */
@@ -79,7 +99,12 @@ function normalizeKeywords(kw: KBUpsertInput['keywords']): string[] {
 }
 
 export type UpsertResult =
-  | { ok: true; entry: KBEntry; created: boolean }
+  /**
+   * `duplicate` 는 **이미 같은 내용이 있어 새로 만들지 않았다**는 뜻이다 (DS 72-3).
+   * `created: false` 만으로는 「고쳤다」와 구별되지 않아, 화면이 「수정되었습니다」라고 적는다 —
+   * 아무것도 고치지 않은 저장에 그 말을 쓰면 §13 이 금지한 「없는 일」이 된다.
+   */
+  | { ok: true; entry: KBEntry; created: boolean; duplicate?: true }
   /**
    * 거절. `conflict` 가 있으면 **입력이 틀린 것이 아니라** 그 사이 다른 화면에서 바뀐 것이다
    * (DS 46-1) — 부르는 쪽은 적던 글을 버리지 않고 다음 길을 준다. `current` 는 지금 저장된 값이다.
@@ -113,6 +138,10 @@ export function upsertKB(input: KBUpsertInput): UpsertResult {
       answer,
       ...(source ? { source } : {}),
     };
+    // 이미 같은 내용이 있으면 **쌍둥이를 만들지 않는다** (DS 72-3) — 그 자료를 그대로 돌려주고
+    // 새로 만들지 않았다는 사실을 함께 말한다(「다시 시도」가 두 번째 자료를 만들던 자리다).
+    const twin = kbEntries.find((e) => kbContentRev(e) === kbContentRev(entry));
+    if (twin) return { ok: true, entry: cloneEntry(twin), created: false, duplicate: true };
     kbEntries.push(entry);
     schedulePersist();
     return { ok: true, entry: cloneEntry(entry), created: true };
@@ -299,7 +328,8 @@ export interface CustomRuleInput {
 }
 
 export type CustomRuleResult =
-  | { ok: true; rule: CustomRule; created: boolean }
+  /** `duplicate` — 이미 같은 내용의 규칙이 있어 새로 만들지 않았다 (DS 72-3 · `UpsertResult` 와 같은 규약). */
+  | { ok: true; rule: CustomRule; created: boolean; duplicate?: true }
   | { ok: false; error: string; conflict?: 'gone' | 'changed'; current?: CustomRule };
 
 export function upsertCustomRule(input: CustomRuleInput): CustomRuleResult {
@@ -329,6 +359,10 @@ export function upsertCustomRule(input: CustomRuleInput): CustomRuleResult {
       enabled: input.enabled !== false,
       createdAt: new Date().toISOString(),
     };
+    // 같은 내용의 규칙을 두 벌 만들지 않는다 (DS 72-3) — 뒤에 만든 쪽은 **영영 걸리지 않는다**
+    // (앞의 규칙이 먼저 답한다 · DS 44-3 이 경고로 알려 주던 그 자리를 아예 만들지 않는다).
+    const twin = customRules.find((r) => customRuleContentRev(r) === customRuleContentRev(rule));
+    if (twin) return { ok: true, rule: cloneCustomRule(twin), created: false, duplicate: true };
     customRules.push(rule);
     schedulePersist();
     return { ok: true, rule: cloneCustomRule(rule), created: true };

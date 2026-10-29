@@ -135,7 +135,32 @@ export function resolveKb(kbId: unknown, labels: Record<string, string>): { kbId
   return label ? { kbId: id, citation: ellipsize(label, MAX_CITATION_LEN) } : null;
 }
 
-/** 잘못된 입력은 조용히 버리지 않고 사유를 돌려준다(라우트가 400으로 바꾼다). */
+/**
+ * 이 평가가 **무엇에 대한 것인가** — 묶음 열쇠 (DS 43-2 · DS 58-2 · DS 72-2).
+ *
+ * 한 벌이어야 하는 까닭: 이 열쇠로 집계가 「보완이 필요한 자료」를 묶고(아래 `feedbackSummary`),
+ * 접수가 「같은 사람의 같은 평가인가」를 가린다(`recordFeedback`). 두 벌로 적으면 화면에서는
+ * 한 줄인 것이 저장에서는 두 건이 된다.
+ *
+ * 열쇠가 **빈 값**이면 「무엇에 대한 평가인지 모른다」다 — 그때는 묶지 않는다(모르는 것들을
+ * 한 줄로 모으면 서로 다른 답변의 평가가 뭉친다).
+ */
+function targetKey(e: { kbId?: string; citation?: string }): string {
+  if (e.kbId) return `id:${e.kbId}`;
+  return e.citation ? `label:${e.citation}` : '';
+}
+
+/**
+ * 잘못된 입력은 조용히 버리지 않고 사유를 돌려준다(라우트가 400으로 바꾼다).
+ *
+ * **같은 사람이 같은 자료에 보낸 평가는 한 건이다** (DS 72-2) — 위젯의 평가 전송에는 실패하면
+ * 「다시 시도」가 뜨는데(DS 33-1), 그 버튼이 보내는 요청은 **앞 요청이 이미 서버에 닿은 뒤**일
+ * 수 있다(기한이 지나 끊은 요청도 서버에서는 끝까지 처리된다 · DS 23-1). 종전에는 그때 평가가
+ * **두 건**으로 쌓였다: 「보완이 필요한 자료」의 👎 수가 사람 수보다 크고(상위 5줄은 그 수로
+ * 줄을 세운다 · DS 32-1), 도움됨 비율은 한 사람의 한 번 누름을 두 번 센다(§13 — 우리가 만든
+ * 수다). 그래서 **마지막 값만 남긴다** — 열쇠는 위 `targetKey`(누가·무엇에 대해)이고, 식별자는
+ * 처음 것을 그대로 쓴다(그 평가는 같은 평가다).
+ */
 export function recordFeedback(input: {
   sessionHash: unknown;
   verdict: unknown;
@@ -153,10 +178,19 @@ export function recordFeedback(input: {
   const citation = typeof input.citation === 'string' ? ellipsize(input.citation, MAX_CITATION_LEN) : '';
   const kbId = typeof input.kbId === 'string' ? input.kbId.trim().slice(0, MAX_KB_ID_LEN) : '';
   const channel = typeof input.channel === 'string' && input.channel ? input.channel : 'web';
-  seq += 1;
+  const sessionHash = input.sessionHash.slice(0, 32);
+  const key = targetKey({ ...(kbId ? { kbId } : {}), citation });
+  // 같은 사람의 같은 자료 평가가 이미 있으면 **그 자리를 바꾼다** (DS 72-2). 열쇠를 만들 수
+  // 없는 평가(어느 자료인지 모르는 평가)는 묶지 않는다 — 서로 다른 답변이 한 줄로 뭉친다.
+  const prevIndex = key
+    ? entries.findIndex((e) => e.sessionHash === sessionHash && targetKey(e) === key)
+    : -1;
+  const prev = prevIndex >= 0 ? entries[prevIndex] : undefined;
+  if (!prev) seq += 1;
   const entry: FeedbackEntry = {
-    id: `F-${String(seq).padStart(6, '0')}`,
-    sessionHash: input.sessionHash.slice(0, 32),
+    // 식별자는 처음 것을 그대로 — 같은 사람의 같은 평가이고, 창구는 그 번호를 이미 받아 갔다.
+    id: prev ? prev.id : `F-${String(seq).padStart(6, '0')}`,
+    sessionHash,
     verdict: input.verdict,
     citation,
     // 없으면 칸도 두지 않는다 — 「모른다」와 「빈 자료」를 구분한다(DS 39-1 의 `piiKinds` 와 같은 규칙).
@@ -164,6 +198,8 @@ export function recordFeedback(input: {
     channel,
     at: new Date().toISOString(),
   };
+  // 바꾼 평가는 **맨 뒤로** 옮긴다 — 시각이 지금이므로 목록(최근순)과 어긋나지 않게 한다.
+  if (prevIndex >= 0) entries.splice(prevIndex, 1);
   entries.push(entry);
   if (entries.length > MAX_ENTRIES) entries = entries.slice(-MAX_ENTRIES);
   scheduleSave(FEEDBACK_NS, exportFeedback);
@@ -216,11 +252,10 @@ export function feedbackSummary(labels?: Record<string, string>): FeedbackSummar
     // 열쇠는 id 가 먼저다 — 라벨은 바뀌고, 한 문서에서 나온 여러 항목이 같은 라벨을 공유한다.
     // 이름을 되돌리지 못한 복원분은 **따로 모은다** (DS 58-2) — 「근거 없음」과 섞으면 근거를
     // 들고 답한 평가가 「등록 자료 없이 답한 답변」으로 세어진다(묶을 이름이 없으니 한 줄이다).
-    const key = e.kbId
-      ? `id:${e.kbId}`
-      : e.citationLost && !e.citation
-        ? 'lost:'
-        : `label:${e.citation || NO_CITATION_LABEL}`;
+    // 묶는 자는 `targetKey` 한 곳이다 (DS 72-2) — 접수가 「같은 평가인가」를 가릴 때 쓰는 그 자다.
+    // 열쇠를 만들 수 없는 평가만 여기서 가른다: 근거는 있었는데 되돌리지 못한 것(복원 · DS 58-2)과
+    // 애초에 근거 없이 답한 것은 **다른 사실**이다.
+    const key = targetKey(e) || (e.citationLost ? 'lost:' : `label:${NO_CITATION_LABEL}`);
     const prev = downBy.get(key);
     if (prev) {
       prev.down += 1;
@@ -331,7 +366,29 @@ export function importFeedback(input: unknown): { ok: true; count: number } | { 
       at: readInstant(e.at, new Date().toISOString()),
     });
   }
-  entries = restored.slice(-MAX_ENTRIES);
+  /**
+   * **복원이 고친 것을 되살리지 않는다** (DS 72-2).
+   *
+   * 저장분에는 고치기 전 코드가 쌓아 둔 두 건이 들어 있다(같은 사람·같은 자료). 그대로
+   * 들여오면 집계가 다시 사람 수보다 큰 수를 적는다 — 36차가 마스킹에서(DS 39-2), 49차가
+   * 파기한 연락처에서(DS 52-3) 본 그 복원 경로다. 묶는 자는 접수와 **같은 것**(`targetKey`)을
+   * 쓰고, 남기는 것은 **뒤에 적힌 것**이다(그 사람의 마지막 의견이다).
+   */
+  const byTarget = new Map<string, number>();
+  const collapsed: FeedbackEntry[] = [];
+  for (const e of restored) {
+    const key = targetKey(e);
+    const at = key ? `${e.sessionHash}\u001f${key}` : '';
+    const seenAt = at ? byTarget.get(at) : undefined;
+    if (seenAt !== undefined) {
+      // 처음 것의 식별자를 지키고 값만 뒤의 것으로 — 접수 쪽과 같은 규칙이다.
+      collapsed[seenAt] = { ...e, id: collapsed[seenAt].id };
+      continue;
+    }
+    if (at) byTarget.set(at, collapsed.length);
+    collapsed.push(e);
+  }
+  entries = collapsed.slice(-MAX_ENTRIES);
   const maxSeq = entries.reduce((m, e) => {
     const n = Number(String(e.id).replace(/[^0-9]/g, ''));
     return Number.isFinite(n) && n > m ? n : m;

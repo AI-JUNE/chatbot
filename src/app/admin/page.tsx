@@ -147,6 +147,18 @@ function josa(word: string, withBatchim: string, withoutBatchim: string): string
 }
 
 /**
+ * **이미 같은 내용이 있어 새로 만들지 않았다** (DS 72-3) — 저장 실패 뒤의 「다시 시도」가
+ * 쌍둥이를 만들려 한 자리다(기한이 지나 끊긴 요청은 서버에서 끝까지 처리됐을 수 있다 · DS 23-2).
+ *
+ * 문구를 한 곳에 둔다: 네 자리(안내 자료·규칙·파트너·고객사)가 같은 사실을 말한다. 「등록했습니다」
+ * 라고 적으면 목록에 한 줄이 늘어난 줄 알고, 「수정했습니다」라고 적으면 **고치지 않은 것을
+ * 고쳤다고** 말한다(§13 — 없는 일을 사실로 적지 않는다).
+ */
+function duplicateSavedText(what: string): string {
+  return `같은 내용의 ${josa(what, '이', '가')} 이미 있어 새로 만들지 않았습니다.`;
+}
+
+/**
  * 앞 글자에 붙어서 한 글자를 이루는 코드포인트 — 원본은 `src/lib/limits.ts`(JOINS_LEFT·REGIONAL) (DS 62-1).
  * 결합 기호 · 이음표(ZWJ) · 변형 선택자 · 피부색 수정자 · 태그 글자 · 분해형 한글의 중성·종성.
  */
@@ -3443,7 +3455,11 @@ export default function AdminPage() {
       setPEditRev(null);
       setPConflict(null);
       await loadPartners(partnerFilter);
-      flashSaved(data.created ? '파트너를 등록했습니다.' : '파트너를 수정했습니다.', data.saved as SavedView | undefined);
+      flashSaved(
+        // 새로 만들지 않았으면 그 사실을 말한다 (DS 72-3).
+        data.duplicate ? duplicateSavedText('파트너') : data.created ? '파트너를 등록했습니다.' : '파트너를 수정했습니다.',
+        data.saved as SavedView | undefined,
+      );
     } catch {
       setPartnerErr('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
@@ -3501,7 +3517,11 @@ export default function AdminPage() {
       setAEditRev(null);
       setAConflict(null);
       await loadPartners(partnerFilter);
-      flashSaved(data.created ? '고객사를 등록했습니다.' : '고객사를 수정했습니다.', data.saved as SavedView | undefined);
+      flashSaved(
+        // 새로 만들지 않았으면 그 사실을 말한다 (DS 72-3) — 고객사가 두 줄이면 정산이 두 번 센다.
+        data.duplicate ? duplicateSavedText('고객사') : data.created ? '고객사를 등록했습니다.' : '고객사를 수정했습니다.',
+        data.saved as SavedView | undefined,
+      );
     } catch {
       setPartnerErr('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
@@ -4039,7 +4059,8 @@ export default function AdminPage() {
     };
     // 세션이 만료된 채로 저장하면 401 이 온다 — 다른 쓰기 경로와 같이 잠금 화면으로 넘긴다
     // (종전에는 「저장하지 못했습니다: 관리자 토큰이 필요합니다」 라는 내부 문구만 토스트로 떴다).
-    let data: { ok?: boolean; error?: string; conflict?: 'gone' | 'changed'; current?: KBEntryView; saved?: SavedView } | null;
+    // `duplicate` — 이미 같은 내용이 있어 새로 만들지 않았다 (DS 72-3).
+    let data: { ok?: boolean; error?: string; conflict?: 'gone' | 'changed'; current?: KBEntryView; saved?: SavedView; duplicate?: boolean } | null;
     try {
       const res = await afetch('/api/admin/kb', {
         method: 'POST',
@@ -4074,7 +4095,9 @@ export default function AdminPage() {
     setKbConflict(null);
     setKbErr({});
     await loadKB();
-    flashSaved(editingId ? '수정되었습니다.' : '추가되었습니다.', data.saved);
+    // 새로 만들지 않았으면 그 사실을 말한다 (DS 72-3) — 자료가 두 벌이면 하나만 고쳐도
+    // 다른 쪽이 계속 답한다(그래서 「추가되었습니다」는 틀린 말이다).
+    flashSaved(data.duplicate ? duplicateSavedText('자료') : editingId ? '수정되었습니다.' : '추가되었습니다.', data.saved);
   };
 
   /**
@@ -4347,7 +4370,12 @@ export default function AdminPage() {
           'fail',
         );
       } else {
-        flashSaved(crEditing ? '규칙을 수정했습니다.' : '규칙을 추가했습니다.', data.saved as SavedView | undefined);
+        flashSaved(
+          // 새로 만들지 않았으면 그 사실을 말한다 (DS 72-3) — 같은 내용의 규칙을 두 벌 만들면
+          // 뒤에 만든 쪽은 영영 걸리지 않는다(바로 위 「쓰이지 않습니다」와 같은 종류의 사실이다).
+          data.duplicate ? duplicateSavedText('규칙') : crEditing ? '규칙을 수정했습니다.' : '규칙을 추가했습니다.',
+          data.saved as SavedView | undefined,
+        );
       }
     } catch {
       notify('네트워크 오류로 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.', 'fail');

@@ -1942,3 +1942,43 @@ test('연락처를 재는 자가 서버와 같다 (DS 70-2)', opts, async () => 
   assert.equal(/\[0-9\\s\(\)\+-\]\{7,\}/.test(code), false, '종전 식이 남아 있다');
   assert.match(code, /const PHONE_PLANS_W/, '자리 수를 세는 표가 사본에 없다');
 });
+
+/* ══════════ 69차 재감사 (DS 72-1) ══════════ */
+
+/**
+ * DS 72-1 — 말풍선마다 **한 번 쓰는 열쇠**가 있고, 「다시 보내기」는 그 값을 다시 보낸다.
+ *
+ * 열쇠가 매번 새로 만들어지면 서버는 「처음 보내는 말」과 「닿았는지 모르는 말」을 가를 수 없다 —
+ * 기한이 지나 끊긴 요청은 서버에서 끝까지 처리되므로(DS 23-1), 그때의 다시 보내기는 같은 말을
+ * **두 번** 처리시켰다(접수 폼은 두 칸 나아갔다).
+ */
+test('말풍선이 보내는 열쇠는 한 번 쓰고, 다시 보낼 때는 그 값을 쓴다 (DS 72-1)', opts, async () => {
+  await loadWidget();
+  const mod = cachedMod;
+
+  // ① 모양 — 서버가 받는 상한(64자) 안이고, 무엇의 열쇠인지 읽을 수 있다.
+  const ids = new Set();
+  for (let i = 0; i < 2000; i += 1) {
+    const id = mod.newMsgId();
+    assert.match(id, /^m_[0-9a-f]{32}$/, `열쇠 모양이 다르다: ${id}`);
+    assert.ok(id.length <= 64, '열쇠가 서버 입력 상한을 넘는다');
+    ids.add(id);
+  }
+  assert.equal(ids.size, 2000, '2000번 중에 겹치는 열쇠가 나왔다');
+  // 세션 식별자와 **다른 값**이다(세션 하나에 말풍선이 여럿이다).
+  assert.notEqual(mod.newMsgId().slice(2), mod.newSessionId().slice(4));
+
+  // ② 난수원은 한 곳이다 — 난수를 두 벌 적으면 한쪽만 고쳐지는 자리가 또 생긴다(DS 49-3).
+  const src = readFileSync(new URL('../src/components/ChatWidget.tsx', import.meta.url), 'utf8');
+  const fn = sliceFn(src, 'export function newMsgId(');
+  assert.match(fn, /newSessionId\(\)/, '열쇠가 다른 난수원에서 나온다');
+  assert.equal(/Math\.random|getRandomValues|randomUUID/.test(fn), false, '난수를 두 벌 적었다');
+
+  // ③ 다시 보내기가 **앞서 쓴 열쇠**를 들고 간다(실패 안내 말풍선이 그 값을 들고 있다).
+  assert.match(src, /failedId\?: string;/, '실패 말풍선이 열쇠를 들고 있지 않다');
+  assert.match(src, /const msgId = retryId \|\| newMsgId\(\);/, '다시 보내기가 새 열쇠를 만든다');
+  assert.match(src, /onClick=\{\(\) => sendText\(failedText, m\.key, failedId\)\}/, '다시 보내기 버튼이 열쇠를 넘기지 않는다');
+  // 저장되는 대화에는 실패 말풍선이 들어가지 않으므로(열쇠도 함께 사라진다) 되살린 뒤의
+  // 다시 보내기는 새 말이다 — 저장 대상을 거르는 자리가 종전 그대로인지 함께 본다.
+  assert.match(src, /msgs\.filter\(\(m\) => m\.failed === undefined\)/, '실패 말풍선이 저장된다');
+});

@@ -997,7 +997,9 @@ test('위젯 전송 실패는 답변처럼 보이지 않고 다시 보낼 수 �
   assert.match(s, /role="alert"/, '실패 안내는 즉시 읽혀야 한다');
   assert.match(s, /var\(--danger-50\)/, '경고 톤은 토큰을 쓴다');
   assert.match(s, /다시 보내기/, '다시 보낼 수단이 없다 — 사용자가 쓴 글이 사라진다');
-  assert.match(s, /sendText\(failedText, m\.key\)/, '다시 보내기가 원문을 그대로 재전송해야 한다');
+  // 72차(DS 72-1)에 **앞서 쓴 열쇠**를 함께 들고 간다 — 원문을 그대로 보내는 것은 종전과 같고,
+  // 같은 열쇠로 보내야 서버가 그 말을 두 번 처리하지 않는다(그 배선은 widget.test.mjs DS 72-1).
+  assert.match(s, /sendText\(failedText, m\.key, failedId\)/, '다시 보내기가 원문을 그대로 재전송해야 한다');
   // 실패 경로 3곳(서버 오류·네트워크 예외·오프라인)이 모두 재전송 문장을 들고 있어야 한다.
   const fails = s.match(/failed: text/g) || [];
   assert.ok(fails.length >= 3, `실패 경로에 재전송 문장이 빠져 있다(${fails.length}/3)`);
@@ -4566,4 +4568,100 @@ test('대화 기록 창구와 화면이 보여 준 수를 전체라고 말하지
   assert.ok(page.includes('이 화면에는 최근 {turns.length}쌍만 들어 있습니다.'), '빠진 대화가 있다는 사실을 적지 않는다');
   // 지킬 수 없는 약속을 버튼 이름에 적지 않는다 — 콘솔은 대화 「전체」를 들고 있지 않다.
   assert.equal(page.includes('대화 전체 보기'), false, '「전체」라고 적은 버튼이 남아 있다');
+});
+
+/* ══════════ 69차 재감사 — 이미 받은 것을 또 받았을 때 (DS 72-x) ══════════ */
+
+/**
+ * DS 72-1 — 「이미 받았다」를 가리는 자가 **한 곳**이고, 웹 창구가 그것을 지나는가.
+ *
+ * 돌려 보는 쪽(판정 자체)은 runtime.test.mjs 가 센다. 여기서는 **배선**을 고정한다 —
+ * 그 판정이 서명 검증 파일 안에 있었던 탓에 웹 창구가 가져다 쓰지 못한 것이 이 결함의 뿌리다.
+ */
+test('재전달을 가리는 자가 한 곳이고 웹 대화 창구가 그것을 지난다 (DS 72-1)', () => {
+  const idem = stripComments(read('src/lib/idem.ts'));
+  const wa = stripComments(read('src/lib/webhookAuth.ts'));
+  const route = stripComments(read('src/app/api/chat/route.ts'));
+  const kakao = stripComments(read('src/app/api/kakao/webhook/route.ts'));
+  const widget = read('src/components/ChatWidget.tsx');
+
+  // ① 판정과 저장은 `lib/idem` 한 곳이다 — 웹훈 인증 파일에는 **저장소가 남아 있지 않다**.
+  assert.match(idem, /const seen = new Map<string, DedupeRecord>\(\);/, '재전달을 기억하는 자리가 없다');
+  assert.match(idem, /export function dedupeCheck\(/, '재전달을 가리는 자가 없다');
+  assert.match(idem, /export function dedupeRelease\(/, '답을 만들지 못한 자리를 거두는 자가 없다');
+  assert.match(idem, /export const REQUEST_KEY_LEN = 64;/, '열쇠 상한에 이름이 없다');
+  assert.equal(/new Map<string, DedupeRecord>/.test(wa), false, '재전달 저장소가 두 벌이다');
+  assert.match(wa, /export \{[\s\S]{0,200}dedupeCheck,[\s\S]{0,200}\} from '@\/lib\/idem';/, '부르던 쪽의 이름이 사라졌다');
+
+  // ② 웹 대화 창구가 **한 번 쓰는 열쇠**를 받고, 세션과 함께 묶어 가린다.
+  assert.match(route, /optStr\(parsed\.data\.msgId, 'msgId', REQUEST_KEY_LEN, ''\)/, '창구가 열쇠를 받지 않는다');
+  assert.match(route, /const dupKey = mid\.value \? eventKey\(\['chat', sessionId, mid\.value\]\) : '';/, '열쇠를 세션과 묶지 않는다');
+  assert.match(route, /if \(dup\.response && typeof dup\.response === 'object'\) \{/, '적어 둔 답을 돌려주지 않는다');
+  assert.match(route, /code: 'duplicate_pending'/, '처리 중인 재전달을 로그에 남기지 않는다');
+  assert.match(route, /if \(dupKey\) dedupeRelease\(dupKey\);/, '답을 만들지 못한 자리를 거두지 않는다');
+  assert.match(route, /if \(dupKey\) dedupeRemember\(dupKey, payload\);/, '만든 답을 적어 두지 않는다');
+  // 적어 두는 자리는 **대화 기록을 남긴 뒤**다 — 그 순서가 뒤집히면 재전달이 기록 없이 지나간다.
+  assert.ok(route.indexOf('logTurn({') < route.indexOf('dedupeRemember(dupKey'), '기록보다 먼저 적어 둔다');
+  // 처리 중인 재전달에는 **답을 지어내지 않는다**(지킬 수 있는 다음 길만 적는다).
+  assert.ok(route.includes('앞서 보내 주신 말씀을 아직 처리하고 있어요.'), '처리 중임을 말하지 않는다');
+
+  // ③ 카카오 창구는 종전 그대로 같은 자를 쓴다(창구마다 다른 판정을 두지 않는다).
+  assert.match(kakao, /const dup = kakaoDedupe\(key\);/, '카카오 쪽 재전달 판정이 사라졌다');
+
+  // ④ 위젯은 말풍선마다 열쇠를 만들고 **다시 보낼 때 같은 값**을 보낸다.
+  assert.match(widget, /export function newMsgId\(\): string \{/, '열쇠를 만드는 자가 없다');
+  assert.match(widget, /const msgId = retryId \|\| newMsgId\(\);/, '다시 보내기가 새 열쇠를 만든다');
+  assert.match(widget, /\{ message: text, sessionId, msgId,/, '열쇠를 보내지 않는다');
+  // 실패 경로 3곳(서버 오류·네트워크 예외·오프라인)이 모두 그 열쇠를 들고 있어야 한다.
+  assert.equal((widget.match(/failedId: msgId/g) || []).length, 3, '열쇠를 들지 않는 실패 경로가 있다');
+  // 난수원은 한 곳이다 — 열쇠를 만들려고 난수를 두 벌 적지 않는다.
+  assert.match(widget, /return `m_\$\{newSessionId\(\)\.slice\('web_'\.length\)\}`;/, '열쇠가 다른 난수원에서 나온다');
+});
+
+/**
+ * DS 72-2 · DS 72-3 — 두 번째 사실을 만들지 않는 자리의 **배선**.
+ * (값으로 돌려 보는 쪽은 runtime.test.mjs 의 같은 번호 테스트가 센다.)
+ */
+test('평가·저장 창구가 두 번째 사실을 만들지 않는다 (DS 72-2 · DS 72-3)', () => {
+  const fb = stripComments(read('src/lib/feedback.ts'));
+  const store = stripComments(read('src/lib/adminStore.ts'));
+  const partners = stripComments(read('src/lib/partners.ts'));
+  const kbRoute = stripComments(read('src/app/api/admin/kb/route.ts'));
+  const ruleRoute = stripComments(read('src/app/api/admin/rules/route.ts'));
+  const partnerRoute = stripComments(read('src/app/api/admin/partners/route.ts'));
+  const page = stripComments(read('src/app/admin/page.tsx'));
+
+  // ① 평가 — 묶는 자는 한 곳이고, 접수가 그 자로 같은 평가를 찾는다.
+  assert.match(fb, /function targetKey\(e: \{ kbId\?: string; citation\?: string \}\): string \{/, '묶는 자가 없다');
+  assert.match(fb, /entries\.findIndex\(\(e\) => e\.sessionHash === sessionHash && targetKey\(e\) === key\)/, '같은 평가를 찾지 않는다');
+  assert.match(fb, /id: prev \? prev\.id : `F-\$\{String\(seq\)\.padStart\(6, '0'\)\}`/, '같은 평가에 새 번호를 붙인다');
+  // 복원도 같은 자를 쓴다 — 고치기 전 저장분이 두 건으로 되살아나지 않는다.
+  assert.match(fb, /const key = targetKey\(e\);/, '복원이 묶지 않는다');
+  assert.match(fb, /entries = collapsed\.slice\(-MAX_ENTRIES\);/, '복원이 쌓인 채로 들여온다');
+
+  // ② 저장 — 「내용의 모습」은 동시 편집 관문과 **같은 식**에서 식별자만 뺀 것이다.
+  assert.match(store, /function kbContentRev\(e: KBEntry\): string \{\n  return kbRev\(\{ \.\.\.e, id: '' \}\);/, '자료의 내용 판정이 두 벌이다');
+  assert.match(store, /function customRuleContentRev\(r: CustomRule\): string \{\n  return customRuleRev\(\{ \.\.\.r, intent: '' \}\);/, '규칙의 내용 판정이 두 벌이다');
+  assert.match(partners, /function accountContentRev\(a: Account\): string \{\n  return accountRev\(\{ \.\.\.a, id: '' \}\);/, '고객사의 내용 판정이 두 벌이다');
+  assert.match(partners, /function partnerContentRev\(p: Partner\): string \{\n  return partnerRev\(\{ \.\.\.p, id: '' \}\);/, '파트너의 내용 판정이 두 벌이다');
+  // 만드는 자리 넷 모두가 그 자를 지난다.
+  for (const [what, body, sig] of [
+    ['자료', store, /const twin = kbEntries\.find\(\(e\) => kbContentRev\(e\) === kbContentRev\(entry\)\);/],
+    ['규칙', store, /const twin = customRules\.find\(\(r\) => customRuleContentRev\(r\) === customRuleContentRev\(rule\)\);/],
+    ['파트너', partners, /const twin = partners\.find\(\(p\) => partnerContentRev\(p\) === partnerContentRev\(draft\)\);/],
+    ['고객사', partners, /const twin = accounts\.find\(\(a\) => accountContentRev\(a\) === accountContentRev\(draft\)\);/],
+  ]) assert.match(body, sig, `${what}를 만드는 자리가 쌍둥이를 가리지 않는다`);
+
+  // ③ 창구는 그 사실을 화면에 전하고, **변경 이력에 「수정」이라 적지 않는다**.
+  for (const [what, body] of [['자료', kbRoute], ['규칙', ruleRoute], ['파트너·고객사', partnerRoute]]) {
+    assert.ok(body.includes('같은 내용이 이미 있어 새로 만들지 않음'), `${what} 쓰기가 없는 일을 기록에 적는다`);
+    // `stripComments` 는 빈 중괄호를 걷어 간다 — 삼항의 앞쪽만 본다.
+    assert.match(body, /duplicate \? \{ duplicate: true \} :/, `${what} 응답이 그 사실을 싣지 않는다`);
+  }
+
+  // ④ 화면 문구는 한 곳에서 나온다 — 네 자리가 같은 사실을 같은 말로 적는다.
+  assert.match(page, /function duplicateSavedText\(what: string\): string \{/, '쌍둥이 안내 문구가 자리마다 흩어져 있다');
+  for (const what of ['자료', '규칙', '파트너', '고객사']) {
+    assert.ok(page.includes(`duplicateSavedText('${what}')`), `${what} 저장이 새로 만들지 않은 사실을 말하지 않는다`);
+  }
 });

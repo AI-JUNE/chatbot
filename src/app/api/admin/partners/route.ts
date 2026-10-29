@@ -95,11 +95,12 @@ export async function POST(req: NextRequest) {
     logAudit({
       action: 'partner.upsert',
       target: r.partner.id,
-      detail: `${r.created ? '등록' : '수정'}: ${ellipsize(r.partner.name, AUDIT_PART_LEN)}`,
+      // 아무것도 바뀌지 않은 저장을 「수정」이라 적지 않는다 (DS 72-3).
+      detail: `${r.duplicate ? '같은 내용이 이미 있어 새로 만들지 않음' : r.created ? '등록' : '수정'}: ${ellipsize(r.partner.name, AUDIT_PART_LEN)}`,
       authed,
     });
     // 「등록했습니다」는 디스크를 보고 나온 말이어야 한다 (DS 47-1).
-    return ok({ partner: r.partner, created: r.created, saved: savePartnersNow() });
+    return ok({ partner: r.partner, created: r.created, ...(r.duplicate ? { duplicate: true } : {}), saved: savePartnersNow() });
   }
 
   if (kind === 'account') {
@@ -127,10 +128,11 @@ export async function POST(req: NextRequest) {
       // 값마다 줄이는 자는 한 곳이다(`lib/limits.ellipsize` · DS 62-3) — 이름과 메모는
       // 운영자가 적는 글이고, 줄였다는 사실을 말하지 않으면 「경로 추천 / 담당자 메모 앞부분」이
       // 메모의 전부인 것처럼 읽힌다.
-      detail: `${r.created ? '등록' : '수정'}: ${ellipsize(r.account.name, AUDIT_PART_LEN)} / 귀속 ${ownerName} / 경로 ${LEAD_SOURCE_LABELS[r.account.source]}${last ? ` / ${ellipsize(last.note, AUDIT_PART_LEN)}` : ''}`,
+      // 아무것도 바뀌지 않은 저장을 「수정」이라 적지 않는다 (DS 72-3).
+      detail: `${r.duplicate ? '같은 내용이 이미 있어 새로 만들지 않음' : r.created ? '등록' : '수정'}: ${ellipsize(r.account.name, AUDIT_PART_LEN)} / 귀속 ${ownerName} / 경로 ${LEAD_SOURCE_LABELS[r.account.source]}${last ? ` / ${ellipsize(last.note, AUDIT_PART_LEN)}` : ''}`,
       authed,
     });
-    return ok({ account: r.account, created: r.created, saved: savePartnersNow() });
+    return ok({ account: r.account, created: r.created, ...(r.duplicate ? { duplicate: true } : {}), saved: savePartnersNow() });
   }
 
   // 화면의 세그먼트(고객사/파트너)가 늘 하나를 고르므로 여기까지 오지 않는다 —

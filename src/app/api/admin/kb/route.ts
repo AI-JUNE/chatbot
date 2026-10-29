@@ -48,13 +48,20 @@ export async function POST(req: NextRequest) {
     action: 'kb.upsert',
     target: result.entry.id,
     // 운영자가 적은 질문은 길이가 열려 있다 — 줄일 때 **줄였다고 적는다** (DS 62-3).
-    detail: `${result.created ? '생성' : '수정'}: ${ellipsize(result.entry.question, AUDIT_NAME_LEN)}`,
+    // 아무것도 바뀌지 않은 저장을 「수정」이라 적지 않는다 (DS 72-3) — 변경 이력은 **일어난 일**이다.
+    detail: `${result.duplicate ? '같은 내용이 이미 있어 새로 만들지 않음' : result.created ? '생성' : '수정'}: ${ellipsize(result.entry.question, AUDIT_NAME_LEN)}`,
     authed: isAdminAuthed(req),
   });
   // 「저장되었습니다」는 **디스크를 보고 나온 말**이어야 한다 (DS 47-1) — 보관이 막혔거나
   // 실패했으면 화면이 그 사실을 말할 수 있게 결과를 함께 보낸다.
   return ok(
-    { entry: { ...result.entry, rev: kbRev(result.entry) }, created: result.created, saved: saveAdminNow() },
+    {
+      entry: { ...result.entry, rev: kbRev(result.entry) },
+      created: result.created,
+      // 「다시 시도」가 만들려던 쌍둥이를 막았다는 사실 (DS 72-3) — 화면이 다른 말을 적는다.
+      ...(result.duplicate ? { duplicate: true } : {}),
+      saved: saveAdminNow(),
+    },
     result.created ? 201 : 200,
   );
 }

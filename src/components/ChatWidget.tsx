@@ -79,6 +79,12 @@ interface Msg {
    * 정상 답변과 같은 모양으로 그리면 사용자는 챗봇이 그렇게 "답했다"고 읽는다(QUALITY_BAR §3).
    */
   failed?: string;
+  /**
+   * 그 전송이 쓴 **한 번 쓰는 열쇠** (DS 72-1) — 「다시 보내기」는 이 값을 그대로 다시 보낸다.
+   * 그래야 서버가 「처음 보내는 말」과 「닿았는지 모르는 말」을 가를 수 있다. 종전에는 같은 말이
+   * 새 요청으로 들어가, 앞 요청이 이미 닿아 있으면 **두 번 처리됐다**(폼은 두 칸 나아갔다).
+   */
+  failedId?: string;
   escalate?: boolean;
   suggestions?: Suggestion[];
   ticketId?: string;
@@ -597,6 +603,17 @@ export function newSessionId(): string {
   // 마지막 그물: 두 벌의 난수를 **자릿수를 채워** 잇는다(짧은 표기로 줄어들지 않게).
   const chunk = () => Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
   return `web_${Date.now().toString(36)}${chunk()}${chunk()}`;
+}
+
+/**
+ * 말풍선 하나가 보내는 요청의 **한 번 쓰는 열쇠** (DS 72-1).
+ *
+ * 난수를 만드는 자는 위의 한 곳뿐이다(DS 49-3) — 열쇠를 만들려고 난수원을 두 벌로 적으면
+ * 한쪽만 고쳐지는 자리가 또 생긴다. 접두사만 바꿔 **무엇의 열쇠인지** 읽을 수 있게 둔다
+ * (서버가 받는 상한 64자 안이다 · `lib/idem.REQUEST_KEY_LEN`).
+ */
+export function newMsgId(): string {
+  return `m_${newSessionId().slice('web_'.length)}`;
 }
 
 /**
@@ -1476,8 +1493,10 @@ export default function ChatWidget({
   /**
    * 메시지 전송(입력창·빠른 답장 칩·「다시 보내기」 공용).
    * @param retryOf 다시 보내기인 경우 지울 안내 말풍선의 key — 사용자 말풍선은 이미 위에 있으므로 다시 그리지 않는다.
+   * @param retryId 다시 보내기인 경우 **앞서 쓴 열쇠**(DS 72-1) — 같은 열쇠로 보내면 서버가
+   *   이미 만들어 둔 답을 그대로 돌려준다(같은 말이 두 번 처리되지 않는다).
    */
-  async function sendText(raw: string, retryOf?: number) {
+  async function sendText(raw: string, retryOf?: number, retryId?: string) {
     // 서버가 터는 자와 같다 (DS 63-1) — `trim()` 만 보면 보이지 않는 글자뿐인 말이 빈 말풍선으로 올라갔다.
     const text = cleanText(raw);
     if (!text || busy) return;
@@ -1490,9 +1509,11 @@ export default function ChatWidget({
       setInput('');
       setMsgs((m) => [...m, { key: nextKey(), role: 'user', text, at: Date.now() }]);
     }
+    // 이 전송의 열쇠 — 다시 보내기면 **앞서 쓴 것을 그대로** 쓴다 (DS 72-1).
+    const msgId = retryId || newMsgId();
     // 연결이 끊긴 상태: 요청을 보내 봐야 실패한다 — 원인을 밝히고 바로 다시 보낼 수단을 준다.
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      pushBot({ text: '인터넷 연결이 끊겨 메시지를 보내지 못했습니다. 연결이 돌아오면 다시 보내 주세요.', failed: text });
+      pushBot({ text: '인터넷 연결이 끊겨 메시지를 보내지 못했습니다. 연결이 돌아오면 다시 보내 주세요.', failed: text, failedId: msgId });
       return;
     }
     // ── 한동안 비워 둔 대화 (DS 24-3) ──
@@ -1511,13 +1532,13 @@ export default function ChatWidget({
       // 기한 안에 끝낸다 — 답이 끝내 오지 않으면 끊고 아래 실패 안내로 보낸다(기다림이 무한이 되지 않게).
       const { r, data } = await postJson(
         '/api/chat',
-        { message: text, sessionId, ...(tenant ? { tenant: tenant.id } : {}) },
+        { message: text, sessionId, msgId, ...(tenant ? { tenant: tenant.id } : {}) },
         CHAT_TIMEOUT_MS,
       );
       // 지워진 대화의 답이다 — 화면에 싣지 않는다(아래 실패 안내도 같다).
       if (gen !== genRef.current) return;
       if (!r.ok || data?.ok === false || typeof data?.reply !== 'string') {
-        pushBot({ text: errorText(data, r), failed: text });
+        pushBot({ text: errorText(data, r), failed: text, failedId: msgId });
         return;
       }
       pushBot({
@@ -1538,6 +1559,9 @@ export default function ChatWidget({
           ? '답변이 오지 않아 기다리기를 멈췄습니다. 다시 보내 보시겠어요?'
           : '연결이 원활하지 않아 메시지를 보내지 못했습니다. 잠시 후 다시 보내 주세요.',
         failed: text,
+        // 기한이 지난 요청은 **서버에 닿아 있을 수 있다** — 다시 보낼 때 같은 열쇠를 써서
+        // 두 번 처리되지 않게 한다(그 답이 이미 만들어져 있으면 그것을 그대로 받는다 · DS 72-1).
+        failedId: msgId,
       });
     } finally {
       // 새 대화가 이미 시작됐다면 그 대화의 기다림 표시를 꺼서는 안 된다
@@ -1777,6 +1801,8 @@ export default function ChatWidget({
               // 전송 실패 안내는 답변이 아니다 — 아바타 없이 경고 톤 카드로 그리고 곧바로 다시 보낼 수 있게 한다.
               if (m.failed !== undefined) {
                 const failedText = m.failed;
+                // 앞서 쓴 열쇠를 그대로 들고 다시 보낸다 (DS 72-1).
+                const failedId = m.failedId;
                 return (
                   <Fragment key={m.key}>
                   {divider}
@@ -1792,7 +1818,7 @@ export default function ChatWidget({
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--ink)' }}>{m.text}</div>
                       <button
-                        onClick={() => sendText(failedText, m.key)}
+                        onClick={() => sendText(failedText, m.key, failedId)}
                         aria-disabled={busy || undefined}
                         // 복구 동작이라 보조 칩(30px)보다 큰 손가락 목표를 준다(375px 기준).
                         style={chip(busy, { marginTop: 8, minHeight: 34, padding: '7px 12px', display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--danger)', borderColor: 'var(--danger)' })}
