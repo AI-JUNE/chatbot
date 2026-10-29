@@ -2,10 +2,10 @@
 // 벡터 검색·임베딩 없이(비용·의존성 0) 제목 계층 + 문단 경계로 자르고 키워드를 뽑는 방식.
 // [승인 필요] 임베딩 기반 시맨틱 검색·외부 스토리지 업로드 — 전까지 서버 메모리·관리 콘솔 등록만.
 import type { KBEntry } from '@/lib/knowledge';
-import { cutEnd, ellipsize } from '@/lib/limits';
+import { cut, cutEnd, ellipsize, KB_QUESTION_LEN, KB_SOURCE_LEN, KEYWORD_LEN } from '@/lib/limits';
 import { compact, toNfc } from '@/lib/normalize';
 import { compareText } from '@/lib/order';
-import { readsAsSentence } from '@/lib/prose';
+import { readsAsSentence, splitSentences } from '@/lib/prose';
 
 export const MAX_DOC_CHARS = 100_000;
 
@@ -42,9 +42,17 @@ export interface DocChunk {
 }
 
 export interface ChunkOptions {
-  /** 청크 목표 길이(문자). 문단 경계를 우선하므로 초과할 수 있다. */
+  /**
+   * 한 조각의 길이 **상한**(문자) — 운영자가 「한 항목 길이」로 고르는 값이다 (DS 74-2).
+   *
+   * 종전 주석은 「목표 길이 … 초과할 수 있다」였고, 실제로는 **얼마든지** 초과했다: 빈 줄 없이
+   * 붙여 넣은 약관 한 덩이는 문단이 하나라 조각도 하나다(돌려서 받아 냈다 — 500자로 고른
+   * 7,500자 문서가 7,499자 한 조각이 됐고, 그 글이 그대로 자료의 답변이 되어 고객 말풍선에
+   * 한 덩이로 나갔다). 운영자가 미리보기에서 눈으로 확인하는 수가 이 값이므로, 이제는 **넘지
+   * 않는다** — 문단이 길면 문장 경계에서, 한 문장이 그보다 길면 글자 경계에서 나눈다.
+   */
   maxChars?: number;
-  /** 이보다 짧은 청크는 앞 청크에 합친다. */
+  /** 이보다 짧은 청크는 앞 청크에 합친다(합쳐도 상한을 넘지 않을 때만). */
   minChars?: number;
 }
 
@@ -99,6 +107,44 @@ function headingPath(stack: string[]): string {
 }
 
 /**
+ * 문단 하나를 **상한 안에 드는 토막들**로 나눈다 (DS 74-2).
+ *
+ * 어디서 끊는가(먼저 되는 쪽부터):
+ *  ① 문장 경계 — `lib/prose.splitSentences` 가 가린다(소수 `1.5`·주소 `co.kr`·번호 매김의
+ *    점을 문장 끝으로 읽지 않는 그 자다 · DS 66-2). 끊은 자리가 고객이 읽는 답변의 끝이므로
+ *    말이 맺히는 자리여야 한다.
+ *  ② 한 문장이 상한보다 길면 글자 경계 — `lib/limits.cut`(`cutEnd`)로 끊는다. 이모지·분해형
+ *    한글의 **반쪽을 남기지 않는** 자다(DS 62-1). 표시(`…`)는 붙이지 않는다: 버리는 것이
+ *    아니라 다음 토막으로 이어지므로, 표시를 붙이면 「여기서 끝났다」는 거짓말이 된다.
+ */
+function fitParagraph(para: string, maxChars: number): string[] {
+  if (para.length <= maxChars) return [para];
+  const out: string[] = [];
+  let cur = '';
+  const flush = () => {
+    if (cur) out.push(cur);
+    cur = '';
+  };
+  for (const sentence of splitSentences(para)) {
+    let rest = sentence;
+    // 한 문장이 상한보다 길면 글자 경계에서 나눈다(한 글자도 쪼개지 않는다).
+    while (rest.length > maxChars) {
+      flush();
+      const head = cut(rest, maxChars);
+      // 상한이 한 글자도 담을 수 없을 만큼 좁으면 더 나눌 수 없다 — 그 자리는 그대로 둔다.
+      if (!head) break;
+      out.push(head);
+      rest = rest.slice(head.length).trimStart();
+    }
+    if (!rest) continue;
+    if (cur && cur.length + 1 + rest.length > maxChars) flush();
+    cur = cur ? `${cur} ${rest}` : rest;
+  }
+  flush();
+  return out.length ? out : [para];
+}
+
+/**
  * 문서를 청크로 나눈다.
  * 1) 마크다운/번호 제목에서 무조건 끊고, 제목 경로를 청크에 붙인다.
  * 2) 제목 사이 본문은 빈 줄(문단) 경계로 모아 maxChars 근처에서 끊는다.
@@ -128,16 +174,27 @@ export function chunkDocument(raw: string, opts: ChunkOptions = {}): DocChunk[] 
     cur = null;
     curLen = 0;
   };
+  /**
+   * 문단 하나를 담는다 — **담은 뒤에 넘치는지 보지 않고, 넘칠 것 같으면 먼저 끊는다** (DS 74-2).
+   *
+   * 종전에는 담고 나서 `curLen >= maxChars` 면 끊었다. 그래서 상한을 **넘은 뒤에야** 끊겼고,
+   * 조각 하나가 상한의 두 배 가까이 되는 일이 늘 있었다(문단 400자 + 400자 = 801자 한 조각이
+   * 「500자로 나눠 주세요」의 답이었다). 넘지 않게 담는 쪽으로 돌리면 조각마다 상한이 지켜진다 —
+   * 문단은 `fitParagraph` 가 이미 상한 안에 들게 나눠 둔다.
+   */
   const push = (paragraph: string) => {
-    const para = paragraph.trim();
-    if (!para) return;
-    if (!cur) {
-      cur = { heading: headingPath(stack), parts: [] };
-      curLen = 0;
+    const whole = paragraph.trim();
+    if (!whole) return;
+    for (const para of fitParagraph(whole, maxChars)) {
+      // 줄로 이어 붙일 자리(`parts.join('\n')`)까지 세어 상한을 넘기지 않는다.
+      if (cur && curLen + 1 + para.length > maxChars) flush();
+      if (!cur) {
+        cur = { heading: headingPath(stack), parts: [] };
+        curLen = 0;
+      }
+      cur.parts.push(para);
+      curLen += (cur.parts.length > 1 ? 1 : 0) + para.length;
     }
-    cur.parts.push(para);
-    curLen += para.length;
-    if (curLen >= maxChars) flush();
   };
 
   let buf: string[] = [];
@@ -170,12 +227,13 @@ export function chunkDocument(raw: string, opts: ChunkOptions = {}): DocChunk[] 
   flushBuf();
   flush();
 
-  // 짧은 조각 병합
+  // 짧은 조각 병합 — **합쳐서 상한을 넘으면 합치지 않는다** (DS 74-2).
+  // 종전에는 이 자리가 상한을 보지 않아, 꽉 찬 조각 뒤의 한 줄짜리 꼬리가 상한을 넘겼다.
   const merged: { heading: string; text: string }[] = [];
   for (const c of chunks) {
     const body = c.parts.join('\n');
     const prev = merged[merged.length - 1];
-    if (prev && body.length < minChars && prev.heading === c.heading) {
+    if (prev && body.length < minChars && prev.heading === c.heading && prev.text.length + 1 + body.length <= maxChars) {
       prev.text = `${prev.text}\n${body}`;
     } else {
       merged.push({ heading: c.heading, text: body });
@@ -240,7 +298,10 @@ export function extractKeywords(text: string, limit = 8): string[] {
     .toLowerCase()
     .split(/[^0-9a-z가-힣]+/u)
     .map(stripParticles)
-    .filter((t) => t.length >= 2 && !STOPWORDS.has(t));
+    // 낱말 하나가 상한을 넘으면 버린다 (DS 74-2) — 띄어쓰기 없이 붙어 온 긴 덩이(표·코드·
+    // 주소에서 온다)는 어떤 질문에도 걸리지 않는 검색어이고, 그 글자가 자료의 검색어 칸을
+    // 통째로 먹는다(화면은 그 칸을 「고객이 쓸 표현」이라고 부른다).
+    .filter((t) => t.length >= 2 && t.length <= KEYWORD_LEN && !STOPWORDS.has(t));
 
   const freq = new Map<string, number>();
   for (const t of tokens) freq.set(t, (freq.get(t) ?? 0) + 1);
@@ -359,10 +420,16 @@ export function ingestDocument(raw: string, opts: IngestOptions): IngestResult {
     candidates.push({
       id: `${prefix}_${String(chunk.index).padStart(3, '0')}`,
       category,
-      question: toQuestion(chunk, title),
+      /**
+       * 대표 질문·출처는 **자료 한 건의 칸 상한**을 지킨다 (DS 74-1·74-2).
+       * 문서의 제목 한 줄은 길이가 열려 있다(`# …` 는 글쓴이가 적는 대로다) — 그 글자가 그대로
+       * 질문·출처가 되면, 손으로 적어 넣는 길에서는 거절되는 길이가 문서로 들어오는 길에서는
+       * 통과한다. 줄일 때는 **줄였다고 적는다**(`ellipsize` · DS 62-2·62-3).
+       */
+      question: ellipsize(toQuestion(chunk, title), KB_QUESTION_LEN),
       keywords,
       answer: chunk.text,
-      source: chunk.heading ? `${title} — ${chunk.heading}` : title,
+      source: ellipsize(chunk.heading ? `${title} — ${chunk.heading}` : title, KB_SOURCE_LEN),
       chunkIndex: chunk.index,
     });
   }

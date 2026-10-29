@@ -56,6 +56,35 @@ export const AUDIT_NAME_LEN = 60;
 export const AUDIT_PART_LEN = 40;
 
 /**
+ * **운영자가 적어 고객에게 나가는 글**의 상한 — 지식베이스 한 자료·내 규칙 한 건 (DS 74-1·74-3).
+ *
+ * 왜 이 파일에 와야 했는가: 이 제품은 **받는 말**(고객 발화 2000자)과 **남기는 말**(기록·요약·
+ * 감사 로그)은 전부 이 파일에서 재는데, 정작 **우리가 내보내는 말**은 아무도 재지 않았다.
+ * 돌려서 받아 냈다 — 3만 자 답변과 2만 자 규칙 답변이 그대로 저장되고, 그 글은 고객 말풍선에
+ * 한 덩이로 나간다. 고객이 한 번에 보낼 수 있는 글자는 2000자인데(`MAX_MESSAGE_LEN`) 우리가
+ * 보내는 글에는 상한이 없었다 — 같은 대화의 두 쪽을 다른 자로 재고 있었다.
+ *
+ * 수를 왜 이렇게 두는가:
+ *  - `KB_ANSWER_LEN` 은 `MAX_MESSAGE_LEN`·문서 등록의 「한 항목 길이」 상한(`CHUNK_CHARS_MAX`)과
+ *    **같은 2000**이다. 문서를 조각으로 나눠 등록하는 길과 손으로 적어 넣는 길이 같은 상한을
+ *    쓰지 않으면, 한쪽으로 들어온 자료만 다른 쪽에서 고칠 수 없게 된다.
+ *  - `KEYWORDS_LEN` 은 **칸 하나**의 상한이다(화면은 쉼표로 이어 적는 한 칸이다). 낱말 하나의
+ *    상한(`KEYWORD_LEN`)은 문서에서 뽑을 때만 쓴다 — 띄어쓰기 없는 긴 덩이가 검색어가 되면
+ *    어떤 질문에도 걸리지 않는다. 두 수는 **함께 맞춰 둔다**: 문서에서 뽑는 검색어는 8개까지라
+ *    (`ingest.extractKeywords` 의 기본값) 8×30 + 쉼표 7 = 254 자로 칸 하나에 들어간다 —
+ *    그래야 문서로 들어온 자료를 콘솔에서 **다시 저장할 수 있다**(한 칸으로 보내므로).
+ */
+export const KB_QUESTION_LEN = 200;
+export const KB_ANSWER_LEN = 2000;
+export const KB_CATEGORY_LEN = 40;
+export const KB_SOURCE_LEN = 300;
+export const KEYWORDS_LEN = 300;
+export const KEYWORD_LEN = 30;
+export const RULE_LABEL_LEN = 80;
+/** 규칙 답변 — 종전 이름(`MAX_RULE_REPLY_LEN`)으로 `lib/adminStore` 가 그대로 내보낸다. */
+export const RULE_REPLY_LEN = 1000;
+
+/**
  * 잘랐을 때 그 자리에 남기는 표시.
  *
  * 왜 필요한가: 운영자는 「환불 수수료가 궁금한데 저번에 주문한」에서 **고객이 거기서 멈춘 것인지

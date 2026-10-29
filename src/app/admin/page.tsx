@@ -98,8 +98,26 @@ const MAX_CHUNK_CHARS = 2000;
 function docLen(v: string): number {
   return (v || '').normalize('NFC').length;
 }
-/** 기본 규칙 답변 덮어쓰기 길이 상한 — 원본은 `src/lib/adminStore.ts`(MAX_RULE_REPLY_LEN). */
+/** 기본 규칙 답변 덮어쓰기 길이 상한 — 원본은 `src/lib/limits.ts`(RULE_REPLY_LEN). */
 const MAX_RULE_REPLY_LEN = 1000;
+/**
+ * **운영자가 적어 고객에게 나가는 글의 상한** — 원본은 `src/lib/limits.ts` (DS 74-1·74-3).
+ * 콘솔은 lib 을 불러오지 않으므로(`MAX_DOC_CHARS`·`docLen` 과 같은 기존 규약) 여기에 옮겨 적고
+ * 테스트가 두 쪽의 수를 맞춰 고정한다. 화면이 모르면 **보낸 뒤에야** 거절당한다(DS 29-1).
+ */
+const KB_QUESTION_LEN = 200;
+const KB_ANSWER_LEN = 2000;
+const KB_CATEGORY_LEN = 40;
+const KEYWORDS_LEN = 300;
+const RULE_LABEL_LEN = 80;
+/**
+ * 이 칸이 서버에 **얼마로 재어지는가** (DS 74-1).
+ * 서버는 `toNfc` 로 모은 뒤 `cleanText` 로 턴 길이를 센다(`optStr`) — 화면이 다른 자로 세면
+ * 보이지 않는 글자가 든 글에서 화면과 서버의 답이 갈린다. 테스트가 두 자의 결과를 대조한다.
+ */
+function fieldLen(v: string): number {
+  return cleanText((v || '').normalize('NFC')).length;
+}
 
 /**
  * 끝 글자의 받침 — 원본은 `src/lib/refusal.ts`(batchimOf) (DS 61-1).
@@ -4053,6 +4071,21 @@ export default function AdminPage() {
     if (!editingId && splitKeywords(form.keywords).length === 0) {
       errs.keywords = '고객이 쓸 표현을 한 개 이상 입력해 주세요(쉼표로 구분).';
     }
+    /**
+     * 상한도 **그 칸에서** 말한다 (DS 74-1) — 종전에는 이 세 칸에 상한이 아예 없어서, 긴 글을
+     * 적은 운영자는 보낼 때까지 아무 말도 듣지 못했다(본문 32KB 를 넘기면 그때서야 「보낸 내용이
+     * 너무 큽니다」가 토스트로 떴고, 그 문장은 **얼마까지 되는지**를 말하지 않는다).
+     * 재는 자는 서버와 같다(`fieldLen`) — 적은 글자 수와 거절 사유가 어긋나지 않게.
+     */
+    if (!errs.question && fieldLen(form.question) > KB_QUESTION_LEN) {
+      errs.question = `대표 질문은 ${comma(KB_QUESTION_LEN)}자까지 적을 수 있습니다.`;
+    }
+    if (!errs.answer && fieldLen(form.answer) > KB_ANSWER_LEN) {
+      errs.answer = `답변은 ${comma(KB_ANSWER_LEN)}자까지 적을 수 있습니다. 긴 안내는 자료를 나눠 등록해 주세요.`;
+    }
+    if (!errs.keywords && fieldLen(form.keywords) > KEYWORDS_LEN) {
+      errs.keywords = `고객이 쓸 표현은 ${comma(KEYWORDS_LEN)}자까지 적을 수 있습니다.`;
+    }
     setKbErr(errs);
     if (Object.keys(errs).length > 0) {
       focusErrorField(firstErrorId(errs, KB_FIELD_ORDER));
@@ -4331,6 +4364,17 @@ export default function AdminPage() {
     if (blank(crForm.label)) errs.label = '규칙 이름을 입력해 주세요.';
     if (splitKeywords(crForm.keywords).length === 0) errs.keywords = '고객이 쓸 표현을 한 개 이상 입력해 주세요.';
     if (blank(crForm.reply)) errs.reply = '고객에게 보낼 답변을 입력해 주세요.';
+    // 상한은 자료 쪽과 같은 자리에서 말한다 (DS 74-3) — 답변 칸은 이미 상한에서 멈추지만
+    // (`maxLength`), 이름·표현 칸은 종전에 아무도 재지 않았다.
+    if (!errs.label && fieldLen(crForm.label) > RULE_LABEL_LEN) {
+      errs.label = `규칙 이름은 ${comma(RULE_LABEL_LEN)}자까지 적을 수 있습니다.`;
+    }
+    if (!errs.keywords && fieldLen(crForm.keywords) > KEYWORDS_LEN) {
+      errs.keywords = `고객이 쓸 표현은 ${comma(KEYWORDS_LEN)}자까지 적을 수 있습니다.`;
+    }
+    if (!errs.reply && fieldLen(crForm.reply) > MAX_RULE_REPLY_LEN) {
+      errs.reply = `답변은 ${comma(MAX_RULE_REPLY_LEN)}자까지 적을 수 있습니다.`;
+    }
     setCrErr(errs);
     if (Object.keys(errs).length) {
       focusErrorField(firstErrorId(errs, CR_FIELD_ORDER));
@@ -5792,7 +5836,8 @@ export default function AdminPage() {
                 </div>
                 <div className="ac-field">
                   <label htmlFor="kb-category">카테고리</label>
-                  <input id="kb-category" style={S.input} placeholder="예: 요금" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
+                  {/* 짧은 칸은 애초에 넘기지 않게 막는다 — 문서 등록의 같은 칸과 같은 수·같은 방식(DS 74-1). */}
+                  <input id="kb-category" style={S.input} placeholder="예: 요금" value={form.category} maxLength={KB_CATEGORY_LEN} onChange={(e) => setForm({ ...form, category: e.target.value })} />
                 </div>
                 <div className="ac-field">
                   <label htmlFor="kb-question">대표 질문 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span></label>
@@ -5826,7 +5871,18 @@ export default function AdminPage() {
                   {kbErr.keywords && <p id="kb-keywords-err" className="ac-err">{kbErr.keywords}</p>}
                 </div>
                 <div className="ac-field">
-                  <label htmlFor="kb-answer">답변 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span></label>
+                  {/* 글자 수가 라벨 옆에 선다 — 375px 에서는 아래로 흐른다(고정 너비 없음 · DS 71-3). */}
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                    <label htmlFor="kb-answer">답변 <span aria-hidden="true" style={{ color: 'var(--danger)' }}>*</span></label>
+                    {/* 상한을 **적는 동안** 알린다 (DS 74-1) — 서버와 같은 자로 세고(`fieldLen`),
+                        끊는 자도 한 곳이다(`comma` · DS 60-3). 문서 본문 칸과 같은 모양이다. */}
+                    <span
+                      id="kb-answer-count"
+                      style={{ ...S.tag, marginLeft: 'auto', ...(fieldLen(form.answer) > KB_ANSWER_LEN ? { color: 'var(--danger)', fontWeight: 700 } : {}) }}
+                    >
+                      {comma(fieldLen(form.answer))} / {comma(KB_ANSWER_LEN)}자
+                    </span>
+                  </div>
                   <textarea
                     id="kb-answer"
                     style={{ ...S.input, minHeight: 110, ...(kbErr.answer ? { borderColor: 'var(--danger)' } : {}) }}
@@ -5834,7 +5890,7 @@ export default function AdminPage() {
                     value={form.answer}
                     aria-required="true"
                     aria-invalid={kbErr.answer ? 'true' : undefined}
-                    aria-describedby={kbErr.answer ? 'kb-answer-err' : undefined}
+                    aria-describedby={`${kbErr.answer ? 'kb-answer-err ' : ''}kb-answer-count`}
                     onChange={(e) => { setForm({ ...form, answer: e.target.value }); if (kbErr.answer) setKbErr({ ...kbErr, answer: undefined }); }}
                   />
                   {kbErr.answer && <p id="kb-answer-err" className="ac-err">{kbErr.answer}</p>}

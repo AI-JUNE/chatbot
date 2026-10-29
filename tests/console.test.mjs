@@ -301,7 +301,12 @@ test('지식베이스가 표(검색·카테고리 필터)+우측 편집 폼으�
     assert.match(kb, new RegExp(`id="${id}"`), `입력 누락: ${id}`);
   }
   assert.match(kb, /aria-invalid=\{kbErr\.question/, '인라인 검증(질문)');
-  assert.match(kb, /aria-describedby=\{kbErr\.answer/, '오류 문구 연결(답변)');
+  // 답변 칸은 오류 문구와 **글자 수**를 함께 읽힌다 (DS 74-1) — 상한을 모르면 보낸 뒤에야 거절당한다.
+  assert.ok(
+    kb.includes("aria-describedby={`${kbErr.answer ? 'kb-answer-err ' : ''}kb-answer-count`}"),
+    '오류 문구·글자 수가 답변 칸과 묶여 읽히지 않는다',
+  );
+  assert.match(kb, /id="kb-answer-count"/, '답변 글자 수 표시가 없다');
   assert.match(kb, /<EmptyArt kind="kb" \/>/, '빈 상태 일러스트');
   assert.match(kb, /검색 결과가 없습니다/, '검색 0건 안내');
   assert.match(kb, /aria-label=\{`삭제: \$\{e\.question\}`\}/, '행 버튼에 대상 이름이 있어야 한다');
@@ -4064,4 +4069,57 @@ test('보완이 필요한 자료가 분모와 모수를 함께 적는다 (DS 73-
   assert.match(card, /typeof stats\.feedback\.downTargets === 'number' && stats\.feedback\.downTargets > stats\.feedback\.topDown\.length/, '모수를 늘 적거나 아예 적지 않는다');
   assert.ok(card.includes('{comma(stats.feedback.downTargets)}가지 중 {comma(stats.feedback.topDown.length)}가지'), '몇 가지 중 몇 가지인지 적지 않는다');
   assert.match(card, /flexWrap: 'wrap'/, '좁은 화면에서 머리줄이 넘친다');
+});
+
+/* ══════════ 71차 재감사 (DS 74-1) ══════════ */
+
+/**
+ * DS 74-1 — 화면이 **얼마까지 적을 수 있는지**를 말하지 않았다.
+ *
+ * 자료의 대표 질문·답변·검색어 칸에는 상한이 없었다(화면에도, 서버에도). 그래서 긴 안내를
+ * 붙여 넣은 운영자는 보낼 때까지 아무 말도 듣지 못했고, 본문 상한에 걸리면 그때서야
+ * 「보낸 내용이 너무 큽니다」가 토스트로 떴다 — 그 문장은 **얼마까지 되는지**를 말하지 않는다.
+ * 재는 자가 서버와 같아야 적은 글자 수와 거절 사유가 어긋나지 않는다(`optStr` = `toNfc` 뒤
+ * `cleanText`).
+ */
+test('답변 칸의 글자 수를 서버와 같은 자로 세어 그 칸에서 알린다 (DS 74-1)', opts, async () => {
+  const { fieldLen } = await loadConsoleFns(['cleanText', 'fieldLen'], ['CONSOLE_INVISIBLE']);
+  const { cleanText: libClean } = await importLib('text', ['normalize']);
+  const { toNfc } = await importLib('normalize', ['text']);
+
+  // ① 콘솔 사본과 서버의 자가 **같은 수**를 센다(콘솔은 lib 을 불러올 수 없다).
+  const samples = [
+    '환불은 결제일로부터 7일 이내입니다.',
+    '한글'.normalize('NFD'),
+    '제로폭​공백',
+    '소프트­하이픈',
+    '줄바꿈\r\n섞인\n글',
+    '넓은　공백',
+    '이모지 👍🏻 섞인 글',
+    '  앞뒤 공백  ',
+    '',
+  ];
+  for (const s of samples) {
+    assert.equal(fieldLen(s), libClean(toNfc(s)).length, `콘솔과 서버의 자가 갈라졌다: ${JSON.stringify(s)}`);
+  }
+  // 종전 식 재현 — 그냥 `length` 로 세면 보이지 않는 글자·분해형 한글에서 다른 수가 나온다.
+  assert.notEqual('한글'.normalize('NFD').length, fieldLen('한글'.normalize('NFD')));
+  assert.notEqual('제로폭​공백'.length, fieldLen('제로폭​공백'));
+
+  // ② 그 수가 적는 동안 보인다 — 끊는 자는 한 곳(`comma` · DS 60-3)이고, 넘치면 색이 바뀐다.
+  await loadConsole();
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const kb = src.slice(src.indexOf("{tab === 'kb' &&"), src.indexOf("{tab === 'rules' &&"));
+  assert.ok(kb.includes('{comma(fieldLen(form.answer))} / {comma(KB_ANSWER_LEN)}자'), '적는 동안 글자 수를 말하지 않는다');
+  assert.match(kb, /fieldLen\(form\.answer\) > KB_ANSWER_LEN \? \{ color: 'var\(--danger\)'/, '넘친 것을 색으로도 말하지 않는다');
+  // 머리줄이 접힌다 — 375px 에서 라벨과 글자 수가 두 줄로 흐른다(고정 너비 없음).
+  const answerField = kb.slice(kb.indexOf('htmlFor="kb-answer"') - 400, kb.indexOf('id="kb-answer-count"'));
+  assert.match(answerField, /flexWrap: 'wrap'/, '좁은 화면에서 라벨과 글자 수가 겹친다');
+  // 짧은 칸은 애초에 넘기지 않게 막는다 — 문서 등록의 같은 칸과 같은 방식이다.
+  assert.match(kb, /id="kb-category"[^>]*maxLength=\{KB_CATEGORY_LEN\}/, '카테고리 칸에 상한이 없다');
+
+  // ③ 거절은 **그 칸에서** 말한다(토스트가 아니다 · DS 29-1) — 세 칸 모두.
+  assert.ok(cachedJs.includes('대표 질문은'), '질문 칸의 상한 안내가 없다');
+  assert.ok(cachedJs.includes('답변은'), '답변 칸의 상한 안내가 없다');
+  assert.ok(cachedJs.includes('고객이 쓸 표현은'), '검색어 칸의 상한 안내가 없다');
 });

@@ -6,10 +6,33 @@ import { shadowOfRule } from '@/lib/chat';
 import { getRuleOverride, setRuleOverride, listCustomRules, upsertCustomRule, deleteCustomRule, customRuleRev, ruleOverrideRev, overrideConflict, saveAdminNow, MAX_RULE_REPLY_LEN, CustomRuleInput, type CustomRule } from '@/lib/adminStore';
 import { logAudit } from '@/lib/audit';
 import { ok, fail, readJson, reqQuery, optStr, requireAdmin, isAdminAuthed } from '@/lib/http';
-import { AUDIT_NAME_LEN, ellipsize } from '@/lib/limits';
-import { CHANGED_TARGET_MESSAGE, STALE_TARGET_MESSAGE, tooLongMessage } from '@/lib/refusal';
+import { AUDIT_NAME_LEN, ellipsize, KEYWORDS_LEN, RULE_LABEL_LEN } from '@/lib/limits';
+import { toNfc } from '@/lib/normalize';
+import { CHANGED_TARGET_MESSAGE, STALE_TARGET_MESSAGE } from '@/lib/refusal';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * **내 규칙 한 건이 받는 칸과 그 상한** (DS 74-3).
+ *
+ * 바로 아래 `PATCH`(기본 규칙 답변 덮어쓰기)는 1000자를 재고 있었는데, 같은 화면의 바로 옆
+ * 칸인 `POST`(내가 만드는 규칙)는 **아무것도 재지 않았다** — 같은 「답변」 칸을 두 창구가 다른
+ * 자로 봤다. 돌려서 받아 냈다: 2만 자 답변과 5천 자 규칙 이름이 그대로 저장되고(그 이름은
+ * 목록·전역 검색·변경 이력에 선다), 제로폭 공백 한 자만 적은 답변은 **빈 말풍선**으로 고객에게
+ * 나간다(`matchCustomRule` 이 실제로 그 규칙을 돌려준다).
+ *
+ * 길이는 정규화 뒤에 잰다(`toNfc`) — 분해형 한글을 그냥 세면 멀쩡한 글이 상한에 먼저 걸린다.
+ */
+const RULE_FIELDS: readonly (readonly [string, number])[] = [
+  ['label', RULE_LABEL_LEN],
+  ['reply', MAX_RULE_REPLY_LEN],
+  ['keywords', KEYWORDS_LEN],
+  ['baseRev', 120],
+];
+
+function nfcIfText(v: unknown): unknown {
+  return typeof v === 'string' ? toNfc(v) : v;
+}
 
 function ruleView(intent: string) {
   const r = RULES.find((x) => x.intent === intent)!;
@@ -50,8 +73,9 @@ export async function POST(req: NextRequest) {
 
   const parsed = await readJson<CustomRuleInput & Record<string, unknown>>(req);
   if (!parsed.ok) return parsed.res;
+  const body = parsed.data as Record<string, unknown>;
 
-  const intentField = optStr(parsed.data.intent, 'intent', 60);
+  const intentField = optStr(body.intent, 'intent', 60);
   if (!intentField.ok) return intentField.res;
   const intent = intentField.value;
   if (intent && RULES.some((r) => r.intent === intent)) {
@@ -59,7 +83,22 @@ export async function POST(req: NextRequest) {
     // 걷어낸 코드 어휘다(화면 문자열 검사가 서버 문장까지 보지 못했다 — DS 29-3).
     return fail('conflict', '기본 규칙과 같은 이름은 쓸 수 없습니다. 규칙 이름을 바꿔 주세요.', undefined, { status: 400 });
   }
-  const result = upsertCustomRule(parsed.data);
+
+  // 들어온 칸을 재서 넘긴다 (DS 74-3) — 보내지 않은 칸은 보내지 않은 대로 둔다(수정에서
+  // 빈 칸은 지금 값을 지킨다). 켜짐 여부·상담원 연결은 참/거짓이라 저장소가 그대로 가린다.
+  const input: Record<string, unknown> = { ...(intent ? { intent } : {}) };
+  for (const [key, max] of RULE_FIELDS) {
+    if (body[key] === undefined) continue;
+    const raw = key === 'keywords' && Array.isArray(body[key])
+      ? (body[key] as unknown[]).map((k) => String(k)).join(',')
+      : body[key];
+    const f = optStr(nfcIfText(raw), key, max);
+    if (!f.ok) return f.res;
+    input[key] = f.value;
+  }
+  if (body.escalate !== undefined) input.escalate = body.escalate === true;
+  if (body.enabled !== undefined) input.enabled = body.enabled !== false;
+  const result = upsertCustomRule(input as CustomRuleInput);
   if (!result.ok) {
     // 그 사이 다른 화면에서 바뀌었거나 지워진 규칙 (DS 46-1) — 적던 글을 버리지 않게 사유를 함께 보낸다.
     if (result.conflict) {
@@ -117,15 +156,20 @@ export async function PATCH(req: NextRequest) {
   if (body.enabled !== undefined && typeof body.enabled !== 'boolean') {
     return fail('invalid_input');
   }
-  if (body.reply !== undefined && body.reply !== null && typeof body.reply !== 'string') {
-    return fail('invalid_input');
-  }
-  if (typeof body.reply === 'string' && body.reply.length > MAX_RULE_REPLY_LEN) {
-    return fail('invalid_input', tooLongMessage('reply', MAX_RULE_REPLY_LEN));
-  }
 
   const enabled = body.enabled as boolean | undefined;
-  const reply = body.reply as string | null | undefined;
+  /**
+   * 답변 칸을 재는 자는 **내 규칙 쪽과 같다** (DS 74-3) — 종전에는 이 자리만 길이를 손으로
+   * 재서(`body.reply.length`) 보이지 않는 글자를 글자로 셌고, 분해형 한글은 상한에 먼저 걸렸다.
+   * `null` 은 「기본값으로 되돌린다」는 뜻이라 글자로 재지 않는다(아래 기록이 그 둘을 가른다).
+   */
+  let reply: string | null | undefined;
+  if (body.reply === null) reply = null;
+  else if (body.reply !== undefined) {
+    const f = optStr(nfcIfText(body.reply), 'reply', MAX_RULE_REPLY_LEN);
+    if (!f.ok) return f.res;
+    reply = f.value;
+  }
   // 답변을 덮어쓰는 저장만 **내가 본 모습**을 들고 온다 (DS 46-1) — 켜기/끄기는 한 칸 패치라
   // 겨룰 글이 없다. 들고 왔는데 다르면 거절하고 지금 값을 함께 보낸다.
   const baseRev = typeof body.baseRev === 'string' ? body.baseRev : undefined;

@@ -2555,8 +2555,9 @@ test('폼이 거절하면 틀린 칸으로 데려간다 (DS 29-1)', () => {
   assert.match(bare, /aria-describedby=\{kbErr\.keywords \? 'kb-keywords-err' : undefined\}/, '키워드 오류가 칸과 묶여 읽히지 않는다');
 
   // 기본 규칙 답변은 서버 상한을 화면이 먼저 막는다(칸을 벗어난 뒤 토스트로 거절당하지 않게).
-  const store = read('src/lib/adminStore.ts');
-  const max = /MAX_RULE_REPLY_LEN = (\d+)/.exec(store);
+  // 수는 `lib/limits` 에 있다 (DS 74-3) — `lib/adminStore` 는 종전 이름으로 그대로 내보낸다.
+  assert.match(read('src/lib/adminStore.ts'), /export const MAX_RULE_REPLY_LEN = RULE_REPLY_LEN;/, '답변 상한이 단일 출처를 보지 않는다');
+  const max = /export const RULE_REPLY_LEN = (\d+);/.exec(read('src/lib/limits.ts'));
   assert.ok(max, '서버의 답변 상한을 찾지 못했다');
   assert.match(s, new RegExp(`const MAX_RULE_REPLY_LEN = ${max[1]};`), '답변 상한이 서버와 다르다');
   assert.match(bare, /maxLength=\{MAX_RULE_REPLY_LEN\}/, '인라인 답변 편집에 상한이 없다');
@@ -4282,7 +4283,9 @@ test('글의 경계를 짐작하는 자가 한 벌이다 (DS 66-1·66-2·66-3)',
   assert.match(read('src/lib/knowledge.ts'), /import \{ splitSentences \} from '@\/lib\/prose';/, '근거 발췌가 공통 자를 쓰지 않는다');
   assert.match(read('src/lib/kakao.ts'), /import \{ sentenceEndAt \} from '@\/lib\/prose';/, '말풍선 나누기가 공통 자를 쓰지 않는다');
   const ing = read('src/lib/ingest.ts');
-  assert.match(ing, /import \{ readsAsSentence \} from '@\/lib\/prose';/, '제목 판정이 공통 자를 쓰지 않는다');
+  // 문서 등록은 두 가지를 그 자에 묻는다 — 「이 줄이 제목인가」와 「문단을 어디서 끊는가」
+  // (상한을 넘는 문단을 문장 경계에서 나눈다 · DS 74-2).
+  assert.match(ing, /import \{ readsAsSentence, splitSentences \} from '@\/lib\/prose';/, '제목·문장 판정이 공통 자를 쓰지 않는다');
   assert.match(ing, /NUMBERED_HEADING_RE\.test\(t\) && !readsAsSentence\(t\)/, '번호로 시작하는 본문을 제목으로 읽는다');
 
   // 제 식으로 문장 끝을 재는 자리가 **0건**이다 — 두 벌이면 한쪽만 고쳐진다(다시 생기는 것을
@@ -4664,4 +4667,106 @@ test('평가·저장 창구가 두 번째 사실을 만들지 않는다 (DS 72-2
   for (const what of ['자료', '규칙', '파트너', '고객사']) {
     assert.ok(page.includes(`duplicateSavedText('${what}')`), `${what} 저장이 새로 만들지 않은 사실을 말하지 않는다`);
   }
+});
+
+/* ══════════ 71차 재감사 — 우리가 「이만큼까지」를 재는 자리 (DS 74-x) ══════════ */
+
+/**
+ * DS 74-1·74-3 — 관리 콘솔의 두 쓰기 창구가 들어온 값을 **재지 않았다**.
+ *
+ * `/api/admin/kb` 는 본문을 그대로 저장소에 넘겼고(길이·보이지 않는 글자·글자 아닌 값 전부),
+ * `/api/admin/rules` 는 `PATCH`(기본 규칙 답변)만 1000자를 재고 `POST`(내 규칙)는 아무것도
+ * 재지 않았다 — 같은 화면의 같은 「답변」 칸을 두 창구가 다른 자로 봤다. 이 제품의 자는
+ * `lib/http` 의 `optStr`/`reqStr`(= `cleanText` + 상한 · DS 63-1)이고, 상한은 `lib/limits` 다.
+ */
+test('쓰기 창구가 들어온 값을 한 자로 재고, 상한은 한 곳에 있다 (DS 74-1·74-3)', () => {
+  const limits = read('src/lib/limits.ts');
+  const kbRoute = read('src/app/api/admin/kb/route.ts');
+  const ruleRoute = read('src/app/api/admin/rules/route.ts');
+  const store = read('src/lib/adminStore.ts');
+  const ingest = read('src/lib/ingest.ts');
+
+  // ① 상한은 `lib/limits` 에 이름을 갖고 있다.
+  const num = (name, body = limits) => {
+    const m = new RegExp(`export const ${name} = ([\\d_]+);`).exec(body);
+    assert.ok(m, `${name} 상한이 단일 출처에 없다`);
+    return Number(m[1].replace(/_/g, ''));
+  };
+  const q = num('KB_QUESTION_LEN');
+  const a = num('KB_ANSWER_LEN');
+  const cat = num('KB_CATEGORY_LEN');
+  const kws = num('KEYWORDS_LEN');
+  const kw = num('KEYWORD_LEN');
+  const label = num('RULE_LABEL_LEN');
+  const reply = num('RULE_REPLY_LEN');
+  // 고객이 한 번에 보내는 글과 **같은 수**다 — 같은 대화의 두 쪽을 다른 자로 재지 않는다.
+  assert.equal(a, num('MAX_MESSAGE_LEN'), '우리가 내보내는 글과 고객이 보내는 글의 상한이 갈라졌다');
+  // 문서로 들어오는 길의 조각 상한과도 같다 — 한쪽으로 들어온 자료를 다른 쪽에서 고칠 수 있어야 한다.
+  assert.equal(a, num('CHUNK_CHARS_MAX', ingest), '문서 조각 상한과 자료 답변 상한이 갈라졌다');
+  // 문서에서 뽑는 검색어(8개)가 한 칸에 들어간다 — 들어온 자료를 콘솔에서 다시 저장할 수 있다.
+  assert.ok(kw * 8 + 7 <= kws, `검색어 ${kw}자 8개가 한 칸(${kws}자)에 들어가지 않는다`);
+
+  // ② 두 창구가 그 자를 지난다 — 본문을 그대로 넘기는 자리가 0건이다.
+  assert.match(kbRoute, /const KB_FIELDS: readonly \(readonly \[string, number\]\)\[\] = \[/, '자료 창구가 받는 칸 목록이 없다');
+  for (const [field, name] of [['id', '60'], ['category', 'KB_CATEGORY_LEN'], ['question', 'KB_QUESTION_LEN'], ['answer', 'KB_ANSWER_LEN'], ['source', 'KB_SOURCE_LEN']]) {
+    assert.ok(kbRoute.includes(`['${field}', ${name}]`), `자료 창구가 ${field} 칸을 재지 않는다`);
+  }
+  assert.match(kbRoute, /const f = optStr\(nfcIfText\(body\[key\]\), key, max\);/, '자료 창구가 공통 자를 쓰지 않는다');
+  assert.equal(/upsertKB\(body\)/.test(kbRoute), false, '자료 창구가 본문을 그대로 저장소에 넘긴다');
+  assert.match(ruleRoute, /const RULE_FIELDS: readonly \(readonly \[string, number\]\)\[\] = \[/, '규칙 창구가 받는 칸 목록이 없다');
+  for (const [field, name] of [['label', 'RULE_LABEL_LEN'], ['reply', 'MAX_RULE_REPLY_LEN'], ['keywords', 'KEYWORDS_LEN']]) {
+    assert.ok(ruleRoute.includes(`['${field}', ${name}]`), `규칙 창구가 ${field} 칸을 재지 않는다`);
+  }
+  assert.equal(/upsertCustomRule\(parsed\.data\)/.test(ruleRoute), false, '규칙 창구가 본문을 그대로 저장소에 넘긴다');
+  // 길이를 손으로 재는 자리가 남아 있지 않다(그 자는 보이지 않는 글자를 글자로 센다).
+  assert.equal(/body\.reply\.length > MAX_RULE_REPLY_LEN/.test(ruleRoute), false, '손으로 길이를 재는 자리가 남아 있다');
+
+  // ③ 길이는 **정규화 뒤에** 잰다 — 분해형 한글을 그냥 세면 멀쩡한 글이 먼저 걸린다(DS 42-3).
+  for (const [what, body] of [['자료', kbRoute], ['규칙', ruleRoute]]) {
+    assert.match(body, /function nfcIfText\(v: unknown\): unknown \{\n  return typeof v === 'string' \? toNfc\(v\) : v;\n\}/, `${what} 창구가 정규화 전에 잰다`);
+  }
+
+  // ④ 저장소의 빈칸 판정도 같은 자다 — 창구를 지나지 않는 길(문서 등록·복원)이 하나 있다.
+  assert.match(store, /function clean\(v: unknown\): string \{\n  return cleanText\(v\);\n\}/, '저장소가 받는 자리의 자를 쓰지 않는다');
+  assert.equal(/\.trim\(\) \|\| existing\./.test(store), false, '저장소에 trim 으로 재는 자리가 남아 있다');
+  assert.equal(/\(input\.(question|answer|label|reply) \|\| ''\)\.trim\(\)/.test(store), false, '필수 검사가 trim 으로 재는 자리가 남아 있다');
+
+  // ⑤ 거절 문장은 **그 칸의 화면 라벨**로 말한다 — 코드 키를 보이지 않는다(DS 29-3).
+  const refusal = read('src/lib/refusal.ts');
+  for (const [key, name] of [['question', '대표 질문'], ['answer', '답변'], ['keywords', '고객이 쓸 표현'], ['label', '규칙 이름']]) {
+    assert.ok(refusal.includes(`${key}: '${name}',`), `${key} 칸의 사람 말 이름이 없다`);
+  }
+
+  // ⑥ 화면도 같은 수를 알고 있어야 **보내기 전에** 말할 수 있다(DS 29-1).
+  const page = read('src/app/admin/page.tsx');
+  for (const [name, value] of [['KB_QUESTION_LEN', q], ['KB_ANSWER_LEN', a], ['KB_CATEGORY_LEN', cat], ['KEYWORDS_LEN', kws], ['RULE_LABEL_LEN', label], ['MAX_RULE_REPLY_LEN', reply]]) {
+    assert.ok(page.includes(`const ${name} = ${value};`), `콘솔 사본의 ${name} 이 서버와 다르다`);
+  }
+  assert.ok(page.includes('원본은 `src/lib/limits.ts`'), '콘솔 사본이 출처를 밝히지 않는다');
+  const bare = stripComments(page);
+  for (const [field, limit] of [['form.question', 'KB_QUESTION_LEN'], ['form.answer', 'KB_ANSWER_LEN'], ['form.keywords', 'KEYWORDS_LEN'], ['crForm.label', 'RULE_LABEL_LEN'], ['crForm.keywords', 'KEYWORDS_LEN'], ['crForm.reply', 'MAX_RULE_REPLY_LEN']]) {
+    assert.ok(bare.includes(`fieldLen(${field}) > ${limit}`), `${field} 칸이 상한을 보내기 전에 보지 않는다`);
+  }
+});
+
+/**
+ * DS 74-2 — 「한 항목 길이」가 상한이 아니었다(담은 뒤에 넘치는지 봤다).
+ * 값으로 확인하는 쪽은 `tests/runtime.test.mjs` 다 — 여기서는 **다시 생기지 않게** 고정한다.
+ */
+test('문서 조각이 상한을 넘지 않게 나뉜다 (DS 74-2)', () => {
+  const ingest = read('src/lib/ingest.ts');
+  assert.match(ingest, /function fitParagraph\(para: string, maxChars: number\): string\[\] \{/, '문단을 상한 안에 넣는 자가 없다');
+  // 문장 경계는 공통 자에게 묻고, 글자 경계는 반쪽을 남기지 않는 자에게 묻는다.
+  assert.match(ingest, /for \(const sentence of splitSentences\(para\)\)/, '문장 경계를 제 식으로 찾는다');
+  assert.match(ingest, /const head = cut\(rest, maxChars\);/, '글자 경계를 제 식으로 끊는다');
+  // 담기 **전에** 끊는다 — 종전 식(`curLen >= maxChars` 로 담은 뒤 끊기)이 남아 있지 않다.
+  assert.match(ingest, /if \(cur && curLen \+ 1 \+ para\.length > maxChars\) flush\(\);/, '담은 뒤에 넘치는지 본다');
+  // 주석에 적힌 종전 식으로 거짓 실패하지 않게 코드 구간만 본다(DS 5-6 에서 겪은 거짓 통과의 반대).
+  assert.equal(/curLen >= maxChars/.test(stripComments(ingest)), false, '종전 식이 남아 있다');
+  // 병합도 상한을 본다.
+  assert.match(ingest, /prev\.heading === c\.heading && prev\.text\.length \+ 1 \+ body\.length <= maxChars/, '짧은 꼬리 병합이 상한을 넘긴다');
+  // 문서가 만드는 자료 한 건도 자료 쪽 상한을 지킨다(줄이면 줄였다고 적는다).
+  assert.match(ingest, /question: ellipsize\(toQuestion\(chunk, title\), KB_QUESTION_LEN\)/, '대표 질문이 상한을 모른다');
+  assert.match(ingest, /source: ellipsize\(chunk\.heading \? `\$\{title\} — \$\{chunk\.heading\}` : title, KB_SOURCE_LEN\)/, '출처가 상한을 모른다');
+  assert.match(ingest, /t\.length >= 2 && t\.length <= KEYWORD_LEN/, '낱말 하나의 상한을 보지 않는다');
 });

@@ -91,6 +91,13 @@ export const FIELD_LABELS: Readonly<Record<string, string>> = {
   message: '메시지',
   contact: '연락처',
   reply: '답변',
+  // 지식베이스 한 자료·내 규칙 한 건의 칸 (DS 74-1·74-3) — 종전에는 이 칸들이 거절 문장을
+  // 가질 일이 없었다(아무도 재지 않았으므로 거절도 없었다). 이름은 **그 칸의 화면 라벨**이다:
+  // 「답변」은 자료 쪽과 규칙 쪽이 같은 말이라 `reply` 와 같은 글자를 쓴다.
+  question: '대표 질문',
+  answer: '답변',
+  keywords: '고객이 쓸 표현',
+  label: '규칙 이름',
 };
 
 /** 화면에 적어도 되는 이름. 없으면 null — 부르는 쪽이 이름 없는 문장으로 떨어진다. */

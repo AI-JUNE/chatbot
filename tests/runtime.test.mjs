@@ -7923,3 +7923,118 @@ test('보완이 필요한 자료가 분모와 모수를 함께 말한다 (DS 73-
   assert.equal(F.feedbackSummary().downTargets, 0);
   assert.equal(F.feedbackSummary().topDown.length, 0);
 });
+
+/* ══════════ 디자인 스프린트 — 71차 재감사 (DS 74-1·74-2·74-3) ══════════ */
+
+/**
+ * DS 74-1·74-3 — **우리가 내보내는 글을 아무도 재지 않았다**.
+ *
+ * 이 제품은 받는 말(고객 발화 2000자)과 남기는 말(기록·요약·감사 로그)을 `lib/limits` 에서
+ * 재는데, 운영자가 적어 **고객 말풍선에 그대로 나가는 글**(자료의 답변·내 규칙의 답변)에는
+ * 상한이 없었다. 게다가 저장소의 빈칸 판정이 `trim()` 이라, 보이지 않는 글자 한 자만 적은
+ * 질문·답변·규칙 이름이 필수 검사를 통과했다(DS 63-1 이 세운 자를 지나지 않는 자리다).
+ */
+const WRITE_GROUP = ['adminStore', 'knowledge', 'normalize', 'limits', 'text', 'ingest', 'order', 'prose'];
+
+test('보이지 않는 글자만 적은 칸은 빈 칸이다 — 자료·내 규칙 (DS 74-1·74-3)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const pick = (name) => importLib(name, WRITE_GROUP.filter((n) => n !== name));
+  const store = await pick('adminStore');
+  const ZW = '​';
+  const SOFT = '­';
+
+  // 종전 식 재현 — `trim()` 은 이 글자들을 글자로 센다(그래서 저장까지 갔다).
+  assert.equal(`${ZW}${SOFT}`.trim().length, 2, '재현 조건이 성립하지 않는다 — trim 이 지우고 있다');
+
+  const blankKb = store.upsertKB({ id: 'ds74-blank', question: ZW, answer: `${ZW}${SOFT}`, keywords: ['보이지않는'] });
+  assert.equal(blankKb.ok, false, '보이지 않는 질문·답변이 지식베이스에 들어간다');
+  assert.match(blankKb.error, /대표 질문·답변·키워드를 모두 입력해 주세요/);
+  assert.equal(store.listKB().some((e) => e.id === 'ds74-blank'), false, '거절했는데 자료가 남았다');
+
+  const blankRule = store.upsertCustomRule({ intent: 'ds74_blank', label: ZW, reply: ZW, keywords: ['보이지않는'] });
+  assert.equal(blankRule.ok, false, '보이지 않는 규칙 이름·답변이 저장된다');
+  assert.match(blankRule.error, /규칙 이름·고객이 쓸 표현·답변을 모두 입력해 주세요/);
+
+  // 섞여 온 글자는 **지우고 저장한다**(값을 버리지 않는다) — 붙여 넣은 글에 흔히 섞여 온다.
+  const mixed = store.upsertKB({ id: 'ds74-mixed', question: `환불${ZW} 규정`, answer: `7일${SOFT} 이내`, keywords: [`환불${ZW}`, ''] });
+  assert.equal(mixed.ok, true);
+  assert.equal(mixed.entry.question, '환불 규정');
+  assert.equal(mixed.entry.answer, '7일 이내');
+  assert.deepEqual(mixed.entry.keywords, ['환불']);
+
+  // 기본 규칙 답변 덮어쓰기도 같은 자다 — 보이지 않는 답변은 **빈 말풍선**으로 고객에게 나갔다.
+  store.setRuleOverride('hours', { reply: '영업시간 안내입니다.' });
+  store.setRuleOverride('hours', { reply: ZW });
+  assert.equal(store.getRuleOverride('hours')?.reply, undefined, '보이지 않는 답변이 기본 응답문을 밀어낸다');
+
+  // 그 규칙이 실제로 걸리는가 — 걸리는 길이므로 저장 자리에서 막아야 한다.
+  const live = store.upsertCustomRule({ intent: 'ds74_live', label: '빈 답변', reply: `${ZW}답변 있음`, keywords: ['빈답변시험'] });
+  assert.equal(live.ok, true);
+  assert.equal(store.matchCustomRule('빈답변시험').reply, '답변 있음', '걸린 규칙의 답변에 보이지 않는 글자가 남았다');
+});
+
+/**
+ * DS 74-2 — 「한 항목 길이」가 **상한이 아니었다**.
+ *
+ * 운영자가 고르는 그 수는 목표일 뿐이었고, 빈 줄 없이 붙여 넣은 한 덩이는 문단이 하나라
+ * 조각도 하나였다(돌려서 받아 냈다 — 500자로 고른 7,500자 문서가 7,499자 한 조각). 그 글이
+ * 그대로 자료의 답변이 되어 고객 말풍선에 한 덩이로 나갔다. 담은 뒤에 넘치는지 보던 자리도
+ * 같은 결함이었다(400+400=801자 한 조각).
+ */
+test('문서를 나눈 조각이 「한 항목 길이」를 넘지 않는다 (DS 74-2)', opts, async () => {
+  const pick = (name) => importLib(name, WRITE_GROUP.filter((n) => n !== name));
+  const ingest = await pick('ingest');
+  const limits = await pick('limits');
+
+  const onePara = '우리 서비스의 환불 규정은 다음과 같습니다. '.repeat(300);
+  const bare = (s) => s.replace(/\s+/g, '');
+  // 종전 식 재현 — 문단 경계만 보면 조각이 하나다(상한의 15배).
+  assert.equal(onePara.split(/\n\s*\n/).length, 1, '재현 조건이 성립하지 않는다 — 문단이 둘 이상이다');
+
+  for (const max of [120, 500, 2000]) {
+    const chunks = ingest.chunkDocument(onePara, { maxChars: max });
+    assert.ok(chunks.length > 1, `상한 ${max}: 긴 문단이 한 조각으로 남는다`);
+    for (const c of chunks) assert.ok(c.text.length <= max, `상한 ${max}: ${c.text.length}자 조각이 있다`);
+    // 글은 **하나도 사라지지 않는다** — 나누는 일이지 자르는 일이 아니다.
+    assert.equal(bare(chunks.map((c) => c.text).join(' ')), bare(onePara), `상한 ${max}: 나누면서 글이 사라졌다`);
+    // 끊은 자리는 문장 끝이다(마지막 조각만 예외일 수 있다).
+    for (const c of chunks.slice(0, -1)) assert.match(c.text, /[.!?。]$/, '문장 가운데서 끊었다');
+  }
+
+  // 문장 끝이 없는 글은 글자 경계에서 끊는다 — 그래도 상한을 지키고 글은 보존된다.
+  const noStop = '가'.repeat(3000);
+  const hard = ingest.chunkDocument(noStop, { maxChars: 500 });
+  assert.ok(hard.length > 1 && Math.max(...hard.map((c) => c.text.length)) <= 500);
+  assert.equal(hard.map((c) => c.text).join(''), noStop, '문장 끝이 없는 글을 나누다 글을 버렸다');
+
+  // 끊는 자리에 온 이모지의 **반쪽을 남기지 않는다** (DS 62-1 의 자를 그대로 쓴다).
+  const em = ingest.chunkDocument(`${'한'.repeat(498)}👍🏻${'글'.repeat(400)}`, { maxChars: 500 });
+  for (const text of em.map((x) => x.text)) {
+    assert.equal(/[\uD800-\uDBFF]$/.test(text), false, '조각 끝에 반쪽 글자가 남았다');
+    assert.equal(/^[\uDC00-\uDFFF]/.test(text), false, '조각 머리에 반쪽 글자가 남았다');
+  }
+
+  // 담은 뒤에 끊던 자리 — 문단 둘이 상한을 넘기면 **먼저** 끊는다.
+  const two = ingest.chunkDocument(`${'가'.repeat(400)}.\n\n${'나'.repeat(400)}.`, { maxChars: 500 });
+  assert.equal(two.length, 2, '문단 둘이 한 조각으로 붙어 상한을 넘는다');
+  for (const c of two) assert.ok(c.text.length <= 500);
+
+  // 짧은 꼬리 병합도 상한을 본다 — 꽉 찬 조각 뒤의 한 줄이 상한을 넘기지 않는다.
+  const tail = ingest.chunkDocument(`${'다'.repeat(490)}.\n\n짧은 꼬리.`, { maxChars: 500 });
+  for (const c of tail) assert.ok(c.text.length <= 500, `병합이 상한을 넘겼다(${c.text.length}자)`);
+
+  // 문서가 만드는 자료 한 건이 **손으로 적어 넣는 길과 같은 상한**을 지킨다.
+  const longHeading = `# ${'아주 긴 제목이다 '.repeat(40)}\n\n환불은 결제일로부터 7일 이내에 신청해야 합니다.`;
+  for (const c of ingest.ingestDocument(longHeading, { title: '환불 규정', maxChars: 500 }).candidates) {
+    assert.ok(c.question.length <= limits.KB_QUESTION_LEN, `대표 질문이 상한을 넘는다(${c.question.length}자)`);
+    assert.ok(c.source.length <= limits.KB_SOURCE_LEN, `출처가 상한을 넘는다(${c.source.length}자)`);
+    assert.match(c.question, /…/, '줄였는데 줄였다고 적지 않는다');
+  }
+
+  // 띄어쓰기 없이 붙어 온 긴 덩이는 검색어가 되지 않는다 — 한 칸(쉼표로 이어 적는다)에 들어간다.
+  const blob = ingest.ingestDocument(`# 표\n\n${'가나다라마바사아자차카타파하'.repeat(10)} 요금 안내입니다.`, { title: '요금' });
+  for (const c of blob.candidates) {
+    for (const k of c.keywords) assert.ok(k.length <= limits.KEYWORD_LEN, `낱말이 상한을 넘는다(${k.length}자)`);
+    assert.ok(c.keywords.join(', ').length <= limits.KEYWORDS_LEN, '검색어가 한 칸에 들어가지 않는다 — 콘솔에서 다시 저장할 수 없다');
+  }
+});

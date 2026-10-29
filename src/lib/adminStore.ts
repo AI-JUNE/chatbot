@@ -6,6 +6,8 @@ import { keywordHit, prepare } from '@/lib/normalize';
 import { flushSaves, loadJson, saveJson, saveNow, savedInfo, scheduleSave, type SavedInfo } from '@/lib/storage';
 import { revOf } from '@/lib/rev';
 import { readInstant } from '@/lib/kst';
+import { RULE_REPLY_LEN } from '@/lib/limits';
+import { cleanText } from '@/lib/text';
 import { CHANGED_TARGET_MESSAGE, RESTORE_FORMAT_MESSAGE, STALE_TARGET_MESSAGE } from '@/lib/refusal';
 
 function cloneEntry(e: KBEntry): KBEntry {
@@ -92,10 +94,23 @@ function conflictOf<T>(baseRev: string | undefined, existing: T | undefined, rev
   return revOfItem(existing) === base ? null : 'changed';
 }
 
+/**
+ * 저장되는 값을 **받는 자리의 자**로 턴다 — `trim()` 이 아니라 `cleanText` 다 (DS 63-1·74-1).
+ *
+ * 종전에는 이 파일의 모든 칸이 `String(v).trim()` 이었다. `trim()` 은 제로폭 공백·소프트
+ * 하이픈·방향 제어를 **글자로 세므로**, 보이지 않는 글자 한 자만 적은 질문·답변·규칙 이름이
+ * 필수 검사를 통과해 저장됐다(돌려서 받아 냈다: 그 규칙은 실제로 걸리고, 고객에게는 **빈
+ * 말풍선**이 나간다). 쓰기 창구(`optStr`)가 이 자로 재고 들어오는데 저장소가 다른 자를 쓰면,
+ * 창구를 지나지 않는 길 하나로 그 약속이 깨진다.
+ */
+function clean(v: unknown): string {
+  return cleanText(v);
+}
+
 function normalizeKeywords(kw: KBUpsertInput['keywords']): string[] {
   if (!kw) return [];
-  const arr = Array.isArray(kw) ? kw : String(kw).split(',');
-  return arr.map((s) => String(s).trim().toLowerCase()).filter(Boolean);
+  const arr = Array.isArray(kw) ? kw : clean(kw).split(',');
+  return arr.map((s) => clean(s).toLowerCase()).filter(Boolean);
 }
 
 export type UpsertResult =
@@ -124,15 +139,15 @@ export function upsertKB(input: KBUpsertInput): UpsertResult {
   }
 
   if (!existing) {
-    const question = (input.question || '').trim();
-    const answer = (input.answer || '').trim();
+    const question = clean(input.question);
+    const answer = clean(input.answer);
     if (!question || !answer || keywords.length === 0) {
       return { ok: false, error: '대표 질문·답변·키워드를 모두 입력해 주세요.' };
     }
-    const source = (input.source || '').trim();
+    const source = clean(input.source);
     const entry: KBEntry = {
       id,
-      category: (input.category || '일반').trim() || '일반',
+      category: clean(input.category) || '일반',
       question,
       keywords,
       answer,
@@ -147,12 +162,12 @@ export function upsertKB(input: KBUpsertInput): UpsertResult {
     return { ok: true, entry: cloneEntry(entry), created: true };
   }
 
-  if (input.category !== undefined) existing.category = String(input.category).trim() || existing.category;
-  if (input.question !== undefined) existing.question = String(input.question).trim() || existing.question;
-  if (input.answer !== undefined) existing.answer = String(input.answer).trim() || existing.answer;
+  if (input.category !== undefined) existing.category = clean(input.category) || existing.category;
+  if (input.question !== undefined) existing.question = clean(input.question) || existing.question;
+  if (input.answer !== undefined) existing.answer = clean(input.answer) || existing.answer;
   if (input.keywords !== undefined && keywords.length > 0) existing.keywords = keywords;
   if (input.source !== undefined) {
-    const src = String(input.source).trim();
+    const src = clean(input.source);
     if (src) existing.source = src;
     else delete existing.source;
   }
@@ -246,8 +261,12 @@ export function resetKB(): void {
 /**
  * 기본 규칙 답변을 덮어쓸 때의 길이 상한. 화면도 같은 값을 알고 있어야
  * **보내기 전에** 이유를 밝힐 수 있다(DS 29-1 — 거절은 그 칸에서 해야 한다).
+ *
+ * 수는 이제 `lib/limits`(`RULE_REPLY_LEN`) 에 있다 (DS 74-3) — 이 이름으로 가져다 쓰는 쪽
+ * (라우트·콘솔 사본)이 있어 이름만 여기 남긴다. 상한이 파일마다 손으로 적히면 갈라진다는 것이
+ * 그 파일이 생긴 까닭이고, 내 규칙의 **이름·고객이 쓸 표현**은 거기에 처음 올라간 수다.
  */
-export const MAX_RULE_REPLY_LEN = 1000;
+export const MAX_RULE_REPLY_LEN = RULE_REPLY_LEN;
 
 export interface RuleOverride {
   enabled: boolean;
@@ -264,7 +283,9 @@ export function setRuleOverride(intent: string, patch: { enabled?: boolean; repl
   const cur = ruleOverrides.get(intent) ?? { enabled: true };
   let reply = cur.reply;
   if (patch.reply === null) reply = undefined;
-  else if (patch.reply !== undefined) reply = String(patch.reply).trim() || undefined;
+  // 보이지 않는 글자만 적은 답변은 **빈 답변**이다 (DS 74-3) — `trim()` 은 그것을 글자로 세
+  // 기본 응답문을 밀어내고, 고객에게는 아무것도 적히지 않은 말풍선이 나간다.
+  else if (patch.reply !== undefined) reply = clean(patch.reply) || undefined;
   const next: RuleOverride = { enabled: patch.enabled ?? cur.enabled, reply };
   ruleOverrides.set(intent, next);
   schedulePersist();
@@ -345,8 +366,8 @@ export function upsertCustomRule(input: CustomRuleInput): CustomRuleResult {
   }
 
   if (!existing) {
-    const label = (input.label || '').trim();
-    const reply = (input.reply || '').trim();
+    const label = clean(input.label);
+    const reply = clean(input.reply);
     if (!label || !reply || keywords.length === 0) {
       return { ok: false, error: '규칙 이름·고객이 쓸 표현·답변을 모두 입력해 주세요.' };
     }
@@ -368,8 +389,8 @@ export function upsertCustomRule(input: CustomRuleInput): CustomRuleResult {
     return { ok: true, rule: cloneCustomRule(rule), created: true };
   }
 
-  if (input.label !== undefined) existing.label = String(input.label).trim() || existing.label;
-  if (input.reply !== undefined) existing.reply = String(input.reply).trim() || existing.reply;
+  if (input.label !== undefined) existing.label = clean(input.label) || existing.label;
+  if (input.reply !== undefined) existing.reply = clean(input.reply) || existing.reply;
   if (input.keywords !== undefined && keywords.length > 0) existing.keywords = keywords;
   if (input.escalate !== undefined) existing.escalate = input.escalate === true;
   if (input.enabled !== undefined) existing.enabled = input.enabled !== false;
