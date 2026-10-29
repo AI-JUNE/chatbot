@@ -344,6 +344,11 @@ interface OpsStats {
     /** `label` 은 서버가 붙인 주제 표시명이다(`@/lib/intents`) — 화면은 코드를 그리지 않는다. */
     topIntents: { intent: string; count: number; label?: string }[];
     /**
+     * 이름으로 묶은 **전체 주제 가지 수** — 위 목록은 그중 앞 10가지뿐이다 (DS 73-2).
+     * 옛 응답에는 없다 — 그때는 「몇 가지 중 몇 가지」를 말할 수 없으므로 보여 준 수만 적는다.
+     */
+    topics?: number;
+    /**
      * 고객사(테넌트)별 집계(DS 36-1). `label` 은 서버가 붙인 이름이다.
      * 옛 응답 대비 optional — 없으면 고객사 카드를 그리지 않는다(없는 수를 지어내지 않는다).
      */
@@ -383,8 +388,15 @@ interface OpsStats {
      * `citationLost` 는 **근거는 있었는데 어느 자료인지 되돌리지 못한** 복원분이다(DS 58-2) —
      * 「근거 없음」과 다른 사실이라 다르게 적는다. 옛 응답에는 `key`·`kbId`·`missing` 이
      * 없다(그때는 라벨이 열쇠였다).
+     * `up` 은 **같은 줄에 달린 👍 수**다 (DS 73-3) — 분모가 없으면 이 줄의 수는 「많이 쓰인
+     * 자료」와 「고쳐야 할 자료」를 가리지 못한다. 옛 응답에는 없다(그때는 모른다).
      */
-    topDown: { key?: string; citation: string; kbId?: string; missing?: boolean; citationLost?: boolean; down: number }[];
+    topDown: { key?: string; citation: string; kbId?: string; missing?: boolean; citationLost?: boolean; down: number; up?: number }[];
+    /**
+     * 👎가 하나라도 달린 **전체 자료 가지 수** — 위 목록은 그중 앞 다섯 줄뿐이다 (DS 73-3).
+     * 옛 응답에는 없다.
+     */
+    downTargets?: number;
   };
 }
 
@@ -5220,9 +5232,19 @@ export default function AdminPage() {
           {/* ── 무엇을 많이 묻는가 ── */}
           {stats && (
             <section style={S.card}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12 }}>
+              {/* 글이 길어졌으므로 375px 에서 접힌다 — 고정 너비가 없다. */}
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
                 <h2 style={S.h2}>많이 묻는 주제</h2>
-                <span style={S.tag}>상위 {stats.conversation.topIntents.length || 0}개</span>
+                {/* 「상위 10개」만 적던 자리 — 몇 가지 중 몇 가지인지 말한다 (DS 73-2 · DS 31-3).
+                    바로 아랫 카드(「답하지 못한 질문」)와 **같은 틀**로 적는다. 옛 응답에는
+                    모수가 없으므로 그때는 보여 준 수만 적는다(모르는 수를 지어내지 않는다). */}
+                <span style={S.tag} role="status">
+                  {typeof stats.conversation.topics === 'number'
+                    ? stats.conversation.topics > stats.conversation.topIntents.length
+                      ? `${comma(stats.conversation.topics)}가지 중 ${comma(stats.conversation.topIntents.length)}가지`
+                      : `${comma(stats.conversation.topics)}가지`
+                    : `상위 ${stats.conversation.topIntents.length || 0}개`}
+                </span>
               </div>
               {stats.conversation.topIntents.length > 0 ? (
                 stats.conversation.topIntents.map((t) => {
@@ -5351,10 +5373,35 @@ export default function AdminPage() {
                   </div>
                   {stats.feedback.topDown.length > 0 && (
                     <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
-                      <h3 style={{ fontSize: 13.5, fontWeight: 800, marginBottom: 8 }}>보완이 필요한 자료</h3>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                        <h3 style={{ fontSize: 13.5, fontWeight: 800 }}>보완이 필요한 자료</h3>
+                        {/* 다섯 줄이 전부인 것처럼 보이던 자리 (DS 73-3 · DS 31-3) — 몇 가지 중
+                            몇 가지인지 말한다. 옛 응답에는 모수가 없으므로 아무 말도 하지 않는다. */}
+                        {typeof stats.feedback.downTargets === 'number' && stats.feedback.downTargets > stats.feedback.topDown.length && (
+                          <span style={S.tag} role="status">
+                            {comma(stats.feedback.downTargets)}가지 중 {comma(stats.feedback.topDown.length)}가지
+                          </span>
+                        )}
+                      </div>
                       <ul className="ac-rows" aria-label="아쉬워요가 많은 자료">
                         {stats.feedback.topDown.map((d) => {
-                          const pill = <span className="ac-pill" style={TONE.warn}>아쉬워요 {d.down}건</span>;
+                          /**
+                           * **분모를 함께 적는다** (DS 73-3).
+                           *
+                           * 자료는 많이 쓰일수록 👎도 받는다 — 종전에는 「아쉬워요 1건」만 적어,
+                           * 👍 30건·👎 1건인 자료가 👍 0건·👎 1건인 자료와 같은 줄로 보였다.
+                           * 바로 위 큰 글씨가 비율인 화면에서 이 줄만 분모가 없었다(DS 67-1).
+                           * 옛 응답에는 👍 수가 없다 — 그때는 「0건」이 아니라 **모른다**이므로
+                           * 종전처럼 👎 수만 적는다(없는 수를 지어내지 않는다 · §13).
+                           */
+                          const pill =
+                            typeof d.up === 'number' ? (
+                              <span className="ac-pill" style={TONE.warn}>
+                                평가 {comma(d.up + d.down)}건 중 아쉬워요 {comma(d.down)}건
+                              </span>
+                            ) : (
+                              <span className="ac-pill" style={TONE.warn}>아쉬워요 {d.down}건</span>
+                            );
                           // 열쇠는 서버가 만든 것을 쓴다(DS 43-2) — 라벨을 열쇠로 쓰면 같은 이름을
                           // 공유하는 자료 둘이 한 줄로 합쳐지고, 이름을 고치면 줄이 새로 생긴다.
                           const key = d.key || d.citation;

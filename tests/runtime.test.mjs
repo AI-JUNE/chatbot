@@ -7795,3 +7795,131 @@ test('저장을 다시 눌러도 같은 것이 두 벌 생기지 않는다 (DS 7
   P.resetPartners();
   A.resetKB();
 });
+
+/* ══════════ 디자인 스프린트 — 70차 재감사 (DS 73-1·73-2·73-3) ══════════ */
+
+/**
+ * DS 73-1·73-2 — 대시보드 「많이 묻는 주제」가 **코드로 묶고 이름으로 그렸다**.
+ *
+ * 이 제품의 인텐트 코드와 주제 이름은 1:1 이 아니다 — 접수 한 흐름의 네 코드
+ * (`form:reservation:name`·`:datetime`·`:datetime:retry`·`:contact`)는 모두
+ * 「예약 접수 진행 중」 한 이름이다(`intents.formLabel`). 그래서 같은 이름이 여러 줄로 서고
+ * 수가 그만큼 갈라져, 한 주제가 상위 10자리를 여러 줄로 먹고 다른 주제는 밀려 보이지 않았다.
+ * 모수도 없어 「상위 10개」가 전부처럼 읽혔다(DS 31-3).
+ */
+const TOPIC_GROUP = ['convlog', 'intents', 'storage', 'logger', 'monitoring', 'pii', 'limits', 'kst', 'order', 'num'];
+
+test('많이 묻는 주제를 이름으로 묶고, 몇 가지 중 몇 가지인지 말한다 (DS 73-1·73-2)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const pick = (name) => importLib(name, TOPIC_GROUP.filter((n) => n !== name));
+  const C = await pick('convlog');
+  const { intentLabel, UNKNOWN_INTENT_LABEL } = await pick('intents');
+  C.resetLogs();
+
+  const turn = (intent) =>
+    C.logTurn({ sessionId: 's-73', channel: 'web', tenant: null, message: '예약하고 싶어요', reply: '답', intent, source: 'context', escalate: false });
+
+  const SAME_NAME = ['form:reservation:name', 'form:reservation:datetime', 'form:reservation:datetime:retry', 'form:reservation:contact'];
+  for (const c of SAME_NAME) turn(c);
+  turn('pricing');
+  turn('pricing');
+
+  // 종전 식 재현 — 코드로 묶으면 **다섯 줄**이고, 그중 네 줄의 이름이 똑같다.
+  const byCode = new Map();
+  for (const t of C.listAllTurns()) byCode.set(t.intent, (byCode.get(t.intent) ?? 0) + 1);
+  assert.equal(byCode.size, 5, '종전 식(코드로 묶기)이 재현되지 않는다');
+  assert.equal(
+    [...byCode.keys()].filter((c) => intentLabel(c) === '예약 접수 진행 중').length,
+    4,
+    '이름이 같은 코드가 넷이라는 전제가 깨졌다',
+  );
+
+  // 고친 뒤 — 이름으로 묶으므로 **두 가지**이고, 갈라졌던 수가 한 줄로 모인다.
+  const st = C.convStats();
+  assert.equal(st.topics, 2, `같은 이름이 여러 줄로 선다(${st.topics}가지)`);
+  assert.equal(st.topIntents.length, 2);
+  assert.equal(st.topIntents[0].count, 4, '한 주제의 수가 코드마다 갈라진다');
+  assert.equal(intentLabel(st.topIntents[0].intent), '예약 접수 진행 중', '대표 코드의 이름이 묶음의 이름과 다르다');
+  assert.equal(st.topIntents[1].count, 2);
+  assert.equal(intentLabel(st.topIntents[1].intent), '요금 문의');
+
+  // 동점 차례는 **들어온 순서에 매이지 않는다**(DS 64-2 의 자를 지난다).
+  C.resetLogs();
+  for (const c of ['pricing', 'refund', 'greeting']) turn(c);
+  const first = C.convStats().topIntents.map((t) => intentLabel(t.intent)).join(',');
+  C.resetLogs();
+  for (const c of ['greeting', 'refund', 'pricing']) turn(c);
+  const second = C.convStats().topIntents.map((t) => intentLabel(t.intent)).join(',');
+  assert.equal(first, second, `같은 자료가 들어온 차례만 달라도 주제 차례가 바뀐다(${first} / ${second})`);
+
+  // 모수는 **자르기 전**의 가지 수다 — 「상위 10개」가 전부인 것처럼 적지 않는다(DS 31-3).
+  C.resetLogs();
+  for (let i = 0; i < 12; i += 1) for (let n = 0; n <= i; n += 1) turn(`kb:분류${String(i).padStart(2, '0')}`);
+  const many = C.convStats();
+  assert.equal(many.topIntents.length, 10, '상위 목록의 길이가 바뀌었다');
+  assert.equal(many.topics, 12, `잘라 낸 가지 수를 말하지 않는다(${many.topics})`);
+
+  // 이름을 댈 수 없는 코드는 **한 줄**에 모인다 — 그 수가 「기타」의 진짜 크기다.
+  C.resetLogs();
+  for (const c of ['cr_gone_a', 'cr_gone_b', 'cr_gone_b']) turn(c);
+  const other = C.convStats();
+  assert.equal(other.topics, 1, '이름을 댈 수 없는 코드가 저마다 한 줄을 차지한다');
+  assert.equal(other.topIntents[0].count, 3);
+  assert.equal(intentLabel(other.topIntents[0].intent), UNKNOWN_INTENT_LABEL);
+  // 이름을 넘기면 그 이름으로 갈라진다 — 부르는 쪽이 아는 이름을 넘겨야 한다는 뜻이다.
+  const named = C.convStats({ cr_gone_a: '내 규칙 가', cr_gone_b: '내 규칙 나' });
+  assert.equal(named.topics, 2, '운영자가 만든 규칙이 한 묶음으로 뭉친다');
+  assert.equal(named.topIntents[0].intent, 'cr_gone_b');
+  assert.equal(named.topIntents[0].count, 2);
+  C.resetLogs();
+});
+
+/**
+ * DS 73-3 — 「보완이 필요한 자료」가 **분모 없이** 👎 수를 적고, 다섯 줄이 전부처럼 보였다.
+ *
+ * 자료는 많이 쓰일수록 👎도 받는다. 👍 30건·👎 1건인 자료와 👍 0건·👎 1건인 자료가 같은
+ * 줄로 보이면, 운영자는 그 목록을 「고칠 자료」로 읽고 잘 쓰이는 자료를 고치러 간다.
+ * 바로 위 큰 글씨가 비율인 화면에서 이 줄만 분모가 없던 자리다(DS 67-1·67-2).
+ */
+test('보완이 필요한 자료가 분모와 모수를 함께 말한다 (DS 73-3)', opts, async () => {
+  const F = await importLib('feedback', ['storage', 'logger', 'monitoring', 'refusal', 'kst', 'limits', 'order', 'text', 'num']);
+  F.resetFeedback();
+
+  const labels = {};
+  for (let i = 1; i <= 7; i += 1) {
+    labels[`kb${i}`] = `자료 ${i}`;
+    F.recordFeedback({ sessionHash: `h${i}`, verdict: 'down', citation: `자료 ${i}`, kbId: `kb${i}` });
+  }
+  // 자료 1 은 많이 쓰이는 자료다 — 👍 30건.
+  for (let i = 0; i < 30; i += 1) F.recordFeedback({ sessionHash: `u${i}`, verdict: 'up', citation: '자료 1', kbId: 'kb1' });
+
+  const s = F.feedbackSummary(labels);
+  assert.equal(s.down, 7);
+  assert.equal(s.topDown.length, F.TOP_DOWN_LIMIT, '보여 주는 줄 수가 바뀌었다');
+  assert.equal(s.downTargets, 7, `잘라 낸 가지 수를 말하지 않는다(${s.downTargets})`);
+  assert.ok(s.downTargets > s.topDown.length, '모수와 보여 준 수가 같아 재현이 되지 않는다');
+
+  const hot = s.topDown.find((t) => t.kbId === 'kb1');
+  assert.equal(hot.down, 1);
+  assert.equal(hot.up, 30, '많이 쓰이는 자료의 👍 가 그 줄에 없다');
+  const cold = s.topDown.find((t) => t.kbId === 'kb2');
+  assert.equal(cold.down, 1);
+  assert.equal(cold.up, 0, '👍 가 없는 자료에 없는 수를 지어냈다');
+  // 두 줄은 종전에 **같은 글자**로 보였다 — 이제 분모가 그 둘을 가린다.
+  assert.notEqual(hot.up + hot.down, cold.up + cold.down);
+
+  // 묶는 자는 👎 쪽과 한 벌이다 — 근거 없이 답한 답변에 달린 👍 도 그 줄로 들어간다.
+  F.resetFeedback();
+  F.recordFeedback({ sessionHash: 'n1', verdict: 'down' });
+  F.recordFeedback({ sessionHash: 'n2', verdict: 'up' });
+  const none = F.feedbackSummary({});
+  assert.equal(none.topDown.length, 1);
+  assert.equal(none.topDown[0].citation, F.NO_CITATION_LABEL);
+  assert.equal(none.topDown[0].up, 1, '같은 줄의 👍 가 다른 열쇠로 세어진다');
+  assert.equal(none.downTargets, 1);
+
+  // 평가가 하나도 없으면 모수도 0 이다(없는 줄을 지어내지 않는다).
+  F.resetFeedback();
+  assert.equal(F.feedbackSummary().downTargets, 0);
+  assert.equal(F.feedbackSummary().topDown.length, 0);
+});

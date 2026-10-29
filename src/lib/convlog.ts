@@ -416,7 +416,19 @@ export interface ConvStats {
    * 종전에는 모든 고객사를 하나로 합쳐 세어, 이음에 줄 수 있는 수치가 한 줄도 없었다.
    */
   byTenant: TenantBucket[];
-  topIntents: { intent: string; count: number }[]; // 상위 10개
+  /**
+   * 많이 묻는 주제 상위 10개 — **이름으로 묶은** 것이다 (DS 73-1).
+   *
+   * `intent` 는 그 묶음의 **대표 코드**(가장 많이 나온 코드)다. 부르는 쪽이 그 코드로 다시
+   * 이름을 붙여도 묶음의 이름이 그대로 나온다(한 묶음 안의 코드는 모두 같은 이름이다).
+   */
+  topIntents: { intent: string; count: number }[];
+  /**
+   * 이름으로 묶은 **전체 주제 가지 수** (DS 73-2) — 위 목록은 그중 앞 10가지뿐이다.
+   * 화면이 「보여 준 수를 전체라고 말하지 않게」 하는 모수다(DS 31-3 · 「답하지 못한 질문」의
+   * `groups` 와 같은 자리·같은 뜻).
+   */
+  topics: number;
   autoHandled: number; // rule/kb로 즉시 응답한 턴
   autoRate: number; // 자동처리율(0~1, 소수 3자리)
   escalatedTurns: number;
@@ -488,10 +500,40 @@ function recentDays(count = 7): string[] {
   return out;
 }
 
-export function convStats(): ConvStats {
+/**
+ * 한 주제 묶음 — **이름이 열쇠**이고, 대표 코드는 그 안에서 가장 많이 나온 코드다 (DS 73-1).
+ */
+interface TopicBucket {
+  label: string;
+  /** 대표 코드 — 이 코드로 이름을 다시 붙여도 같은 이름이 나온다. */
+  intent: string;
+  count: number;
+  /** 대표를 고를 때 쓴 「가장 많은 코드의 수」. */
+  top: number;
+}
+
+/**
+ * @param intentLabels 운영자가 만든 규칙(`cr_*`)의 이름 — 런타임에만 알 수 있어 부르는 쪽이
+ *   넘긴다(`turnsToCsv` 와 같은 규약). 넘기지 않으면 이름을 댈 수 없는 코드가 한 묶음
+ *   (「기타」)으로 모이므로, **이름을 아는 쪽이 부를 때 함께 넘겨야** 한다.
+ */
+export function convStats(intentLabels?: Record<string, string>): ConvStats {
   const bySource: Record<string, number> = {};
   const byChannel: Record<string, number> = {};
   const byIntent: Record<string, number> = {};
+  /**
+   * 주제는 **이름으로** 묶는다 (DS 73-1).
+   *
+   * 종전에는 코드(`l.intent`)로 묶고 화면이 그 코드에 이름을 붙여 그렸다. 그런데 이 제품의
+   * 코드와 이름은 1:1 이 아니다 — 접수 한 흐름의 `form:reservation:name`·`:datetime`·
+   * `:datetime:retry`·`:contact` 는 모두 「예약 접수 진행 중」 한 이름이다(`intents.formLabel`).
+   * 그래서 대시보드 「많이 묻는 주제」에 **같은 이름이 네 줄**로 서고, 그 주제의 수는 네 쪽으로
+   * 갈라졌다: 한 주제가 상위 10자리를 여러 줄로 먹고 정작 다른 주제는 아래로 밀려 보이지
+   * 않는다(DS 42-1 이 「답하지 못한 질문」에서 고친 그 모양이다 — 그쪽은 묶음 열쇠를 엔진과
+   * 같은 자로 모아 고쳤다). 이름을 댈 수 없는 코드(`UNKNOWN_INTENT_LABEL`)도 마찬가지로
+   * 한 줄에 모인다 — 그 수가 「기타」의 진짜 크기다.
+   */
+  const byTopic = new Map<string, TopicBucket>();
   const sessions = new Set<string>();
   // 고객사별 집계 — 세션은 고객사 안에서 센다(한 세션이 두 고객사에 걸치는 일은 없다).
   const byTenantMap = new Map<string, { tenant: string | null; turns: number; sessions: Set<string>; escalated: number }>();
@@ -506,7 +548,16 @@ export function convStats(): ConvStats {
     }
     bySource[l.source] = (bySource[l.source] || 0) + 1;
     byChannel[l.channel] = (byChannel[l.channel] || 0) + 1;
-    byIntent[l.intent] = (byIntent[l.intent] || 0) + 1;
+    const codeCount = (byIntent[l.intent] = (byIntent[l.intent] || 0) + 1);
+    // 이름으로 묶고, 대표 코드는 그 안에서 가장 많이 나온 코드로 둔다 (DS 73-1).
+    const topicLabel = intentLabel(l.intent, intentLabels);
+    const topic = byTopic.get(topicLabel) ?? { label: topicLabel, intent: l.intent, count: 0, top: 0 };
+    topic.count += 1;
+    if (codeCount > topic.top) {
+      topic.top = codeCount;
+      topic.intent = l.intent;
+    }
+    byTopic.set(topicLabel, topic);
     sessions.add(l.sessionId);
     const tenant = l.tenant ?? null;
     const tk = tenant ?? '';
@@ -546,10 +597,11 @@ export function convStats(): ConvStats {
     }
   }
 
-  const topIntents = Object.entries(byIntent)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([intent, count]) => ({ intent, count }));
+  // 같은 수면 이름순이다 — 줄 세우는 자는 `lib/order` 한 곳이다 (DS 64-2 · `byTenant` 와 같은
+  // 규칙). 종전에는 동점 차례가 **기록이 들어온 순서**에 매여 있어, 같은 자료가 들어온 차례만
+  // 달라도 상위 10 경계에서 어느 주제가 화면에 서는지가 바뀌었다.
+  const topics = [...byTopic.values()].sort((a, b) => b.count - a.count || compareText(a.label, b.label));
+  const topIntents = topics.slice(0, 10).map((t) => ({ intent: t.intent, count: t.count }));
   const totalTurns = logs.length;
   return {
     totalTurns,
@@ -563,6 +615,8 @@ export function convStats(): ConvStats {
       // **그 서버에 켜진 로케일**로 셌다(흔들리지 않게 두려던 자리가 환경에 매여 있었다).
       .sort((a, b) => b.turns - a.turns || compareText(a.tenant, b.tenant)),
     topIntents,
+    // 「보여 준 수」가 전부인지 일부인지 화면이 말할 수 있어야 한다 (DS 73-2 · DS 31-3).
+    topics: topics.length,
     autoHandled,
     autoRate: totalTurns ? Math.round((autoHandled / totalTurns) * 1000) / 1000 : 0,
     escalatedTurns,

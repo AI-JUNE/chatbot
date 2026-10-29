@@ -23,7 +23,10 @@ export async function GET(req: NextRequest) {
   // 운영자에게 `kb:환불`·`cr_m1x2`·`form:reservation:datetime` 같은 코드가 그대로 보인다.
   // 이름은 어휘를 아는 서버에서 붙여 보낸다(`@/lib/intents`).
   const labels = intentLabelMap(listCustomRules());
-  const conversation = convStats();
+  // 주제 묶음도 **그 이름으로** 센다 (DS 73-1) — 집계에 이름을 넘기지 않으면 운영자가 만든
+  // 규칙들이 한 묶음(「기타」)으로 뭉쳐, 대표 코드에 붙은 한 규칙의 이름이 다른 규칙의 수까지
+  // 달고 선다. 이름을 아는 자리가 여기이므로 여기서 넘긴다(`turnsToCsv` 와 같은 규약).
+  const conversation = convStats(labels);
   // 접수는 고객이 만드는 데이터라 상한이 없다 — **전부 싣지 않는다**(DS 43-3).
   // 콘솔은 이 응답을 30초마다 다시 받는다. 「전체 몇 건인가」는 `ticketPage.total` 과
   // `stats.escalation`(상태별 전체 수)이 말하므로, 화면은 보여 준 수를 전체라고 말하지 않는다.

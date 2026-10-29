@@ -84,6 +84,14 @@ export interface FeedbackTarget {
    */
   citationLost?: boolean;
   down: number;
+  /**
+   * 같은 자료에 달린 👍 수 — **이 줄의 분모**다 (DS 73-3).
+   *
+   * 종전에는 👎 수만 있었다. 그런데 자료는 많이 쓰일수록 👎도 받는다 — 👍 30건·👎 1건인
+   * 자료가 👍 0건·👎 1건인 자료와 **같은 줄로** 보였고, 운영자는 그 목록을 「고칠 자료」로
+   * 읽는다(바로 위 큰 글씨가 비율인 화면에서 이 줄만 분모가 없었다 · DS 67-1·67-2).
+   */
+  up: number;
 }
 
 export interface FeedbackSummary {
@@ -100,8 +108,14 @@ export interface FeedbackSummary {
    * 남긴다(기존 API 계약이라 값을 바꾸지 않는다).
    */
   helpfulRate: number | null;
-  /** 👎가 많은 근거 순 상위 목록(개선 대상). */
+  /** 👎가 많은 근거 순 상위 목록(개선 대상). 최대 `TOP_DOWN_LIMIT` 줄이다. */
   topDown: FeedbackTarget[];
+  /**
+   * 👎가 하나라도 달린 **전체 자료 가지 수** (DS 73-3) — 위 목록은 그중 앞 다섯 줄뿐이다.
+   * 화면이 「보여 준 수를 전체라고 말하지 않게」 하는 모수다(DS 31-3 · 「답하지 못한 질문」의
+   * `groups`·대화 집계의 `topics` 와 같은 자리·같은 뜻).
+   */
+  downTargets: number;
 }
 
 const MAX_ENTRIES = 500;
@@ -239,13 +253,31 @@ export const UNKNOWN_KB_LABEL = '어느 자료인지 알 수 없음';
  *   이 모듈이 KB 를 import 하면 평가 저장소가 지식 적재에 묶인다. 넘기지 않으면 이름을 바꾸지
  *   않고(평가 당시의 라벨 그대로) 「지워졌다」고 단정하지도 않는다.
  */
+/** 「보완이 필요한 자료」에 보이는 줄 수 — 모수(`downTargets`)와 함께 쓰는 수다 (DS 73-3). */
+export const TOP_DOWN_LIMIT = 5;
+
+/**
+ * 한 평가가 어느 줄에 들어가는가 — 👍·👎가 **같은 자**를 지나야 한 줄의 분모가 맞는다 (DS 73-3).
+ * 열쇠를 만들 수 없는 평가는 「왜 없는지」로 가른다(복원분 · 근거 없이 답한 답변 · DS 53-2·58-2).
+ */
+function rowKey(e: FeedbackEntry): string {
+  return targetKey(e) || (e.citationLost ? 'lost:' : `label:${NO_CITATION_LABEL}`);
+}
+
 export function feedbackSummary(labels?: Record<string, string>): FeedbackSummary {
   let up = 0;
   let down = 0;
   const downBy = new Map<string, { kbId?: string; citation: string; citationLost?: true; down: number }>();
+  /**
+   * 같은 줄에 달린 👍 수 — **그 줄의 분모**다 (DS 73-3). 👎가 하나도 없는 자료는 목록에
+   * 서지 않으므로 여기 센 수가 쓰이지 않는다(미리 가려 두지 않는다 — 가리는 자가 두 벌이 된다).
+   */
+  const upBy = new Map<string, number>();
   for (const e of entries) {
     if (e.verdict === 'up') {
       up += 1;
+      const k = rowKey(e);
+      upBy.set(k, (upBy.get(k) ?? 0) + 1);
       continue;
     }
     down += 1;
@@ -255,7 +287,7 @@ export function feedbackSummary(labels?: Record<string, string>): FeedbackSummar
     // 묶는 자는 `targetKey` 한 곳이다 (DS 72-2) — 접수가 「같은 평가인가」를 가릴 때 쓰는 그 자다.
     // 열쇠를 만들 수 없는 평가만 여기서 가른다: 근거는 있었는데 되돌리지 못한 것(복원 · DS 58-2)과
     // 애초에 근거 없이 답한 것은 **다른 사실**이다.
-    const key = targetKey(e) || (e.citationLost ? 'lost:' : `label:${NO_CITATION_LABEL}`);
+    const key = rowKey(e);
     const prev = downBy.get(key);
     if (prev) {
       prev.down += 1;
@@ -288,12 +320,23 @@ export function feedbackSummary(labels?: Record<string, string>): FeedbackSummar
         // 데려갈 곳이 없는 세 번째 사유 — 화면이 「근거 없음」과 다르게 적는다 (DS 58-2).
         ...(v.citationLost ? { citationLost: true } : {}),
         down: v.down,
+        // 같은 줄에 달린 👍 — 분모가 없으면 이 수는 「많이 쓰인 자료」와 「고쳐야 할 자료」를
+        // 가리지 못한다 (DS 73-3). 묶음 열쇠는 👎 쪽과 **같은 자**(`rowKey`)를 지난다.
+        up: upBy.get(key) ?? 0,
       };
     })
     // 같은 수면 근거 이름순 — 줄 세우는 자는 `lib/order` 한 곳이다 (DS 64-2).
     .sort((a, b) => b.down - a.down || compareText(a.citation, b.citation) || compareText(a.key, b.key))
-    .slice(0, 5);
-  return { total, up, down, helpfulRate: total === 0 ? null : Math.round((up / total) * 100), topDown };
+    .slice(0, TOP_DOWN_LIMIT);
+  return {
+    total,
+    up,
+    down,
+    helpfulRate: total === 0 ? null : Math.round((up / total) * 100),
+    topDown,
+    // 「보여 준 수」가 전부인지 일부인지 화면이 말할 수 있어야 한다 (DS 73-3 · DS 31-3).
+    downTargets: downBy.size,
+  };
 }
 
 /** 테스트·운영 점검용 초기화. */

@@ -2145,7 +2145,10 @@ test('평가가 어느 자료에 대한 것인지 id 로 오간다 (DS 43-2)', o
   //    화면에서 한 줄인 것이 저장에서는 두 건이 된다. 열쇠의 순서(id 먼저)는 종전 그대로다.
   assert.match(lib, /function targetKey\(e: \{ kbId\?: string; citation\?: string \}\): string \{\n  if \(e\.kbId\) return `id:\$\{e\.kbId\}`;/, '평가를 라벨로 묶는다');
   assert.match(lib, /return e\.citation \? `label:\$\{e\.citation\}` : '';/, '이름이 있는 평가를 라벨로 묶지 않는다');
-  assert.match(lib, /const key = targetKey\(e\) \|\| \(e\.citationLost \? 'lost:' : `label:\$\{NO_CITATION_LABEL\}`\);/, '집계가 묶는 자를 따로 적어 두었다');
+  // 70차(DS 73-3)에 이 식이 `rowKey` 한 곳으로 모였다 — 👍 도 같은 자를 지나야 한 줄의
+  // 분모가 맞는다. 묶는 자는 여전히 `targetKey`(접수 쪽과 한 벌)이고 순서도 그대로다.
+  assert.match(lib, /function rowKey\(e: FeedbackEntry\): string \{\n  return targetKey\(e\) \|\| \(e\.citationLost \? 'lost:' : `label:\$\{NO_CITATION_LABEL\}`\);/, '집계가 묶는 자를 따로 적어 두었다');
+  assert.match(lib, /const key = rowKey\(e\);/, '👎 를 묶는 자리가 그 자를 지나지 않는다');
   // ④ 이름 규칙이 근거 라벨과 같다 — 운영자가 답변 아래에서 본 그 이름이 목록에 떠야 한다.
   assert.match(knowledge, /source: entry\.source\?\.trim\(\) \|\| entry\.question,/, '근거 라벨 규칙이 바뀌었다');
   assert.match(tenantKB, /const label = \(e\.source \|\| ''\)\.trim\(\) \|\| \(e\.question \|\| ''\)\.trim\(\);/, '목록의 이름 규칙이 근거 라벨과 어긋난다');
@@ -3999,4 +4002,66 @@ test('대화 상세가 받아 온 토막을 대화 전체라고 적지 않는다
   const def = Number((convlog.match(/export const TURN_PAGE_DEFAULT = (\d+);/) || [])[1]);
   assert.ok(def > 0, '서버 기본값을 찾지 못했다');
   assert.equal(Number((src.match(/const TURN_PAGE_STEP = (\d+);/) || [])[1]), def, '콘솔의 묶음 크기가 서버 기본값과 다르다');
+});
+
+/**
+ * ── DS 73-1·73-2 — 「많이 묻는 주제」가 코드로 묶고 이름으로 그렸다 ──
+ * 이름이 같은 코드가 넷이면 같은 이름이 네 줄로 서고 그 주제의 수가 네 쪽으로 갈라진다.
+ * 모수도 없어 「상위 10개」가 전부처럼 읽혔다(DS 31-3) — 바로 아랫 카드는 그 말을 적는다.
+ */
+test('많이 묻는 주제가 이름으로 묶이고 몇 가지 중 몇 가지인지 적는다 (DS 73-1·73-2)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const route = readFileSync(new URL('../src/app/api/admin/escalations/route.ts', import.meta.url), 'utf8');
+  const lib = readFileSync(new URL('../src/lib/convlog.ts', import.meta.url), 'utf8');
+
+  // ① 집계가 **이름으로** 묶는다 — 이름을 아는 쪽이 넘긴다(`turnsToCsv` 와 같은 규약).
+  assert.match(lib, /export function convStats\(intentLabels\?: Record<string, string>\): ConvStats/, '집계가 이름을 받지 않는다');
+  assert.match(lib, /const topicLabel = intentLabel\(l\.intent, intentLabels\);/, '주제를 코드로 묶는다');
+  assert.match(lib, /const topics = \[\.\.\.byTopic\.values\(\)\]\.sort\(\(a, b\) => b\.count - a\.count \|\| compareText\(a\.label, b\.label\)\);/, '동점 차례가 기록 순서에 매여 있다');
+  assert.match(lib, /topics: topics\.length,/, '잘라 낸 가지 수를 말하지 않는다');
+  // 대표 코드는 그 묶음에서 가장 많은 코드다 — 부르는 쪽이 그 코드로 이름을 다시 붙인다.
+  assert.match(lib, /if \(codeCount > topic\.top\) \{/, '대표 코드를 고르지 않는다');
+
+  // ② 라우트가 이름을 넘긴다 — 넘기지 않으면 운영자가 만든 규칙들이 「기타」로 뭉친다.
+  assert.match(route, /const conversation = convStats\(labels\);/, '집계에 이름을 넘기지 않는다');
+
+  // ③ 화면이 모수를 적는다 — 바로 아랫 카드(「답하지 못한 질문」)와 같은 틀이다.
+  const card = src.slice(src.indexOf('<h2 style={S.h2}>많이 묻는 주제</h2>'), src.indexOf('── 보완 목록 ──'));
+  assert.equal(card.includes('상위 {stats.conversation.topIntents.length || 0}개'), false, '「상위 n개」만 적는 자리가 남아 있다');
+  assert.match(card, /typeof stats\.conversation\.topics === 'number'/, '옛 응답에서도 모수가 있는 척한다');
+  assert.ok(
+    card.includes('`${comma(stats.conversation.topics)}가지 중 ${comma(stats.conversation.topIntents.length)}가지`'),
+    '몇 가지 중 몇 가지인지 적지 않는다',
+  );
+  assert.match(card, /role="status"/, '모수가 바뀌어도 스크린리더에 닿지 않는다');
+  // 375px 에서 글이 길어진 만큼 접힌다(고정 너비가 없다).
+  assert.match(card, /flexWrap: 'wrap'/, '좁은 화면에서 머리줄이 넘친다');
+});
+
+/**
+ * ── DS 73-3 — 「보완이 필요한 자료」가 분모 없이 수를 적었다 ──
+ * 자료는 많이 쓰일수록 👎도 받는다. 👍 30건·👎 1건과 👍 0건·👎 1건이 같은 줄로 보이면
+ * 운영자는 잘 쓰이는 자료를 고치러 간다. 다섯 줄이 전부인 것처럼 보이던 자리이기도 하다.
+ */
+test('보완이 필요한 자료가 분모와 모수를 함께 적는다 (DS 73-3)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const lib = readFileSync(new URL('../src/lib/feedback.ts', import.meta.url), 'utf8');
+
+  // ① 집계가 같은 줄의 👍 를 센다 — 👎 와 **같은 자**(`rowKey`)를 지난다.
+  assert.match(lib, /const upBy = new Map<string, number>\(\);/, '같은 줄의 👍 를 세지 않는다');
+  assert.match(lib, /upBy\.set\(k, \(upBy\.get\(k\) \?\? 0\) \+ 1\);/, '👍 를 묶지 않는다');
+  assert.match(lib, /up: upBy\.get\(key\) \?\? 0,/, '한 줄의 분모가 비어 있다');
+  assert.match(lib, /downTargets: downBy\.size,/, '잘라 낸 가지 수를 말하지 않는다');
+  // 보여 주는 줄 수는 이름 있는 상수다 — 모수와 함께 쓰는 수다.
+  assert.match(lib, /export const TOP_DOWN_LIMIT = 5;/, '자르는 수에 이름이 없다');
+  assert.match(lib, /\.slice\(TOP_DOWN_LIMIT\)|\.slice\(0, TOP_DOWN_LIMIT\)/, '자르는 자리가 그 상수를 쓰지 않는다');
+
+  // ② 화면이 분모를 적는다. 옛 응답(👍 수 없음)에서는 **아무 수도 지어내지 않는다**.
+  const card = src.slice(src.indexOf('{stats.feedback.topDown.length > 0 && ('), src.indexOf('{/* ── 최근 대화 ── */}'));
+  assert.ok(card.includes('평가 {comma(d.up + d.down)}건 중 아쉬워요 {comma(d.down)}건'), '분모 없이 👎 수만 적는다');
+  assert.match(card, /typeof d\.up === 'number'/, '옛 응답에서 👍 0건이라고 단정한다');
+  // ③ 다섯 줄이 전부인 것처럼 보이던 머리줄 — 넘칠 때만 모수를 적는다.
+  assert.match(card, /typeof stats\.feedback\.downTargets === 'number' && stats\.feedback\.downTargets > stats\.feedback\.topDown\.length/, '모수를 늘 적거나 아예 적지 않는다');
+  assert.ok(card.includes('{comma(stats.feedback.downTargets)}가지 중 {comma(stats.feedback.topDown.length)}가지'), '몇 가지 중 몇 가지인지 적지 않는다');
+  assert.match(card, /flexWrap: 'wrap'/, '좁은 화면에서 머리줄이 넘친다');
 });
