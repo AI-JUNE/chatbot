@@ -121,6 +121,16 @@ export function estimateTokens(text: string): number {
 }
 
 /**
+ * 시스템 프롬프트가 쓸 수 있는 글자 수 — **이 수를 아는 자는 한 곳이다**.
+ *
+ * 왜 이름을 주는가: 프롬프트를 **만드는 쪽**(`buildSystemPrompt`)과 **재는 쪽**(`clampMessages`)이
+ * 각자 수를 들고 있으면, 만드는 쪽이 넘긴 글을 재는 쪽이 글자 가운데에서 끊는다 (DS 75-3).
+ */
+export function systemBudget(maxInputChars: number): number {
+  return Math.max(200, Math.floor(maxInputChars * 0.8));
+}
+
+/**
  * 입력 상한 적용 — 시스템 프롬프트는 보존하고 **오래된 대화 턴부터** 버린다.
  * 마지막 사용자 메시지는 반드시 남긴다(남길 수 없으면 잘라서라도 남긴다).
  */
@@ -129,7 +139,7 @@ export function clampMessages(
   messages: LLMMessage[],
   maxInputChars: number,
 ): { system: string; messages: LLMMessage[]; dropped: number; chars: number } {
-  const sys = cut(system, Math.max(200, Math.floor(maxInputChars * 0.8)));
+  const sys = cut(system, systemBudget(maxInputChars));
   let budget = maxInputChars - sys.length;
   const kept: LLMMessage[] = [];
   let dropped = 0;
@@ -150,6 +160,26 @@ export function clampMessages(
     }
     dropped += i + 1;
     break;
+  }
+
+  /**
+   * 보내는 **첫 마디는 고객 차례**여야 한다 (DS 75-1).
+   *
+   * 위 고리는 뒤에서부터 담으므로, 예산이 모자라면 남는 것이 「상담원 차례 → 고객 차례」로
+   * 시작할 수 있다. 그 모양은 보낼 수 없는 본문이다 — Anthropic 창구는 첫 마디가 고객
+   * (`user`) 이 아니면 본문 전체를 400 으로 거절한다. 그러면 우리가 받는 것은 「자료를
+   * 못 찾았다」가 아니라 **아무 답도 없는 upstream_error** 이고, 고객에게는 결정적 폴백이
+   * 그대로 나간다(생성이 통째로 사라진 줄 아무도 모른다 — 재시도 대상도 아니다).
+   * 돌려서 받아 냈다: 1,800자 네 턴 + 질문 하나를 넣으면 보낸 차례가
+   * `assistant,user,assistant,user` 였다.
+   *
+   * 고치는 길은 **더 버리는 것**이다 — 앞머리의 상담원 차례는 짝이 되는 고객의 말이 이미
+   * 버려진 조각이라, 들고 가도 모델이 무엇에 대한 답인지 알 수 없다. 버린 수는 `dropped` 에
+   * 함께 센다(얼마를 버렸는지 말하는 자가 하나여야 한다).
+   */
+  while (kept.length && kept[0]!.role !== 'user') {
+    kept.shift();
+    dropped += 1;
   }
 
   const chars = sys.length + kept.reduce((n, m) => n + m.content.length, 0);
@@ -330,9 +360,6 @@ export async function complete(input: { system: string; messages: LLMMessage[] }
   const clamped = clampMessages(scrub(input.system), masked, cfg.maxInputChars);
   if (clamped.messages.length === 0) return fail('input_too_large', false, 0);
 
-  // 4) 분당 호출 상한
-  if (!reserveCall(cfg.maxCallsPerMinute, t0)) return fail('budget_exceeded', false, 0);
-
   const req: LLMRequest = {
     system: clamped.system,
     messages: clamped.messages,
@@ -342,6 +369,23 @@ export async function complete(input: { system: string; messages: LLMMessage[] }
   let last: LLMResult = fail('upstream_error', true, 0);
   const total = cfg.retries + 1;
   for (let attempt = 1; attempt <= total; attempt += 1) {
+    /**
+     * 4) 분당 호출 상한 — **실제로 나가는 호출마다** 센다 (DS 75-2).
+     *
+     * 종전에는 이 줄이 고리 **앞**에 한 번 있었다. 그래서 상한은 「프롬프트 수」를 셌고
+     * 재시도는 공짜로 나갔다 — 재시도는 같은 본문을 **다시 과금**하는 호출이다. 돌려서
+     * 받아 냈다: 상한 2 · 재시도 3 으로 두면 업스트림 호출이 **8번** 나가고
+     * (`maxCallsPerMinute` 의 4배), 「지금 몇 번 불렀나」를 묻는 자(`llmState`)는 2 라고
+     * 답했다. 비용 안전장치라고 적어 둔 수가 실제로는 (재시도+1)배까지 헐거웠다.
+     *
+     * 첫 시도조차 예산이 없으면 그 사실을 사유로 돌려준다(종전과 같은 `budget_exceeded`).
+     * 재시도 차례에 바닥나면 **직전 실패를 그대로** 돌려준다 — 상한은 비용을 막는 자이므로
+     * 예산이 없을 때 더 두들기지 않는 쪽이 맞고, 고객에게는 어느 쪽이든 결정적 폴백이 간다.
+     */
+    if (!reserveCall(cfg.maxCallsPerMinute, now())) {
+      if (attempt === 1) return fail('budget_exceeded', false, 0);
+      break;
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
     timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
@@ -375,22 +419,77 @@ export interface GroundingDoc {
   answer: string;
 }
 
-/** 근거 기반 시스템 프롬프트 — 자료에 없으면 지어내지 말고 모른다고 답하게 한다. */
-export function buildSystemPrompt(docs: GroundingDoc[]): string {
-  const context = docs.length
-    ? docs.map((d, i) => `[자료 ${i + 1}] Q. ${d.question}\nA. ${d.answer}`).join('\n\n')
-    : '(제공된 자료 없음)';
-  return [
-    '너는 한국어 고객센터 상담 도우미다. 아래 "자료"에 있는 내용만 근거로 답한다.',
-    '규칙:',
-    '1. 자료에 없는 내용은 추측하지 말고 "제가 확인할 수 없는 내용"이라고 밝힌 뒤 상담원 연결을 안내한다.',
-    '2. 금액·기간·수치는 자료에 적힌 값만 사용한다. 임의로 만들지 않는다.',
-    '3. 3문장 이내로 간결하게, 존댓말로 답한다.',
-    '4. 개인정보(주민등록번호·카드번호 등)를 되묻거나 반복해서 적지 않는다.',
-    '',
-    '자료:',
-    context,
-  ].join('\n');
+const PROMPT_HEAD = [
+  '너는 한국어 고객센터 상담 도우미다. 아래 "자료"에 있는 내용만 근거로 답한다.',
+  '규칙:',
+  '1. 자료에 없는 내용은 추측하지 말고 "제가 확인할 수 없는 내용"이라고 밝힌 뒤 상담원 연결을 안내한다.',
+  '2. 금액·기간·수치는 자료에 적힌 값만 사용한다. 임의로 만들지 않는다.',
+  '3. 3문장 이내로 간결하게, 존댓말로 답한다.',
+  '4. 개인정보(주민등록번호·카드번호 등)를 되묻거나 반복해서 적지 않는다.',
+  '',
+  '자료:',
+].join('\n');
+
+const NO_DOCS = '(제공된 자료 없음)';
+
+/**
+ * 자료 한 건을 실을 때 **최소한 이만큼은** 들어가야 한다 — 그만큼도 못 되면 싣지 않는다.
+ * 두 문장도 안 되는 토막은 근거가 아니라 오해의 재료다.
+ */
+const MIN_DOC_ANSWER = 200;
+
+/** 자료가 빠졌을 때 프롬프트에 적는 한 줄 — 모델이 이 목록을 전부로 읽지 않게 한다. */
+function omittedNote(total: number, kept: number): string {
+  return `(등록된 자료 ${total}건 중 ${kept}건만 실었습니다 — 나머지는 길이 때문에 빠졌습니다. 실리지 않은 자료는 근거로 쓸 수 없습니다.)`;
+}
+
+/**
+ * 근거 기반 시스템 프롬프트 — 자료에 없으면 지어내지 말고 모른다고 답하게 한다.
+ *
+ * **자료를 반 토막으로 싣지 않는다** (DS 75-3). 종전에는 이 함수가 상한을 몰랐고, 넘친 글은
+ * 저 아래 `clampMessages` 가 `cut` 으로 글자 가운데에서 끊었다. 돌려서 받아 냈다: 자료 두 건을
+ * 넣으면 프롬프트가 「… 환불 수수료는 12,0」에서 끝났고, 뒤 자료는 머리줄째 사라졌다. 바로
+ * 위에 적힌 규칙이 「금액·기간·수치는 자료에 적힌 값만 사용한다」인데, 그 자료에 적힌 값이
+ * **12,0원** 이 된 것이다 — §13 이 금한 「없는 수」를 우리 프롬프트가 만들어 건넨 자리다.
+ *
+ * 그래서 담는 쪽이 상한을 안다: 통째로 들어가는 자료만 싣고, 마지막 한 건이 남는 자리에
+ * 걸치면 **잘랐다고 적어**(`clip` 의 「…(이하 생략)」 · DS 62-2) 싣는다. 빠진 건이 있으면
+ * 그 수를 한 줄로 말한다 — 모델이 이 목록을 전부로 읽으면 「자료에 없으면 모른다고 답한다」가
+ * 거짓 근거가 된다. 자료가 **한 건도** 들어가지 않으면 부르는 쪽이 호출을 접는다.
+ *
+ * 밖으로 나가는 글은 여기서 이미 마스킹한다(`scrub`) — 상한을 재는 자와 보내는 자가 같은
+ * 글자를 세야 한다(마스킹이 길이를 늘릴 수 있다 · `***@***`).
+ */
+export function buildSystemPrompt(
+  docs: GroundingDoc[],
+  maxChars = Infinity,
+): { system: string; kept: number; omitted: number } {
+  const blocks: string[] = [];
+  // 빠진 자료가 생기면 그 사실을 적어야 하므로, 그 한 줄의 자리를 미리 비워 둔다
+  // (실은 건수의 자리수가 가장 긴 모양으로 재 둔다 — 비워 둔 자리보다 긴 줄을 적지 않는다).
+  const reserve = docs.length ? omittedNote(docs.length, docs.length).length + 2 : 0;
+  let left = maxChars - PROMPT_HEAD.length - 1 - reserve;
+
+  for (const d of docs) {
+    const label = `[자료 ${blocks.length + 1}] Q. ${scrub(d.question)}\nA. `;
+    const answer = scrub(d.answer);
+    const room = left - (blocks.length ? 2 : 0) - label.length;
+    if (room >= answer.length) {
+      blocks.push(label + answer);
+      left = room - answer.length;
+      continue;
+    }
+    if (room >= MIN_DOC_ANSWER) blocks.push(label + clip(answer, room));
+    break;
+  }
+
+  const omitted = docs.length - blocks.length;
+  const note = omitted > 0 ? `\n\n${omittedNote(docs.length, blocks.length)}` : '';
+  return {
+    system: `${PROMPT_HEAD}\n${blocks.length ? blocks.join('\n\n') : NO_DOCS}${note}`,
+    kept: blocks.length,
+    omitted,
+  };
 }
 
 /**
@@ -406,18 +505,25 @@ export function sanitizeAnswer(text: string, maxChars = 900): string {
 
 /**
  * 대화 엔진이 쓰는 진입점. 실패하면 `null` 을 돌려주고, 호출부는 결정적 폴백을 유지한다.
+ *
+ * 프롬프트를 **상한 안에서** 만든다 (DS 75-3) — 상한을 아는 자는 `systemBudget` 하나이고,
+ * 자료가 한 건도 들어가지 않으면 **근거 없이 묻지 않는다**(결정적 폴백을 그대로 둔다 —
+ * 근거가 없을 때 호출하지 않는 것은 `augmentWithLLM` 이 이미 세운 환각 방지 규칙이다).
  */
 export async function generateGroundedAnswer(
   input: { question: string; docs: GroundingDoc[]; history?: LLMMessage[] },
   opts: CompleteOptions = {},
 ): Promise<{ text: string; provider: LLMProviderName; model: string } | { failed: LLMFailureReason }> {
+  const cfg = opts.config ?? readConfig();
   const history = (input.history ?? []).slice(-6);
+  const prompt = buildSystemPrompt(input.docs, systemBudget(cfg.maxInputChars));
+  if (input.docs.length > 0 && prompt.kept === 0) return { failed: 'input_too_large' };
   const res = await complete(
     {
-      system: buildSystemPrompt(input.docs),
+      system: prompt.system,
       messages: [...history, { role: 'user', content: input.question }],
     },
-    opts,
+    { ...opts, config: cfg },
   );
   if (!res.ok) return { failed: res.reason };
   const text = sanitizeAnswer(res.text);

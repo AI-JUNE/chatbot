@@ -429,6 +429,30 @@ test('LLM 어댑터는 상한(입력·출력·호출)을 모두 강제한다', (
   assert.match(s, /CIRCUIT_FAILURE_LIMIT/, '연속 실패 차단(서킷)이 있어야 한다');
 });
 
+test('분당 호출 상한을 재는 자리가 **재시도 고리 안**에 있다 (DS 75-2)', () => {
+  const s = read('src/lib/llm.ts');
+  const loop = s.indexOf('for (let attempt = 1');
+  const reserve = s.indexOf('reserveCall(cfg.maxCallsPerMinute');
+  assert.ok(loop > 0 && reserve > loop, '예산은 실제로 나가는 호출마다 세어야 한다(재시도도 과금이다)');
+  assert.equal((s.match(/reserveCall\(/g) || []).length, 2, '예산을 재는 자리는 정의 1곳 + 호출 1곳이어야 한다');
+});
+
+test('시스템 프롬프트 상한을 **아는 자가 한 곳**이고, 자료를 반 토막으로 싣지 않는다 (DS 75-3)', () => {
+  const s = read('src/lib/llm.ts');
+  assert.match(s, /export function systemBudget/, '상한을 셈하는 자에 이름이 있어야 한다');
+  assert.equal((s.match(/maxInputChars \* 0\.8/g) || []).length, 1, '그 수를 셈하는 자리는 한 곳이어야 한다');
+  assert.match(s, /cut\(system, systemBudget\(maxInputChars\)\)/, '재는 쪽이 그 자를 써야 한다');
+  assert.match(s, /buildSystemPrompt\(input\.docs, systemBudget\(cfg\.maxInputChars\)\)/, '만드는 쪽도 같은 자를 써야 한다');
+  assert.match(s, /MIN_DOC_ANSWER/, '토막만 남는 자료는 싣지 않는 문턱이 있어야 한다');
+  assert.match(s, /건만 실었습니다/, '싣지 못한 자료의 수를 프롬프트가 말해야 한다');
+  assert.match(s, /prompt\.kept === 0\) return \{ failed: 'input_too_large' \}/, '근거가 한 건도 없으면 호출하지 않아야 한다');
+});
+
+test('외부로 보내는 대화의 첫 마디는 고객 차례다 (DS 75-1)', () => {
+  const s = read('src/lib/llm.ts');
+  assert.match(s, /while \(kept\.length && kept\[0\]!\.role !== 'user'\)/, '첫 마디가 고객 차례가 되도록 더 버려야 한다');
+});
+
 test('LLM 어댑터는 개인정보를 마스킹해 보내고, 실패를 삼키지 않는다', () => {
   const s = read('src/lib/llm.ts');
   assert.match(s, /import \{ scrub \} from '@\/lib\/monitoring'/, '전송 전 마스킹');

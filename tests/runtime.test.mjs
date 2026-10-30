@@ -574,6 +574,116 @@ test('입력 상한 — 오래된 턴부터 버리고 마지막 질문은 반드
   assert.ok(llm.estimateTokens('안녕하세요') > llm.estimateTokens('hello'), '한국어 토큰 추정이 더 커야 한다');
 });
 
+test('잘라 보낸 대화도 **첫 마디가 고객 차례**다 (DS 75-1)', opts, async () => {
+  const llm = await importLib('llm', ['monitoring']);
+  const history = [
+    { role: 'user', content: '가'.repeat(1800) },
+    { role: 'assistant', content: '나'.repeat(1800) },
+    { role: 'user', content: '다'.repeat(1800) },
+    { role: 'assistant', content: '라'.repeat(1800) },
+  ];
+  const all = [...history, { role: 'user', content: '마지막 질문' }];
+
+  // 종전 식 재현 — 뒤에서부터 담기만 하면 남는 것이 「상담원 차례」로 시작한다.
+  const old = [];
+  let budget = 6000 - '시스템'.length;
+  for (let i = all.length - 1; i >= 0; i -= 1) {
+    if (all[i].content.length > budget) break;
+    old.unshift(all[i]);
+    budget -= all[i].content.length;
+  }
+  assert.equal(old[0].role, 'assistant', '종전 식에서는 첫 마디가 상담원 차례였다(Anthropic 400)');
+
+  const c = llm.clampMessages('시스템', all, 6000);
+  assert.equal(c.messages[0].role, 'user', '첫 마디는 고객 차례여야 한다');
+  assert.equal(c.messages[c.messages.length - 1].content, '마지막 질문');
+  assert.equal(c.dropped, 2, '버린 수에 앞머리 상담원 차례도 세어야 한다');
+  assert.ok(c.chars <= 6000);
+
+  // 실제로 나가는 본문도 같다.
+  llm.resetLLMState();
+  const f = fakeFetch([{ status: 200, json: { content: [{ type: 'text', text: '답' }] } }]);
+  await llm.complete({ system: '시스템', messages: all }, { config: llmCfg({ retries: 0 }), fetchImpl: f, sleep: noSleep });
+  assert.equal(f.calls[0].body.messages[0].role, 'user', '보내는 본문의 첫 마디가 고객 차례여야 한다');
+  llm.resetLLMState();
+});
+
+test('분당 호출 상한이 **재시도까지** 센다 — 상한을 넘겨 과금되지 않는다 (DS 75-2)', opts, async () => {
+  const llm = await importLib('llm', ['monitoring']);
+  llm.resetLLMState();
+  const f = fakeFetch([{ status: 503 }]);
+  const cfg = llmCfg({ retries: 3, maxCallsPerMinute: 2 });
+  const run = () => llm.complete({ system: 's', messages: [{ role: 'user', content: 'q' }] }, { config: cfg, fetchImpl: f, sleep: noSleep });
+
+  const first = await run();
+  assert.equal(first.ok, false);
+  assert.equal(first.reason, 'upstream_error', '예산이 바닥나면 직전 실패를 그대로 돌려준다');
+  assert.equal(f.calls.length, 2, '종전에는 상한 2 에 재시도까지 8번 나갔다(상한 × (재시도+1))');
+  assert.equal(llm.llmState().callsLastMinute, 2, '「몇 번 불렀나」가 프롬프트 수가 아니라 호출 수여야 한다');
+
+  const second = await run();
+  assert.equal(second.reason, 'budget_exceeded');
+  assert.equal(f.calls.length, 2, '예산이 바닥난 뒤에는 호출이 나가지 않아야 한다');
+  llm.resetLLMState();
+});
+
+test('근거 자료를 **반 토막으로 싣지 않는다** — 금액이 가운데에서 끊기지 않는다 (DS 75-3)', opts, async () => {
+  const llm = await importLib('llm', ['monitoring']);
+  const budget = llm.systemBudget(6000);
+
+  // 금액이 상한 자리에 오게 맞춘 자료 — 종전 식에서는 끊긴 자리가 값 가운데였다.
+  const fixed = llm.buildSystemPrompt([{ id: 'k', question: '환불 수수료', answer: '' }]).system.length;
+  const one = [{ id: 'kb-1', question: '환불 수수료', answer: '가'.repeat(budget - fixed - 13) + ' 환불 수수료는 12,000원입니다.' }];
+
+  // 종전 식 재현 — 상한을 모르고 만든 뒤 글자 수로 끊으면 「12,0」에서 끝난다.
+  const unbounded = llm.buildSystemPrompt(one).system;
+  assert.ok(unbounded.length > budget);
+  assert.match(unbounded.slice(0, budget), /12,0$/, '종전 식에서는 금액이 가운데에서 끊겼다');
+
+  const p1 = llm.buildSystemPrompt(one, budget);
+  assert.ok(p1.system.length <= budget, '상한을 넘지 않아야 한다');
+  assert.equal(/12,0$/.test(p1.system), false, '값 가운데에서 끊긴 꼬리가 남으면 안 된다');
+  assert.ok(p1.system.endsWith('…(이하 생략)'), '잘라 실은 자료는 잘렸다고 적어야 한다 (DS 62-2)');
+  assert.equal(p1.kept, 1);
+
+  // 상한 안에 드는 자료는 **온전히**, 싣지 못한 자료는 **그 수를** 적는다.
+  const mk = (i, a) => ({ id: `kb-${i}`, question: `질문 ${i}`, answer: a });
+  const many = [
+    mk(1, '환불 수수료는 12,000원입니다. ' + '가'.repeat(1970)),
+    mk(2, '나'.repeat(2000)),
+    mk(3, '다'.repeat(2000)),
+    mk(4, '라'.repeat(2000)),
+  ];
+  const p = llm.buildSystemPrompt(many, budget);
+  assert.ok(p.system.length <= budget, '상한을 넘지 않아야 한다');
+  assert.match(p.system, /환불 수수료는 12,000원입니다\./, '실은 자료의 금액은 온전해야 한다');
+  assert.ok(p.kept >= 1 && p.kept < many.length, '넘치는 자료는 일부만 실린다');
+  assert.equal(p.omitted, many.length - p.kept);
+  assert.match(p.system, new RegExp(`자료 ${many.length}건 중 ${p.kept}건만 실었습니다`), '빠진 자료가 있으면 그 수를 적어야 한다');
+  assert.equal(p.system.includes(`[자료 ${many.length}]`), false, '싣지 못한 자료의 머리줄만 남으면 안 된다');
+
+  // 상한이 자료 한 건도 담을 수 없으면 **근거 없이 묻지 않는다**.
+  llm.resetLLMState();
+  const f = fakeFetch([{ status: 200, json: { content: [{ type: 'text', text: '답' }] } }]);
+  const r = await llm.generateGroundedAnswer(
+    { question: '환불 수수료 얼마예요', docs: many },
+    { config: llmCfg({ retries: 0, maxInputChars: 500 }), fetchImpl: f, sleep: noSleep },
+  );
+  assert.equal(r.failed, 'input_too_large');
+  assert.equal(f.calls.length, 0, '근거가 한 건도 없으면 호출이 나가면 안 된다');
+
+  // 평소 경로 — 자료가 상한 안에 들면 그대로 실려 나간다.
+  llm.resetLLMState();
+  const f2 = fakeFetch([{ status: 200, json: { content: [{ type: 'text', text: '답' }] } }]);
+  await llm.generateGroundedAnswer(
+    { question: '환불 수수료 얼마예요', docs: [{ id: 'kb-1', question: '환불 수수료', answer: '환불 수수료는 12,000원입니다.' }] },
+    { config: llmCfg({ retries: 0 }), fetchImpl: f2, sleep: noSleep },
+  );
+  assert.match(f2.calls[0].body.system, /12,000원/);
+  assert.equal(f2.calls[0].body.system.includes('건만 실었습니다'), false, '빠진 자료가 없으면 그 줄을 적지 않는다');
+  llm.resetLLMState();
+});
+
 /* ══════════ 대화 엔진 × LLM 폴백 ══════════ */
 
 // 대화 엔진 모듈들은 **한 번의 컴파일 결과를 공유**해야 상태(KB·세션)가 통한다.
