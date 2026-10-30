@@ -239,6 +239,75 @@ test('대화 API가 엔진 오류를 모니터링에 보고한다', () => {
   assert.match(s, /captureError/);
 });
 
+/**
+ * DS 76-1 — 울타리 밖으로 나가는 문맥 칸은 **글자만** 가리는 것이 아니다.
+ * 「정말 그렇게 동작하는가」는 `tests/runtime.test.mjs` 가 돌려서 본다 — 여기서는 느슨한
+ * 삼항(글자일 때만 가리고 나머지는 그대로)이 되돌아오지 않는지, 로거와 **같은 규칙**인지를 고정한다.
+ */
+test('오류 리포트의 문맥 칸이 로거와 같은 규칙으로 좁혀진다 (DS 76-1)', () => {
+  const s = read('src/lib/monitoring.ts');
+  assert.match(s, /export function safeExtra/, '문맥 칸을 고르는 자에 이름이 있어야 한다');
+  assert.match(s, /extra: safeExtra\(ctx\)/, '리포트가 그 자를 지나야 한다');
+  assert.equal(
+    /typeof v === 'string' \? scrub\(v\)\.slice\([^)]*\) : v/.test(s),
+    false,
+    '글자일 때만 가리고 나머지를 그대로 싣는 식이 되돌아왔다',
+  );
+  // 두 쪽이 같은 규칙을 적는다 — 객체·배열은 **버리고 이름만** 남긴다.
+  for (const f of ['src/lib/monitoring.ts', 'src/lib/logger.ts']) {
+    const t = read(f);
+    assert.match(t, /객체·배열[^\n]*기록하지 않는다|객체·배열[^\n]*보내지 않는다/, `${f} 에 객체를 버리는 규칙이 없다`);
+    assert.match(t, /dropped\.push\(k\.slice\(0, 40\)\)/, `${f} 가 버린 칸의 이름을 남기지 않는다`);
+  }
+});
+
+/**
+ * DS 76-2 — 리포트를 보내는 일이 고객의 응답을 붙잡지 않는다.
+ * 종전에는 `captureError` 가 수집기 응답까지 `await` 했고 부르는 자리가 그것을 또 기다렸다.
+ */
+test('리포트 전송이 응답 경로 밖에서 끝난다 (DS 76-2)', () => {
+  const s = read('src/lib/monitoring.ts');
+  const body = (s.split('export async function captureError')[1] ?? '').split('export async function withMonitoring')[0];
+  assert.notEqual(body, '', 'captureError 정의를 찾지 못했다');
+  assert.equal(/await fetch\(/.test(body), false, '만드는 자가 전송을 기다리고 있다');
+  assert.match(body, /const job = send\(/, '보내는 일을 따로 맡겨야 한다');
+  assert.equal((s.match(/await fetch\(/g) || []).length, 1, '전송하는 자리는 한 곳이어야 한다');
+  assert.match(s, /export function pendingReports/, '반드시 보내야 하는 자리가 기다릴 길이 있어야 한다');
+  assert.equal((s.match(/SEND_TIMEOUT_MS = /g) || []).length, 1, '전송 상한을 정하는 자리는 한 곳이어야 한다');
+  assert.match(s, /AbortSignal\.timeout\(SEND_TIMEOUT_MS\)/, '전송 상한을 그 자리에 다시 적지 않아야 한다');
+});
+
+/**
+ * DS 76-3 — 「설정됐는가」와 「접수되는가」는 다른 값이다.
+ * 종전에는 전자만 있었고, 전송 결과는 읽지도 세지도 않았다.
+ */
+test('리포트 접수 결과를 세고 콘솔이 그 수를 사람 말로 적는다 (DS 76-3)', () => {
+  const m = read('src/lib/monitoring.ts');
+  assert.match(m, /export function monitoringState/, '접수 결과를 말하는 자가 있어야 한다');
+  assert.match(m, /counters\.lastFailure = 'rejected'/, '수집기가 거절한 것을 세야 한다');
+  assert.match(m, /e\.name === 'AbortError' \? 'timeout' : 'network'/, '닿지 못한 것과 시간 초과를 구분해야 한다');
+
+  const h = read('src/app/api/health/route.ts');
+  assert.match(h, /monitoringReports/, '헬스체크가 접수 결과를 적지 않는다');
+  // 「리포트가 거절되고 있다」는 우리 설정의 상태다 — 토큰을 맞춘 사람에게만 적는다 (DS 49-2).
+  const authedBlock = h.slice(h.indexOf('...(authed'));
+  assert.match(authedBlock, /monitoringReports/, '접수 결과가 인증 없이 노출된다');
+  // 수집기는 우리 서비스의 의존성이 아니다 — 신호등을 노랑으로 만들지 않는다.
+  assert.equal(/failing\.length \|\| brokenTenant \|\| /.test(h), false, '수집기 상태가 서비스 신호등을 흔든다');
+
+  const ui = read('src/app/admin/page.tsx');
+  assert.match(ui, /aria-labelledby="monitor-h"/, '콘솔에 오류 수집 섹션이 없다');
+  assert.match(ui, /const REPORT_FAILURE: Record<ReportFailureCode, string>/, '사유 문장을 사람 말로 들고 있어야 한다');
+  assert.match(ui, /오류 수집처가 설정되지 않았습니다/, '미설정일 때 사실을 적어야 한다');
+  assert.match(ui, /수집처에 접수되지 않았습니다/, '실패를 문장으로 적어야 한다');
+  assert.match(ui, /서버 1대가 센 값/, '보여 준 수를 전부라고 말하지 않아야 한다 (DS 31-3)');
+  // 응답 코드·환경변수명은 운영자 화면에 적지 않는다.
+  const visible = ui.split('\n').filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*') && !l.trim().startsWith('/**')).join('\n');
+  for (const leak of ['SENTRY', 'Sentry', 'envelope']) {
+    assert.equal(visible.includes(leak), false, `콘솔 화면에 내부 문구 노출: ${leak}`);
+  }
+});
+
 test('헬스체크가 모니터링 상태와 빌드 정보를 노출한다', () => {
   const s = read('src/app/api/health/route.ts');
   assert.match(s, /MONITORING_ENABLED/);

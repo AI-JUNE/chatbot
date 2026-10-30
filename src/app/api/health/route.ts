@@ -14,7 +14,7 @@
 import { NextRequest } from 'next/server';
 import { KAKAO_LIVE } from '@/lib/kakao';
 import { ok, isAdminAuthed, ADMIN_AUTH_REQUIRED } from '@/lib/http';
-import { MONITORING_ENABLED } from '@/lib/monitoring';
+import { MONITORING_ENABLED, monitoringState } from '@/lib/monitoring';
 import { storageStatus } from '@/lib/storage';
 import { rbacStatus } from '@/lib/rbac';
 import { tenantStatus } from '@/lib/tenantKB';
@@ -39,6 +39,15 @@ export async function GET(req: NextRequest) {
   // 테넌트 지식(이음 FAQ 등) 적재 상태. FAQ가 0건이면 답변 근거가 없다는 뜻이라 degraded로 본다.
   const tenants = tenantStatus();
   const brokenTenant = tenants.some((t) => t.entries === 0 || t.skipped > 0);
+  /**
+   * 오류 리포트가 **접수되는가** (DS 76-3) — 「설정됐는가」(`monitoring`)와 다른 값이다.
+   * 키가 틀려 전부 거절되는 동안에도 종전 응답은 같은 말을 했다. 이 수는 지금 응답한
+   * 서버 1대가 센 값이고(프로세스 메모리), 그 사실은 읽는 화면이 함께 적는다.
+   *
+   * 신호등(`status`)에는 넣지 않는다 — 수집기는 **우리 서비스의 의존성이 아니다**(리포트가
+   * 막혀도 고객의 답은 그대로 간다). 외부 감시가 읽는 그 값은 고객에게 보이는 고장만 센다.
+   */
+  const reports = monitoringState();
   return ok({
     service: 'chatbot',
     status: failing.length || brokenTenant ? 'degraded' : 'ok',
@@ -72,6 +81,13 @@ export async function GET(req: NextRequest) {
       // 그 사실을 밖에 알리는 것은 잠기지 않은 문에 안내판을 세우는 일이다.
       ...(authed
         ? {
+            // 리포트가 거절되고 있다는 사실은 우리 설정의 상태다 — 토큰을 맞춘 사람에게만 적는다.
+            monitoringReports: {
+              sent: reports.sent,
+              failed: reports.failed,
+              lastStatus: reports.lastStatus,
+              lastFailure: reports.lastFailure,
+            },
             adminAuthRequired: ADMIN_AUTH_REQUIRED, // [승인 필요] 전까지 false
             adminTokenConfigured: Boolean(process.env.ADMIN_TOKEN), // 값은 노출하지 않음
             // 파트너 담당자 로그인(partner_admin). [승인 필요] 전까지 false이며,

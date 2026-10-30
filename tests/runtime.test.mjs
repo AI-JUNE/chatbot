@@ -8148,3 +8148,213 @@ test('문서를 나눈 조각이 「한 항목 길이」를 넘지 않는다 (DS
     assert.ok(c.keywords.join(', ').length <= limits.KEYWORDS_LEN, '검색어가 한 칸에 들어가지 않는다 — 콘솔에서 다시 저장할 수 없다');
   }
 });
+
+/* ══════════ 73차 재감사 — 울타리 밖 수집기로 나가는 오류 리포트 (DS 76-1·76-2·76-3) ══════════ */
+
+/**
+ * DSN 이 설정된 `monitoring` 한 벌 — 모듈이 기동할 때 환경변수를 읽으므로(`TARGET`)
+ * import 전에 심고, 심자마자 되돌린다. 묶음 이름이 이 파일에서 유일해야 **다른 테스트가
+ * 쓰는 no-op 모듈과 섞이지 않는다**(`_compile.mjs` 가 묶음마다 다른 폴더에 둔다).
+ */
+let monitoringMod = null;
+async function monitoringWithDsn() {
+  if (monitoringMod) return monitoringMod;
+  const before = process.env.SENTRY_DSN;
+  process.env.SENTRY_DSN = 'https://pubkey@collector.test/4321';
+  try {
+    monitoringMod = await importLib('monitoring', ['pii']);
+  } finally {
+    if (before === undefined) delete process.env.SENTRY_DSN;
+    else process.env.SENTRY_DSN = before;
+  }
+  return monitoringMod;
+}
+
+/** 수집기 흉내 — envelope 본문(3줄) 가운데 사건 한 건을 꺼내 준다. */
+function fakeCollector(reply = { status: 200 }) {
+  const calls = [];
+  const fn = async (url, init) => {
+    const body = String(init?.body ?? '');
+    let event = null;
+    try {
+      event = JSON.parse(body.split('\n')[2]);
+    } catch {
+      event = null;
+    }
+    calls.push({ url, body, event, signal: init?.signal });
+    if (reply.hangMs) {
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(resolve, reply.hangMs);
+        init?.signal?.addEventListener('abort', () => {
+          clearTimeout(t);
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        });
+      });
+    }
+    if (reply.throws) throw Object.assign(new Error('boom'), { name: reply.throws });
+    return { ok: reply.status >= 200 && reply.status < 300, status: reply.status };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+/** globalThis.fetch 를 갈아 끼우고 반드시 돌려놓는다. */
+async function withFetch(fn, body) {
+  const real = globalThis.fetch;
+  globalThis.fetch = fn;
+  try {
+    return await body();
+  } finally {
+    globalThis.fetch = real;
+  }
+}
+
+test('오류 리포트의 문맥 칸이 **글자만** 가리지 않는다 (DS 76-1)', opts, async () => {
+  const M = await monitoringWithDsn();
+  assert.equal(M.MONITORING_ENABLED, true, 'DSN 을 심지 못했다 — 재현 실패');
+  const ctx = {
+    route: '/api/chat',
+    detail: { email: 'hong@gowon.kr', phone: '010-1234-5678' },
+    list: ['계좌 1002123456789'],
+    note: '연락처 010-1234-5678 로 전화 주세요',
+    tries: 2,
+    live: false,
+    missing: null,
+    broken: Number.NaN,
+  };
+
+  // 종전 식 재현 — 글자일 때만 가렸으므로 객체·배열 안의 글자는 그대로 나갔다.
+  const old = JSON.stringify(
+    Object.fromEntries(Object.entries(ctx).map(([k, v]) => [k, typeof v === 'string' ? M.scrub(v).slice(0, 300) : v])),
+  );
+  assert.match(old, /hong@gowon\.kr/, '종전 식에서 이메일이 그대로 나갔다 — 재현 실패');
+  assert.match(old, /1002123456789/, '종전 식에서 계좌번호가 그대로 나갔다 — 재현 실패');
+
+  const f = fakeCollector();
+  await withFetch(f, async () => {
+    M.resetMonitoringState();
+    await M.captureError(new Error('연락처 010-1234-5678 에서 실패'), ctx);
+    await M.pendingReports();
+  });
+  assert.equal(f.calls.length, 1);
+  const body = f.calls[0].body;
+  for (const raw of ['hong@gowon.kr', '010-1234-5678', '1002123456789']) {
+    assert.equal(body.includes(raw), false, `울타리 밖으로 ${raw} 가 그대로 나갔다`);
+  }
+  const extra = f.calls[0].event.extra;
+  assert.equal(extra.route, '/api/chat', '글자 칸은 그대로 실려야 한다');
+  assert.equal(extra.tries, 2, '수는 실려야 한다');
+  assert.equal(extra.live, false, '참거짓은 실려야 한다');
+  assert.equal('missing' in extra, false, '빈 값은 싣지 않는다');
+  assert.deepEqual(extra.dropped, ['detail', 'list', 'broken'], '버린 칸은 **이름만** 남겨야 한다');
+  assert.equal(extra.detail, undefined);
+  assert.match(f.calls[0].event.exception.values[0].value, /\*{4}/, '오류 메시지도 가려야 한다');
+
+  // 보낼 수 없는 값 하나가 **리포트 전체를 삼키지 않는다** — 종전에는 0건이 나갔다.
+  const circular = { name: 'ctx' };
+  circular.self = circular;
+  assert.throws(() => JSON.stringify({ ctx: circular }), '순환 참조가 직렬화를 깨뜨리지 않는다 — 재현 실패');
+  const f2 = fakeCollector();
+  await withFetch(f2, async () => {
+    M.resetMonitoringState();
+    await M.captureError(new Error('순환 참조'), { route: '/api/chat', ctx: circular, n: 10n });
+    await M.pendingReports();
+  });
+  assert.equal(f2.calls.length, 1, '종전에는 직렬화가 깨져 리포트가 통째로 사라졌다');
+  assert.deepEqual(f2.calls[0].event.extra.dropped, ['ctx', 'n']);
+});
+
+test('오류 리포트를 보내는 일이 **고객의 응답을 붙잡지 않는다** (DS 76-2)', opts, async () => {
+  const M = await monitoringWithDsn();
+  const HANG = 400;
+  const f = fakeCollector({ status: 200, hangMs: HANG });
+
+  await withFetch(f, async () => {
+    M.resetMonitoringState();
+
+    // 종전 식 재현 — 보내는 일을 그 자리에서 기다렸다(그리고 부르는 자리가 그것을 또 기다렸다).
+    const t0 = Date.now();
+    await f('https://collector.test/api/4321/envelope/', { body: 'x', signal: AbortSignal.timeout(3000) });
+    const blocked = Date.now() - t0;
+    assert.ok(blocked >= HANG - 50, `종전 식이 붙잡지 않았다(${blocked}ms) — 재현 실패`);
+
+    // 고친 뒤 — 만드는 일만 하고 돌아온다.
+    const t1 = Date.now();
+    await M.captureError(new Error('느린 수집기'), { route: '/api/kakao/webhook' });
+    const held = Date.now() - t1;
+    assert.ok(held < HANG / 2, `리포트가 응답을 ${held}ms 붙잡았다`);
+    assert.equal(f.calls.length, 2, '그래도 리포트는 나가 있어야 한다(기다리지만 않는다)');
+
+    // 기다려 주는 자를 부르면 그때는 끝까지 기다린다(스크립트·배치용).
+    const t2 = Date.now();
+    await M.pendingReports();
+    assert.ok(Date.now() - t2 >= HANG - 250, '`pendingReports` 가 전송을 기다리지 않는다');
+    assert.equal(M.monitoringState().sent, 1);
+  });
+
+  // 겹쳐 들어온 리포트도 하나의 기다림으로 모인다 — 센 수가 빠지지 않는다.
+  const f2 = fakeCollector({ status: 200, hangMs: 60 });
+  await withFetch(f2, async () => {
+    M.resetMonitoringState();
+    await M.captureError(new Error('1'), { route: '/api/chat' });
+    await M.captureError(new Error('2'), { route: '/api/chat' });
+    await M.captureError(new Error('3'), { route: '/api/chat' });
+    await M.pendingReports();
+    assert.equal(M.monitoringState().sent, 3, '겹쳐 보낸 리포트의 결과가 빠졌다');
+  });
+});
+
+test('리포트가 **접수됐는지**를 말하는 자가 있다 — 꺼진 것과 고장 난 것이 다르다 (DS 76-3)', opts, async () => {
+  const M = await monitoringWithDsn();
+
+  // 수집기가 거절한다(키가 틀린 자리) — 종전에는 응답을 읽지 않아 아무 기록도 남지 않았다.
+  await withFetch(fakeCollector({ status: 401 }), async () => {
+    M.resetMonitoringState();
+    await M.captureError(new Error('거절'), { route: '/api/chat' });
+    await M.pendingReports();
+    const s = M.monitoringState();
+    assert.equal(s.enabled, true, '「설정됐는가」는 여전히 true 다 — 그 값만으로는 구분할 수 없었다');
+    assert.equal(s.sent, 0, '접수된 리포트는 0건이다');
+    assert.equal(s.failed, 1);
+    assert.equal(s.lastStatus, 401);
+    assert.equal(s.lastFailure, 'rejected');
+  });
+
+  // 닿지 못한 것과 제때 답하지 않은 것은 운영자가 할 일이 다르다.
+  await withFetch(fakeCollector({ throws: 'TypeError' }), async () => {
+    M.resetMonitoringState();
+    await M.captureError(new Error('연결 실패'), { route: '/api/chat' });
+    await M.pendingReports();
+    assert.equal(M.monitoringState().lastFailure, 'network');
+    assert.equal(M.monitoringState().lastStatus, null);
+  });
+  await withFetch(fakeCollector({ throws: 'AbortError' }), async () => {
+    M.resetMonitoringState();
+    await M.captureError(new Error('시간 초과'), { route: '/api/chat' });
+    await M.pendingReports();
+    assert.equal(M.monitoringState().lastFailure, 'timeout');
+  });
+
+  // 만들지도 못한 리포트 — 보내지 않지만 그 사실은 센다(조용히 사라지지 않는다).
+  const f = fakeCollector();
+  await withFetch(f, async () => {
+    M.resetMonitoringState();
+    const bad = new Error('x');
+    Object.defineProperty(bad, 'message', { get() { throw new Error('읽을 수 없는 메시지'); } });
+    await M.captureError(bad, { route: '/api/chat' });
+    await M.pendingReports();
+    assert.equal(f.calls.length, 0, '만들지 못한 리포트를 보냈다');
+    assert.equal(M.monitoringState().failed, 1);
+    assert.equal(M.monitoringState().lastFailure, 'build');
+  });
+
+  // 접수되면 그 수를 센다.
+  await withFetch(fakeCollector({ status: 200 }), async () => {
+    M.resetMonitoringState();
+    await M.captureError(new Error('ok'), { route: '/api/chat' });
+    await M.pendingReports();
+    const s = M.monitoringState();
+    assert.deepEqual([s.sent, s.failed, s.lastStatus, s.lastFailure], [1, 0, 200, null]);
+  });
+  M.resetMonitoringState();
+});

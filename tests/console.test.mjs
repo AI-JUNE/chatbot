@@ -471,6 +471,27 @@ test('감사 로그·저장소 상태가 표·카드 그리드로 렌더되고 �
   assert.match(css, /\.ac-nsgrid\{display:grid/, '카드 그리드 CSS');
 });
 
+/**
+ * DS 76-3 — 「오류 수집」 패널. 종전에 이 사실을 말하는 자는 /api/health 의 한 칸뿐이었고
+ * 운영자 화면에는 아예 없었다(수집처가 리포트를 전부 거절해도 콘솔은 아무 말도 하지 않았다).
+ */
+test('오류 수집 패널이 색만으로 말하지 않고 사람 말로 적는다 (DS 76-3)', opts, () => {
+  const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const t = src.slice(src.indexOf("{tab === 'audit' &&"), src.indexOf("{tab === 'test' &&"));
+  assert.match(t, /<section style=\{S\.card\} aria-labelledby="monitor-h">/, '섹션 이름');
+  assert.match(t, /<h2 id="monitor-h"/, '제목이 섹션 이름과 이어져야 한다');
+  assert.match(t, /role="status" aria-live="polite"/, '상태가 바뀌면 스크린리더가 읽어야 한다');
+  // pill 은 색을 가지지만 **문장이 따로 있다** — 색만으로 말하지 않는다.
+  assert.match(t, /수집처 \{monitor\.enabled \? '설정됨' : '미설정'\}/, '설정 여부를 글자로 적어야 한다');
+  assert.match(t, /전달 \{monitor\.reports\.sent\}건 · 실패 \{monitor\.reports\.failed\}건/, '전달·실패 수');
+  assert.match(t, /REPORT_FAILURE\[monitor\.reports\.lastFailure\]/, '사유 문장을 이어 적어야 한다');
+  assert.match(t, /아직 전달된 리포트가 없습니다/, '0건을 고장으로 말하지 않는다');
+  assert.match(t, /서버 1대가 센 값/, '센 범위를 함께 적어야 한다 (DS 31-3)');
+  // 수집기는 서비스 의존성이 아니다 — 「서비스가 멈췄다」로 읽히는 말을 쓰지 않는다.
+  assert.match(t, /고객 응답은 그대로 동작합니다/, '영향 범위를 적어야 한다');
+  assert.match(src, /headers: authHeaders\(\), cache: 'no-store' \}\);\n      const data = await res\.json\(\);\n      const st = data\?\.dependencies\?\.storage/, '상태 조회가 토큰을 함께 보내야 한다');
+});
+
 test('테넌트 지식이 요약 카드+FAQ 표로 렌더되고 편집 UI 가 없다 (DS 2-11)', opts, () => {
   const src = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
   const t = src.slice(src.indexOf("{tab === 'tenant' &&"), src.indexOf("{tab === 'audit' &&"));

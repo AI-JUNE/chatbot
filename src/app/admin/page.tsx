@@ -1859,6 +1859,29 @@ interface StorageView {
 }
 
 /**
+ * 오류 리포트가 **접수되는지** (DS 76-3) — /api/health 의 `flags` 에서 온다.
+ * 옛 응답·토큰 미인증에는 `reports` 가 없다(그때는 수집처가 켜졌는지만 말한다).
+ */
+interface MonitoringView {
+  enabled: boolean;
+  reports: { sent: number; failed: number; lastFailure: ReportFailureCode | null } | null;
+}
+
+type ReportFailureCode = 'build' | 'network' | 'timeout' | 'rejected';
+
+/**
+ * 리포트가 접수되지 못한 사유를 **운영자의 말로** 적는다 (DS 76-3).
+ * 응답 코드·내부 용어는 화면에 적지 않는다 — 운영자가 할 일만 적는다(저장소 쪽
+ * `STORAGE_HEALTH` 와 같은 모양이다: 닫힌 목록은 화면이 문장을 들고 있다).
+ */
+const REPORT_FAILURE: Record<ReportFailureCode, string> = {
+  rejected: '수집처가 리포트를 받지 않았습니다. 배포 설정의 수집처 주소·키를 확인해 주세요.',
+  network: '수집처에 연결하지 못했습니다. 잠시 후 다시 확인해 주세요.',
+  timeout: '수집처가 제때 응답하지 않았습니다. 잠시 후 다시 확인해 주세요.',
+  build: '리포트를 만들지 못했습니다. 개발팀에 알려 주세요.',
+};
+
+/**
  * 저장 영역의 이름을 **알 수 없을 때**만 쓰는 말 (DS 47-3).
  *
  * 종전에는 이 파일이 이름 사전을 따로 들고 있었다(`admin`·`audit`·`tickets`·`convlog` 넷).
@@ -3782,8 +3805,9 @@ export default function AdminPage() {
     }
   }, []);
 
-  // ---- 저장소 상태(/api/health) ----
+  // ---- 저장소·오류 수집 상태(/api/health) ----
   const [storage, setStorage] = useState<StorageView | null>(null);
+  const [monitor, setMonitor] = useState<MonitoringView | null>(null);
   const [storageErr, setStorageErr] = useState('');
   const [storageBusy, setStorageBusy] = useState(false);
   const loadStorage = useCallback(async () => {
@@ -3791,17 +3815,32 @@ export default function AdminPage() {
     setStorageBusy(true);
     setStorageErr('');
     try {
-      const res = await afetch('/api/health', { cache: 'no-store' });
+      // 토큰을 함께 보낸다 — 「리포트가 접수되는가」는 토큰을 맞춘 사람에게만 적히는 칸이다
+      // (DS 49-2·76-3). 이 주소는 인증을 요구하지 않으므로 토큰이 없어도 응답은 온다.
+      const res = await afetch('/api/health', { headers: authHeaders(), cache: 'no-store' });
       const data = await res.json();
       const st = data?.dependencies?.storage;
       if (!res.ok || !st) {
         setStorage(null);
+        setMonitor(null);
         setStorageErr('저장소 상태를 확인하지 못했습니다. 잠시 후 새로고침해 주세요.');
         return;
       }
       setStorage(st as StorageView);
+      const flags = data?.flags;
+      setMonitor({
+        enabled: Boolean(flags?.monitoring),
+        reports: flags?.monitoringReports
+          ? {
+              sent: Number(flags.monitoringReports.sent) || 0,
+              failed: Number(flags.monitoringReports.failed) || 0,
+              lastFailure: (flags.monitoringReports.lastFailure as ReportFailureCode | null) ?? null,
+            }
+          : null,
+      });
     } catch {
       setStorage(null);
+      setMonitor(null);
       setStorageErr('네트워크 오류로 저장소 상태를 확인하지 못했습니다.');
     } finally {
       setStorageBusy(false);
@@ -7384,6 +7423,66 @@ export default function AdminPage() {
                   </ul>
                 </>
               )}
+            </section>
+
+            {/* ── 오류 수집 (DS 76-3) ──
+                종전에 이 사실을 말하는 자는 /api/health 의 `monitoring` 한 칸뿐이었고, 그 값은
+                「수집처가 설정됐는가」였다 — 키가 틀려 리포트가 전부 거절되는 동안에도 같은
+                말을 했다. 운영자 화면에는 아예 없던 자리다. 색만으로 말하지 않는다(문장이
+                일어난 일과 할 일을 적는다 · DS 47-2 와 같은 규칙). */}
+            <section style={S.card} aria-labelledby="monitor-h">
+              <h2 id="monitor-h" style={S.h2}>오류 수집</h2>
+              <p style={{ ...S.tag, marginTop: 2 }}>
+                서비스에서 오류가 났을 때 그 사실이 수집처로 전달되는지 보여 줍니다. 전달되지 않아도 고객 응답은 그대로 동작합니다.
+              </p>
+              <div role="status" aria-live="polite">
+                {!storageErr && !monitor && (
+                  <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10 }}>
+                    {storageBusy ? '오류 수집 상태를 확인하는 중입니다…' : '표시할 오류 수집 정보가 없습니다.'}
+                  </p>
+                )}
+                {monitor && (
+                  <>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
+                      <span className="ac-pill" style={monitor.enabled ? TONE.ok : TONE.warn}>
+                        수집처 {monitor.enabled ? '설정됨' : '미설정'}
+                      </span>
+                      {monitor.reports && (
+                        <span className="ac-pill" style={monitor.reports.failed > 0 ? TONE.danger : undefined}>
+                          전달 {monitor.reports.sent}건 · 실패 {monitor.reports.failed}건
+                        </span>
+                      )}
+                    </div>
+                    {!monitor.enabled && (
+                      <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10, lineHeight: 1.6 }}>
+                        오류 수집처가 설정되지 않았습니다. 지금은 오류가 서버 기록에만 남습니다.
+                      </p>
+                    )}
+                    {monitor.enabled && monitor.reports && monitor.reports.failed > 0 && (
+                      <p style={{ fontSize: 14, color: 'var(--danger)', marginTop: 10, lineHeight: 1.6 }}>
+                        최근 오류 리포트 {monitor.reports.failed}건이 수집처에 접수되지 않았습니다.
+                        {monitor.reports.lastFailure ? ` ${REPORT_FAILURE[monitor.reports.lastFailure]}` : ''}
+                      </p>
+                    )}
+                    {monitor.enabled && monitor.reports && monitor.reports.failed === 0 && monitor.reports.sent === 0 && (
+                      <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10, lineHeight: 1.6 }}>
+                        아직 전달된 리포트가 없습니다 — 오류가 나지 않았다는 뜻입니다.
+                      </p>
+                    )}
+                    {monitor.enabled && !monitor.reports && (
+                      <p style={{ fontSize: 14, color: 'var(--sub)', marginTop: 10, lineHeight: 1.6 }}>
+                        전달 결과는 관리 토큰으로 접속했을 때 표시됩니다.
+                      </p>
+                    )}
+                    {/* 보여 준 수를 전부라고 말하지 않는다 (DS 31-3) — 이 수는 프로세스 메모리다. */}
+                    {monitor.reports && (
+                      <p style={{ ...S.tag, marginTop: 8 }}>
+                        이 수는 지금 응답한 서버 1대가 센 값이며, 재시작하면 0부터 다시 셉니다.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
             </section>
           </>
         );
