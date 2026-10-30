@@ -8358,3 +8358,213 @@ test('리포트가 **접수됐는지**를 말하는 자가 있다 — 꺼진 것
   });
   M.resetMonitoringState();
 });
+
+/* ══════════ 74차 재감사 — 어느 자료가 답할지 고르는 자리 (DS 77-x) ══════════ */
+
+/** 종전 식 재현 — 겹침을 거르지 않고 더하고, 동점이면 **먼저 등록한 자료**가 이긴다. */
+function legacyScore(N, pre, entry) {
+  let score = 0;
+  const matched = [];
+  for (const kw of entry.keywords) {
+    if (!kw) continue;
+    const hit = N.keywordHit(pre.compact, pre.jamo, kw, true);
+    if (hit.kind === 'none') continue;
+    score += (N.compact(kw).length >= 2 ? 2 : 1) * N.MATCH_WEIGHT[hit.kind];
+    matched.push({ keyword: kw, kind: hit.kind });
+  }
+  return { entry, score, matched };
+}
+function legacyMatch(N, message, minScore, entries) {
+  const pre = N.prepare(message);
+  let best = null;
+  for (const entry of entries) {
+    const m = legacyScore(N, pre, entry);
+    if (m.score > 0 && (!best || m.score > best.score)) best = m;
+  }
+  return best && best.score >= minScore ? best : null;
+}
+
+/**
+ * DS 77-1 — **동점이면 먼저 등록한 자료가 답했다.**
+ *
+ * 코드 기본값 12건이 목록 앞에 있고 운영자가 넣은 자료는 뒤에 붙으므로(`kbEntries.push`),
+ * 더 또렷한 자료를 새로 넣어도 옛 자료가 계속 답한다. 고르는 자를 **순서가 아니라 규칙**으로
+ * 바꿨다 — 점수 → 질의를 더 많이 설명한 쪽 → 걸린 표현이 많은 쪽 → 나중에 등록한 쪽.
+ */
+test('동점일 때 무엇이 답하는가는 등록 순서가 아니라 규칙이 정한다 (DS 77-1)', opts, async () => {
+  const K = await importLib('knowledge', ['normalize']);
+  const N = await importLib('normalize', []);
+
+  const generic = { id: 'old_generic', category: '요금', question: '요금이 어떻게 되나요?', keywords: ['요금'], answer: '요금은 상담 후 안내드립니다.' };
+  const specific = { id: 'new_specific', category: '요금', question: '환불 수수료는 얼마인가요?', keywords: ['환불 수수료'], answer: '환불 수수료는 결제액의 10%입니다.' };
+  const entries = [generic, specific]; // 코드 기본값 뒤에 운영자가 새로 넣은 자료
+  const q = '환불 수수료 요금 알려주세요';
+
+  // ① 두 자료의 점수가 정말 같은지부터 — 같지 않으면 이 재현은 아무것도 지키지 않는다.
+  assert.equal(K.matchKnowledge(q, 0, [generic]).score, K.matchKnowledge(q, 0, [specific]).score, '동점이 아니다 — 재현이 성립하지 않는다');
+  // ② 종전 식: 먼저 등록한 일반 자료가 답한다(고객은 수수료를 묻고 「상담 후 안내」를 받는다).
+  assert.equal(legacyMatch(N, q, 2, entries).entry.id, 'old_generic', '종전 식에서도 새 자료가 답한다 — 재현 실패');
+  // ③ 고친 뒤: 질의를 더 많이 설명한 쪽이 답하고, **목록 차례를 뒤집어도 같은 답**이다.
+  assert.equal(K.matchKnowledge(q, 2, entries).entry.id, 'new_specific');
+  assert.equal(K.matchKnowledge(q, 2, [specific, generic]).entry.id, 'new_specific', '답이 목록 차례에 따라 흔들린다');
+  // ④ 설명한 글자 수까지 같으면 나중에 등록한 쪽이다(가릴 근거가 없을 때의 규칙 · 역시 순서 무관).
+  const a = { id: 'twin_a', category: 'x', question: '첫 자료', keywords: ['해지'], answer: '첫 안내.' };
+  const b = { id: 'twin_b', category: 'x', question: '나중 자료', keywords: ['해약'], answer: '나중 안내.' };
+  assert.equal(K.matchKnowledge('해지 해약 알려주세요', 2, [a, b]).entry.id, 'twin_b');
+  // ⑤ 점수가 다르면 그 수가 먼저다(동점 규칙이 점수를 밀어내지 않는다).
+  const weak = { id: 'weak', category: 'x', question: '약한 자료', keywords: ['환불'], answer: '약함.' };
+  const strong = { id: 'strong', category: 'x', question: '강한 자료', keywords: ['환불', '수수료'], answer: '강함.' };
+  assert.equal(K.matchKnowledge('환불 수수료', 2, [strong, weak]).entry.id, 'strong');
+});
+
+/**
+ * DS 77-2 — **보여 주는 줄과 답하는 자료를 서로 다른 자로 쟀다.**
+ *
+ * 연관 질문 목록은 고객이 번호로 고르는 줄이다(「번호(1~3)로 답하셔도 돼요」). 그런데 그
+ * 차례를 정하던 점수는 ① 키워드 길이를 보지 않고(`MATCH_WEIGHT` 만 더한다) ② 대표 질문이
+ * 질의에 들어 있기만 하면 2점을 줬다 — 한 글자 대표 질문이 아무 질의에나 걸린다.
+ */
+test('고객이 번호로 고르는 줄과 실제로 답하는 자료가 같은 자로 정해진다 (DS 77-2)', opts, async () => {
+  const K = await importLib('knowledge', ['normalize']);
+  const N = await importLib('normalize', []);
+
+  const short = { id: 'short', category: 'b', question: '정산', keywords: ['정'], answer: '정산 안내입니다.' };
+  const long = { id: 'long', category: 'a', question: '위약금 정산 기준', keywords: ['위약금 정산'], answer: '위약금은 남은 기간으로 정산합니다.' };
+  const entries = [short, long];
+  const q = '위약금 정산 어떻게 되나요';
+
+  // ① 종전 식 재현 — 가장 짧은 자료가 1번에 섰다.
+  const legacySearch = (query, limit, list) => {
+    const pre = N.prepare(query);
+    return list
+      .map((entry) => {
+        const m = legacyScore(N, pre, entry);
+        let score = m.matched.reduce((acc, x) => acc + N.MATCH_WEIGHT[x.kind], 0);
+        const qc = N.compact(entry.question);
+        if (qc.includes(pre.compact) || pre.compact.includes(qc)) score += 2;
+        return { entry, score };
+      })
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((x) => x.entry.id);
+  };
+  assert.deepEqual(legacySearch(q, 3, entries), ['short', 'long'], '종전 식에서도 긴 자료가 1번이다 — 재현 실패');
+  assert.equal(legacyMatch(N, q, 2, entries).entry.id, 'long', '종전에도 답하는 쪽은 긴 자료였다 — 어긋남이 재현되지 않는다');
+
+  // ② 고친 뒤 — 1번이 실제로 답하는 자료다.
+  assert.deepEqual(K.searchKnowledge(q, 3, entries).map((e) => e.id), ['long', 'short']);
+  assert.equal(K.matchKnowledge(q, 2, entries).entry.id, 'long');
+
+  // ③ 그래도 후보는 넓게 본다 — 대표 질문의 **머리만** 쳐도 목록에 뜬다(키워드가 없는 자료).
+  const pin = { id: 'pin', category: 't', question: '핀번호 확인 방법', keywords: ['zzzzq'], answer: '마이페이지에서 확인하세요.' };
+  assert.deepEqual(K.searchKnowledge('핀번호', 3, [pin]).map((e) => e.id), ['pin'], '키워드를 적지 않은 자료가 후보에서 빠진다');
+  // ④ 표기만 다른 대표 질문도 그대로 걸린다(DS 42-1 이 세운 자리).
+  const punct = { id: 'k42', category: '일반', question: '환불·교환, 가능한가요?', keywords: ['zzzzq'], answer: '네' };
+  assert.deepEqual(K.searchKnowledge('환불교환가능한가요', 3, [punct]).map((e) => e.id), ['k42']);
+  // ⑤ 질의에 걸린 것이 없으면 목록도 비어 있다(아무 자료나 번호를 받지 않는다).
+  assert.deepEqual(K.searchKnowledge('zzzz아무관계없는말', 3, entries), []);
+});
+
+/**
+ * DS 77-3 — **같은 글자를 여러 번 셌다.**
+ *
+ * 콘솔의 키워드 칸은 쉼표로 구분한 자유 글이고 문서 등록은 표현을 자동으로 만든다 — 그래서
+ * 같은 글자를 품은 표현(`환불, 환불 규정, 규정`)이 흔하다. 종전에는 그 셋이 모두 더해져
+ * 점수가 「얼마나 들어맞는가」가 아니라 「운영자가 몇 번 적었는가」를 쟀다.
+ */
+test('겹치는 표현은 한 번만 센다 — 점수가 적어 둔 횟수를 재지 않는다 (DS 77-3)', opts, async () => {
+  const K = await importLib('knowledge', ['normalize']);
+  const N = await importLib('normalize', []);
+
+  const dup = { id: 'dup', category: 'c', question: '환불', keywords: ['환불', '환불 규정', '규정'], answer: '환불 규정 안내.' };
+  const other = { id: 'other', category: 'd', question: '교환 절차는 어떻게 되나요', keywords: ['교환 절차'], answer: '교환 절차 안내.' };
+
+  // ① 종전 식 재현 — 같은 네 글자가 세 번 세어져 6점이 됐다.
+  assert.equal(legacyMatch(N, '환불 규정 알려주세요', 0, [dup]).score, 6, '종전 식에서 부풀지 않는다 — 재현 실패');
+  // ② 고친 뒤 — 가장 많이 기여하는 표현 하나만 센다.
+  const m = K.matchKnowledge('환불 규정 알려주세요', 0, [dup]);
+  assert.equal(m.score, 2);
+  assert.deepEqual(m.matched, [{ keyword: '환불 규정', kind: 'exact' }]);
+  assert.equal(m.coverage, 4, '설명한 글자 수가 겹침까지 세고 있다');
+
+  // ③ 부풀린 점수가 **다른 자료를 누르던** 자리 — 이제는 두 자료가 같은 점수다.
+  const q = '교환 절차랑 환불 규정';
+  assert.equal(legacyMatch(N, q, 0, [dup]).score, 6);
+  assert.equal(legacyMatch(N, q, 0, [other]).score, 2);
+  assert.equal(K.matchKnowledge(q, 0, [dup]).score, K.matchKnowledge(q, 0, [other]).score, '한쪽이 여전히 부풀어 있다');
+
+  // ④ 겹칠 때 **정확 일치가 오타 보정에 밀리지 않는다**(MATCH_WEIGHT 가 세운 선).
+  //    「활동확인서 발금」(오타)은 긴 표현에 오타 보정으로, 짧은 표현에 정확 일치로 걸린다.
+  const cert = { id: 'cert', category: '증명', question: '활동확인서 발급되나요?', keywords: ['활동확인서', '활동확인서 발급'], answer: '활동확인서는 마이페이지에서 발급하실 수 있어요.' };
+  const typo = K.matchKnowledge('활동확인서 발금되나요', 0, [cert]);
+  assert.deepEqual(typo.matched, [{ keyword: '활동확인서', kind: 'exact' }], '정확 일치가 오타 보정에 자리를 내줬다 — 확신도까지 함께 떨어진다');
+  // 오타가 없으면 더 긴 표현이 걸리고, 설명한 글자 수가 그만큼 크다.
+  const clean = K.matchKnowledge('활동확인서 발급되나요', 0, [cert]);
+  assert.deepEqual(clean.matched, [{ keyword: '활동확인서 발급', kind: 'exact' }]);
+  assert.ok(clean.coverage > typo.coverage);
+
+  // ⑤ 이 부풀림은 **기본 자료 안에도** 있었다 — 압축형이 같은 표현 두 개가 두 번 세어졌다.
+  const support = K.KB.find((e) => e.id === 'support');
+  assert.ok(support.keywords.includes('안돼요') && support.keywords.includes('안 돼요'), '기본 자료가 바뀌어 재현이 성립하지 않는다');
+  assert.equal(legacyMatch(N, '안돼요', 0, [support]).score, 4, '종전 식에서 두 번 세지 않는다 — 재현 실패');
+  assert.equal(K.matchKnowledge('안돼요', 0, [support]).score, 2);
+  // 그래도 기본 자료가 답하는 자료는 바뀌지 않는다(부풀린 수만 바로잡는다).
+  for (const [q2, id] of [['안돼요', 'support'], ['카톡 연동 되나요', 'kakao'], ['멀티채널 지원하나요', 'channels'], ['장애가 났어요', 'support']]) {
+    assert.equal(K.matchKnowledge(q2, 2, K.KB).entry.id, id, `「${q2}」가 답하는 자료가 바뀌었다`);
+  }
+});
+
+/**
+ * DS 77-4 — **근거 줄이 묻지 않은 문장을 가리켰다.**
+ *
+ * 문장을 고르는 점수가 자료에 적힌 키워드 **전부**를 봤다. 「요금과 환불」 두 가지가 적힌
+ * 자료에서 환불을 물으면 두 문장이 각각 키워드 하나씩 걸려 동점이 되고, 동점이면 첫 문장이
+ * 이겼다 — 고객이 「이 답의 출처」로 읽는 줄에 **묻지 않은 금액**이 떴다(§13).
+ */
+test('근거 줄은 고객이 물은 것을 가리킨다 (DS 77-4)', opts, async () => {
+  const K = await importLib('knowledge', ['normalize']);
+  const N = await importLib('normalize', []);
+
+  const entry = {
+    id: 'multi',
+    category: '요금',
+    question: '요금과 환불은 어떻게 되나요?',
+    keywords: ['요금', '환불'],
+    answer: '요금은 월 9만원입니다. 환불은 남은 기간을 일 단위로 계산해 드려요.',
+  };
+
+  // ① 종전 식 재현 — 키워드 전부로 채점하고 동점이면 첫 문장이 이긴다.
+  const legacyPick = (query) => {
+    const sentences = K.splitSentences(entry.answer);
+    const pre = N.prepare(query);
+    let best = sentences[0];
+    let bestScore = -1;
+    for (const s of sentences) {
+      const sPre = N.prepare(s);
+      let score = 0;
+      for (const kw of entry.keywords) if (N.keywordHit(sPre.compact, sPre.jamo, kw, false).kind !== 'none') score += 1;
+      if (pre.compact && sPre.compact.includes(pre.compact)) score += 2;
+      if (score > bestScore) { bestScore = score; best = s; }
+    }
+    return best;
+  };
+  assert.equal(legacyPick('환불 어떻게 되나요'), '요금은 월 9만원입니다.', '종전 식에서도 환불 문장을 고른다 — 재현 실패');
+
+  // ② 고친 뒤 — 물은 것에 걸린 표현만 보고 고른다.
+  assert.equal(K.buildCitation(entry, '환불 어떻게 되나요', [{ keyword: '환불' }]).snippet, '환불은 남은 기간을 일 단위로 계산해 드려요.');
+  assert.equal(K.buildCitation(entry, '요금 얼마예요', [{ keyword: '요금' }]).snippet, '요금은 월 9만원입니다.');
+  // ③ 부르는 쪽이 걸린 표현을 넘기지 않아도 같은 문장을 고른다(그 칸은 라벨에만 쓴다).
+  assert.equal(K.buildCitation(entry, '환불 어떻게 되나요').snippet, '환불은 남은 기간을 일 단위로 계산해 드려요.');
+  assert.deepEqual(K.buildCitation(entry, '환불 어떻게 되나요', [{ keyword: '환불' }]).keywords, ['환불']);
+  // ④ 긴 표현이 짧은 표현에 밀리지 않는다 — 한 글자가 긴 표현과 같은 무게를 갖지 않는다.
+  const fee = {
+    id: 'fee', category: '요금', question: '초과 사용 요금은?', keywords: ['초과', '배'],
+    answer: '기본 요금은 월 100,000원입니다.\n초과 사용분은 1.5배로 계산합니다.',
+  };
+  assert.equal(K.buildCitation(fee, '초과 사용분은 얼마인가요', [{ keyword: '초과' }]).snippet, '초과 사용분은 1.5배로 계산합니다.');
+  // ⑤ 질의에 걸린 표현이 하나도 없으면 종전처럼 자료의 표현 전부로 본다(출처 라벨만 필요한 자리).
+  const none = K.buildCitation(entry, 'zzzz아무관계없는말');
+  assert.ok(entry.answer.includes(none.snippet.replace(/…$/, '')), '근거는 원문 인용이어야 한다');
+  assert.equal(none.kbId, 'multi');
+});

@@ -181,6 +181,48 @@ test('근거 문장은 원문에서 그대로 뽑는다(생성 요약 금지)', 
   assert.equal(/CHAT_LLM_LIVE|fetch\(/.test(k), false, '지식 매칭 계층은 외부 호출을 하지 않아야 한다');
 });
 
+/* ── 74차 재감사: 어느 자료가 답할지 고르는 자 (DS 77-x) ── */
+test('무엇이 답하는가를 가리는 자가 한 벌이다 (DS 77-1·77-2)', () => {
+  const k = read('src/lib/knowledge.ts');
+  // 동점을 가리는 자는 한 곳에서 정의되고, 두 쪽(확신 매칭·연관 질문)이 모두 그 자를 지난다.
+  assert.equal((k.match(/^function better\(/gm) || []).length, 1, '동점을 가리는 자가 한 곳이 아니다');
+  const mk = k.slice(k.indexOf('export function matchKnowledge'), k.indexOf('export function searchKnowledge'));
+  const sk = k.slice(k.indexOf('export function searchKnowledge'));
+  assert.match(mk, /better\(/, '확신 매칭이 동점 규칙을 지나지 않는다');
+  assert.match(sk, /better\(/, '연관 질문이 동점 규칙을 지나지 않는다');
+  // 종전 식이 되돌아오지 않는다 — 「먼저 등록한 쪽이 이기는 >」·자기만의 점수 합·헐거운 가산.
+  assert.equal(/m\.score > best\.score/.test(k), false, '동점이면 먼저 등록한 자료가 이기는 식이 돌아왔다');
+  assert.equal(/matched\.reduce\([^)]*MATCH_WEIGHT/.test(k), false, '연관 질문이 자기만의 점수를 다시 센다');
+  assert.equal(/\.includes\(pre\.compact\) \|\| pre\.compact\.includes\(/.test(k), false, '대표 질문 가산이 길이를 보지 않는 식으로 돌아왔다');
+  assert.match(k, /^function questionHit\(/m, '대표 질문의 겹침을 표현으로 보는 자가 없다');
+  // 채점하는 자도 한 곳이다(두 쪽이 같은 함수를 부른다).
+  assert.equal((k.match(/^function scoreEntry\(/gm) || []).length, 1, '채점하는 자가 한 곳이 아니다');
+  assert.match(mk, /scoreEntry\(/);
+  assert.match(sk, /scoreEntry\(/);
+});
+
+test('겹치는 표현을 거르는 자리가 한 곳이다 (DS 77-3)', () => {
+  const k = read('src/lib/knowledge.ts');
+  assert.equal((k.match(/^function pickHits\(/gm) || []).length, 1, '겹침을 거르는 자가 한 곳이 아니다');
+  assert.equal((k.match(/pickHits\(/g) || []).length, 2, '거르는 자를 부르는 곳이 한 곳이 아니다(정의 1 + 호출 1)');
+  // 겹침은 키워드가 아니라 **실제로 걸린 표기**로 잰다(동의어는 키워드와 글자가 다르다).
+  assert.match(k, /^function overlaps\(/m, '겹침을 재는 자가 없다');
+  assert.match(k, /term: hit\.term/, '걸린 표기를 들고 다니지 않으면 동의어 중복을 가릴 수 없다');
+  // 겹칠 때 고르는 기준은 기여(points)다 — 길이로 고르면 정확 일치가 오타 보정에 밀린다.
+  assert.match(k, /b\.points - a\.points/, '겹침을 거를 때 기여가 가장 큰 쪽을 고르지 않는다');
+  assert.match(k, /coverage/, '질의를 얼마나 설명했는지 재는 칸이 없다');
+});
+
+test('근거 문장은 고객이 물은 표현으로 고른다 (DS 77-4)', () => {
+  const k = read('src/lib/knowledge.ts');
+  const bc = k.slice(k.indexOf('export function buildCitation'));
+  assert.match(bc, /const asked = /, '질의에 걸린 표현을 다시 세지 않는다');
+  assert.match(bc, /for \(const kw of terms\)/, '문장 채점이 질의에 걸린 표현을 보지 않는다');
+  assert.equal(/for \(const kw of entry\.keywords\)/.test(bc), false, '자료의 표현 전부로 문장을 채점하는 식이 돌아왔다');
+  // 한 글자가 긴 표현과 같은 무게를 갖지 않는다.
+  assert.match(bc, /score \+= Math\.max\(1, compact\(kw\)\.length\)/, '문장 채점이 표현 길이를 보지 않는다');
+});
+
 /* ── 문서 업로드·청킹 ── */
 test('문서 인제스트가 상한과 승인 게이트를 지킨다', () => {
   assert.ok(has('src/lib/ingest.ts'), 'ingest 모듈이 있어야 한다');
