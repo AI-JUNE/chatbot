@@ -5708,6 +5708,9 @@ export default function AdminPage() {
             <h2 id="ac-kb-import" style={{ ...S.h2, marginBottom: 6 }}>문서로 안내 자료 만들기</h2>
             <p style={{ fontSize: 12.5, color: 'var(--mut)', marginBottom: 10 }}>
               안내문·약관·매뉴얼 텍스트를 붙여넣으면 제목·문단 단위로 잘라 FAQ 후보를 만듭니다. 미리보기로 확인한 뒤 등록하세요.
+              {/* 무엇을 읽는지 적는다 (DS 79-1·79-2·79-3) — 종전에는 제목만 읽는다고 적어 두고
+                  글머리표·표·강조 표시를 고객 말풍선에 글자로 내보냈다. */}
+              목록(<code>-</code>·<code>•</code>)과 표(<code>|</code>·탭)는 고객이 읽을 줄로 바꾸고, 강조·링크 표시는 떼어 냅니다.
               등록된 항목은 답변에 <strong>출처(근거)</strong>가 함께 표시됩니다. 키워드는 자동 추출값이므로 등록 후 보정하는 것을 권장합니다.
             </p>
             <div className="ac-grid3">
@@ -5752,7 +5755,7 @@ export default function AdminPage() {
               <textarea
                 id="kb-imp-text"
                 style={{ ...S.input, minHeight: 150, fontFamily: 'inherit', ...(impErr.text ? { borderColor: 'var(--danger)' } : {}) }}
-                placeholder={'문서 본문을 붙여넣으세요.\n# 제목, ## 소제목, "1. 항목", "제1조" 형식을 구분 기준으로 인식합니다.'}
+                placeholder={'문서 본문을 붙여넣으세요.\n# 제목, ## 소제목, "1. 항목", "제1조" 형식을 구분 기준으로 인식합니다.\n글머리표·표는 고객이 읽을 줄로 바뀝니다.'}
                 value={imp.text}
                 aria-required="true"
                 aria-invalid={impErr.text ? 'true' : undefined}

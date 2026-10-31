@@ -5,7 +5,15 @@ import type { KBEntry } from '@/lib/knowledge';
 import { cut, cutEnd, ellipsize, KB_QUESTION_LEN, KB_SOURCE_LEN, KEYWORD_LEN } from '@/lib/limits';
 import { compact, overlapsTerm, toNfc } from '@/lib/normalize';
 import { compareText } from '@/lib/order';
-import { readsAsSentence, splitSentences } from '@/lib/prose';
+import {
+  bulletLine,
+  readsAsSentence,
+  splitSentences,
+  stripAddresses,
+  stripInlineMarks,
+  tableCells,
+  tableLines,
+} from '@/lib/prose';
 
 export const MAX_DOC_CHARS = 100_000;
 
@@ -202,8 +210,28 @@ export function chunkDocument(raw: string, opts: ChunkOptions = {}): DocChunk[] 
     if (buf.length) push(buf.join(' '));
     buf = [];
   };
+  /**
+   * 잇따른 표 행을 모아 두는 자리 (DS 79-2) — 머리 행·구분선을 가리려면 **한 덩이**로 봐야 한다.
+   * 표가 끝나는 자리(표가 아닌 줄·빈 줄·제목·글 끝)에서 사람이 읽는 줄로 옮겨 담는다.
+   */
+  let rows: string[][] = [];
+  const flushRows = () => {
+    if (!rows.length) return;
+    for (const row of tableLines(rows)) push(row);
+    rows = [];
+  };
 
-  for (const line of text.split('\n')) {
+  for (const raw of text.split('\n')) {
+    // 서식 표시는 **읽는 글에서 떼어 둔다** (DS 79-3) — 제목 판정보다 앞이다(`## **요금**`).
+    const line = stripInlineMarks(raw);
+    // 표 행은 모아서 함께 본다 (DS 79-2) — 제목·목록 판정보다 앞이다(`| --- |` 는 목록이 아니다).
+    const cells = tableCells(line);
+    if (cells) {
+      flushBuf();
+      rows.push(cells);
+      continue;
+    }
+    flushRows();
     const h = isHeadingLine(line);
     if (h) {
       flushBuf();
@@ -216,6 +244,13 @@ export function chunkDocument(raw: string, opts: ChunkOptions = {}): DocChunk[] 
       flushBuf();
       continue;
     }
+    // 글머리표 목록도 **한 문단**이다 (DS 79-1) — 표시를 떼고 하나로 모아 적는다.
+    const bullet = bulletLine(line);
+    if (bullet) {
+      flushBuf();
+      push(bullet);
+      continue;
+    }
     // 목록 항목은 **한 문단**이다 (DS 66-1) — 이어 붙이면 번호가 줄바꿈을 잃는다.
     if (LIST_ITEM_RE.test(line.trim())) {
       flushBuf();
@@ -225,6 +260,7 @@ export function chunkDocument(raw: string, opts: ChunkOptions = {}): DocChunk[] 
     buf.push(line.trim());
   }
   flushBuf();
+  flushRows();
   flush();
 
   // 짧은 조각 병합 — **합쳐서 상한을 넘으면 합치지 않는다** (DS 74-2).
@@ -277,6 +313,23 @@ const STOPWORDS = new Set([
   '모든', '모두', '여러', '다양', '참고', '유의', '주의', '필요', '제공', '포함',
   // 종결형이 조사 떼기(`요`)를 지나며 남긴 글자 — 「…로 접수해 주세요」의 꼬리다
   '주세', '해주세',
+  /**
+   * 76차에 더했다 (DS 79-2·79-3) — **표의 칸 이름**·강조어와, 어미 목록이 꼬리를 떼기에 한 글자 짧아
+   * 그대로 남던 서술어다(`같습니다`(4자)는 `습니다`(3자)를 떼면 한 글자가 남아 `stripOnce` 가
+   * 손대지 않는다 — 뽑은 값에서 받아 냈다).
+   *
+   * 칸 이름을 여기 적는 까닭: 표를 사람이 읽는 줄로 옮기면(DS 79-2) 머리 행의 이름이 **행마다**
+   * 다시 적히므로 빈도가 행 수만큼 올라간다 — 「구분」·「비고」가 그 문서에서 가장 자주 나오는
+   * 말이 되어 「고객이 쓸 표현」 칸을 먹는다. 둘 다 표의 살림이고 고객이 묻는 말이 아니다.
+   */
+  '구분', '비고', '같습니다', '중요',
+  /**
+   * 목록에 **이미 있는 말의 다른 꼴** — `있다`·`없다`·`같다` 는 종전부터 여기 있었는데, 그
+   * 말이 문서에서 가장 많이 쓰는 꼴(연결형·관형형)은 어미 목록을 지나지 못했다(세 글자짜리
+   * 토막은 `stripOnce` 가 한 글자만 남기지 않으려고 손대지 않는다). 새 말을 더하는 것이 아니라
+   * 같은 말의 꼴을 맞추는 것이라 여기 적는다 — 어느 쪽도 고객이 묻는 말이 아니다.
+   */
+  '있으면', '없으면', '있는', '없는',
 ]);
 
 /**
@@ -296,6 +349,21 @@ const ENDINGS = [
   '하였다', '되었다', '이다', '한다', '된다', '하는', '되는', '하고', '되고', '하며', '되며',
   '하지', '되지', '하면', '되면', '하기', '되기', '해야', '되어', '하여', '된', '한', '해',
 ];
+
+/**
+ * **조사 하나만 남은 토막**은 검색어가 아니다 (DS 79-3).
+ *
+ * 조사 떼기는 「조사보다 긴 말」에만 손을 댄다(`stripOnce` — 한 글자만 남기지 않기 위해서다).
+ * 그래서 조사와 글자까지 같은 토막은 그 자를 그냥 지나간다. 종전에는 그런 토막이 생길 자리가
+ * 없었는데, 주소를 지우면서(바로 위) 주소에 붙어 있던 조사가 **홀로 남는다**:
+ *
+ *     「신청은 고객센터(https://…)에서 할 수 있습니다」 → 주소를 지운 자리에 「에서」가 남는다
+ *
+ * 그 글자가 「고객이 쓸 표현」 칸에 들어가면 「…에서」가 든 아무 질문에나 자료가 답한다
+ * (DS 78-2 가 「가능」·「고객」에서 닫은 것과 같은 결함이다). 거르는 목록은 조사 떼기가 쓰는
+ * 그 목록이다 — 두 벌로 적으면 한쪽만 늘어난다.
+ */
+const PARTICLE_ONLY = new Set(PARTICLES);
 
 function stripOnce(token: string, list: string[]): string {
   for (const suffix of list) {
@@ -325,14 +393,25 @@ function stripParticles(token: string): string {
  * 수만 자짜리 한글 문서를 올려 놓고 그 말을 듣는다. 세는 글자를 먼저 맞춘다(DS 42-3).
  */
 export function extractKeywords(text: string, limit = 8): string[] {
-  const tokens = toNfc(text)
+  // 주소·이메일·파일 이름은 **글이 아니다** (DS 79-3) — 토막으로 끊기면 `https`·`example`·
+  // `center` 가 「고객이 쓸 표현」 칸을 차지하고, 그 문서가 말하는 낱말이 칸을 받지 못한다.
+  const tokens = stripAddresses(toNfc(text))
     .toLowerCase()
     .split(/[^0-9a-z가-힣]+/u)
     .map(stripParticles)
     // 낱말 하나가 상한을 넘으면 버린다 (DS 74-2) — 띄어쓰기 없이 붙어 온 긴 덩이(표·코드·
     // 주소에서 온다)는 어떤 질문에도 걸리지 않는 검색어이고, 그 글자가 자료의 검색어 칸을
     // 통째로 먹는다(화면은 그 칸을 「고객이 쓸 표현」이라고 부른다).
-    .filter((t) => t.length >= 2 && t.length <= KEYWORD_LEN && !STOPWORDS.has(t));
+    .filter((t) => t.length >= 2 && t.length <= KEYWORD_LEN && !STOPWORDS.has(t) && !PARTICLE_ONLY.has(t))
+    /**
+     * **단위 없는 수는 검색어가 아니다** (DS 79-3).
+     *
+     * 78차가 수의 경계를 세운 뒤에도(DS 78-4) 「10」은 「10시에 전화했어요」·「10개
+     * 주문했어요」에 그대로 걸린다 — 경계는 **더 큰 수**를 가릴 뿐이고, 단위가 없으면 그 수가
+     * 무엇의 값인지는 어디에도 없다. `3일`·`100원`처럼 단위가 붙은 수는 그대로 둔다.
+     * 주소를 거른 자리에 칸이 남으므로(바로 위) 이 수가 칸을 받는 일이 오히려 늘어난다.
+     */
+    .filter((t) => !/^[0-9]+$/.test(t));
 
   const freq = new Map<string, number>();
   for (const t of tokens) freq.set(t, (freq.get(t) ?? 0) + 1);
@@ -395,6 +474,37 @@ function slugify(s: string): string {
  */
 export function docIdPrefix(title: string): string {
   return `doc_${slugify((title || '').trim() || '업로드 문서')}`;
+}
+
+/**
+ * 출처 라벨 — `문서명` 또는 `문서명 — 소제목` (DS 79-4).
+ *
+ * 이 글자는 **고객이 읽는다**(말풍선의 「근거 · …」 줄·카카오 말풍선·「응답 테스트」의 근거 칸)
+ * 그리고 운영자가 지식베이스 표에서 어느 문서의 어느 대목인지 가리는 값이다. 종전에는 문서명과
+ * 제목 경로를 그냥 이어 붙여, **문서의 큰 제목이 곧 문서명인 가장 흔한 모양**에서 같은 말이 두
+ * 번 적혔다(돌려서 받아 냈다): 「환불 안내」 문서에 `# 환불 안내` 를 적으면 출처가
+ * **「환불 안내 — 환불 안내」**, 소제목이 있으면 「요금 안내 — 요금 안내 > 기본 요금」이다.
+ * 고객에게는 말을 더듬는 글이고, 운영자에게는 칸 폭을 먹어 **뒤쪽 소제목이 잘리는** 자리다
+ * (상한은 `KB_SOURCE_LEN` 이다 · DS 74-2).
+ *
+ * 그래서 **같은 말은 한 번만** 적는다 — 문서명과 같은 토막·앞서 적은 토막을 뺀다. 같은 말인지는
+ * 「같은 말인가」를 묻는 자(`lib/normalize.compact`)가 가린다: 띄어쓰기·문장부호만 다른 표기
+ * (`환불안내`·「환불 안내」)도 같은 말이다(DS 78-1 의 겹침 거르기와 같은 자리).
+ *
+ * 앞자리는 **언제나 문서명**으로 남는다 — 등록하는 쪽이 그 글자로 「남의 문서를 덮어쓰는가」를
+ * 가린다(`adminStore.docOverlap` 이 `' — '` 앞을 문서명으로 읽는다).
+ */
+function sourceLabel(title: string, heading: string): string {
+  const seen = new Set<string>([compact(title)]);
+  const segs: string[] = [];
+  for (const raw of heading.split(' > ')) {
+    const seg = raw.trim();
+    const key = compact(seg);
+    if (!seg || !key || seen.has(key)) continue;
+    seen.add(key);
+    segs.push(seg);
+  }
+  return segs.length ? `${title} — ${segs.join(' > ')}` : title;
 }
 
 /**
@@ -498,7 +608,8 @@ export function ingestDocument(raw: string, opts: IngestOptions): IngestResult {
       question: ellipsize(toQuestion(chunk, title, perHeading.get(chunk.heading) ?? 1), KB_QUESTION_LEN),
       keywords,
       answer: chunk.text,
-      source: ellipsize(chunk.heading ? `${title} — ${chunk.heading}` : title, KB_SOURCE_LEN),
+      // 문서명과 제목 경로를 한 줄로 적는 자는 한 곳이다 — 같은 말을 두 번 적지 않는다 (DS 79-4).
+      source: ellipsize(sourceLabel(title, chunk.heading), KB_SOURCE_LEN),
       chunkIndex: chunk.index,
     });
   }

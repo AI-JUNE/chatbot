@@ -8761,3 +8761,233 @@ test('수가 더 큰 수 안에서 걸리지 않는다 (DS 78-4)', opts, async (
   assert.equal(hit('100원짜리 있나요', '1000원'), 'none');
   assert.equal(hit('1000원 요금제', '1000원'), 'exact');
 });
+
+/* ══════════ 76차 재감사 — 우리가 붙여 넣은 글의 서식을 읽는 자리 (DS 79-x) ══════════ */
+
+/** 이 회차의 묶음 — 뽑는 쪽(`ingest`)·고르는 쪽(`knowledge`)·모양을 보는 자(`prose`). */
+const SHAPE_DEPS = ['ingest', 'knowledge', 'limits', 'normalize', 'order', 'prose', 'text'];
+const shapeLib = (name) => importLib(name, SHAPE_DEPS.filter((n) => n !== name));
+
+/**
+ * DS 79-1 — **글머리표 목록이 한 줄로 이어 붙고 표시가 글자로 남던 자리.**
+ *
+ * 66차는 번호 매긴 목록을 한 문단으로 세웠다(이어 붙이면 번호가 줄바꿈을 잃으므로). 그런데
+ * 같은 글에 그만큼 흔한 글머리표 목록에는 그 자가 없었다 — 세 줄이 공백 하나로 이어 붙고
+ * `-`·`*` 가 고객 말풍선·「근거」 줄에 그대로 갔다. 표시가 남는 것보다 나쁜 것은 **항목 경계가
+ * 사라지는 것**이다: 「전액 환불 - 7일 초과」가 한 문장처럼 읽힌다.
+ */
+test('글머리표 목록이 한 줄로 이어 붙지 않는다 (DS 79-1)', opts, async () => {
+  const ingest = await shapeLib('ingest');
+  const P = await shapeLib('prose');
+  const K = await shapeLib('knowledge');
+
+  const LINES = [
+    '- 수령 후 7일 이내: 전액 환불',
+    '- 7일 초과 14일 이내: 수수료 10% 차감',
+    '* 사용 흔적이 있으면 환불이 제한됩니다',
+  ];
+  const doc = ['# 환불 안내', '', '환불 조건은 아래와 같습니다.', '', ...LINES].join('\n');
+
+  // ① 재현 — 66차가 세운 자(번호 매김)는 이 줄을 목록으로 보지 않고, 본문 줄은 공백으로 이어 붙는다.
+  const NUMBERED_ONLY = /^제?\s?\d+(?:[.\-]\d+)*\s?(?:조|장|절)?[.)]\s+\S/;
+  for (const line of LINES) {
+    assert.equal(NUMBERED_ONLY.test(line), false, `재현이 깨졌다 — 종전 자가 이미 목록으로 본다: ${line}`);
+  }
+  const legacy = LINES.map((l) => l.trim()).join(' ');
+  assert.ok(legacy.includes('전액 환불 - 7일 초과'), '재현이 깨졌다 — 종전 식에서도 항목이 갈린다');
+
+  // ② 고친 뒤 — 항목마다 한 줄이고, 표시는 하나로 모였다(아스키 표시가 글자로 남지 않는다).
+  const text = ingest.chunkDocument(doc).map((c) => c.text).join('\n');
+  const items = text.split('\n').filter((l) => l.startsWith(P.BULLET_MARK));
+  assert.deepEqual(items, [
+    '· 수령 후 7일 이내: 전액 환불',
+    '· 7일 초과 14일 이내: 수수료 10% 차감',
+    '· 사용 흔적이 있으면 환불이 제한됩니다',
+  ], '글머리표 항목이 세 줄로 남지 않았다');
+  assert.equal(/(^|\n)[-*+]\s/.test(text), false, '아스키 글머리표가 글자로 남았다');
+  assert.ok(text.includes('환불 조건은 아래와 같습니다.'), '목록 앞의 본문이 사라졌다');
+
+  // ③ 「근거」 줄이 **항목 하나**를 가리킨다 — 종전에는 세 항목이 붙은 한 줄이 떴다.
+  const cands = ingest.ingestDocument(doc, { title: '환불 안내' }).candidates;
+  const m = K.matchKnowledge('환불 수수료 얼마예요', 2, cands);
+  assert.ok(m, '수수료를 물었는데 그 문서가 답하지 않는다');
+  assert.equal(
+    K.buildCitation(m.entry, '환불 수수료 얼마예요', m.matched).snippet,
+    '· 7일 초과 14일 이내: 수수료 10% 차감',
+    '근거가 항목 하나를 가리키지 않는다',
+  );
+
+  // ④ 표시가 아닌 별표·붙임표는 **건드리지 않는다** — 애매하면 글을 그대로 둔다.
+  assert.equal(P.bulletLine('-5% 할인된 금액입니다'), null, '붙임표가 붙은 수를 목록으로 읽는다');
+  assert.equal(P.bulletLine('*중요* 안내'), null, '한 글자 강조를 목록으로 읽는다');
+  assert.equal(P.bulletLine('보통 문장입니다.'), null, '보통 줄을 목록으로 읽는다');
+  assert.equal(P.bulletLine('• 기호 표시는 띄어쓰기가 없어도 목록'), '· 기호 표시는 띄어쓰기가 없어도 목록');
+
+  // ⑤ 66차가 세운 줄은 그대로다 — 번호 매긴 목록은 **번호를 지킨 채** 줄로 남는다.
+  const numbered = ingest.chunkDocument(
+    ['환불 규정', '', '1. 구매 후 7일 이내에는 전액 환불됩니다.', '2. 7일이 지나면 사용 기간을 제외합니다.'].join('\n'),
+  ).map((c) => c.text).join('\n');
+  assert.match(numbered, /1\. 구매 후[^\n]*\n2\. 7일이/, '번호 목록이 한 줄로 이어 붙었다');
+});
+
+/**
+ * DS 79-2 — **표를 붙여 넣으면 행이 한 줄로 뭉치고 `|`·`---` 가 고객에게 가던 자리.**
+ *
+ * 마크다운 표와 탭으로 끊은 표(엑셀·한글 표를 복사하면 그 모양이다) 둘 다 보통 본문 줄이어서
+ * 공백으로 이어 붙었다 — 다른 행의 값이 한 줄에 섞이므로 「없음」이 어느 줄의 값인지 알 수 없다.
+ */
+test('붙여 넣은 표가 사람이 읽는 줄로 바뀐다 (DS 79-2)', opts, async () => {
+  const ingest = await shapeLib('ingest');
+  const P = await shapeLib('prose');
+  const K = await shapeLib('knowledge');
+
+  const ROWS = ['| 구분 | 수수료 |', '| --- | --- |', '| 7일 이내 | 없음 |', '| 14일 이내 | 10% |'];
+  const doc = ['# 수수료 안내', '', ...ROWS].join('\n');
+
+  // ① 재현 — 종전에는 표 네 줄이 본문 한 줄로 이어 붙었다(구분선까지 글자로 간다).
+  const legacy = ROWS.map((l) => l.trim()).join(' ');
+  assert.ok(legacy.includes('| --- | --- |'), '재현이 깨졌다 — 구분선이 글에 남지 않는다');
+  assert.ok(legacy.includes('| 없음 | | 14일 이내 |'), '재현이 깨졌다 — 다른 행의 값이 섞이지 않는다');
+
+  // ② 고친 뒤 — 행마다 한 줄이고 머리 행의 이름이 값에 붙는다. 표 기호는 글에 남지 않는다.
+  const text = ingest.chunkDocument(doc).map((c) => c.text).join('\n');
+  assert.deepEqual(
+    text.split('\n'),
+    ['구분: 7일 이내 · 수수료: 없음', '구분: 14일 이내 · 수수료: 10%'],
+    '표가 읽는 줄로 바뀌지 않았다',
+  );
+  assert.equal(/[|]|---/.test(text), false, '표 기호가 고객에게 가는 글에 남았다');
+
+  // ③ 탭으로 끊은 표도 같은 길이다 — 다만 **구분선이 없으면 머리 행이라 단정하지 않는다**.
+  const tabbed = ingest.chunkDocument(['## 수수료 표', '구분\t수수료\t비고', '7일 이내\t없음\t-'].join('\n'));
+  assert.deepEqual(tabbed.map((c) => c.text), ['구분 · 수수료 · 비고\n7일 이내 · 없음'], '탭 표가 행마다 한 줄로 남지 않았다');
+
+  // ④ 재는 자는 `lib/prose` 한 곳이다 — 표가 아닌 줄을 표로 읽지 않는다.
+  assert.deepEqual(P.tableCells('| 구분 | 수수료 |'), ['구분', '수수료']);
+  assert.equal(P.tableCells('환불|교환 안내'), null, '글 가운데 든 세로줄을 표로 읽는다');
+  assert.equal(P.tableCells('보통 문장입니다.'), null);
+  assert.equal(P.isTableDivider(['---', ':---:']), true);
+  assert.equal(P.isTableDivider(['7일 이내', '없음']), false);
+  // 머리 행은 구분선이 **증거로** 있을 때만 머리다(없으면 값끼리 나란히 적는다).
+  assert.deepEqual(P.tableLines([['구분', '수수료'], ['---', '---'], ['7일', '없음']]), ['구분: 7일 · 수수료: 없음']);
+  assert.deepEqual(P.tableLines([['구분', '수수료'], ['7일', '없음']]), ['구분 · 수수료', '7일 · 없음']);
+  // 빈 칸과 「-」(없음 표시)은 적지 않는다 — 「비고: -」는 고객에게 아무 뜻이 없다.
+  assert.deepEqual(P.tableLines([['구분', '비고'], ['---', '---'], ['7일', '-']]), ['구분: 7일']);
+
+  // ⑤ 고객이 수수료를 물으면 **그 행 한 줄**이 근거로 뜬다.
+  const cands = ingest.ingestDocument(doc, { title: '수수료 안내' }).candidates;
+  const m = K.matchKnowledge('14일 이내 수수료 얼마예요', 2, cands);
+  assert.ok(m, '표만 있는 문서가 등록되지 않았거나 답하지 않는다');
+  assert.equal(
+    K.buildCitation(m.entry, '14일 이내 수수료 얼마예요', m.matched).snippet,
+    '구분: 14일 이내 · 수수료: 10%',
+    '근거가 그 행을 가리키지 않는다',
+  );
+});
+
+/**
+ * DS 79-3 — **주소·서식 기호가 글로 세어지던 자리.**
+ *
+ * 주소 한 줄이 자료 한 건의 여덟 칸 중 다섯을 먹었다(돌려서 받아 낸 값이 그대로 증거다):
+ * `center`·`example`·`gowon`·`https`·`help`. 그 바람에 그 문서의 「환불」은 칸을 받지 못했고,
+ * 「https 보안 되나요」에는 2점 확신 답변이 나갔다.
+ */
+test('주소·서식 기호가 「고객이 쓸 표현」이 되지 않는다 (DS 79-3)', opts, async () => {
+  const ingest = await shapeLib('ingest');
+  const P = await shapeLib('prose');
+  const K = await shapeLib('knowledge');
+
+  const body = [
+    '중요: 환불금은 영업일 3일 이내에 입금됩니다. 수수료는 10% 입니다.',
+    '신청은 고객센터(https://example.com/center)에서 할 수 있습니다. 문의: help@gowon.co.kr',
+  ].join('\n');
+
+  // ① 종전 식 재현 — 주소를 글로 세면 토막이 그대로 토큰이 된다(두 글자 이상이라 걸러지지 않는다).
+  const pieces = 'https://example.com/center help@gowon.co.kr'
+    .toLowerCase()
+    .split(/[^0-9a-z가-힣]+/u)
+    .filter((t) => t.length >= 2);
+  for (const junk of ['https', 'example', 'center', 'help', 'gowon']) {
+    assert.ok(pieces.includes(junk), `재현이 깨졌다 — 종전 식에서 ${junk} 가 토큰이 아니다`);
+  }
+  // 그때 **실제로 뽑히던 여덟 칸 그대로** 자료를 세우면, 주소를 물은 사람에게 확신 답변이 나가고
+  // 환불을 물은 사람은 기본 안내를 받는다(여덟 칸 중 다섯이 주소라 「환불」이 칸을 받지 못했다).
+  const LEGACY = ['center', 'example', 'gowon', 'https', '고객센터', 'help', '수수료', '영업일'];
+  const legacyKb = [{ id: 'x', category: '문서', question: '환불 안내에 대해 알려주세요', keywords: LEGACY, answer: body }];
+  assert.equal(K.matchKnowledge('https 보안 되나요', 2, legacyKb)?.entry.id, 'x', '재현이 깨졌다 — 주소 토막이 답하지 않는다');
+  for (const q of ['환불 어떻게 해요', '입금 언제 돼요', '신청 어디서 해요']) {
+    assert.equal(K.matchKnowledge(q, 2, legacyKb), null, `재현이 깨졌다 — 종전 칸으로도 답한다: ${q}`);
+  }
+
+  // ② 고친 뒤 — 주소 토막은 검색어가 아니고, 그 문서의 말이 칸을 되찾는다.
+  const cands = ingest.ingestDocument(`# 환불 안내\n\n${body}`, { title: '환불 안내' }).candidates;
+  const kws = cands[0].keywords;
+  for (const junk of ['https', 'example', 'center', 'help', 'gowon', 'com']) {
+    assert.equal(kws.includes(junk), false, `주소 토막이 아직 검색어다: ${junk}`);
+  }
+  for (const own of ['환불', '입금', '신청']) {
+    assert.ok(kws.includes(own), `문서가 말하는 낱말이 아직 칸을 받지 못한다: ${own}`);
+  }
+  for (const q of ['환불 어떻게 해요', '입금 언제 돼요', '신청 어디서 해요']) {
+    assert.equal(K.matchKnowledge(q, 2, cands)?.entry.id, cands[0].id, `문서가 답해야 할 질문에 답하지 못한다: ${q}`);
+  }
+  assert.equal(K.matchKnowledge('https 보안 되나요', 2, cands), null, '주소를 물은 사람에게 아직 확신 답변이 나간다');
+  // 주소에 붙어 있던 조사가 홀로 남아 검색어가 되지 않는다 — 「…에서」가 든 아무 질문에나 걸린다.
+  assert.equal(kws.includes('에서'), false, '주소를 지운 자리에 조사만 남아 검색어가 됐다');
+  // 주소는 **글에서는 지우지 않는다** — 고객이 눌러 갈 곳이 그 글에 든 유일한 길이다.
+  assert.ok(cands[0].answer.includes('https://example.com/center'), '답변에서 주소가 사라졌다');
+
+  // ③ 서식 표시는 글자로 남지 않는다(링크는 글과 주소를 모두 남긴다).
+  const marked = ingest.ingestDocument(
+    '# 안내\n\n**중요**: `환불`은 ~~5일~~ 7일 이내입니다. 신청은 [고객센터](https://example.com/center)에서 하세요.',
+    { title: '안내' },
+  ).candidates[0].answer;
+  assert.ok(marked.includes('중요: 환불은 5일 7일 이내입니다.'), `서식 표시가 글자로 남았다: ${marked}`);
+  assert.ok(marked.includes('고객센터(https://example.com/center)'), '링크의 글이나 주소가 사라졌다');
+  assert.equal(/\*\*|~~|`|\]\(/.test(marked), false, '표시 기호가 남았다');
+  // 한 글자 강조·밑줄은 건드리지 않는다 — 표시가 아닌 별표를 지우면 글이 달라진다.
+  assert.equal(P.stripInlineMarks('*중요* 안내 doc_001'), '*중요* 안내 doc_001');
+
+  // ④ **단위 없는 수**는 검색어가 아니다 — 경계를 세운 뒤에도(DS 78-4) 「10」은 아무 10에나 걸린다.
+  const bare = [{ id: 'n', category: '문서', question: '수수료', keywords: ['10'], answer: '수수료는 10% 입니다.' }];
+  assert.equal(K.matchKnowledge('10시에 전화했어요', 2, bare)?.entry.id, 'n', '재현이 깨졌다 — 맨 수가 걸리지 않는다');
+  assert.equal(ingest.extractKeywords('수수료는 10% 입니다. 10일 안에 신청하세요.', 8).includes('10'), false, '맨 수가 아직 검색어다');
+  // 단위가 붙은 수는 그대로 둔다 — 그 수가 무엇의 값인지 그 글자가 말한다.
+  assert.ok(ingest.extractKeywords('환불은 3일 이내이고 수수료는 100원입니다.', 8).includes('3일'), '단위가 붙은 수까지 버렸다');
+});
+
+/**
+ * DS 79-4 — **출처가 같은 말을 두 번 적던 자리.**
+ *
+ * 문서의 큰 제목이 곧 문서명인 가장 흔한 모양에서 출처가 「환불 안내 — 환불 안내」가 됐다.
+ * 그 글자는 고객이 말풍선의 「근거 · …」 줄로 읽고, 운영자가 표에서 어느 대목인지 가리는 값이다.
+ */
+test('출처가 문서명을 두 번 적지 않는다 (DS 79-4)', opts, async () => {
+  const ingest = await shapeLib('ingest');
+
+  // ① 재현 — 종전 식(문서명과 제목 경로를 그냥 이어 붙이기)에서는 같은 말이 두 번 적힌다.
+  const legacy = (title, heading) => (heading ? `${title} — ${heading}` : title);
+  assert.equal(legacy('환불 안내', '환불 안내'), '환불 안내 — 환불 안내', '재현이 깨졌다');
+  assert.equal(legacy('요금 안내', '요금 안내 > 기본 요금'), '요금 안내 — 요금 안내 > 기본 요금');
+
+  const src = (raw, title) => ingest.ingestDocument(raw, { title }).candidates.map((c) => c.source);
+  const PLAIN = '# 환불 안내\n\n환불은 7일 이내에 신청하실 수 있습니다.';
+  const NESTED = '# 요금 안내\n\n## 기본 요금\n\n기본 요금은 월 10만 원입니다.';
+
+  // ② 고친 뒤 — 같은 말은 한 번만 적는다.
+  assert.deepEqual(src(PLAIN, '환불 안내'), ['환불 안내']);
+  assert.deepEqual(src(NESTED, '요금 안내'), ['요금 안내 — 기본 요금'], '제목 경로에서 문서명만 빠지지 않았다');
+  // 표기만 다른 것도 같은 말이다 — 「같은 말인가」를 묻는 자가 가린다(DS 78-1 과 같은 자리).
+  assert.deepEqual(src(PLAIN, '환불안내'), ['환불안내']);
+
+  // ③ 다른 말이면 그대로 적는다 — 줄이는 것은 **겹친 말**뿐이다.
+  assert.deepEqual(src('# 환불 규정\n\n환불은 7일 이내에 신청하실 수 있습니다.', '환불 안내서'), ['환불 안내서 — 환불 규정']);
+
+  // ④ 앞자리는 언제나 문서명이다 — 등록하는 쪽이 그 글자로 「남의 문서를 덮어쓰는가」를 가린다
+  //    (`adminStore.docOverlap` 이 `' — '` 앞을 문서명으로 읽는다).
+  for (const [raw, title] of [[PLAIN, '환불 안내'], [NESTED, '요금 안내'], [PLAIN, '환불 안내서']]) {
+    for (const s of src(raw, title)) {
+      assert.equal(s.split(' — ')[0], title, '출처 앞자리가 문서명이 아니다 — 덮어쓰기 경고가 조용히 사라진다');
+    }
+  }
+});

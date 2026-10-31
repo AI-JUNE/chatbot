@@ -3227,7 +3227,9 @@ test('유니코드 정규화는 한 곳에서만 적는다 (DS 42-3)', () => {
   // 정규화 **뒤에** 자르고, 자르는 자리는 `cutEnd` 가 고른다 (DS 62-1) — 정규화가 합쳐 주지
   // 못하는 두 칸 글자(이모지)가 상한 가운데 떨어지면 마지막 글자가 반쪽으로 남는다.
   assert.match(ing, /const nfc = toNfc\(raw\);\n\s*const text = nfc\.slice\(0, cutEnd\(nfc, MAX_DOC_CHARS\)\)/, '정규화 전에 문서를 자른다');
-  assert.match(ing, /const tokens = toNfc\(text\)\n\s*\.toLowerCase\(\)/, '정규화 전에 토큰을 가른다');
+  // 주소 토막을 지우는 것도 정규화 **뒤**다 (DS 79-3) — 분해형으로 들어온 글에서 먼저 지우면
+  // 지우는 자가 보는 글자와 토큰을 가르는 자가 보는 글자가 갈라진다.
+  assert.match(ing, /const tokens = stripAddresses\(toNfc\(text\)\)\n\s*\.toLowerCase\(\)/, '정규화 전에 토큰을 가른다');
   const route = read('src/app/api/admin/kb/import/route.ts');
   assert.match(route, /reqStr\(typeof body\.text === 'string' \? toNfc\(body\.text\) : body\.text, 'text', MAX_DOC_CHARS\)/, '길이를 정규화 전에 잰다');
 
@@ -4426,7 +4428,12 @@ test('글의 경계를 짐작하는 자가 한 벌이다 (DS 66-1·66-2·66-3)',
   const ing = read('src/lib/ingest.ts');
   // 문서 등록은 두 가지를 그 자에 묻는다 — 「이 줄이 제목인가」와 「문단을 어디서 끊는가」
   // (상한을 넘는 문단을 문장 경계에서 나눈다 · DS 74-2).
-  assert.match(ing, /import \{ readsAsSentence, splitSentences \} from '@\/lib\/prose';/, '제목·문장 판정이 공통 자를 쓰지 않는다');
+  // 76차에 셋이 더 왔다 (DS 79-1·79-2·79-3) — 목록·표·서식 표시 판정도 같은 자에서 가져온다.
+  const proseImport = ing.match(/import \{([\s\S]*?)\} from '@\/lib\/prose';/);
+  assert.ok(proseImport, '제목·문장 판정이 공통 자를 쓰지 않는다');
+  for (const name of ['readsAsSentence', 'splitSentences', 'bulletLine', 'tableCells', 'tableLines', 'stripInlineMarks', 'stripAddresses']) {
+    assert.ok(proseImport[1].includes(name), `문서 등록이 ${name} 을 제 손으로 적고 있다`);
+  }
   assert.match(ing, /NUMBERED_HEADING_RE\.test\(t\) && !readsAsSentence\(t\)/, '번호로 시작하는 본문을 제목으로 읽는다');
 
   // 제 식으로 문장 끝을 재는 자리가 **0건**이다 — 두 벌이면 한쪽만 고쳐진다(다시 생기는 것을
@@ -4908,7 +4915,9 @@ test('문서 조각이 상한을 넘지 않게 나뉜다 (DS 74-2)', () => {
   assert.match(ingest, /prev\.heading === c\.heading && prev\.text\.length \+ 1 \+ body\.length <= maxChars/, '짧은 꼬리 병합이 상한을 넘긴다');
   // 문서가 만드는 자료 한 건도 자료 쪽 상한을 지킨다(줄이면 줄였다고 적는다).
   assert.match(ingest, /question: ellipsize\(toQuestion\(chunk, title.*?\), KB_QUESTION_LEN\)/, '대표 질문이 상한을 모른다');
-  assert.match(ingest, /source: ellipsize\(chunk\.heading \? `\$\{title\} — \$\{chunk\.heading\}` : title, KB_SOURCE_LEN\)/, '출처가 상한을 모른다');
+  // 출처를 적는 자는 한 곳이다 (DS 79-4) — 문서명과 제목 경로를 이어 붙이던 식이 남아 있지 않다.
+  assert.match(ingest, /source: ellipsize\(sourceLabel\(title, chunk\.heading\), KB_SOURCE_LEN\)/, '출처가 상한을 모른다');
+  assert.equal(/`\$\{title\} — \$\{chunk\.heading\}`/.test(ingest), false, '종전 식(그냥 이어 붙이기)이 남아 있다');
   assert.match(ingest, /t\.length >= 2 && t\.length <= KEYWORD_LEN/, '낱말 하나의 상한을 보지 않는다');
 });
 
@@ -4955,4 +4964,39 @@ test('고객이 번호로 고르는 줄에 같은 글이 두 번 뜨지 않는�
   const i = read('src/lib/ingest.ts');
   assert.match(i, /const perHeading = new Map<string, number>\(\)/, '제목마다 조각이 몇인지 세지 않는다');
   assert.match(i, /if \(head && siblings <= 1\) return `\$\{head\}에 대해 알려주세요`/, '제목 하나가 조각 여럿을 가리키는 식이 남았다');
+});
+
+/* ── 76차 재감사: 우리가 붙여 넣은 글의 서식을 읽는 자리 (DS 79-x) ── */
+test('글의 모양을 보는 자가 한 벌이고 문서 등록이 그 자를 지난다 (DS 79-1·79-2·79-3)', () => {
+  const p = read('src/lib/prose.ts');
+  // 목록·표·서식 판정은 「글의 뼈대를 짐작하는 자」 한 곳에 있다(제목·문장 판정과 같은 자리).
+  for (const fn of ['bulletLine', 'tableCells', 'isTableDivider', 'tableLines', 'stripInlineMarks', 'stripAddresses']) {
+    assert.equal((p.match(new RegExp(`^export function ${fn}\\(`, 'gm')) || []).length, 1, `${fn} 가 한 곳에 없다`);
+  }
+  assert.match(p, /export const BULLET_MARK = '· ';/, '고객이 읽는 글머리표를 한 곳에서 정하지 않는다');
+
+  const s = read('src/lib/ingest.ts');
+  // 문서 등록은 제 손으로 모양을 재지 않는다 — 글머리표 글자·표 기호가 이 파일에 없다.
+  assert.equal(s.includes("'· '"), false, '글머리표 글자를 문서 등록이 제 손으로 적는다');
+  assert.equal(/\^\\\|\(\.\+\)\\\|\$|split\('\|'\)/.test(s), false, '표를 가르는 식을 문서 등록이 제 손으로 적는다');
+
+  // 읽는 차례: ① 서식 표시 떼기 ② 표 모으기 ③ 제목 ④ 글머리표·번호 목록.
+  const loop = s.slice(s.indexOf("for (const raw of text.split('\\n'))"), s.indexOf('  flushBuf();\n  flushRows();'));
+  const at = (needle) => {
+    const i = loop.indexOf(needle);
+    assert.ok(i >= 0, `읽는 차례에서 빠졌다: ${needle}`);
+    return i;
+  };
+  assert.ok(at('stripInlineMarks(raw)') < at('tableCells(line)'), '표 판정이 서식 표시보다 먼저다');
+  assert.ok(at('tableCells(line)') < at('isHeadingLine(line)'), '제목 판정이 표보다 먼저다 — 구분선을 제목으로 읽는다');
+  assert.ok(at('isHeadingLine(line)') < at('bulletLine(line)'), '글머리표 판정이 제목보다 먼저다');
+  assert.ok(at('bulletLine(line)') < at('LIST_ITEM_RE.test(line.trim())'), '번호 목록 판정이 글머리표보다 먼저다');
+
+  // 주소를 지우는 것은 **검색어를 뽑는 쪽**뿐이다 — 답변 글에는 주소가 그대로 남아야 한다.
+  assert.equal((s.match(/stripAddresses\(/g) || []).length, 1, '주소를 지우는 자리가 뽑는 쪽 말고 또 있다');
+  // 조사만 남은 토막을 거르는 목록은 조사 떼기가 쓰는 그 목록이다(두 벌로 적으면 한쪽만 늘어난다).
+  assert.match(s, /const PARTICLE_ONLY = new Set\(PARTICLES\);/, '조사 목록을 두 벌로 적는다');
+  assert.match(s, /!PARTICLE_ONLY\.has\(t\)/, '조사만 남은 토막이 검색어가 된다');
+  // 단위 없는 수는 검색어가 아니다(DS 78-4 가 세운 경계는 더 큰 수만 가린다).
+  assert.match(s, /\.filter\(\(t\) => !\/\^\[0-9\]\+\$\/\.test\(t\)\)/, '맨 수를 거르는 자리가 없다');
 });
