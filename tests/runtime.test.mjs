@@ -8991,3 +8991,178 @@ test('출처가 문서명을 두 번 적지 않는다 (DS 79-4)', opts, async ()
     }
   }
 });
+
+/* ══════════ 디자인 스프린트 — 77차 재감사 (DS 80-1·80-2·80-3·80-4) ══════════ */
+
+/** 종전 기본 룰 패턴 — 「고친 뒤」와 견주기 위해 그때 그 글자를 그대로 적어 둔다. */
+const DS80_OLD = {
+  greeting: /(안녕|하이|hello|반가|여보세요)/i,
+  bye: /(잘 ?가|안녕히|종료|끝낼|바이)/,
+  hours: /(영업시간|운영시간|업무시간|근무시간|상담시간|몇 ?시|언제.*(열|여|닫))/,
+  location: /(어디에? ?있|위치|주소|찾아가|오시는 ?길|약도|주차)/,
+  reservation: /(예약.*(하고|할래|하려|가능|잡)|예약해|부킹)/,
+  privacy: /(개인정보|프라이버시|정보보호|데이터.*(안전|보관|삭제)|암호화)/,
+  agent: /(상담원|상담사|담당자|담당 ?선생|코디네이터|코디님|사람|직원|연결)/,
+};
+
+/**
+ * DS 80-1 — 기본 규칙이 **제 조건을 사람 말로** 들고 있다.
+ *
+ * 콘솔 「기본 규칙」 카드의 「예를 들어」 칸은 종전에 **정규식을 화면에서 풀어** 만들었다. 그 값이
+ * 뜻 없는 글자였던 사실은 `tests/console.test.mjs`(DS 80-1)가 종전 식을 그대로 돌려 받아 내고,
+ * 여기서는 그 자리를 채울 값이 **룰 쪽에 실제로 있는지**를 본다 — 모든 룰이 표현을 들고 있고,
+ * 그 표현에 정규식 기호가 섞여 있지 않은 것(화면이 그대로 칩에 넣는다).
+ */
+test('기본 규칙이 제 대표 표현을 사람 말로 들고 있다 (DS 80-1)', opts, async () => {
+  const { RULES } = await eng('rules');
+  assert.ok(RULES.length >= 19, '기본 규칙 수가 줄었다 — 전제가 깨졌다');
+  for (const r of RULES) {
+    assert.ok(Array.isArray(r.examples) && r.examples.length >= 2, `${r.intent}: 대표 표현이 없다`);
+    for (const ex of r.examples) {
+      assert.equal(typeof ex, 'string');
+      assert.ok(ex.trim().length >= 2, `${r.intent}: 「${ex}」는 한 글자다 — 칩으로 읽을 수 없다`);
+      // 화면은 이 값을 **그대로** 칩에 넣는다 — 정규식 기호가 섞이면 운영자 화면에 내부 표기가
+      // 그대로 뜬다(QUALITY_BAR 「내부 문구 0건」).
+      assert.equal(/[|()?*+\\^$[\]{}]/.test(ex), false, `${r.intent}: 「${ex}」에 정규식 기호가 있다`);
+    }
+  }
+});
+
+/**
+ * DS 80-2 — **우리 룰이 서로를 가리는 것**을 우리만 보지 않았다.
+ *
+ * 엔진은 `RULES` 를 위에서부터 돌고 패턴은 부분 일치다. 그래서 넓은 룰이 위에 있으면 아래의
+ * 구체적인 룰은 **한 번도 답하지 못한다**. 44차에 운영자 규칙에는 그 사실을 알려 주게 했는데
+ * (`shadowOfRule`) 정작 기본 룰끼리는 아무도 보지 않았다. 돌려서 받아 냈다 — 아래 자리 모두
+ * 고객이 말한 것과 **다른 룰**이 답했고, 그 가운데 둘은 하려던 일의 반대였다(예약을 고치려는
+ * 사람에게 새 예약을, 구독을 끊으려는 사람에게 작별 인사를).
+ */
+test('기본 규칙의 대표 표현은 제 규칙이 답한다 (DS 80-2)', opts, async () => {
+  const C = await eng('chat');
+
+  // ── ① 종전 식 재현 — 앞에 있던 넓은 룰이 그 문장을 **이미** 가져갔다.
+  assert.equal(DS80_OLD.greeting.test('안녕히 계세요'), true, '재현 조건(인사가 종결 인사를 덮는다)이 성립하지 않는다');
+  assert.equal(DS80_OLD.bye.test('구독 종료하고 싶어요'), true, '재현 조건(종결 인사가 해지를 덮는다)이 성립하지 않는다');
+  assert.equal(DS80_OLD.location.test('이메일 주소 바꿔주세요'), true, '재현 조건(오시는 길이 연락처를 덮는다)이 성립하지 않는다');
+  assert.equal(DS80_OLD.hours.test('택배 몇 시에 와요?'), true, '재현 조건(운영시간이 배송을 덮는다)이 성립하지 않는다');
+  assert.equal(DS80_OLD.reservation.test('예약 변경하고 싶어요'), true, '재현 조건(예약 접수가 예약 변경을 덮는다)이 성립하지 않는다');
+  assert.equal(DS80_OLD.privacy.test('대화 내용 삭제해 주세요'), false, '재현 조건(「데이터」라고 말해야 알아들었다)이 성립하지 않는다');
+
+  // ── ② 고친 뒤 — 말한 사람의 일에 맞는 룰이 답한다.
+  const intentOf = (t, i) => C.replyTo(t, `ds80-2-${i}`).intent;
+  assert.equal(intentOf('안녕히 계세요', 1), 'bye');
+  assert.equal(intentOf('구독 종료하고 싶어요', 2), 'cancel');
+  assert.equal(intentOf('서비스 종료할래요', 3), 'cancel');
+  assert.equal(intentOf('이메일 주소 바꿔주세요', 4), 'contact');
+  assert.equal(intentOf('택배 몇 시에 와요?', 5), 'delivery');
+  assert.equal(intentOf('예약 변경하고 싶어요', 6), 'reservation_change');
+  assert.equal(intentOf('예약 취소하고 싶어요', 7), 'reservation_change');
+  assert.equal(intentOf('대화 내용 삭제해 주세요', 8), 'privacy');
+
+  // ── ③ 멀쩡한 자리는 그대로다 — 좁히면서 원래 답하던 말을 잃지 않았다.
+  assert.equal(intentOf('안녕하세요', 10), 'greeting');
+  assert.equal(intentOf('반갑습니다', 11), 'greeting', '「반갑습니다」를 모르던 자리가 남아 있다');
+  assert.equal(intentOf('반가워요', 12), 'greeting');
+  assert.equal(intentOf('반품 되나요', 13), 'refund', '「반」 한 글자가 인사로 걸린다');
+  assert.equal(intentOf('대화 종료', 14), 'bye');
+  assert.equal(intentOf('종료', 15), 'bye', '대화를 끝내겠다는 한 마디를 못 알아듣는다');
+  assert.equal(intentOf('영업시간 알려주세요', 16), 'hours');
+  assert.equal(intentOf('몇 시까지 하나요', 17), 'hours');
+  assert.equal(intentOf('언제 문 여나요', 18), 'hours');
+  assert.equal(intentOf('주소 알려주세요', 19), 'location');
+  assert.equal(intentOf('주차 가능한가요', 20), 'location');
+  assert.equal(intentOf('개인정보 어떻게 보관해요', 21), 'privacy');
+  assert.equal(intentOf('배송 언제 와요', 22), 'delivery');
+  assert.equal(intentOf('세금계산서 발행해 주세요', 23), 'receipt');
+  // 예약 접수는 접수 폼이 붙어 있어 `form:reservation:start` 로 이어질 수 있다 — 둘 다 그 룰의 길이다.
+  assert.match(intentOf('예약 가능한가요', 24), /^(reservation|form:reservation)/);
+
+  // ── ④ 그리고 그 사실을 **제품이 스스로 말한다** — 대표 표현은 모두 제 룰이 답한다.
+  //     (운영자 규칙에만 해 주던 일을 우리 규칙에도 한다 · DS 44-3 의 옆칸)
+  assert.deepEqual(C.builtinRuleMisses(), [], '가려진 기본 규칙이 있다');
+
+  // ── ⑤ 재는 자가 **정말 가려짐을 잡는지** 값으로 확인한다 — 종전 순서를 다시 적으면 어긋남이 뜬다.
+  const firstOf = (list, example) => {
+    const compact = example.replace(/[\s\p{P}]/gu, '');
+    const hit = list.find((c) => c.test.test(example) || c.test.test(compact));
+    return hit ? hit.intent : '';
+  };
+  const oldOrder = [
+    { intent: 'greeting', test: DS80_OLD.greeting },
+    { intent: 'bye', test: DS80_OLD.bye },
+  ];
+  assert.equal(firstOf(oldOrder, '안녕히 계세요'), 'greeting', '검사 식이 종전 가려짐을 잡지 못한다');
+  assert.equal(firstOf([...oldOrder].reverse(), '안녕히 계세요'), 'bye', '순서를 뒤집어도 같은 답이 나온다 — 순서를 보지 않는 검사다');
+});
+
+/**
+ * DS 80-3 — 짧은 외래어 인사말이 **다른 낱말 안에서** 걸렸다.
+ *
+ * `하이`·`바이` 는 다른 낱말의 머리로도 흔하다(하이브리드·하이패스·바이러스·바이크). 패턴이 부분
+ * 일치라 그 두 글자가 든 아무 문장이나 인사·작별 인사가 됐다 — 「바이러스 걸린 것 같아요」가
+ * 「이용해 주셔서 감사합니다. 필요하실 때 언제든 다시 찾아 주세요!」를 받았다(고객은 장애를
+ * 신고하는 중이다). 수의 경계를 세운 자리(DS 78-4)와 같은 종류다.
+ */
+test('짧은 외래어 인사말은 다른 낱말 안에서 걸리지 않는다 (DS 80-3)', opts, async () => {
+  const C = await eng('chat');
+
+  // ── ① 종전 식 재현 — 민 부분 일치는 낱말 안쪽에서도 걸린다.
+  assert.equal(DS80_OLD.bye.test('바이러스 걸린 것 같아요'), true);
+  assert.equal(DS80_OLD.bye.test('바이크 대여되나요?'), true);
+  assert.equal(DS80_OLD.greeting.test('하이브리드 요금제 있어요?'), true);
+  assert.equal(DS80_OLD.greeting.test('하이패스 되나요?'), true);
+
+  // ── ② 고친 뒤 — 그 문장들은 인사·작별 인사가 아니다.
+  const intentOf = (t, i) => C.replyTo(t, `ds80-3-${i}`).intent;
+  assert.notEqual(intentOf('바이러스 걸린 것 같아요', 1), 'bye');
+  assert.notEqual(intentOf('바이크 대여되나요?', 2), 'bye');
+  assert.notEqual(intentOf('하이브리드 요금제 있어요?', 3), 'greeting');
+  assert.notEqual(intentOf('하이패스 되나요?', 4), 'greeting');
+
+  // ── ③ 좁힌 것은 **경계뿐**이다 — 그 말 자체는 그대로 인사·작별 인사다.
+  assert.equal(intentOf('하이', 5), 'greeting');
+  assert.equal(intentOf('하이!', 6), 'greeting');
+  assert.equal(intentOf('바이', 7), 'bye');
+  assert.equal(intentOf('바이바이', 8), 'bye', '겹쳐 말한 작별 인사를 못 알아듣는다');
+  // 한글 인사말은 경계를 묻지 않는다 — 어미가 붙는 말이다.
+  assert.equal(intentOf('안녕하세요', 9), 'greeting');
+  assert.equal(intentOf('잘 가요', 10), 'bye');
+});
+
+/**
+ * DS 80-4 — 넓은 한 낱말이 **묻지도 않은 접수를 만들었다.**
+ *
+ * 상담원 연결 룰은 `escalate` 다 — 걸리는 순간 서버가 접수를 세우고 접수번호를 말한다. 그런데
+ * 종전 패턴은 `사람`·`직원`·`연결` 을 낱말 하나로 들고 있었다. 돌려서 받아 냈다: 「사람이 몇 명까지
+ * 쓸 수 있어요?」(좌석 수 질문)·「직원 할인 있나요?」·「와이파이 연결 어떻게 해요?」가 모두
+ * 접수번호를 받았고, 그 접수는 상담원 줄에 쌓여 **사람이 전화를 건다**.
+ */
+test('넓은 한 낱말이 접수를 만들지 않는다 (DS 80-4)', opts, async () => {
+  process.env.ADMIN_PERSIST = 'false';
+  const C = await eng('chat');
+  const E = await eng('escalation');
+
+  // ── ① 종전 식 재현 — 그 문장들이 상담원 연결 룰에 걸렸다.
+  for (const t of ['사람이 몇 명까지 쓸 수 있어요?', '직원 할인 있나요?', '와이파이 연결 어떻게 해요?']) {
+    assert.equal(DS80_OLD.agent.test(t), true, `재현 조건이 성립하지 않는다: ${t}`);
+  }
+
+  // ── ② 고친 뒤 — 접수가 하나도 늘지 않는다(답변이 접수번호를 말하지 않는다).
+  const before = E.listTickets().length;
+  let i = 0;
+  for (const t of ['사람이 몇 명까지 쓸 수 있어요?', '직원 할인 있나요?', '와이파이 연결 어떻게 해요?', '계정 연결은 어디서 해요?']) {
+    const r = C.replyTo(t, `ds80-4-a${i++}`);
+    assert.notEqual(r.intent, 'agent', `묻지 않은 접수를 만든다: ${t}`);
+    assert.equal(r.ticketId === undefined, true, `접수번호가 붙었다: ${t}`);
+    assert.equal(/ESC-\d/.test(r.reply), false, `답변이 접수번호를 말한다: ${t}`);
+  }
+  assert.equal(E.listTickets().length, before, '접수가 늘었다 — 상담원 줄에 쌓인다');
+
+  // ── ③ 정말 부르는 말은 그대로 접수된다 — 좁히면서 상담원을 부르는 길을 막지 않았다.
+  for (const t of ['상담원 연결해 주세요', '담당자와 통화하고 싶어요', '사람 좀 바꿔주세요', '직원하고 얘기하고 싶어요', '사람이랑 통화하고 싶어요', '연결해주세요', '코디네이터 연결']) {
+    const r = C.replyTo(t, `ds80-4-b${i++}`);
+    assert.equal(r.intent, 'agent', `상담원을 부르는 말을 못 알아듣는다: ${t}`);
+    assert.equal(r.escalate, true, `접수가 서지 않는다: ${t}`);
+  }
+  assert.ok(E.listTickets().length > before, '부르는 말에도 접수가 서지 않는다');
+});

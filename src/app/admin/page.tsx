@@ -264,7 +264,8 @@ const PARTNER_FIELD_ORDER = [['name', 'p-name'], ['feeRatePct', 'p-fee']] as con
 interface RuleView {
   intent: string;
   label: string;
-  pattern: string;
+  /** 이 규칙이 답하는 말 — 서버가 사람 말로 적어 보낸다 (DS 80-1). 화면이 조건을 풀지 않는다. */
+  examples: string[];
   escalate: boolean;
   defaultReply: string;
   enabled: boolean;
@@ -2790,15 +2791,18 @@ function probeKeywords(sentence: string, keywords: string[]): string[] {
   });
 }
 
-/** 내장 룰의 정규식을 사람이 읽을 예시 표현으로 푼다(첫 그룹의 대안만, 최대 6개). */
-function patternExamples(pattern: string): string[] {
-  const m = /\(([^()]+)\)/.exec(pattern);
-  const body = m ? m[1] : pattern;
-  return body
-    .split('|')
-    .map((s) => s.replace(/[\\^$.*+?[\]{}]/g, '').replace(/ ?\?/g, '').trim())
-    .filter((s) => s && !/[|()]/.test(s))
-    .slice(0, 6);
+/**
+ * 「예를 들어」 칸에 쓸 표현 (DS 80-1).
+ *
+ * 종전에는 이 자리에서 **정규식을 직접 풀었다** — 첫 괄호 안의 대안만 떼어 보여 줬는데, 중첩 괄호가
+ * 든 패턴에서는 안쪽 그룹이 잡혔다(`(안 ?(돼|되)|오류|…)` → 「돼, 되」). 19개 기본 규칙 가운데
+ * 8개가 그랬다: 장애·오류 신고는 「돼, 되」, 운영시간은 「열, 여, 닫」, 개인정보·보안은 「안전,
+ * 보관, 삭제」, 설치·연동은 「붙, 넣, 다는」. 이제 조건을 사람 말로 적는 일은 룰 자신이 하고
+ * (`lib/rules` `examples`) 화면은 그 값을 그대로 줄 세운다.
+ */
+const RULE_EXAMPLE_CAP = 6;
+function ruleExamples(r: RuleView): string[] {
+  return (r.examples ?? []).slice(0, RULE_EXAMPLE_CAP);
 }
 
 /**
@@ -4997,12 +5001,12 @@ export default function AdminPage() {
           run: () => { goTab('rules'); setRuleQuery(r.label); },
         })),
       ...rules
-        .filter((r) => searchMatch(term, r.label, patternExamples(r.pattern).join(' '), r.effectiveReply))
+        .filter((r) => searchMatch(term, r.label, ruleExamples(r).join(' '), r.effectiveReply))
         .map((r) => ({
           key: `builtin:${r.intent}`,
           kind: '시나리오 룰' as const,
           title: r.label,
-          detail: `기본 규칙 · ${patternExamples(r.pattern).slice(0, 4).join(', ')}`,
+          detail: `기본 규칙 · ${ruleExamples(r).slice(0, 4).join(', ')}`,
           run: () => { goTab('rules'); setRuleQuery(r.label); },
         })),
     ], () => { goTab('rules'); setRuleQuery(word); });
@@ -5990,7 +5994,7 @@ export default function AdminPage() {
       {tab === 'rules' && (() => {
         const q = searchNorm(ruleQuery);
         const shownCustom = customRules.filter((r) => !q || searchMatch(q, r.label, r.keywords.join(' '), r.reply));
-        const shownBuiltin = rules.filter((r) => !q || searchMatch(q, r.label, r.pattern, r.effectiveReply));
+        const shownBuiltin = rules.filter((r) => !q || searchMatch(q, r.label, ruleExamples(r).join(' '), r.effectiveReply));
         const formKeywords = splitKeywords(crForm.keywords);
         const probeHits = probeKeywords(ruleProbe, formKeywords);
         const onEdit = async (r: CustomRuleView) => {
@@ -6102,7 +6106,7 @@ export default function AdminPage() {
               ) : (
                 <ul className="ac-rulelist">
                   {shownBuiltin.map((r) => {
-                    const ex = patternExamples(r.pattern);
+                    const ex = ruleExamples(r);
                     return (
                       <li key={r.intent} className="ac-rulecard" data-off={r.enabled ? undefined : 'true'}>
                         <div className="ac-rulehead">
@@ -6125,7 +6129,7 @@ export default function AdminPage() {
                             <span className="ac-rulekey">예를 들어</span>
                             <div className="ac-chips">
                               {ex.map((k) => <span key={k} className="ac-chip">{k}</span>)}
-                              {ex.length === 6 && <span className="ac-chip" style={{ color: 'var(--mut)' }}>…</span>}
+                              {ex.length === RULE_EXAMPLE_CAP && <span className="ac-chip" style={{ color: 'var(--mut)' }}>…</span>}
                             </div>
                           </div>
                           <span className="ac-rulearrow" aria-hidden="true">→</span>

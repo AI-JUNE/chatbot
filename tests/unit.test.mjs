@@ -5000,3 +5000,44 @@ test('글의 모양을 보는 자가 한 벌이고 문서 등록이 그 자를 �
   // 단위 없는 수는 검색어가 아니다(DS 78-4 가 세운 경계는 더 큰 수만 가린다).
   assert.match(s, /\.filter\(\(t\) => !\/\^\[0-9\]\+\$\/\.test\(t\)\)/, '맨 수를 거르는 자리가 없다');
 });
+
+/* ── 77차 재감사: 우리가 룰 하나를 골라 답하는 자리 (DS 80-x) ── */
+test('룰 차례가 구체적인 것부터이고, 가려짐을 엔진과 같은 자로 잰다 (DS 80-2)', () => {
+  const r = read('src/lib/rules.ts');
+  const order = [...r.matchAll(/^\s{4}intent: '([a-z_]+)',$/gm)].map((m) => m[1]);
+  assert.ok(order.length >= 19, `룰 차례를 읽지 못했다(${order.length}건)`);
+  const at = (intent) => {
+    const i = order.indexOf(intent);
+    assert.ok(i >= 0, `룰이 없다: ${intent}`);
+    return i;
+  };
+  // 넓은 표현이 든 룰보다 **구체적인 룰이 먼저**다 — 뒤에 있으면 한 번도 답하지 못한다.
+  assert.ok(at('bye') < at('greeting'), '`안녕히`(종결 인사)가 `안녕`(인사)에 가려진다');
+  assert.ok(at('contact') < at('location'), '`이메일 주소`(연락처)가 `주소`(오시는 길)에 가려진다');
+  assert.ok(at('reservation_change') < at('reservation'), '예약 변경이 예약 접수에 가려진다');
+  // 접수를 만드는 룰(`escalate`)은 모두 맨 뒤에 있다 — 그 셋이 앞의 안내 룰을 먹지 않게.
+  for (const broad of ['agent', 'urgent', 'complaint']) {
+    assert.ok(at(broad) > at('trouble') && at(broad) > at('delivery'), `접수를 만드는 룰이 안내 룰보다 앞에 있다: ${broad}`);
+  }
+
+  // 「뒤에 한글이 이어지면 다른 낱말이다」는 **한 곳에만** 적는다(DS 80-3).
+  assert.equal((r.match(/\(\?!\[가-힣\]\)/g) || []).length, 1, '낱말 경계를 재는 식이 한 곳이 아니다');
+  assert.match(r, /const WORD_END = '\(\?!\[가-힣\]\)';/, '낱말 경계를 이름 있는 자로 두지 않는다');
+  assert.match(r, /하이\$\{WORD_END\}/, '`하이` 가 경계를 지나지 않는다');
+  assert.match(r, /바이\$\{WORD_END\}/, '`바이` 가 경계를 지나지 않는다');
+
+  // 접수를 만드는 룰에 `사람`·`직원`·`연결` 이 **낱말 하나로** 남아 있지 않다(DS 80-4).
+  const agent = r.slice(r.indexOf("intent: 'agent'"), r.indexOf("intent: 'urgent'"));
+  const pattern = /test: (\/.+\/),/.exec(agent)[1];
+  for (const word of ['사람', '직원', '연결']) {
+    assert.equal(pattern.includes(`|${word}|`), false, `\`${word}\` 이 낱말 하나로 남아 있다 — 묻지 않은 접수를 만든다`);
+  }
+
+  // 가려짐을 재는 자는 엔진과 **같은 것**을 쓴다(deny·압축형 포함) — 따로 비교식을 적으면 어긋난다.
+  const c = read('src/lib/chat.ts');
+  const misses = c.slice(c.indexOf('export function builtinRuleMisses'), c.indexOf('// ---- 연락처 수집'));
+  assert.match(misses, /RULES\.find\(\(c\) => matchRule\(c, example, pre\.compact\)\)/, '가려짐을 엔진과 다른 자로 잰다');
+  assert.match(misses, /const pre = prepare\(example\);/, '압축형을 엔진과 다른 자로 만든다');
+  // 콘솔 오버라이드는 보지 않는다 — 이것은 코드가 들고 있는 성질이고, 룰을 끄는 것은 운영자의 길이다.
+  assert.equal(misses.includes('getRuleOverride'), false, '코드의 성질을 운영자 설정에 따라 다르게 잰다');
+});

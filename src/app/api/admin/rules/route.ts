@@ -40,7 +40,11 @@ function ruleView(intent: string) {
   return {
     intent: r.intent,
     label: r.label,
-    pattern: r.test.source,
+    // 조건은 **룰이 사람 말로 적어 둔 대표 표현**으로 보낸다 (DS 80-1) — 종전에는 정규식 원문
+    // (`r.test.source`)을 그대로 실어 보내고 화면이 그것을 풀었다. 그러면 ① 중첩 괄호가 든 패턴에서
+    // 안쪽 그룹이 잡혀 뜻 없는 글자가 떴고(「장애·오류 신고 → 돼, 되」) ② 콘솔이 내부 표기를 들고
+    // 있게 된다. 작업 이름(`auditActionLabel`)·인텐트 이름(`lib/intents`)과 같은 모양이다.
+    examples: [...r.examples],
     escalate: r.escalate === true,
     defaultReply: r.reply,
     enabled: ov ? ov.enabled : true,

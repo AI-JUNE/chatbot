@@ -227,6 +227,42 @@ export function shadowOfRule(keywords: readonly string[], selfIntent = ''): Rule
   return null;
 }
 
+/** 「이 대표 표현은 제 룰이 아닌 다른 룰이 먼저 답한다」 (DS 80-2). */
+export interface RuleExampleMiss {
+  /** 답해야 하는 룰 */
+  intent: string;
+  /** 그 룰이 적어 둔 대표 표현(`rules.examples`) */
+  example: string;
+  /** 실제로 먼저 답하는 룰 — 아무 룰도 답하지 않으면 빈 글자다 */
+  answeredBy: string;
+}
+
+/**
+ * 기본 룰끼리 서로 가리는 자리를 가려낸다 (DS 80-2).
+ *
+ * 운영자가 만든 규칙이 가려지는 것은 44차에 알려 주게 됐다(`shadowOfRule`). 그런데 **우리 규칙이
+ * 서로 가리는 것**은 어디서도 보지 않았다 — 순서가 곧 우선순위이고(`RULES` 는 위에서부터 돈다)
+ * 패턴은 부분 일치라, 넓은 룰이 위에 있으면 아래의 구체적인 룰은 한 번도 답하지 못한다.
+ * 돌려서 받아 냈다: 「안녕히 계세요」는 인사(`안녕`), 「이메일 주소 바꿔주세요」는 오시는 길
+ * (`주소`), 「택배 몇 시에 와요」는 운영시간(`몇 시`)이 가져갔다.
+ *
+ * 재는 자는 엔진과 **같은 것**이다(`matchRule` · deny·압축형 포함). 다만 **콘솔 오버라이드는 보지
+ * 않는다** — 이것은 코드가 들고 있는 성질이고, 운영자가 룰 하나를 끄는 것은 그의 길이다.
+ */
+export function builtinRuleMisses(): RuleExampleMiss[] {
+  const out: RuleExampleMiss[] = [];
+  for (const r of RULES) {
+    for (const example of r.examples) {
+      const pre = prepare(example);
+      const first = RULES.find((c) => matchRule(c, example, pre.compact));
+      if (!first || first.intent !== r.intent) {
+        out.push({ intent: r.intent, example, answeredBy: first ? first.intent : '' });
+      }
+    }
+  }
+  return out;
+}
+
 // ---- 연락처 수집(에스컬레이션 후속 턴) ----
 
 /**

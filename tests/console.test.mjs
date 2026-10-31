@@ -4151,3 +4151,52 @@ test('답변 칸의 글자 수를 서버와 같은 자로 세어 그 칸에서 �
   assert.ok(cachedJs.includes('답변은'), '답변 칸의 상한 안내가 없다');
   assert.ok(cachedJs.includes('고객이 쓸 표현은'), '검색어 칸의 상한 안내가 없다');
 });
+
+/**
+ * DS 80-1 — 「기본 규칙」 카드의 「예를 들어」 칸이 **정규식을 되짐작해** 뜻 없는 글자를 보여 줬다.
+ *
+ * 종전 화면은 룰의 정규식 원문을 받아 **첫 괄호 안의 대안**만 떼어 칩으로 세웠다. 그런데 중첩
+ * 괄호가 든 패턴에서는 안쪽 그룹이 먼저 잡힌다(`[^()]+` 는 괄호를 건너지 못한다) — 「장애·오류
+ * 신고 → 돼, 되」·「운영시간 → 열, 여, 닫」·「개인정보·보안 → 안전, 보관, 삭제」·「설치·연동 →
+ * 붙, 넣, 다는」. 명령 팔레트의 설명 줄도 같은 값을 썼다. 운영자가 규칙을 켤지 끌지 고르는 자리에
+ * 조건이 **거짓으로** 적혀 있던 것이다.
+ *
+ * 이제 조건을 사람 말로 적는 일은 룰 자신이 하고(`lib/rules` `examples`), 화면·API 는 그 값을
+ * 그대로 옮긴다 — 감사 로그 작업 이름(`auditActionLabel`)·인텐트 이름(`lib/intents`)과 같은 모양이다.
+ */
+test('기본 규칙 카드가 조건을 정규식에서 되짐작하지 않는다 (DS 80-1)', async () => {
+  const page = readFileSync(new URL('../src/app/admin/page.tsx', import.meta.url), 'utf8');
+  const route = readFileSync(new URL('../src/app/api/admin/rules/route.ts', import.meta.url), 'utf8');
+  const rules = readFileSync(new URL('../src/lib/rules.ts', import.meta.url), 'utf8');
+
+  // ── ① 종전 식 재현 — 그 식을 **지금 패턴에** 돌려 뜻 없는 칩이 나오는 것을 값으로 받는다.
+  const oldPatternExamples = (pattern) => {
+    const m = /\(([^()]+)\)/.exec(pattern);
+    const body = m ? m[1] : pattern;
+    return body
+      .split('|')
+      .map((s) => s.replace(/[\\^$.*+?[\]{}]/g, '').replace(/ ?\?/g, '').trim())
+      .filter((s) => s && !/[|()]/.test(s))
+      .slice(0, 6);
+  };
+  assert.deepEqual(oldPatternExamples('(안 ?(돼|되)|작동.*안|오류|에러|버그|장애|먹통|고장|접속.*안)'), ['돼', '되'], '종전 결함이 재현되지 않는다');
+  assert.deepEqual(oldPatternExamples('(영업시간|운영시간|업무시간|근무시간|상담시간|몇 ?시|언제.*(열|여|닫))'), ['열', '여', '닫']);
+  assert.deepEqual(oldPatternExamples('(개인정보|프라이버시|정보보호|데이터.*(안전|보관|삭제)|암호화)'), ['안전', '보관', '삭제']);
+  assert.deepEqual(oldPatternExamples('(설치|연동|스크립트|임베드|위젯.*(붙|넣|다는)|api ?키)'), ['붙', '넣', '다는']);
+
+  // ── ② 고친 뒤 — 룰이 표현을 적고, 서버가 그것을 보내고, 화면은 그대로 줄 세운다.
+  assert.match(rules, /examples: readonly string\[\];/, '룰에 대표 표현 칸이 없다');
+  assert.match(route, /examples: \[\.\.\.r\.examples\]/, '규칙 목록이 대표 표현을 보내지 않는다');
+  assert.equal(/pattern: r\.test\.source/.test(route), false, '규칙 목록이 아직 정규식 원문을 보낸다');
+  assert.match(page, /function ruleExamples\(r: RuleView\): string\[\] \{\s*\n\s*return \(r\.examples \?\? \[\]\)\.slice\(0, RULE_EXAMPLE_CAP\);/, '화면이 대표 표현을 그대로 쓰지 않는다');
+  // 되짐작하던 식이 **남아 있지 않다** — 화면 어디에도 정규식을 푸는 자가 없다.
+  assert.equal(page.includes('patternExamples'), false, '정규식을 푸는 자가 화면에 남아 있다');
+  assert.equal(/\\\(\(\[\^\(\)\]\+\)\\\)/.test(page), false, '첫 괄호를 떼는 식이 화면에 남아 있다');
+  assert.equal(/r\.pattern/.test(page), false, '화면이 아직 정규식 원문을 읽는다');
+
+  // ── ③ 칩·팔레트 두 자리가 **같은 자**를 지난다(한쪽만 고치면 설명 줄이 다시 갈라진다).
+  assert.match(page, /detail: `기본 규칙 · \$\{ruleExamples\(r\)\.slice\(0, 4\)\.join\(', '\)\}`/, '명령 팔레트가 다른 자를 쓴다');
+  assert.match(page, /const ex = ruleExamples\(r\);/, '규칙 카드가 다른 자를 쓴다');
+  // 「…」은 **잘린 때만** 뜬다 — 상한을 한 곳에 두고 같은 값으로 가린다(DS 48-1 과 같은 규칙).
+  assert.match(page, /\{ex\.length === RULE_EXAMPLE_CAP &&/, '잘렸는지를 다른 수로 가린다');
+});
