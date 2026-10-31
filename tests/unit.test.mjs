@@ -5041,3 +5041,118 @@ test('룰 차례가 구체적인 것부터이고, 가려짐을 엔진과 같은 
   // 콘솔 오버라이드는 보지 않는다 — 이것은 코드가 들고 있는 성질이고, 룰을 끄는 것은 운영자의 길이다.
   assert.equal(misses.includes('getRuleOverride'), false, '코드의 성질을 운영자 설정에 따라 다르게 잰다');
 });
+
+
+/* ══════════ 디자인 — 랜딩 개편 (DS 81-1·81-2·81-3) ══════════
+ *
+ * 랜딩은 고객이 **가장 먼저 보는** 화면인데 누르는 것·카드의 규격이 전부 인라인 스타일이었다.
+ * 인라인에는 `:hover`·`:active` 가 없으므로 그 화면의 **버튼 다섯과 카드 열다섯이 손을 올려도
+ * 눌러도 아무 반응을 하지 않았다** — 기준 원본(AICC Portal `public/index.html`)의 같은 요소는
+ * 전부 색이 바뀌고 떠오르고 눌린다. 규격을 `globals.css` 한 벌로 옮긴 것을 여기서 고정한다.
+ */
+
+test('랜딩의 누르는 것이 기준 원본 버튼 규격 한 벌에서 온다 (DS 81-1)', () => {
+  const css = read('src/app/globals.css');
+  const page = read('src/app/page.tsx');
+
+  // 규격은 한 곳이다 — 기준 원본 `.btn`(48px)·`.btn.lg`(58px) 두 가지.
+  const btn = css.match(/\n\.lp-btn\{([\s\S]*?)\}/);
+  assert.ok(btn, '.lp-btn 규격이 없다 — 화면마다 인라인으로 적으면 손 올림 반응을 붙일 수 없다');
+  assert.match(btn[1], /min-height:48px/, '기준 원본의 기본 버튼 높이(48px)가 아니다');
+  assert.match(btn[1], /display:inline-flex/, 'inline 요소는 높이를 받지 않는다');
+  const lg = css.match(/\.lp-btn-lg\{([^}]*)\}/);
+  assert.ok(lg && /min-height:58px/.test(lg[1]), `기준 원본의 큰 버튼 높이(58px)가 아니다: ${lg?.[1]}`);
+
+  // 손을 올렸을 때·눌렀을 때 반응한다. 호버는 손이 있는 기기에서만(터치에서는 누른 색이 남는다).
+  const hoverBlocks = css.match(/@media \(hover:hover\)\{[\s\S]*?\n\}/g) || [];
+  const btnHover = hoverBlocks.find((b) => b.includes('.lp-btn:hover'));
+  assert.ok(btnHover, '랜딩 버튼에 손 올림 반응이 없다');
+  assert.match(btnHover, /\.lp-btn-main:hover\{background:var\(--brand-600\)/, '주된 버튼의 호버가 기준 원본(brandD)과 다르다');
+  // 어두운 면의 버튼은 밝은 면용 호버를 쓰지 않는다 — 그러면 글자가 바탕에 묻힌다.
+  assert.match(btnHover, /\.lp-btn-ondark:hover\{[^}]*color:var\(--brand-600\)/, '어두운 면 버튼이 제 호버를 갖지 않는다');
+  assert.match(css, /\.lp-btn:active\{transform:scale\(\.98\)\}/, '눌림 반응이 없다');
+
+  // 화면은 클래스만 고른다 — 버튼 자리에 인라인 색·패딩·높이가 돌아오지 않는다.
+  const btns = [...page.matchAll(/<(?:a|button)[^>]*className="[^"]*\blp-btn\b[^"]*"[^>]*>/g)].map((m) => m[0]);
+  for (const tag of btns) {
+    assert.equal(/style=\{\{/.test(tag), false, `버튼에 인라인 스타일이 남아 있다: ${tag.slice(0, 80)}`);
+  }
+  // 다섯 자리(상단바·히어로 2·체험·최종 CTA)가 모두 그 규격을 쓴다.
+  assert.equal(btns.length, 5, '랜딩 버튼 수가 바뀌었다 — 규격 밖의 자리가 생겼는지 본다');
+  // 두 공개 화면의 상단바가 같은 버튼을 쓴다(약관·방침의 「홈으로」).
+  assert.match(read('src/app/privacy/LegalLayout.tsx'), /className="lp-btn"/, '약관·방침 상단바가 랜딩과 다른 버튼 규격을 쓴다');
+  assert.equal(/\.lg-home\{/.test(css), false, '「홈으로」 전용 규격이 되살아났다 — 같은 버튼이 두 벌이 된다');
+
+  // 좁은 화면 규칙은 이 규격보다 **앞에** 있어야 한다(뒤에 있으면 48px 규격을 덮는다).
+  assert.ok(css.indexOf('@media (max-width:900px){\n  /* 상단바가 두 줄') < css.indexOf('\n.lp-btn{'),
+    '랜딩 좁은 화면 규칙이 버튼 규격보다 뒤에 있다 — 둘의 순서가 뜻을 가진다');
+  // 375px: 히어로의 두 CTA 는 반 토막으로 눌리지 않고 한 줄씩 전폭을 쓴다(기준 원본과 같은 규칙).
+  assert.match(css, /@media \(max-width:560px\)\{\n  \.lp-cta \.lp-btn\{flex:1 1 100%\}/, '좁은 화면에서 히어로 CTA 가 전폭이 되지 않는다');
+});
+
+test('랜딩 카드가 클래스 한 벌에서 오고 누를 수 없는 상자는 움직이지 않는다 (DS 81-2)', () => {
+  const css = read('src/app/globals.css');
+  const page = read('src/app/page.tsx');
+  const root = css.split(':root{')[1].split('\n}')[0];
+
+  const card = css.match(/\.lp-card,\.lp-panel\{([^}]*)\}/);
+  assert.ok(card, '랜딩 카드 규격(.lp-card/.lp-panel)이 없다');
+  for (const prop of ['background:var(--surface)', 'border:1px solid var(--line)', 'border-radius:var(--r)', 'box-shadow:var(--shadow-card)']) {
+    assert.ok(card[1].includes(prop), `카드 규격에 ${prop} 가 없다 — 콘솔 카드와 다른 상자가 된다`);
+  }
+  // 손 올림 리프트는 **카드에만** 붙는다 — KPI·체험·히어로 예시는 누를 수 없는 상자다.
+  const lift = (css.match(/@media \(hover:hover\)\{[\s\S]*?\n\}/g) || []).find((b) => b.includes('.lp-card:hover'));
+  assert.ok(lift, '카드에 손 올림 반응이 없다 — 기준 원본의 카드는 전부 떠오른다');
+  assert.match(lift, /border-color:var\(--brand-200\)/, '테두리 틴트가 토큰에서 오지 않는다');
+  assert.match(lift, /box-shadow:var\(--shadow-lift\)/, '떠오른 카드의 그림자가 토큰에서 오지 않는다');
+  assert.equal(/\.lp-panel:hover/.test(css), false, '누를 수 없는 상자가 손이 올라가면 움직인다 — 누를 수 있다고 읽힌다');
+  for (const t of ['--brand-200', '--shadow-lift']) {
+    assert.ok(root.includes(t), `${t} 가 :root 에 없다 — 색·그림자는 토큰 한 곳에서만 나온다`);
+  }
+
+  // 화면에는 바탕·테두리·그림자를 다시 적지 않는다(적으면 어떤 클래스 규칙도 그 값을 이기지 못한다).
+  for (const [tag] of page.matchAll(/<(?:div|figure|details)[^>]*className="[^"]*lp-(?:card|panel)[^"]*"[^>]*>/g)) {
+    const inline = (/style=\{\{([^}]*)\}\}/.exec(tag) || [])[1] || '';
+    assert.equal(/border:|background:/.test(inline), false, `카드에 인라인 바탕·테두리가 남아 있다: ${tag.slice(0, 90)}`);
+  }
+  // 네 묶음(동작 방식 3 · 기능 6 · 채널 3 · 도입 3 = 카드 15장)이 모두 같은 규격을 쓴다.
+  assert.equal((page.match(/className="lp-card"/g) || []).length, 4, '카드를 그리는 자리 수가 바뀌었다(네 묶음)');
+
+  // 고대비(강제 색) 모드에서는 1px 테두리가 서로 붙어 한 덩어리로 읽힌다 — 콘솔 카드와 같이 2px 로.
+  const forced = css.match(/@media \(forced-colors: active\)\{[\s\S]*?\n\}/)[0];
+  assert.match(forced, /\.lp-card,\.lp-panel,\.lp-faq\{border-width:2px\}/, '랜딩 카드가 고대비 규칙에서 빠졌다');
+});
+
+test('FAQ 가 기준 원본 여닫는 줄 규격을 쓰고 펼친 카드를 테두리로 말한다 (DS 81-3)', () => {
+  const css = read('src/app/globals.css');
+  const page = read('src/app/page.tsx');
+
+  const sum = css.match(/\.lp-faq summary\{([\s\S]*?)\}/);
+  assert.ok(sum, '.lp-faq summary 규격이 없다');
+  assert.match(sum[1], /min-height:60px/, '기준 원본의 여닫는 줄 높이(60px)가 아니다');
+  assert.match(sum[1], /justify-content:space-between/, '마커가 줄의 끝에 서지 않는다');
+  // 종전 마커는 float 였다 — 질문이 두 줄이 되면 글이 마커를 돌아 흐른다.
+  assert.equal(/\.lp-faq summary::after\{[^}]*float:right/.test(css), false, '마커가 다시 float 로 돌아갔다');
+  assert.match(css, /\.lp-faq summary::after\{content:'\+';flex:none/, '마커가 줄의 한 칸으로 서지 않는다');
+  assert.match(css, /\.lp-faq\[open\] summary::after\{content:'−'\}/, '펼친 뒤 마커가 바뀌지 않는다');
+  // 어느 카드가 열렸는지 테두리로도 말한다(기준 원본 `.faq details[open]`).
+  assert.match(css, /\.lp-faq\[open\]\{border-color:var\(--brand\)\}/, '펼친 카드가 테두리로 말하지 않는다');
+  // 화면은 규격을 다시 적지 않는다.
+  assert.match(page, /<details key=\{f\.q\} className="lp-faq lp-panel">/, 'FAQ 가 인라인 규격으로 돌아갔다');
+  assert.match(page, /<summary>\{f\.q\}<\/summary>/, '여닫는 줄에 인라인 글자 규격이 남아 있다');
+});
+
+test('모션 최소화에서 전환·리프트가 실제로 꺼진다 — 선언 순서 (DS 81-1·81-2)', () => {
+  const css = read('src/app/globals.css');
+  // 미디어 쿼리는 특이도를 더하지 않는다 — 전환을 끄는 블록이 그 규칙보다 **뒤에** 있어야 이긴다.
+  const kill = css.lastIndexOf('@media (prefers-reduced-motion: reduce){');
+  assert.ok(kill > css.indexOf('\n.lp-btn{'), '전환을 끄는 블록이 버튼 규격보다 앞에 있다 — 설정을 켜도 움직인다');
+  assert.ok(kill > css.indexOf('.ac-switch{position:relative'), '전환을 끄는 블록이 스위치 규칙보다 앞에 있다(종전 결함)');
+  const block = css.slice(kill, css.indexOf('\n}', kill));
+  for (const sel of ['.ac-switch', '.lp-btn', '.lp-card']) {
+    assert.ok(block.includes(sel), `모션 최소화에서 ${sel} 의 전환이 꺼지지 않는다`);
+  }
+  assert.match(block, /\.lp-btn:active,\.lp-btn:hover svg,\.lp-card:hover\{transform:none\}/, '움직임(transform)이 남아 있다');
+  // 끈 뒤에도 무엇이 바뀌었는지는 보인다 — 색·테두리까지 되돌리면 손 올림 반응 자체가 사라진다.
+  assert.equal(/background:/.test(block), false, '모션 설정이 색까지 되돌린다');
+});

@@ -52,7 +52,8 @@ export default function LegalLayout({
             <BrandMark size={28} />
             GOWON Chat
           </Link>
-          <Link href="/" className="lg-home">홈으로</Link>
+          {/* 랜딩 상단바 CTA 와 같은 .lp-btn 규격(48px) — 두 공개 화면의 상단바가 갈라지지 않게 한 곳에서 본다. */}
+          <Link href="/" className="lp-btn">홈으로</Link>
         </div>
       </header>
 

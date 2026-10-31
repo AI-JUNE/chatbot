@@ -14,6 +14,11 @@
    * 4.5:1 을 넘기려고 어둡게 잡았으므로 어두운 면 위에서는 이 토큰을 쓴다. */
   --mut-on-ink:#94A3B8;
   --brand:#2563EB; --brand-600:#1D4ED8; --brand-50:#EFF6FF;
+  /* 손을 올린 카드의 테두리 틴트 — 기준 원본(`index.html` 의 `.pr:hover`·`.fc:hover`)이 쓰는 자리를
+   * 이 저장소의 브랜드 계열(50·200·600) 안에서 고른 값이다. 이 색은 **무엇을 말하지 않는다**
+   * (손을 올렸다는 사실은 테두리·그림자·2px 리프트가 함께 말하고, 누를 수 있다는 사실은 커서와
+   * 초점 테두리가 말한다) — 그래서 글자 대비 기준을 따로 세우지 않는다. */
+  --brand-200:#BFDBFE;
   /* 상태 본문색 — 상태 칩·배너·오류 문구가 글자색으로 쓴다. Tailwind 기본값(500~600)은
    * 밝은 면에서 3:1 안팎이라 AA(4.5:1)에 못 미친다 — DS 10-1 과 같은 기준으로 한 단 내렸다.
    * 밝은 면 6종(surface·bg·brand-50·success-50·warn-50·danger-50) 전부에서 최소 4.59:1. */
@@ -34,6 +39,9 @@
   --r:16px; --r-sm:10px; --r-lg:18px;
   --shadow-card:0 1px 2px rgba(15,23,42,.04), 0 12px 30px -18px rgba(15,23,42,.18);
   --shadow-pop:0 10px 15px -3px rgba(15,23,42,.08), 0 30px 60px -30px rgba(15,23,42,.45);
+  /* 손을 올린 카드가 떠오를 때의 그림자 — 기준 원본의 `0 14px 32px -22px rgba(36,87,197,.35)` 를
+   * 이 저장소의 브랜드색(37,99,235)으로 옮겼다(중성 회색인 --shadow-card 와 달리 브랜드 쪽으로 번진다). */
+  --shadow-lift:0 14px 32px -22px rgba(37,99,235,.35);
   --font:'Pretendard Variable',Pretendard,-apple-system,system-ui,'Malgun Gothic',sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -96,11 +104,13 @@ main:focus{outline:none}
 /* 화면에서는 감추고 스크린리더에만 남기는 글 — 콘솔의 .ac-srhide 와 같은 규격. */
 .gw-srhide{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
-/* 모션 최소화 설정을 존중한다(전정 장애 등). */
+/* 모션 최소화 설정을 존중한다(전정 장애 등).
+ * 애니메이션은 여기서 끈다(!important 라 순서와 무관하다). **전환·이동은 여기서 끄지 못한다** —
+ * 미디어 쿼리는 특이도를 더하지 않으므로 뒤에 선언된 `.ac-switch{transition:…}` 가 그대로 이긴다.
+ * 그래서 전환을 끄는 자리는 파일 **아래쪽**(「전환·리프트 끄기」 블록)에 모아 두었다. */
 @media (prefers-reduced-motion: reduce){
   html{scroll-behavior:auto}
   .gw-rise,.gw-panel,.gw-dot,.ac-drawer{animation:none!important}
-  .ac-switch,.ac-switch-knob{transition:none}
   .ac-skel::after{animation:none}
 }
 
@@ -416,14 +426,15 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 
 /* ── 랜딩 레이아웃 (인라인 스타일로 표현할 수 없는 반응형만 클래스로) ── */
 .lp-topin{max-width:1080px;margin:0 auto;padding:0 22px;height:62px;display:flex;align-items:center;gap:18px}
-.lp-nav{display:flex;gap:20px;margin-left:12px}
-.lp-topcta{margin-left:auto;display:inline-flex;align-items:center;min-height:38px;white-space:nowrap}
+/* 메뉴 글자 규격은 여기 한 곳이다(링크는 상속으로 받는다 — `a{color:inherit}` 가 위에 있다).
+ * 인라인으로 적으면 아래 좁은 화면 규칙도, 손 올림 반응도 이기지 못한다(DS 13-2·16-2 와 같은 자리). */
+.lp-nav{display:flex;gap:20px;margin-left:12px;font-size:13.5px;font-weight:600;color:var(--sub)}
+.lp-topcta{margin-left:auto}
 .lp-hero{display:grid;grid-template-columns:minmax(320px,1fr) minmax(280px,380px);gap:44px;align-items:center}
 .lp-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(272px,1fr))}
 .lp-kpi{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
-.lp-faq summary::-webkit-details-marker{display:none}
-.lp-faq summary::after{content:'+';float:right;color:var(--brand-600);font-weight:800}
-.lp-faq[open] summary::after{content:'−'}
+/* 히어로의 CTA 줄 — 기준 원본 `.cta-row`. 좁은 화면 규칙이 있어 인라인으로 적지 않는다. */
+.lp-cta{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
 @media (max-width:900px){
   /* 상단바가 두 줄이 된다: 1행 = 로고 + 「도입 문의」, 2행 = 섹션 메뉴(가로 스크롤 칩).
      메뉴를 display:none 으로 지우면 좁은 화면에는 섹션으로 가는 수단이 아예 없어진다. */
@@ -432,19 +443,87 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
     overscroll-behavior-x:contain;padding-bottom:2px}
   .lp-nav a{white-space:nowrap;font-size:12.5px;padding:7px 10px;background:var(--bg);
     border-radius:8px;min-height:34px;display:inline-flex;align-items:center}
-  /* 두 줄이 된 상단바(라이브 375px 실측 104px)만큼 앵커 착지점도 함께 내린다 —
-     DS 10-2 가 세운 단일 출처를 이 화면 폭에서만 다시 잡는다(scroll-margin 은 쓰지 않는다).
-     104px + 여유 16px — 넓은 화면(63px + 15px = 78px)과 같은 비율의 여유다. */
-  html{scroll-padding-top:120px}
+  /* 두 줄이 된 상단바만큼 앵커 착지점도 함께 내린다 — DS 10-2 가 세운 단일 출처를 이 화면 폭에서만
+     다시 잡는다(scroll-margin 은 쓰지 않는다). 1행이 기준 원본 버튼 규격(48px)을 따르면서
+     10 + 48 + 8(행 간격) + 34(메뉴 칩) + 8 + 1(테두리) = 109px 이 되었다 — 여기에 여유 16px.
+     (종전 값 120px 은 CTA 가 39.6px 이던 때의 104px 기준이다.) */
+  html{scroll-padding-top:125px}
   .lp-hero{grid-template-columns:1fr;gap:28px}
+}
+/* 기준 원본 `@media (max-width:560px){.cta-row .btn{flex:1 1 100%}}` — 좁은 화면에서 히어로의 두
+   CTA 가 반 토막으로 눌리는 대신 한 줄씩 전폭을 쓴다(375px 에서 두 버튼의 폭 합이 화면을 넘는다). */
+@media (max-width:560px){
+  .lp-cta .lp-btn{flex:1 1 100%}
+}
+
+/* ── 랜딩의 누르는 것 — 기준 원본(AICC Portal `index.html`)의 `.btn`/`.btn.main`/`.btn.lg` 이식 ──
+ * 종전에는 다섯 자리가 각자 인라인으로 패딩·굵기를 적어 높이가 제각각이었고(상단바 39.6px ·
+ * 히어로 49.2px · 체험 49.2px · 최종 CTA 52.4px — 기준 원본은 48px 과 58px 두 가지다), **손을 올려도
+ * 눌러도 아무 반응이 없었다**(인라인 스타일에는 :hover 가 없다 — 기준 원본의 모든 버튼은 색이 바뀌고
+ * 눌리면 .98 로 들어간다). 규격을 여기 한 벌로 두고 화면은 클래스만 고른다.
+ * 상단바 CTA 는 그 결과 39.6 → 48px 이 되어 권장 손가락 목표(WCAG 2.5.5 · 44px)를 넘는다.
+ * (좁은 화면 규칙보다 **뒤에** 적는다 — 위에 적으면 그 규칙들이 이 규격을 이긴다.) */
+.lp-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;
+  padding:12px 20px;border-radius:12px;border:1px solid var(--line-2);background:var(--surface);
+  color:var(--ink);font-size:14.5px;font-weight:700;white-space:nowrap;
+  transition:background .15s,border-color .15s,color .15s,transform .08s}
+.lp-btn-main{background:var(--brand);border-color:var(--brand);color:#fff}
+.lp-btn-lg{min-height:58px;padding:16px 26px;font-size:16.5px;border-radius:14px}
+/* 어두운 면(최종 CTA) 위의 꽉 찬 흰 버튼 — 밝은 면용 호버를 그대로 쓰면 흰 글자가 사라진다
+ * (D-ARS 10/25 에서 어두운 면의 투명 버튼이 밝은 호버를 상속해 글씨가 지워진 자리다). */
+.lp-btn-ondark{background:#fff;border-color:#fff;color:var(--ink)}
+/* 손을 올렸을 때만 반응한다 — 터치 기기에서는 누른 색이 손을 뗀 뒤에도 남는다(콘솔과 같은 가드). */
+@media (hover:hover){
+  .lp-btn:hover{background:var(--brand-50);border-color:var(--brand);color:var(--brand-600)}
+  .lp-btn-main:hover{background:var(--brand-600);border-color:var(--brand-600);color:#fff}
+  .lp-btn-ondark:hover{background:var(--brand-50);border-color:var(--brand-50);color:var(--brand-600)}
+  /* 화살표가 붙은 버튼은 그 방향으로 한 걸음 — 기준 원본 `.btn:hover svg` 와 같은 값이다. */
+  .lp-btn svg{transition:transform .25s cubic-bezier(.16,1,.3,1)}
+  .lp-btn:hover svg{transform:translateX(3px)}
+}
+.lp-btn:active{transform:scale(.98)}
+
+/* ── 랜딩 카드 — 기준 원본 `.fc`/`.pr` 규격. 인라인으로 적었던 바탕·테두리·그림자를 여기로 옮긴다
+ * (인라인에 적힌 테두리색은 어떤 클래스 규칙으로도 이길 수 없어 손 올림 반응을 붙일 수 없었다).
+ * `.lp-panel` 은 같은 규격의 **누를 수 없는** 상자다 — 손이 올라가도 움직이지 않는다
+ * (움직이면 누를 수 있다고 읽힌다 — 콘솔의 `.ac-row[data-static]` 과 같은 규칙). */
+.lp-card,.lp-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-card)}
+@media (hover:hover){
+  .lp-card{transition:border-color .2s ease,box-shadow .25s ease,transform .25s cubic-bezier(.16,1,.3,1)}
+  .lp-card:hover{border-color:var(--brand-200);box-shadow:var(--shadow-lift);transform:translateY(-2px)}
+  .lp-nav a:hover,.lp-footlink:hover{color:var(--brand-600)}
+}
+
+/* FAQ 카드 — 기준 원본 `.faq details` 규격(여닫는 줄 60px · 마커 22px · 펼친 카드는 브랜드 테두리).
+ * 종전 마커는 `float:right` 라 질문이 두 줄이 되면 글이 마커를 돌아 흘렀고, 펼쳐도 어느 카드가
+ * 열렸는지 테두리로 말하지 않았다. 마커는 글자(+·−)라 고대비·흑백 인쇄에서도 남는다. */
+.lp-faq{padding:0 20px}
+.lp-faq[open]{border-color:var(--brand)}
+.lp-faq summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:60px;
+  font-size:14.5px;font-weight:700;cursor:pointer;list-style:none}
+.lp-faq summary::-webkit-details-marker{display:none}
+.lp-faq summary::after{content:'+';flex:none;font-size:22px;font-weight:700;line-height:1;color:var(--mut)}
+.lp-faq[open] summary::after{content:'−'}
+.lp-faq p{padding-bottom:18px}
+
+/* ── 모션 최소화: 전환·리프트 끄기 ──
+ * 위쪽 블록(애니메이션)과 달리 전환·이동은 **끄려는 규칙보다 뒤에** 있어야 이긴다
+ * (미디어 쿼리는 특이도를 더하지 않는다 — 종전에는 `.ac-switch` 를 윗블록에서 껐는데
+ * 그 선언이 규칙보다 앞에 있어 손잡이가 설정과 무관하게 계속 미끄러졌다).
+ * 끈 뒤에도 **무엇이 바뀌었는지는 그대로 보인다** — 색·테두리·그림자는 남기고 움직임만 없앤다. */
+@media (prefers-reduced-motion: reduce){
+  .ac-switch,.ac-switch-knob{transition:none}
+  .lp-btn,.lp-btn svg,.lp-card{transition:none}
+  .lp-btn:active,.lp-btn:hover svg,.lp-card:hover{transform:none}
 }
 
 /* ── 약관·방침 페이지 (DS 4-4) — 랜딩과 같은 상단바·카드·푸터 규격 ── */
 .lg-wrap{max-width:1080px;margin:0 auto;padding:0 22px}
 .lg-top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .lg-topin{height:62px;display:flex;align-items:center;justify-content:space-between;gap:18px}
-.lg-home{font-size:13.5px;font-weight:700;color:var(--ink);background:var(--surface);border:1px solid var(--line-2);border-radius:10px;padding:8px 14px;min-height:38px;display:inline-flex;align-items:center}
-.lg-home:hover{background:var(--bg)}
+/* 「홈으로」 는 랜딩 상단바의 CTA 와 같은 자리에 선 같은 종류의 버튼이다 — 규격은 `.lp-btn`
+ * 한 벌에서 오고(48px · 라운드 12 · 손 올림 반응) 여기에는 더 적을 것이 없다.
+ * (종전에는 이 버튼만 38px·라운드 10 이어서 두 공개 화면의 상단바가 미묘하게 달랐다.) */
 .lg-main{flex:1;display:grid;grid-template-columns:220px minmax(0,760px);gap:28px;align-items:start;padding-top:40px;padding-bottom:72px}
 .lg-toc{position:sticky;top:78px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 14px;box-shadow:var(--shadow-card)}
 .lg-toc-title{font-size:11.5px;font-weight:800;letter-spacing:.08em;color:var(--mut);margin:0 6px 8px}
@@ -519,7 +598,8 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
   .ac-toast{border:1px solid ButtonText}
   .ac-toast-fail{border:2px solid ButtonText}
   /* 카드 경계는 1px 테두리뿐이라 이 모드에서 서로 붙어 한 덩어리로 읽힌다 */
-  .ac-kpicard,.ac-nscard,.ac-stat,.ac-preview,.lg-card,.ac-login-card{border-width:2px}
+  .ac-kpicard,.ac-nscard,.ac-stat,.ac-preview,.lg-card,.ac-login-card,
+  .lp-card,.lp-panel,.lp-faq{border-width:2px}
   /* 불러오는 중 자리 표시 — 배경색이 지워져 빈 칸이 된다(막대가 없으면 멈춘 화면으로 보인다) */
   .ac-skel{border:1px solid GrayText}
 }

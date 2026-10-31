@@ -137,12 +137,9 @@ const FAQ = [
   },
 ] as const;
 
-const card = {
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
-  borderRadius: 'var(--r)',
-  boxShadow: 'var(--shadow-card)',
-} as const;
+/* 카드·버튼의 바탕·테두리·그림자·높이는 `globals.css` 의 `.lp-card`·`.lp-panel`·`.lp-btn` 한 벌에서 온다.
+ * 여기에 인라인으로 적으면 어떤 클래스 규칙으로도 이길 수 없어 손 올림 반응도, 좁은 화면 규칙도
+ * 붙지 않는다(DS 13-2·16-2 가 상단바·푸터에서 이미 겪은 자리다). 이 파일에는 여백만 남긴다. */
 
 const sectionLabel = { fontSize: 12.5, fontWeight: 800, letterSpacing: '.06em', color: 'var(--brand-600)', textTransform: 'uppercase' } as const;
 const h2 = { fontSize: 'clamp(23px,3.4vw,32px)', fontWeight: 800, letterSpacing: '-.025em', lineHeight: 1.3, margin: '10px 0 10px' } as const;
@@ -169,10 +166,10 @@ export default function Home() {
             * 칩은 전부 링크라 Tab 으로 차례차례 닿으므로 스크롤 영역에 tabindex 를 따로 두지 않는다. */}
           <nav aria-label="주요 섹션" className="lp-nav">
             {NAV.map(([href, label]) => (
-              <a key={href} href={href} style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--sub)' }}>{label}</a>
+              <a key={href} href={href}>{label}</a>
             ))}
           </nav>
-          <a href="#contact" className="lp-topcta" style={{ fontSize: 13.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 10, padding: '9px 16px' }}>
+          <a href="#contact" className="lp-topcta lp-btn lp-btn-main">
             도입 문의
           </a>
         </div>
@@ -195,12 +192,12 @@ export default function Home() {
               FAQ와 안내문을 등록하면 AI가 1차 응대하고, 답변마다 어느 자료에서 나왔는지 함께 보여줍니다.
               확인이 필요한 문의는 대화 요약과 함께 상담원에게 넘깁니다.
             </p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 26 }}>
+            <div className="lp-cta">
               {/* 적힌 대로 **상담창을 연다**(DS 12-3). `href` 는 그대로 둬 스크립트가 죽어도 체험 섹션으로는 간다. */}
-              <a href="#demo" data-gowon-open style={{ fontSize: 14.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 12, padding: '13px 22px' }}>
+              <a href="#demo" data-gowon-open className="lp-btn lp-btn-main lp-btn-lg">
                 상담창 열어보기
               </a>
-              <a href="#contact" style={{ fontSize: 14.5, fontWeight: 700, color: 'var(--ink)', background: 'var(--surface)', border: '1px solid var(--line-2)', borderRadius: 12, padding: '13px 22px' }}>
+              <a href="#contact" className="lp-btn lp-btn-lg">
                 도입 상담 요청
               </a>
             </div>
@@ -212,7 +209,7 @@ export default function Home() {
           {/* 대화 예시 — 실제 위젯 화면과 같은 구성(값은 예시 문구).
             * `<div aria-label>` 은 역할이 generic 이라 스크린리더가 이름으로 읽지 않는다.
             * `<figure>` 로 둬야 「그림: 상담 화면 예시」로 들어오고, 안내문은 figcaption 으로 묶인다. */}
-          <figure aria-label="상담 화면 예시 — 실제 답변은 등록한 자료에 따라 달라집니다" style={{ ...card, borderRadius: 'var(--r-lg)', overflow: 'hidden', boxShadow: 'var(--shadow-pop)' }}>
+          <figure aria-label="상담 화면 예시 — 실제 답변은 등록한 자료에 따라 달라집니다" className="lp-panel" style={{ borderRadius: 'var(--r-lg)', overflow: 'hidden', boxShadow: 'var(--shadow-pop)' }}>
             <div style={{ background: 'var(--brand)', color: '#fff', padding: '13px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
               <span aria-hidden="true" style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(255,255,255,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14 }}>G</span>
               <div style={{ lineHeight: 1.25 }}>
@@ -248,7 +245,7 @@ export default function Home() {
         </p>
         <div className="lp-grid" style={{ marginTop: 30 }}>
           {TRUST.map((t) => (
-            <div key={t.title} style={{ ...card, padding: '22px 20px' }}>
+            <div key={t.title} className="lp-card" style={{ padding: '22px 20px' }}>
               <span style={{ display: 'inline-flex', width: 36, height: 36, borderRadius: 11, background: 'var(--brand-50)', color: 'var(--brand-600)', alignItems: 'center', justifyContent: 'center' }}>
                 <Icon name={t.icon} size={18} />
               </span>
@@ -265,7 +262,7 @@ export default function Home() {
         <h2 style={h2}>상담 운영에서 실제로 쓰는 것만</h2>
         <div className="lp-grid" style={{ marginTop: 26 }}>
           {FEATURES.map((f) => (
-            <div key={f.title} style={{ ...card, padding: '20px 20px' }}>
+            <div key={f.title} className="lp-card" style={{ padding: '20px 20px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--brand-50)', color: 'var(--brand-600)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
                   <Icon name={f.icon} size={17} />
@@ -284,7 +281,7 @@ export default function Home() {
         <h2 style={h2}>고객이 있는 곳에서 같은 답을</h2>
         <div className="lp-grid" style={{ marginTop: 26 }}>
           {CHANNELS.map((c) => (
-            <div key={c.title} style={{ ...card, padding: '22px 20px' }}>
+            <div key={c.title} className="lp-card" style={{ padding: '22px 20px' }}>
               <span style={{ display: 'inline-flex', width: 36, height: 36, borderRadius: 11, background: 'var(--brand-50)', color: 'var(--brand-600)', alignItems: 'center', justifyContent: 'center' }}>
                 <Icon name={c.icon} size={18} />
               </span>
@@ -302,7 +299,7 @@ export default function Home() {
         <h2 style={h2}>오픈까지 세 단계</h2>
         <div className="lp-grid" style={{ marginTop: 26 }}>
           {STEPS.map((s) => (
-            <div key={s.n} style={{ ...card, padding: '22px 20px' }}>
+            <div key={s.n} className="lp-card" style={{ padding: '22px 20px' }}>
               <span aria-hidden="true" style={{ display: 'inline-flex', width: 30, height: 30, borderRadius: '50%', background: 'var(--brand)', color: '#fff', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14 }}>{s.n}</span>
               <h3 style={{ fontSize: 16, fontWeight: 800, margin: '13px 0 8px' }}>{s.title}</h3>
               <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: 0 }}>{s.body}</p>
@@ -318,7 +315,7 @@ export default function Home() {
         <p style={{ ...lead, maxWidth: 640 }}>
           운영 콘솔이 대화량·자동 완결·상담원 전환을 집계합니다. 아직 측정되지 않은 값은 숫자를 지어내지 않고 「측정 중」으로 둡니다.
         </p>
-        <div style={{ ...card, padding: 20, marginTop: 24 }}>
+        <div className="lp-panel" style={{ padding: 20, marginTop: 24 }}>
           <div className="lp-kpi">
             {CONSOLE_KPI.map(([label, value]) => (
               <div key={label} style={{ background: 'var(--bg)', border: '1px solid var(--line)', borderRadius: 12, padding: '16px 16px' }}>
@@ -335,7 +332,7 @@ export default function Home() {
 
       {/* ── 체험 ── */}
       <section id="demo" style={{ ...wrap, padding: '64px 22px 8px' }}>
-        <div style={{ ...card, padding: '30px 26px', display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'center', justifyContent: 'space-between' }}>
+        <div className="lp-panel" style={{ padding: '30px 26px', display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ maxWidth: 560 }}>
             <span style={sectionLabel}>체험</span>
             <h2 style={{ ...h2, fontSize: 'clamp(21px,2.6vw,27px)', margin: '8px 0 8px' }}>지금 바로 물어보세요</h2>
@@ -345,7 +342,7 @@ export default function Home() {
           </div>
           {/* 「오른쪽 아래를 보세요」는 화면을 보는 사람에게만 닿는 안내였다(WCAG 1.3.3) — 누를 수 있는
             * 단추로 바꿔 위치를 몰라도 시작할 수 있게 한다. 누르면 상담창이 열리고 입력창으로 초점이 간다. */}
-          <button type="button" data-gowon-open style={{ display: 'inline-flex', alignItems: 'center', gap: 9, fontSize: 14.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 12, padding: '13px 22px', minHeight: 44 }}>
+          <button type="button" data-gowon-open className="lp-btn lp-btn-main lp-btn-lg">
             상담창 열기 <Icon name="arrow" size={17} />
           </button>
         </div>
@@ -357,8 +354,8 @@ export default function Home() {
         <h2 style={h2}>도입 전에 많이 받는 질문</h2>
         <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 10 }}>
           {FAQ.map((f) => (
-            <details key={f.q} className="lp-faq" style={{ ...card, padding: '16px 18px' }}>
-              <summary style={{ fontSize: 14.5, fontWeight: 700, cursor: 'pointer', listStyle: 'none' }}>{f.q}</summary>
+            <details key={f.q} className="lp-faq lp-panel">
+              <summary>{f.q}</summary>
               <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.75, margin: '10px 0 0' }}>{f.a}</p>
             </details>
           ))}
@@ -374,7 +371,7 @@ export default function Home() {
           <p style={{ fontSize: 15, color: 'var(--line-2)', lineHeight: 1.7, margin: '14px auto 24px', maxWidth: 520 }}>
             운영 중인 안내 자료를 그대로 등록해 실제 문의에 어떻게 답하는지 보여 드립니다. 파일럿 기간의 집계값으로 도입을 판단하실 수 있습니다.
           </p>
-          <a href="mailto:gowonceo@gmail.com?subject=GOWON%20Chat%20%EB%8F%84%EC%9E%85%20%EB%AC%B8%EC%9D%98" style={{ display: 'inline-block', fontSize: 15, fontWeight: 700, color: 'var(--ink)', background: '#fff', borderRadius: 12, padding: '14px 26px' }}>
+          <a href="mailto:gowonceo@gmail.com?subject=GOWON%20Chat%20%EB%8F%84%EC%9E%85%20%EB%AC%B8%EC%9D%98" className="lp-btn lp-btn-lg lp-btn-ondark">
             도입 문의 보내기
           </a>
           <p style={{ fontSize: 12, color: 'var(--mut-on-ink)', margin: '16px 0 0' }}>이 화면의 응답은 데모 데이터로 보여 드립니다 — 도입 후에는 고객사 안내 자료와 담당 창구로 연결됩니다.</p>
