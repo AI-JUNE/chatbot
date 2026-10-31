@@ -3,7 +3,7 @@
 // [승인 필요] 임베딩 기반 시맨틱 검색·외부 스토리지 업로드 — 전까지 서버 메모리·관리 콘솔 등록만.
 import type { KBEntry } from '@/lib/knowledge';
 import { cut, cutEnd, ellipsize, KB_QUESTION_LEN, KB_SOURCE_LEN, KEYWORD_LEN } from '@/lib/limits';
-import { compact, toNfc } from '@/lib/normalize';
+import { compact, overlapsTerm, toNfc } from '@/lib/normalize';
 import { compareText } from '@/lib/order';
 import { readsAsSentence, splitSentences } from '@/lib/prose';
 
@@ -254,16 +254,47 @@ const PARTICLES = [
   '들의', '와의', '과의', '의', '은', '는', '이', '가', '을', '를', '에', '로', '와', '과', '도', '만', '요',
 ];
 
+/**
+ * 검색어로 쓰지 않는 말.
+ *
+ * 아래쪽 한 묶음은 78차에 더했다 (DS 78-2) — **토픽을 가리키지 않는 일반어**다. 이 칸의 이름은
+ * 화면에서 「고객이 쓸 표현」이고, 그 칸에 든 말 하나가 걸리면 그 자료가 **확신 답변**으로
+ * 나간다(2자 이상 키워드 한 건 = 2점 = `matchKnowledge` 의 문턱). 그래서 우리가 문서를 쓸 때
+ * 쓰는 말이 그 칸에 들어가면, 그 말이 든 **아무 질문에나** 자료가 답한다. 돌려서 받아 냈다:
+ *
+ *     「교환은 상품 수령 후 14일 이내에 가능합니다. 교환 배송비는 고객 부담입니다.」
+ *       → 뽑힌 검색어: 교환 · 14일 · 배송비 · **가능** · **고객** · **부담** · 상품 · 수령
+ *       → 「주차 가능한가요?」 「예약 가능해요?」 에 이 자료가 2점으로 답했다(근거 줄까지 달고)
+ *
+ * 운영자가 손으로 적은 키워드는 건드리지 않는다 — 거르는 것은 **우리가 대신 적어 주는** 값뿐이다.
+ */
 const STOPWORDS = new Set([
   '그리고', '그러나', '하지만', '또는', '또한', '경우', '대한', '대해', '위해', '통해', '해당', '관련',
   '있습니다', '없습니다', '합니다', '됩니다', '입니다', '수', '것', '등', '및', '이런', '저런', '그런',
   '때문', '하여', '하며', '한다', '있다', '없다', '한', '두', '세', '내용', '사항', '다음', '아래', '위',
+  // DS 78-2 — 토픽이 아니라 「우리가 문서를 쓰는 말」
+  '가능', '불가', '부담', '이내', '이후', '이전', '기준', '고객', '안내', '아닙니다', '받은', '같은',
+  '모든', '모두', '여러', '다양', '참고', '유의', '주의', '필요', '제공', '포함',
+  // 종결형이 조사 떼기(`요`)를 지나며 남긴 글자 — 「…로 접수해 주세요」의 꼬리다
+  '주세', '해주세',
 ]);
 
-/** 용언 어미 — "운영합니다" → "운영"처럼 검색어로 쓸모없는 꼬리를 떼기 위한 근사 규칙. */
+/**
+ * 용언 어미 — "운영합니다" → "운영"처럼 검색어로 쓸모없는 꼬리를 떼기 위한 근사 규칙.
+ *
+ * 긴 것부터 적는다(`stripOnce` 가 **먼저 걸린 것**을 뗀다) — 짧은 꼬리를 위에 두면 긴 꼬리가
+ * 영영 걸리지 않는다.
+ *
+ * 아래 두 줄은 78차에 더했다 (DS 78-2). 종전 목록은 **정중한 종결형**(…합니다·…하세요)만 알아서,
+ * 문서에 그만큼 흔한 관형형·연결형·부정형은 꼬리를 단 채로 「고객이 쓸 표현」 칸에 들어갔다 —
+ * 돌려서 받아 낸 값이 그대로 증거다: `접수해`·`등록된`·`아닙니다`. 고객은 그렇게 치지 않는다.
+ */
 const ENDINGS = [
-  '하겠습니다', '되었습니다', '있었습니다', '드리겠습니다', '드립니다', '했습니다', '합니다', '입니다', '습니다',
-  '됩니다', '십니다', '하세요', '해주세요', '주세요', '해요', '이다', '한다', '된다', '하는', '되는', '하고', '되고',
+  '하겠습니다', '되었습니다', '있었습니다', '드리겠습니다', '드립니다', '했습니다', '하였습니다',
+  '합니다', '입니다', '습니다', '됩니다', '십니다', '하세요', '해주세요', '주세요', '해요',
+  '하려면', '되려면', '하거나', '되거나', '되어야', '하여야', '이어야',
+  '하였다', '되었다', '이다', '한다', '된다', '하는', '되는', '하고', '되고', '하며', '되며',
+  '하지', '되지', '하면', '되면', '하기', '되기', '해야', '되어', '하여', '된', '한', '해',
 ];
 
 function stripOnce(token: string, list: string[]): string {
@@ -306,12 +337,29 @@ export function extractKeywords(text: string, limit = 8): string[] {
   const freq = new Map<string, number>();
   for (const t of tokens) freq.set(t, (freq.get(t) ?? 0) + 1);
 
-  return [...freq.entries()]
-    .map(([term, n]) => ({ term, weight: n + Math.min(term.length, 6) * 0.3 }))
-    // 같은 무게면 이름순 — 줄 세우는 자는 `lib/order` 한 곳이다 (DS 64-2).
-    .sort((a, b) => b.weight - a.weight || compareText(a.term, b.term))
-    .slice(0, limit)
-    .map((x) => x.term);
+  return (
+    [...freq.entries()]
+      .map(([term, n]) => ({ term, weight: n + Math.min(term.length, 6) * 0.3 }))
+      /**
+       * **같은 자리를 가리키는 두 표현은 한 칸만 쓴다** (DS 78-1).
+       *
+       * 낱말 빈도로 뽑으므로 `환불`·`환불금` 처럼 한쪽이 다른 쪽에 든 쌍이 흔하다(돌려서 받아
+       * 냈다 — 환불 안내 문서 한 장에서 여덟 칸 중 두 칸이 그 쌍이었다). 77차가 **점수**에서는
+       * 그 겹침을 한 번만 세게 했는데(DS 77-3), 뽑는 쪽은 그대로 두 칸을 썼다 — 여덟 칸은
+       * 자료 한 건이 가질 수 있는 검색어 전부이므로, 한 칸이 겹침에 가면 **다른 개념 하나가
+       * 검색어 없이 남는다**(그 대목을 물어 온 손님은 기본 안내를 받는다 · DS 58-3 의 옆칸).
+       *
+       * 남기는 쪽은 **짧은 쪽**이다. 매칭이 부분 일치라 짧은 쪽이 긴 쪽을 이미 덮는다 —
+       * 「환불금은…」을 물어도 `환불` 이 걸린다. 거꾸로 긴 쪽만 남기면 「환불」 한 마디에는
+       * 걸리지 않는다(오타 보정만 긴 쪽이 조금 더 멀리 가는데, 그 한 칸을 쓸 값이 아니다).
+       * 거르는 자는 `lib/normalize.overlapsTerm` 한 곳 — 점수 쪽과 같은 자다.
+       */
+      .filter((a, i, all) => !all.some((b, j) => j !== i && b.term.length < a.term.length && overlapsTerm(a.term, b.term)))
+      // 같은 무게면 이름순 — 줄 세우는 자는 `lib/order` 한 곳이다 (DS 64-2).
+      .sort((a, b) => b.weight - a.weight || compareText(a.term, b.term))
+      .slice(0, limit)
+      .map((x) => x.term)
+  );
 }
 
 // ---- KB 후보 변환 ----
@@ -349,12 +397,30 @@ export function docIdPrefix(title: string): string {
   return `doc_${slugify((title || '').trim() || '업로드 문서')}`;
 }
 
-/** 청크 첫 문장(또는 제목)을 대표 질문으로 만든다. */
-function toQuestion(chunk: DocChunk, title: string): string {
+/**
+ * 청크 첫 문장(또는 제목)을 대표 질문으로 만든다.
+ *
+ * **제목 하나에 조각이 둘 이상이면 제목으로 묻지 않는다** (DS 78-3). 제목은 그 조각 하나를
+ * 가리키지 못하는데, 종전에는 같은 제목 밑 조각 전부가 그 한 줄을 나눠 썼다 — 돌려서 받아 냈다:
+ * 약관 한 장(「환불 규정」 한 제목 · 조각 여섯)이 **대표 질문도 출처도 똑같은 자료 여섯 건**이
+ * 되고, 그러면
+ *  ① 고객이 번호로 고르는 줄(「번호(1~3)로 답하셔도 돼요」 · `chat.ts` 의 연관 질문)이
+ *     **같은 글 세 줄**로 찼다 — 1·2·3번이 서로 다른 답인데 글이 같아 무엇을 눌러야 할지 없다
+ *  ② 콘솔의 지식베이스 표에서 운영자가 **어느 줄이 어느 대목인지 가릴 수 없었다**(질문·출처가
+ *     같고 다른 칸은 본문뿐이다)
+ * 그래서 형제가 있는 조각은 **제 첫머리**로 묻는다 — 제목이 없을 때 쓰던 자를 그대로 쓴다
+ * (제목은 `source` 에 그대로 남아 어느 대목인지 말한다). 남는 자리 하나는 고객 쪽에서
+ * `searchKnowledge` 가 막는다(같은 글을 두 번 내놓지 않는다).
+ *
+ * @param siblings 같은 제목을 쓰는 조각 수(1이면 이 조각 하나뿐)
+ */
+function toQuestion(chunk: DocChunk, title: string, siblings = 1): string {
   const head = chunk.heading.split(' > ').pop()?.trim();
-  if (head) return `${head}에 대해 알려주세요`;
+  if (head && siblings <= 1) return `${head}에 대해 알려주세요`;
   const firstLine = chunk.text.split('\n')[0].trim();
-  return ellipsize(firstLine, DOC_HEAD_LEN) || `${title} 안내`;
+  const own = ellipsize(firstLine, DOC_HEAD_LEN);
+  if (own) return own;
+  return head ? `${head}에 대해 알려주세요` : `${title} 안내`;
 }
 
 /**
@@ -402,6 +468,9 @@ export function ingestDocument(raw: string, opts: IngestOptions): IngestResult {
   const category = (opts.category || '').trim() || '문서';
   const prefix = (opts.idPrefix || '').trim() || docIdPrefix(title);
   const chunks = chunkDocument(raw, opts);
+  // 제목마다 조각이 몇인가 — 대표 질문이 그 조각 하나를 가리키는지 가리는 수다 (DS 78-3).
+  const perHeading = new Map<string, number>();
+  for (const c of chunks) perHeading.set(c.heading, (perHeading.get(c.heading) ?? 0) + 1);
 
   const candidates: KBCandidate[] = [];
   const dropped: DroppedChunk[] = [];
@@ -426,7 +495,7 @@ export function ingestDocument(raw: string, opts: IngestOptions): IngestResult {
        * 질문·출처가 되면, 손으로 적어 넣는 길에서는 거절되는 길이가 문서로 들어오는 길에서는
        * 통과한다. 줄일 때는 **줄였다고 적는다**(`ellipsize` · DS 62-2·62-3).
        */
-      question: ellipsize(toQuestion(chunk, title), KB_QUESTION_LEN),
+      question: ellipsize(toQuestion(chunk, title, perHeading.get(chunk.heading) ?? 1), KB_QUESTION_LEN),
       keywords,
       answer: chunk.text,
       source: ellipsize(chunk.heading ? `${title} — ${chunk.heading}` : title, KB_SOURCE_LEN),

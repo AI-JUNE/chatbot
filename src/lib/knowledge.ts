@@ -2,7 +2,16 @@
 // 추후 관리 콘솔에서 편집 가능하도록 순수 데이터 + 순수 함수로 유지.
 // 매칭은 src/lib/normalize 의 동의어 확장·자모 오타 보정을 거친다(정확 일치 가중치가 가장 높다).
 import { ellipsize } from '@/lib/limits';
-import { MATCH_WEIGHT, compact, keywordHit, prepare, type PreparedText, type MatchKind } from '@/lib/normalize';
+import {
+  MATCH_WEIGHT,
+  compact,
+  includesTerm,
+  keywordHit,
+  overlapsTerm,
+  prepare,
+  type PreparedText,
+  type MatchKind,
+} from '@/lib/normalize';
 import { splitSentences } from '@/lib/prose';
 
 export interface KBEntry {
@@ -149,11 +158,6 @@ interface Hit {
   fromQuestion?: boolean;
 }
 
-/** 두 표기가 질의의 **같은 자리**를 가리키는가 — 한쪽이 다른 쪽에 들어 있으면 같은 글자다. */
-function overlaps(a: string, b: string): boolean {
-  return a.includes(b) || b.includes(a);
-}
-
 /**
  * 겹치는 키워드는 **한 번만 센다** (DS 77-3).
  *
@@ -166,6 +170,9 @@ function overlaps(a: string, b: string): boolean {
  * 겹치는 것끼리는 **기여가 가장 큰 하나**만 센다(길이가 아니라 기여로 고르는 까닭: 정확 일치가
  * 오타 보정에 밀리면 `MATCH_WEIGHT` 가 세운 선이 무너진다 — 「환불」 정확 일치 2점이
  * 「환불 규정」 오타 보정 1점에 자리를 내주면 확신도까지 함께 떨어진다).
+ *
+ * 겹침을 재는 자는 `lib/normalize.overlapsTerm` 한 곳이다 (DS 78-1) — 뽑는 쪽(`lib/ingest`)이
+ * 같은 겹침을 또 재야 해서, 이 파일 안에만 있던 판정을 「같은 말인가」를 묻는 자리로 옮겼다.
  */
 function pickHits(hits: Hit[]): Hit[] {
   const ranked = [...hits].sort(
@@ -173,7 +180,7 @@ function pickHits(hits: Hit[]): Hit[] {
   );
   const kept: Hit[] = [];
   for (const h of ranked) {
-    if (kept.some((k) => overlaps(k.term, h.term))) continue;
+    if (kept.some((k) => overlapsTerm(k.term, h.term))) continue;
     kept.push(h);
   }
   return kept.sort((a, b) => a.order - b.order);
@@ -191,12 +198,15 @@ function pickHits(hits: Hit[]): Hit[] {
  * 이제는 **겹친 글자가 곧 표현**이고, 키워드와 같은 저울(`keywordScore`)·같은 겹침 거르기
  * (`pickHits`)를 지난다. 「환불되나요」 ↔ 「환불 되나요?」처럼 표기만 다른 자리는 그대로
  * 지켜진다(DS 42-1) — 그때 겹친 글자는 질문 전체이므로 가장 무거운 표현이 된다.
+ *
+ * 겹치는지 보는 자는 키워드 쪽과 같다(`includesTerm` · DS 78-4) — 수의 꼬리가 더 큰 수 안에서
+ * 걸리면 「1월 휴무」 자료가 「11월 휴무」를 물은 고객의 연관 질문 1번이 된다.
  */
 function questionHit(questionCompact: string, queryCompact: string, order: number): Hit | null {
   if (!questionCompact || !queryCompact) return null;
   const short = questionCompact.length <= queryCompact.length ? questionCompact : queryCompact;
   const long = short === questionCompact ? queryCompact : questionCompact;
-  if (!long.includes(short)) return null;
+  if (!includesTerm(long, short)) return null;
   return {
     keyword: short,
     kind: 'exact',
@@ -281,17 +291,33 @@ export function matchKnowledge(message: string, minScore = 2, entries: KBEntry[]
  * 줄이라(「번호(1~3)로 답하셔도 돼요」) 차례가 곧 추천이다. 다른 점은 하나뿐이다: 확신 매칭이
  * 보지 않는 **대표 질문의 겹침**까지 표현으로 센다(`withQuestion`) — 문턱(`minScore`)을 넘지
  * 못한 자료를 후보로 보여 주는 자리이므로, 키워드를 적어 두지 않은 자료도 걸려야 한다.
+ *
+ * 그리고 **같은 글을 두 번 내놓지 않는다** (DS 78-3). 이 목록은 고객이 번호로 고르는 줄이라
+ * 1·2·3번이 서로 다른 선택지여야 뜻이 있다 — 글이 같으면 고객은 세 줄 가운데 무엇을 눌러야
+ * 다른 답이 오는지 알 수 없다(돌려서 받아 냈다: 한 제목 밑 조각 여섯이 「환불 규정에 대해
+ * 알려주세요」 하나를 나눠 써서 목록이 그 한 줄로 가득 찼다). 남길 하나는 `better` 가 고른다 —
+ * 목록 차례를 정하는 자와 같은 자다. 뽑는 쪽(`lib/ingest`)이 조각마다 다른 질문을 적게 고쳤지만
+ * 이 자리는 그것과 별개로 필요하다: 자료는 손으로도 들어오고, 같은 문서를 다른 이름으로 다시
+ * 올릴 수도 있다.
  */
 export function searchKnowledge(query: string, limit = 3, entries: KBEntry[] = KB): KBEntry[] {
   if (!query || !query.trim()) return [];
   const pre = prepare(query);
   if (!pre.compact) return [];
-  return entries
+  const ranked = entries
     .map((entry, index) => ({ ...scoreEntry(pre, entry, true, true), index }))
     .filter((x) => x.score > 0)
-    .sort((a, b) => (better(a, b) ? -1 : better(b, a) ? 1 : 0))
-    .slice(0, limit)
-    .map((x) => x.entry);
+    .sort((a, b) => (better(a, b) ? -1 : better(b, a) ? 1 : 0));
+  const out: KBEntry[] = [];
+  const seen = new Set<string>();
+  for (const x of ranked) {
+    if (out.length >= limit) break;
+    const key = compact(x.entry.question);
+    if (key && seen.has(key)) continue;
+    seen.add(key);
+    out.push(x.entry);
+  }
+  return out;
 }
 
 // ---- 근거 문장 인용 ----

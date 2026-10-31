@@ -86,6 +86,22 @@ export function compact(s: string): string {
   return basicNormalize(s).replace(/[\s.,!?~·・…"'"'()[\]{}<>:;/\\|@#$%^&*+=。、〈〉《》「」『』【】〔〕ㆍ‐‑‒–—―−※_-]/gu, '');
 }
 
+/**
+ * 두 표현이 질의의 **같은 자리**를 가리키는가 — 한쪽이 다른 쪽에 들어 있으면 같은 글자다.
+ *
+ * 「같은 말인가」를 묻는 자리는 이 파일 한 곳이다(위의 `compact` 주석과 같은 까닭). 종전에는
+ * 이 판정이 `knowledge.ts` 안에만 있어, **같은 겹침을 다른 곳에서 또 재야 할 때** 가져다 쓸
+ * 수 없었다 (DS 78-1) — 문서 등록이 뽑아 주는 검색어에도 `환불`·`환불금` 처럼 한쪽이 다른
+ * 쪽에 든 쌍이 섞이는데, 점수 쪽(DS 77-3)은 그 겹침을 한 번만 세고 뽑는 쪽은 그대로 두 칸을
+ * 썼다. 두 쪽이 같은 자를 지나야 「겹친다」의 뜻이 한 가지로 남는다.
+ */
+export function overlapsTerm(a: string, b: string): boolean {
+  const x = compact(a);
+  const y = compact(b);
+  if (!x || !y) return false;
+  return x.includes(y) || y.includes(x);
+}
+
 // ---- 한글 자모 분해 ----
 
 const CHO = ['ㄱ','ㄲ','ㄴ','ㄷ','ㄸ','ㄹ','ㅁ','ㅂ','ㅃ','ㅅ','ㅆ','ㅇ','ㅈ','ㅉ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ'];
@@ -218,6 +234,42 @@ const NONE: KeywordHit = { kind: 'none', term: '' };
  * 정확 일치·동의어 일치는 그대로다 — 좁히는 것은 **보정**뿐이다.
  */
 const HAS_DIGIT = /[0-9]/u;
+const DIGIT = /[0-9]/u;
+
+/**
+ * 표현이 문장 안에 **그 수 그대로** 나타나는가 (DS 78-4).
+ *
+ * 64차는 숫자가 「값」임을 두 자리에서 지켰다 — 늘여 쓴 말 줄이기에서 숫자를 뺐고(「1000원」이
+ * 「100원」으로 줄지 않게), 자모 오타 보정에서 숫자가 든 말을 뺐다(「24시간」과 「2시간」이
+ * 편집거리 1 이라서). **정작 가장 흔한 길인 부분 일치(`includes`)는 그대로 두었다.** 그래서
+ * 수의 꼬리·머리가 더 큰 수 안에서 그대로 걸렸다(돌려서 받아 냈다):
+ *
+ *     「3일」 자료  ← 「13일에 환불 신청했는데요」   「23일에 신청」
+ *     「1월」 자료  ← 「11월 휴무 알려주세요」
+ *     「100원」자료 ← 「1100원 결제했어요」
+ *
+ * 세 줄 모두 **정확 일치**로 걸려 확신 답변이 나갔다 — 64차가 막은 「다른 금액이 오타로 보이는
+ * 것」과 같은 거짓이고, 날짜·금액·기간은 문서 등록이 가장 많이 뽑아 주는 표현이다(`3일`·`14일`·
+ * `100원` 은 꾸민 값이 아니라 `ingest.extractKeywords` 가 실제로 돌려주는 검색어다).
+ *
+ * 그래서 **수가 표현의 머리·꼬리에 있을 때만** 그 자리가 수의 가운데가 아닌지 본다. 가운데 든
+ * 숫자(`a1b`)는 어차피 양끝이 글자라 더 큰 수에 섞이지 않으므로 묻지 않는다 — 좁히는 것은
+ * 수의 경계뿐이고, 글자만으로 된 표현은 종전 그대로 부분 일치다.
+ */
+export function includesTerm(textCompact: string, term: string): boolean {
+  if (!term) return false;
+  if (!HAS_DIGIT.test(term)) return textCompact.includes(term);
+  const headDigit = DIGIT.test(term[0]);
+  const tailDigit = DIGIT.test(term[term.length - 1]);
+  for (let from = 0; ; from += 1) {
+    const at = textCompact.indexOf(term, from);
+    if (at < 0) return false;
+    const before = at > 0 ? textCompact[at - 1] : '';
+    const after = textCompact[at + term.length] ?? '';
+    if ((!headDigit || !DIGIT.test(before)) && (!tailDigit || !DIGIT.test(after))) return true;
+    from = at;
+  }
+}
 
 /**
  * 키워드가 문장에 나타나는지 판정한다. 정확 일치 → 동의어 일치 → 자모 오타 허용 순으로 완화한다.
@@ -227,11 +279,11 @@ const HAS_DIGIT = /[0-9]/u;
 export function keywordHit(textCompact: string, textJamo: string, keyword: string, allowFuzzy = true): KeywordHit {
   const key = compact(keyword);
   if (!key) return NONE;
-  if (textCompact.includes(key)) return { kind: 'exact', term: key };
+  if (includesTerm(textCompact, key)) return { kind: 'exact', term: key };
 
   const variants = variantsOf(keyword);
   for (const v of variants) {
-    if (v !== key && textCompact.includes(v)) return { kind: 'synonym', term: v };
+    if (v !== key && includesTerm(textCompact, v)) return { kind: 'synonym', term: v };
   }
   if (!allowFuzzy || HAS_DIGIT.test(key)) return NONE;
 

@@ -206,7 +206,13 @@ test('겹치는 표현을 거르는 자리가 한 곳이다 (DS 77-3)', () => {
   assert.equal((k.match(/^function pickHits\(/gm) || []).length, 1, '겹침을 거르는 자가 한 곳이 아니다');
   assert.equal((k.match(/pickHits\(/g) || []).length, 2, '거르는 자를 부르는 곳이 한 곳이 아니다(정의 1 + 호출 1)');
   // 겹침은 키워드가 아니라 **실제로 걸린 표기**로 잰다(동의어는 키워드와 글자가 다르다).
-  assert.match(k, /^function overlaps\(/m, '겹침을 재는 자가 없다');
+  // 재는 자는 「같은 말인가」를 묻는 곳 한 벌이고(DS 78-1), 점수 쪽과 뽑는 쪽이 그 자를 지난다 —
+  // 종전에는 이 파일 안에만 있어 `lib/ingest` 가 같은 겹침을 또 재야 할 때 가져다 쓸 수 없었다.
+  const n = read('src/lib/normalize.ts');
+  assert.equal((n.match(/^export function overlapsTerm\(/gm) || []).length, 1, '겹침을 재는 자가 한 곳이 아니다');
+  assert.equal(/^function overlaps\(/m.test(k), false, '겹침을 재는 자가 다시 두 벌이 됐다');
+  assert.match(k, /overlapsTerm\(k\.term, h\.term\)/, '점수 쪽이 공통 겹침 판정을 지나지 않는다');
+  assert.match(read('src/lib/ingest.ts'), /overlapsTerm\(a\.term, b\.term\)/, '뽑는 쪽이 공통 겹침 판정을 지나지 않는다');
   assert.match(k, /term: hit\.term/, '걸린 표기를 들고 다니지 않으면 동의어 중복을 가릴 수 없다');
   // 겹칠 때 고르는 기준은 기여(points)다 — 길이로 고르면 정확 일치가 오타 보정에 밀린다.
   assert.match(k, /b\.points - a\.points/, '겹침을 거를 때 기여가 가장 큰 쪽을 고르지 않는다');
@@ -4901,7 +4907,52 @@ test('문서 조각이 상한을 넘지 않게 나뉜다 (DS 74-2)', () => {
   // 병합도 상한을 본다.
   assert.match(ingest, /prev\.heading === c\.heading && prev\.text\.length \+ 1 \+ body\.length <= maxChars/, '짧은 꼬리 병합이 상한을 넘긴다');
   // 문서가 만드는 자료 한 건도 자료 쪽 상한을 지킨다(줄이면 줄였다고 적는다).
-  assert.match(ingest, /question: ellipsize\(toQuestion\(chunk, title\), KB_QUESTION_LEN\)/, '대표 질문이 상한을 모른다');
+  assert.match(ingest, /question: ellipsize\(toQuestion\(chunk, title.*?\), KB_QUESTION_LEN\)/, '대표 질문이 상한을 모른다');
   assert.match(ingest, /source: ellipsize\(chunk\.heading \? `\$\{title\} — \$\{chunk\.heading\}` : title, KB_SOURCE_LEN\)/, '출처가 상한을 모른다');
   assert.match(ingest, /t\.length >= 2 && t\.length <= KEYWORD_LEN/, '낱말 하나의 상한을 보지 않는다');
+});
+
+/* ── 75차 재감사: 우리가 운영자 대신 검색어·질문을 적는 자리 (DS 78-x) ── */
+test('수의 경계를 재는 자가 한 벌이고 모든 일치가 그 자를 지난다 (DS 78-4)', () => {
+  const n = read('src/lib/normalize.ts');
+  assert.equal((n.match(/^export function includesTerm\(/gm) || []).length, 1, '수의 경계를 재는 자가 한 곳이 아니다');
+  // 종전 식(민 `includes`)이 키워드 일치 자리에 남아 있지 않다 — 정확 일치·동의어 둘 다.
+  const kh = n.slice(n.indexOf('export function keywordHit'), n.indexOf('export const MATCH_WEIGHT'));
+  assert.match(kh, /includesTerm\(textCompact, key\)/, '정확 일치가 수의 경계를 보지 않는다');
+  assert.match(kh, /includesTerm\(textCompact, v\)/, '동의어 일치가 수의 경계를 보지 않는다');
+  assert.equal(/textCompact\.includes\(/.test(kh), false, '종전 식(민 부분 일치)이 남아 있다');
+  // 대표 질문의 겹침도 같은 자를 지난다(연관 질문 1번이 다른 수의 자료가 되지 않게).
+  const k = read('src/lib/knowledge.ts');
+  const qh = k.slice(k.indexOf('function questionHit'), k.indexOf('function scoreEntry'));
+  assert.match(qh, /includesTerm\(long, short\)/, '대표 질문의 겹침이 수의 경계를 보지 않는다');
+});
+
+test('뽑는 자가 겹침·서술어·일반어를 거른다 (DS 78-1·78-2)', () => {
+  const s = read('src/lib/ingest.ts');
+  // 겹침을 거르는 자리는 **뽑는 고리 안**이고, 자르기(`slice(0, limit)`) 전이다 —
+  // 뒤에 두면 밀려난 개념이 칸을 되찾지 못한다.
+  const ex = s.slice(s.indexOf('export function extractKeywords'));
+  const filterAt = ex.indexOf('overlapsTerm(a.term, b.term)');
+  const sliceAt = ex.indexOf('.slice(0, limit)');
+  assert.ok(filterAt > 0, '겹침을 거르는 단계가 없다');
+  assert.ok(sliceAt > filterAt, '겹침을 자른 뒤에 거른다 — 밀려난 개념이 칸을 되찾지 못한다');
+  // 서술어 꼬리·일반어 목록이 자리에 있다(DS 78-2).
+  assert.match(s, /'하려면', '되려면'/, '관형형·연결형 꼬리를 모르는 목록으로 돌아갔다');
+  for (const w of ["'가능'", "'고객'", "'부담'", "'아닙니다'"]) {
+    assert.ok(s.includes(w), `토픽이 아닌 일반어가 목록에서 빠졌다: ${w}`);
+  }
+  // 거르는 것은 **우리가 대신 적는 값**뿐이다 — 운영자가 손으로 적은 키워드를 건드리는 자리가 없다.
+  assert.equal(/STOPWORDS/.test(read('src/lib/knowledge.ts')), false, '매칭 쪽이 운영자의 키워드를 거른다');
+});
+
+test('고객이 번호로 고르는 줄에 같은 글이 두 번 뜨지 않는다 (DS 78-3)', () => {
+  const k = read('src/lib/knowledge.ts');
+  const sk = k.slice(k.indexOf('export function searchKnowledge'));
+  assert.match(sk, /const seen = new Set<string>\(\)/, '같은 글을 가리는 자리가 없다');
+  assert.match(sk, /compact\(x\.entry\.question\)/, '같은 글인지 공통 압축형으로 재지 않는다');
+  assert.match(sk, /better\(/, '남길 하나를 목록 차례와 다른 자로 고른다');
+  // 뽑는 쪽은 같은 제목 밑 조각을 세어 질문을 가린다.
+  const i = read('src/lib/ingest.ts');
+  assert.match(i, /const perHeading = new Map<string, number>\(\)/, '제목마다 조각이 몇인지 세지 않는다');
+  assert.match(i, /if \(head && siblings <= 1\) return `\$\{head\}에 대해 알려주세요`/, '제목 하나가 조각 여럿을 가리키는 식이 남았다');
 });

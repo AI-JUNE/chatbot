@@ -8568,3 +8568,196 @@ test('근거 줄은 고객이 물은 것을 가리킨다 (DS 77-4)', opts, async
   assert.ok(entry.answer.includes(none.snippet.replace(/…$/, '')), '근거는 원문 인용이어야 한다');
   assert.equal(none.kbId, 'multi');
 });
+
+/* ══════════ 75차 재감사 — 우리가 운영자 대신 검색어·질문을 적는 자리 (DS 78-x) ══════════ */
+
+/** 이 회차가 쓰는 묶음 — 뽑는 쪽(`ingest`)과 고르는 쪽(`knowledge`)을 한 폴더에서 꺼낸다. */
+const ING_DEPS = ['ingest', 'knowledge', 'limits', 'normalize', 'order', 'prose', 'text'];
+const ingLib = (name) => importLib(name, ING_DEPS.filter((n) => n !== name));
+
+/** 자료 한 건만 둔 지식베이스 — 「이 표현이 이 질의에 걸리는가」를 답으로 받아 보는 자리. */
+const oneEntry = (keywords, answer = '본문입니다.') => [
+  { id: 'x', category: '문서', question: '자료', keywords, answer },
+];
+
+/**
+ * DS 78-1 — **같은 자리를 가리키는 두 표현이 검색어 두 칸을 썼다.**
+ *
+ * 77차가 점수에서는 그 겹침을 한 번만 세게 했는데(DS 77-3), **뽑는 쪽**은 그대로 두 칸을 썼다.
+ * 여덟 칸은 자료 한 건이 가질 수 있는 검색어 전부라, 한 칸이 겹침에 가면 다른 개념 하나가
+ * 검색어 없이 남는다 — 그 대목을 물어 온 손님은 기본 안내를 받는다.
+ */
+test('겹치는 표현이 검색어 한 칸을 더 먹지 않는다 (DS 78-1)', opts, async () => {
+  const ingest = await ingLib('ingest');
+  const K = await ingLib('knowledge');
+  const N = await ingLib('normalize');
+
+  // ① 재현 조건 — 뽑는 자는 `환불금` 을 표현으로 알고(혼자 있으면 뽑는다), 그 글자는 `환불` 과
+  //    **같은 자리**를 가리키며, 무게는 더 길어서 **가장 먼저** 칸을 차지한다. 거르는 단계가
+  //    없던 종전에는 두 칸 중 두 칸이 그 쌍이었고 `교환` 은 칸을 받지 못했다.
+  assert.ok(ingest.extractKeywords('환불금 지급', 8).includes('환불금'), '재현이 깨졌다 — 뽑는 자가 환불금을 모른다');
+  assert.equal(N.overlapsTerm('환불', '환불금'), true, '재현이 깨졌다 — 두 표현이 같은 자리를 가리키지 않는다');
+  assert.deepEqual(ingest.extractKeywords('환불금 교환 반납', 1), ['환불금'], '재현이 깨졌다 — 긴 표현이 먼저 칸을 받지 않는다');
+
+  // ② 고친 뒤 — 두 칸은 **서로 다른 개념** 둘이다.
+  assert.deepEqual(ingest.extractKeywords('환불 환불금 교환', 2), ['교환', '환불'], '겹치는 쌍이 아직 두 칸을 쓴다');
+  // 여덟 칸 전부를 봐도 서로 겹치는 쌍이 없다.
+  const eight = ingest.extractKeywords('환불 환불금 교환 반납 배송 보증 수선 포장 사은품', 8);
+  assert.equal(eight.length, 8, '칸을 다 쓰지 못한다');
+  assert.equal(eight.includes('환불금'), false, '겹치는 긴 표현이 남았다');
+  for (const a of eight) {
+    for (const b of eight) if (a !== b) assert.equal(N.overlapsTerm(a, b), false, `겹치는 쌍이 남았다: ${a}·${b}`);
+  }
+
+  // ③ 남기는 쪽이 **짧은 쪽**인 까닭 — 부분 일치라 짧은 쪽이 긴 쪽을 이미 덮는다.
+  //    거꾸로 긴 쪽만 남기면 「환불」 한 마디에는 걸리지 않는다(값으로 받아 낸다).
+  assert.equal(K.matchKnowledge('환불 해주세요', 2, oneEntry(['환불금'])), null, '재현이 깨졌다 — 긴 표현이 짧은 질의에도 걸린다');
+  assert.equal(K.matchKnowledge('환불금 언제 들어와요', 2, oneEntry(['환불']))?.entry.id, 'x', '짧은 표현이 긴 말을 덮지 못한다');
+
+  // ④ 실제 문서에서도 그렇다 — 환불 안내 한 장의 검색어에 그 쌍이 없다.
+  const doc = [
+    '# 환불 및 교환 안내', '', '## 환불 규정',
+    '구매 후 7일 이내에는 전액 환불됩니다. 환불금은 영업일 3일 이내에 입금됩니다.',
+    '환불 신청은 고객센터로 접수해 주세요. 교환 수수료는 없습니다.',
+  ].join('\n');
+  const kws = ingest.ingestDocument(doc, { title: '환불 정책' }).candidates[0].keywords;
+  assert.ok(kws.includes('환불'), '짧은 쪽이 사라졌다');
+  assert.equal(kws.includes('환불금'), false, '겹치는 긴 표현이 남았다');
+  assert.ok(kws.includes('교환'), '겹침에 밀려 있던 개념이 아직 칸을 받지 못한다');
+});
+
+/**
+ * DS 78-2 — **우리가 적어 준 「고객이 쓸 표현」에 우리 문서의 서술어·일반어가 섞였다.**
+ *
+ * 그 칸에 든 말 하나가 걸리면 자료는 **확신 답변**으로 나간다(2자 이상 한 건 = 2점 = 문턱).
+ * 그래서 「가능」·「고객」·「부담」이 검색어가 되면 그 말이 든 아무 질문에나 자료가 답한다.
+ */
+test('뽑아 준 검색어에 서술어·일반어가 섞이지 않는다 (DS 78-2)', opts, async () => {
+  const ingest = await ingLib('ingest');
+  const K = await ingLib('knowledge');
+
+  const body = '교환은 상품 수령 후 14일 이내에 가능합니다. 교환 배송비는 고객 부담입니다.';
+  const doc = `## 교환 안내\n${body}`;
+
+  // ① 종전 식 재현 — 종전에 이 두 줄에서 **실제로 뽑히던 검색어 그대로** 자료를 세우면,
+  //    문서가 한 글자도 말하지 않은 질문에 그 자료가 2점으로 답한다(근거 줄까지 달고).
+  const LEGACY = ['교환', '14일', '배송비', '가능', '고객', '부담', '상품', '수령'];
+  const legacy = oneEntry(LEGACY, body);
+  for (const q of ['주차 가능한가요?', '예약 가능해요?', '고객 등급이 뭐예요']) {
+    assert.equal(K.matchKnowledge(q, 2, legacy)?.entry.id, 'x', `재현이 깨졌다 — 종전 검색어로도 답하지 않는다: ${q}`);
+  }
+
+  // ② 고친 뒤 — 그 말들은 검색어가 아니고, 그 질문은 폴백으로 간다.
+  const now = ingest.ingestDocument(doc, { title: '교환 안내' }).candidates;
+  for (const junk of ['가능', '고객', '부담', '이내']) {
+    assert.equal(now[0].keywords.includes(junk), false, `일반어가 아직 검색어다: ${junk}`);
+  }
+  for (const q of ['주차 가능한가요?', '예약 가능해요?', '고객 등급이 뭐예요']) {
+    assert.equal(K.matchKnowledge(q, 2, now), null, `묻지 않은 질문에 아직 답한다: ${q}`);
+  }
+  // 멀쩡한 질문은 그대로 답한다 — 좁힌 것이 답을 가져가지 않았다.
+  assert.equal(K.matchKnowledge('교환 되나요?', 2, now)?.entry.id, now[0].id, '문서가 답해야 할 질문에 답하지 못한다');
+  assert.ok(now[0].keywords.includes('교환') && now[0].keywords.includes('14일'), '토픽 표현이 함께 사라졌다');
+
+  // ③ 종결형·관형형 꼬리도 떨어진다 — 고객은 「접수해」·「등록된」·「아닙니다」로 치지 않는다.
+  const tails = ingest.extractKeywords('환불 신청은 고객센터로 접수해 주세요. 등록된 계좌로 입금됩니다. 환불 대상이 아닙니다.', 10);
+  for (const junk of ['접수해', '등록된', '아닙니다', '주세']) {
+    assert.equal(tails.includes(junk), false, `서술어가 아직 검색어다: ${junk}`);
+  }
+  assert.ok(tails.includes('접수') && tails.includes('등록'), '꼬리를 떼면서 말까지 버렸다');
+});
+
+/**
+ * DS 78-3 — **한 제목 밑 조각 전부가 대표 질문 하나를 나눠 썼다.**
+ *
+ * 고객 쪽에서는 번호로 고르는 줄(「번호(1~3)로 답하셔도 돼요」)이 같은 글로 차고, 운영자 쪽에서는
+ * 지식베이스 표의 질문·출처가 같아 어느 줄이 어느 대목인지 가릴 수 없었다.
+ */
+test('한 제목 밑 조각들이 대표 질문 하나를 나눠 쓰지 않는다 (DS 78-3)', opts, async () => {
+  const ingest = await ingLib('ingest');
+  const K = await ingLib('knowledge');
+
+  const P = [
+    '구매 후 7일 이내에는 결제하신 금액 전액을 환불해 드립니다. 카드로 결제하신 분은 승인 취소로 처리되며, 카드사 사정에 따라 영업일이 더 걸릴 수 있습니다.',
+    '환불금은 영업일 기준 3일 안에 등록하신 계좌로 입금됩니다. 계좌 정보가 예금주와 다르면 입금이 늦어지므로 고객센터로 다시 알려 주셔야 합니다.',
+    '프로모션으로 받으신 상품은 환불 대상에서 빠집니다. 함께 드린 사은품은 반납해 주셔야 하며, 반납이 어려우면 사은품 금액을 뺀 뒤 환불해 드립니다.',
+  ];
+  const doc = ['## 환불 규정', '', P[0], '', P[1], '', P[2]].join('\n');
+
+  // ① 재현 조건 — 조각이 셋인데 제목은 하나다. 종전 식(제목만 보고 묻기)이면 질문 셋이 같아진다.
+  const chunks = ingest.chunkDocument(doc, { maxChars: 150 });
+  assert.equal(chunks.length, 3, '재현 조건이 성립하지 않는다 — 조각이 셋이 아니다');
+  assert.equal(new Set(chunks.map((c) => c.heading)).size, 1, '재현 조건이 성립하지 않는다 — 제목이 하나가 아니다');
+  const legacyQ = chunks.map((c) => `${c.heading.split(' > ').pop().trim()}에 대해 알려주세요`);
+  assert.equal(new Set(legacyQ).size, 1, '재현이 깨졌다 — 종전 식에서도 질문이 갈린다');
+
+  // ② 고친 뒤 — 질문 셋이 서로 다르고, 제목은 **출처**에 그대로 남아 어느 대목인지 말한다.
+  const cands = ingest.ingestDocument(doc, { title: '이용약관', maxChars: 150 }).candidates;
+  assert.equal(cands.length, 3);
+  assert.equal(new Set(cands.map((c) => c.question)).size, 3, '대표 질문이 아직 같다 — 운영자가 표에서 줄을 가릴 수 없다');
+  assert.equal(new Set(cands.map((c) => c.source)).size, 1, '출처가 제목을 잃었다');
+  for (const c of cands) assert.ok(c.answer.startsWith(c.question.replace(/…$/, '')), '질문이 그 조각의 첫머리가 아니다');
+
+  // ③ 제목 밑에 조각이 하나면 종전 그대로 묻는다(제목이 그 조각을 가리킨다).
+  const one = ingest.ingestDocument(['## 환불 규정', '', P[0]].join('\n'), { title: '이용약관' }).candidates;
+  assert.deepEqual(one.map((c) => c.question), ['환불 규정에 대해 알려주세요'], '제목 하나·조각 하나에서 묻는 말이 바뀌었다');
+
+  // ④ 고객이 번호로 고르는 줄은 **같은 글을 두 번 내놓지 않는다** — 자료는 손으로도 들어온다.
+  const dup = [
+    { id: 'a', category: '문서', question: '환불 규정에 대해 알려주세요', keywords: ['환불'], answer: '첫째' },
+    { id: 'b', category: '문서', question: '환불 규정에 대해 알려주세요', keywords: ['환불', '환불 규정'], answer: '둘째' },
+    { id: 'c', category: '문서', question: '교환 규정에 대해 알려주세요', keywords: ['교환'], answer: '교환' },
+  ];
+  const listed = K.searchKnowledge('환불 규정 교환 어떻게', 3, dup);
+  assert.deepEqual(listed.map((e) => e.id), ['b', 'c'], '같은 글이 두 줄로 뜨거나, 남는 하나를 다른 자로 골랐다');
+  assert.equal(new Set(listed.map((e) => e.question)).size, listed.length, '목록에 같은 글이 남았다');
+});
+
+/**
+ * DS 78-4 — **수의 꼬리·머리가 더 큰 수 안에서 그대로 걸렸다.**
+ *
+ * 64차는 늘여 쓴 말 줄이기와 자모 오타 보정에서 숫자를 뺐지만, 가장 흔한 길인 부분 일치는
+ * 그대로 두었다. 날짜·금액·기간은 문서 등록이 가장 많이 뽑아 주는 표현이다.
+ */
+test('수가 더 큰 수 안에서 걸리지 않는다 (DS 78-4)', opts, async () => {
+  const K = await ingLib('knowledge');
+  const N = await ingLib('normalize');
+
+  const kb = [
+    { id: 'd3', category: '문서', question: '환불은 3일', keywords: ['3일'], answer: '환불은 3일 이내에 됩니다.' },
+    { id: 'm1', category: '문서', question: '1월 휴무', keywords: ['1월'], answer: '1월에는 설 연휴 휴무가 있습니다.' },
+    { id: 'p100', category: '문서', question: '100원 요금', keywords: ['100원'], answer: '기본 요금은 100원입니다.' },
+  ];
+
+  // ① 종전 식 재현 — 민 부분 일치는 수의 가운데에서도 걸린다(그래서 확신 답변이 나갔다).
+  for (const [text, term] of [['13일에환불신청', '3일'], ['11월휴무알려주세요', '1월'], ['1100원결제했어요', '100원']]) {
+    assert.equal(text.includes(term), true, `재현이 깨졌다 — 종전 식에서도 안 걸린다: ${term}`);
+  }
+
+  // ② 고친 뒤 — 그 질문은 폴백으로 간다(묻지 않은 수의 자료가 답하지 않는다).
+  for (const q of ['13일에 환불 신청했는데요', '23일에 신청', '11월 휴무 알려주세요', '1100원 결제했어요']) {
+    assert.equal(K.matchKnowledge(q, 2, kb), null, `더 큰 수 안에서 아직 걸린다: ${q}`);
+  }
+  // 연관 질문(대표 질문의 겹침)도 같은 자를 지난다 — 「11월 휴무」가 「1월 휴무」를 추천하지 않는다.
+  assert.deepEqual(K.searchKnowledge('11월 휴무', 3, kb).map((e) => e.id), [], '연관 질문이 다른 수의 자료를 1번으로 올린다');
+
+  // ③ 그 수를 물으면 그대로 답한다 — 좁힌 것이 답을 가져가지 않았다.
+  assert.equal(K.matchKnowledge('3일이면 되나요', 2, kb)?.entry.id, 'd3');
+  assert.equal(K.matchKnowledge('1월 휴무 알려주세요', 2, kb)?.entry.id, 'm1');
+  assert.equal(K.matchKnowledge('100원 맞나요', 2, kb)?.entry.id, 'p100');
+  assert.deepEqual(K.searchKnowledge('1월 휴무', 3, kb).map((e) => e.id), ['m1']);
+
+  // ④ 좁히는 것은 **수의 경계**뿐이다 — 글자 표현은 종전 그대로 부분 일치고,
+  //    가운데 든 숫자는 양끝이 글자라 묻지 않는다.
+  const hit = (text, kw) => {
+    const p = N.prepare(text);
+    return N.keywordHit(p.compact, p.jamo, kw).kind;
+  };
+  assert.equal(hit('환불정책 알려줘', '환불'), 'exact', '글자 표현의 부분 일치가 끊겼다');
+  assert.equal(hit('2026년 10월에 바뀝니다', '10월'), 'exact', '같은 수를 못 찾는다');
+  assert.equal(hit('카톡으로 문의', '카카오톡'), 'synonym', '동의어가 끊겼다');
+  assert.equal(N.includesTerm('xa1by', 'a1b'), true, '가운데 든 숫자에까지 경계를 묻는다');
+  // 64차가 세운 줄은 그대로다(두 금액을 가른다).
+  assert.equal(hit('100원짜리 있나요', '1000원'), 'none');
+  assert.equal(hit('1000원 요금제', '1000원'), 'exact');
+});
