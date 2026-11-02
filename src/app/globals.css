@@ -467,8 +467,27 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
  * 그래서 인쇄 규칙이 스티키 배치를 이기지 못했다(미디어 쿼리는 인라인을 덮지 못한다 — DS 13-2). */
 .lp-top,.lg-top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .lp-foot,.lg-foot{border-top:1px solid var(--line);background:var(--surface)}
-.lp-footin{padding:26px 22px 34px;text-align:center;font-size:12.5px;color:var(--mut)}
-.lp-footnote{display:block;margin-top:10px}
+/* 푸터 안쪽 — 기준 원본 `footer{padding:44px 0 56px;font-size:13.5px;line-height:1.85}`.
+ * 종전에는 26px/12.5px 가운데 정렬 한 줄이었다(링크 둘 + 고지 한 줄). */
+.lp-footin{padding:44px 22px 48px;font-size:13.5px;line-height:1.85;color:var(--mut)}
+/* 기준 원본 `.foot{grid-template-columns:1.4fr 1fr 1fr 1fr}` — 좁은 화면에서는 2단(아래 규칙). */
+.lp-footgrid{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:24px}
+.lp-footbrand{display:inline-flex;align-items:center;gap:9px;min-height:44px;
+  font-weight:800;font-size:16px;letter-spacing:-.02em;color:var(--ink)}
+.lp-footabout{margin-top:4px;max-width:34em}
+.lp-footmail{color:var(--brand-600);font-weight:600;word-break:break-all}
+/* 묶음 제목 — 기준 원본 `.foot h4{font-size:14px;color:var(--ink)}`. 제목 요소가 아니라 문단이다:
+ * 랜딩의 제목 단계(h1 하나 + 섹션 h2 여덟)에 푸터 묶음 셋을 끼워 넣지 않는다. 대신 이 글이
+ * 묶음(nav)의 **접근 이름**이 된다(`aria-labelledby` — 이름을 따로 적으면 같은 말이 두 번 읽힌다). */
+.lp-foottitle{font-size:14px;font-weight:800;color:var(--ink);margin-bottom:2px}
+.lp-footcol{display:flex;flex-direction:column}
+.lp-footbot{margin-top:28px;padding-top:20px;border-top:1px solid var(--line);
+  display:flex;justify-content:space-between;gap:8px 24px;flex-wrap:wrap}
+.lp-footnote{font-size:12.5px}
+@media (max-width:900px){
+  .lp-footgrid{grid-template-columns:1fr 1fr}
+  .lp-footin{padding:32px 22px 36px}
+}
 
 .lp-sec{padding:96px 0}
 .lp-sec[data-face="white"]{background:var(--surface)}
@@ -550,8 +569,22 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 @media (hover:hover){
   .lp-card{transition:border-color .2s ease,box-shadow .25s ease,transform .25s cubic-bezier(.16,1,.3,1)}
   .lp-card:hover{border-color:var(--brand-200);box-shadow:var(--shadow-lift);transform:translateY(-2px)}
-  .lp-nav a:hover,.lp-footlink:hover{color:var(--brand-600)}
+  .lp-nav a:hover,.lp-footlink:hover,.lp-footbrand:hover{color:var(--brand-600)}
+  .lp-footmail:hover{text-decoration:underline}
 }
+
+/* ── 채널 상태 칩 ── 기준 원본은 기능 카드의 상태를 `.st.on`(제공 중) · `.st.wait`(승인 후 개통)
+ * **두 색**으로 가른다. 우리 랜딩은 세 채널의 상태가 전부 같은 브랜드 틴트 하나였다 —
+ * 「운영 중」과 「연동 준비」와 「연계 설계 완료」가 화면에서 같은 물건으로 보였고, 색이 글자를
+ * 거드는 대신 **서로 다른 상태를 같은 색으로** 말했다. 색 짝은 콘솔 상태 배지
+ * (`.ac-badge[data-tone]`)와 **같은 토큰**이다 — 같은 종류의 상태가 화면마다 다른 색이면
+ * 같은 제품으로 보이지 않는다. 뜻은 칩의 **글자**가 말한다(색을 못 보는 사람·흑백 인쇄에서도 같다).
+ * 중립 칩은 바탕 면 색이 아니라 흰색이다 — 흰 면의 카드가 `--bg` 를 입으므로(DS 82-1 짝바꿈),
+ * 칩까지 `--bg` 면 카드와 한 색이 되어 칩의 경계가 사라진다. */
+.lp-st{display:inline-flex;align-items:center;font-size:11.5px;font-weight:700;line-height:1.45;
+  border-radius:999px;padding:5px 11px;border:1px solid var(--line-2);background:var(--surface);color:var(--sub)}
+.lp-st[data-tone="on"]{border-color:var(--success-200);background:var(--success-50);color:var(--success)}
+.lp-st[data-tone="wait"]{border-color:var(--warn-200);background:var(--warn-50);color:var(--warn)}
 
 /* FAQ 카드 — 기준 원본 `.faq details` 규격(여닫는 줄 60px · 마커 22px · 펼친 카드는 브랜드 테두리).
  * 종전 마커는 `float:right` 라 질문이 두 줄이 되면 글이 마커를 돌아 흘렀고, 펼쳐도 어느 카드가
@@ -611,12 +644,13 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
   .lg-card{padding:24px 18px 30px}
 }
 
-/* 푸터 법무 링크(약관·방침) — 두 화면의 푸터가 같은 규격을 본다.
- * 이 두 링크가 약관·방침으로 가는 **유일한 길**인데(DS 15-3), 글자만 있는 12.5px 링크라
- * 누를 수 있는 높이가 15px 였다 — 같은 화면의 다른 모든 링크가 34~42px 를 지키는데
- * 여기만 규격 밖이었다(WCAG 2.5.8 최소 24px·2.5.5 권장 44px). 글자 크기·색·굵기는 그대로 두고
- * **누를 면만** 키운다. 화면마다 인라인으로 적지 않는다 — 미디어 쿼리가 인라인을 이기지 못한다(DS 13-2). */
-.lp-footlink{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 6px;margin:0 2px;
+/* 푸터 링크 — 두 공개 화면의 푸터가 같은 규격을 본다(마크업도 `PublicFooter` 한 벌이다).
+ * 약관·방침으로 가는 길이 글자만 있는 12.5px 링크라 누를 수 있는 높이가 15px 였다(DS 16-2) —
+ * 같은 화면의 다른 모든 링크가 34~42px 를 지키는데 여기만 규격 밖이었다(WCAG 2.5.8 최소 24px·
+ * 2.5.5 권장 44px). 글자 크기·색·굵기는 그대로 두고 **누를 면만** 키운다.
+ * 4단 묶음 안에서는 한 줄에 하나씩 서므로 누를 면이 묶음 폭까지 늘어난다(글자는 왼쪽에 붙는다) —
+ * 가운데 한 줄이던 종전에는 글자 폭이 곧 누를 폭이어서 두 글자 링크가 44px 를 넘지 못했다. */
+.lp-footlink{display:inline-flex;align-items:center;justify-content:flex-start;min-height:44px;min-width:44px;
   color:var(--sub);font-weight:600}
 
 /* ── OS 고대비(Windows 고대비 등 강제 색 모드)에서도 「지금 선택된 것」이 보이게 (DS 25-2) ──
@@ -657,6 +691,9 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
   /* 카드 경계는 1px 테두리뿐이라 이 모드에서 서로 붙어 한 덩어리로 읽힌다 */
   .ac-kpicard,.ac-nscard,.ac-stat,.ac-preview,.lg-card,.ac-login-card,
   .lp-card,.lp-panel,.lp-faq,.lp-stat{border-width:2px}
+  /* 상태 칩 — 세 상태의 틴트가 전부 같은 색으로 치환된다. 뜻은 글자가 말하지만, 바탕이 카드와
+     같은 색이 되면 **칩이라는 것조차** 보이지 않는다(테두리 1px 만 남는다). */
+  .lp-st{border-width:2px}
   /* 불러오는 중 자리 표시 — 배경색이 지워져 빈 칸이 된다(막대가 없으면 멈춘 화면으로 보인다) */
   .ac-skel{border:1px solid GrayText}
 }
@@ -704,7 +741,25 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
    *    우리 화면의 위젯은 iframe 이 아니라 같은 문서라 그 규칙이 닿지 않는다).
    * 어두운 면은 **종이에서 밝은 면이 된다** — 색을 지키지 않고 글자색을 되돌린다. */
   .lp-top,.lg-top{position:static;background:none;backdrop-filter:none}
-  .lp-nav,.lp-topcta,.lg-top .lp-btn,.lp-cta,.gw-root{display:none}
+  /* 본문 폭은 화면의 것이다 — 종이 폭(A4 182mm)은 이미 @page 여백이 정했고, 좌우 22px 을
+     한 번 더 비우면 그만큼이 본문에서 깎인다. */
+  .lp-wrap,.lg-wrap{max-width:none;padding:0}
+  /* 종이에서 누를 수 없는 것 — 상단바 메뉴·CTA, 히어로 CTA 줄, 떠 있는 상담창,
+     푸터의 링크 묶음 셋, 그리고 약관·방침의 **목차**. 목차는 좁은 폭에서 가로 스크롤 상자가
+     되는데(종이는 A4 182mm ≈ 688px 라 그 규칙이 인쇄에도 걸린다) 종이에서는 굴릴 수 없어
+     뒤쪽 항목이 **잘린 채 사라진다** — 콘솔 표에서 DS 9-1·25-3 이 이미 겪은 자리다.
+     푸터의 브랜드·운영·문의 줄과 마무리 줄은 남긴다(품의서에 붙는 쪽이 그 정보다). */
+  .lp-nav,.lp-topcta,.lg-top .lp-btn,.lp-cta,.gw-root,.lp-footcol,.lg-toc{display:none}
+  .lp-footgrid{grid-template-columns:minmax(0,1fr)}
+  .lp-footin{padding:10px 0 0;font-size:11px;line-height:1.6}
+  .lp-footbot{margin-top:8px;padding-top:8px}
+  /* 약관·방침 본문 — 카드 테두리·그림자·안쪽 여백은 화면의 것이다(종이에서는 폭을 깎는다).
+     `break-inside:avoid` 는 **한 장에 들어갈 수 있는 상자**에만 뜻이 있다 — 조문 열두 개가
+     든 카드에 걸어 두면 엔진이 지킬 수 없는 지시가 되고, 지키려 할 때는 장을 통째로 비운다. */
+  .lg-main{display:block;padding:0}
+  .lg-card{border:0;border-radius:0;padding:0;box-shadow:none;break-inside:auto}
+  .legal-body h2,.lg-title{break-after:avoid}
+  .legal-notice{break-inside:avoid}
   /* 띠 리듬 96px 은 화면의 숨 쉬는 간격이다 — 종이에서는 그만큼이 빈 줄로 찍혀 장수를 늘린다.
      (히어로를 함께 적는다 — 그쪽 여백은 속성 선택자에 있어 `.lp-sec` 한 줄로는 덮이지 않는다.) */
   .lp-sec,.lp-sec[data-face="hero"]{padding:20px 0}
@@ -714,7 +769,7 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
   /* 흰 버튼은 테두리도 흰색이다 — 배경이 사라지면 글자만 떠 있는 줄이 된다. */
   .lp-btn-ondark{border-color:var(--line-2);color:var(--ink)}
   .lp-sec[data-face="white"] .lp-card,.lp-sec[data-face="white"] .lp-panel,
-  .lp-sec[data-face="white"] .lp-stat,.lp-card,.lp-panel,.lp-stat,.lp-faq,.lg-card{box-shadow:none;break-inside:avoid}
+  .lp-sec[data-face="white"] .lp-stat,.lp-card,.lp-panel,.lp-stat,.lp-faq{box-shadow:none;break-inside:avoid}
   /* 제목만 장 끝에 남고 카드가 다음 장으로 넘어가지 않게 한다. */
   .lp-sech{break-after:avoid}
 }

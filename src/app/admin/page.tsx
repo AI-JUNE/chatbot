@@ -3,6 +3,8 @@
 // 관리 콘솔(MVP): 지식베이스(FAQ) CRUD · 시나리오 룰 편집 · 응답 테스트.
 // 저장은 인메모리 스텁 — [승인 필요] DB 영구 저장·관리자 인증(현재 ADMIN_TOKEN 미설정 시 개방).
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
+/** 브랜드 마크는 공용 컴포넌트 한 곳에서 온다 — 종전에는 이 파일과 랜딩이 각자 경로 데이터의 사본을 들고 있었다. */
+import BrandMark from '@/components/BrandMark';
 
 interface KBEntryView {
   id: string;
@@ -2213,19 +2215,6 @@ const TAB_ICON: Record<TabKey, string> = {
   install: 'M6 5.5 3.5 8 6 10.5M10 5.5 12.5 8 10 10.5',
   audit: 'M3.5 3.5h9M3.5 7h9M3.5 10.5h5.5M11.5 12.5l1.5-1.5',
 };
-
-/** 브랜드 마크 — 말풍선 + 이니셜. 원본은 `src/app/icon.svg`(파비콘)이며 경로 데이터를 같이 쓴다. */
-const MARK_BODY = 'M7 2.5h18A5.5 5.5 0 0 1 30.5 8v11a5.5 5.5 0 0 1-5.5 5.5H13l-5 5v-5H7A5.5 5.5 0 0 1 1.5 19V8A5.5 5.5 0 0 1 7 2.5Z';
-const MARK_G = 'M20.9 9.9A6 6 0 1 0 22 13.5h-5.2';
-
-function BrandMark({ size = 30 }: { size?: number }) {
-  return (
-    <svg aria-hidden="true" focusable="false" width={size} height={size} viewBox="0 0 32 32" style={{ flexShrink: 0 }}>
-      <path d={MARK_BODY} fill="var(--brand)" />
-      <path d={MARK_G} fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
 /** 새 창으로 열리는 링크 — 보는 사람에게는 이 표시가, 듣는 사람에게는 이름 뒤 고지가 그 사실을 알린다.
  *  두 안내가 갈라지지 않게 한 곳에서만 만든다(DS 11-3). */

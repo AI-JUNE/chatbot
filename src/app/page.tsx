@@ -1,5 +1,8 @@
+import BrandMark from '@/components/BrandMark';
 import ChatWidget from '@/components/ChatWidget';
+import PublicFooter from '@/components/PublicFooter';
 import { fallbackStarters } from '@/lib/tenantKB';
+import { CONTACT_MAILTO } from '@/lib/site';
 
 /**
  * 랜딩 — AICC Portal 과 같은 디자인 시스템(globals.css 토큰)만 쓴다.
@@ -51,18 +54,9 @@ function Icon({ name, size = 16 }: { name: IconKey; size?: number }) {
   );
 }
 
-/** 브랜드 마크 — 말풍선 + 이니셜. 원본은 `src/app/icon.svg`(파비콘)이며 경로 데이터를 같이 쓴다. */
-const MARK_BODY = 'M7 2.5h18A5.5 5.5 0 0 1 30.5 8v11a5.5 5.5 0 0 1-5.5 5.5H13l-5 5v-5H7A5.5 5.5 0 0 1 1.5 19V8A5.5 5.5 0 0 1 7 2.5Z';
-const MARK_G = 'M20.9 9.9A6 6 0 1 0 22 13.5h-5.2';
-
-function BrandMark({ size = 28 }: { size?: number }) {
-  return (
-    <svg aria-hidden="true" focusable="false" width={size} height={size} viewBox="0 0 32 32" style={{ flexShrink: 0 }}>
-      <path d={MARK_BODY} fill="var(--brand)" />
-      <path d={MARK_G} fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
+/* 브랜드 마크는 `@/components/BrandMark` 한 곳에서 온다 — 종전에는 이 파일과 콘솔이 각자
+ * 같은 경로 데이터의 **사본**을 들고 있었다(공용 컴포넌트가 이미 있는데도). 마크를 고치면
+ * 고칠 자리가 셋이었고, 테스트는 셋이 같은지 **대조**만 했다(단일 출처가 아니라 사본 대조다). */
 
 const TRUST = [
   {
@@ -91,10 +85,14 @@ const FEATURES = [
   { icon: 'lock' as IconKey, title: '연락처는 흘리지 않습니다', body: '연락처와 대화 내용은 로그·오류 리포트에서 가려집니다. 관리 기능은 권한을 확인합니다.' },
 ] as const;
 
+/* `tone` 은 콘솔 상태 배지(`.ac-badge[data-tone]`)와 **같은 짝**이다 — 기준 원본 랜딩도
+ * 기능 카드의 상태를 `.st.on`(제공 중) · `.st.wait`(승인 후 개통) 두 색으로 가른다.
+ * 종전에는 세 상태가 전부 같은 브랜드 틴트 하나여서, **지금 쓸 수 있는 채널과 아직 못 쓰는
+ * 채널이 화면에서 구분되지 않았다**. 뜻은 글자가 말하고(색을 못 보는 사람에게도 같다) 색은 거든다. */
 const CHANNELS = [
-  { icon: 'chat' as IconKey, title: '웹 채팅', body: '홈페이지 오른쪽 아래에 뜨는 상담창. 모바일에서는 전체화면으로 열립니다.', state: '운영 중' },
-  { icon: 'kakao' as IconKey, title: '카카오톡 채널', body: '같은 지식·같은 규칙으로 카카오톡 문의에 응답합니다.', state: '연동 준비 — 채널 승인 후 활성화' },
-  { icon: 'call' as IconKey, title: '콜봇 연계', body: 'AICC 콜봇과 같은 지식·같은 상담원 전환 규칙을 공유합니다.', state: '연계 설계 완료' },
+  { icon: 'chat' as IconKey, title: '웹 채팅', body: '홈페이지 오른쪽 아래에 뜨는 상담창. 모바일에서는 전체화면으로 열립니다.', state: '운영 중', tone: 'on' },
+  { icon: 'kakao' as IconKey, title: '카카오톡 채널', body: '같은 지식·같은 규칙으로 카카오톡 문의에 응답합니다.', state: '연동 준비 — 채널 승인 후 활성화', tone: 'wait' },
+  { icon: 'call' as IconKey, title: '콜봇 연계', body: 'AICC 콜봇과 같은 지식·같은 상담원 전환 규칙을 공유합니다.', state: '연계 설계 완료', tone: 'plan' },
 ] as const;
 
 const STEPS = [
@@ -209,8 +207,10 @@ export default function Home() {
 
           {/* 대화 예시 — 실제 위젯 화면과 같은 구성(값은 예시 문구).
             * `<div aria-label>` 은 역할이 generic 이라 스크린리더가 이름으로 읽지 않는다.
-            * `<figure>` 로 둬야 「그림: 상담 화면 예시」로 들어오고, 안내문은 figcaption 으로 묶인다. */}
-          <figure aria-label="상담 화면 예시 — 실제 답변은 등록한 자료에 따라 달라집니다" className="lp-panel" style={{ borderRadius: 'var(--r-lg)', overflow: 'hidden', boxShadow: 'var(--shadow-pop)' }}>
+            * `<figure>` 로 둬야 「그림: 상담 화면 예시」로 들어온다.
+            * 이름은 **보이는 figcaption 하나**에서 온다 — `aria-label` 을 함께 적으면 그쪽이
+            * 이름을 이기고, figcaption 은 본문으로 또 읽혀 **같은 문장을 두 번** 듣는다. */}
+          <figure className="lp-panel" style={{ borderRadius: 'var(--r-lg)', overflow: 'hidden', boxShadow: 'var(--shadow-pop)' }}>
             <div style={{ background: 'var(--brand)', color: '#fff', padding: '13px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
               <span aria-hidden="true" style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(255,255,255,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14 }}>G</span>
               <div style={{ lineHeight: 1.25 }}>
@@ -299,7 +299,7 @@ export default function Home() {
                 </span>
                 <h3 style={{ fontSize: 16, fontWeight: 800, margin: '12px 0 8px' }}>{c.title}</h3>
                 <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: '0 0 12px' }}>{c.body}</p>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--brand-600)', background: 'var(--brand-50)', borderRadius: 999, padding: '5px 11px' }}>{c.state}</span>
+                <span className="lp-st" data-tone={c.tone}>{c.state}</span>
               </div>
             ))}
           </div>
@@ -394,7 +394,8 @@ export default function Home() {
             <h2 id="contact-h">가지고 계신 FAQ로 먼저 확인해 보세요</h2>
             <p>운영 중인 안내 자료를 그대로 등록해 실제 문의에 어떻게 답하는지 보여 드립니다. 파일럿 기간의 집계값으로 도입을 판단하실 수 있습니다.</p>
           </div>
-          <a href="mailto:gowonceo@gmail.com?subject=GOWON%20Chat%20%EB%8F%84%EC%9E%85%20%EB%AC%B8%EC%9D%98" className="lp-btn lp-btn-lg lp-btn-ondark">
+          {/* 주소·제목은 `lib/site` 한 곳에서 온다 — 푸터도 같은 값을 본다(사본이 없으면 갈라지지 않는다). */}
+          <a href={CONTACT_MAILTO} className="lp-btn lp-btn-lg lp-btn-ondark">
             도입 문의 보내기
           </a>
           <p className="lp-note">이 화면의 응답은 데모 데이터로 보여 드립니다 — 도입 후에는 고객사 안내 자료와 담당 창구로 연결됩니다.</p>
@@ -402,14 +403,10 @@ export default function Home() {
       </section>
       </main>
 
-      <footer className="lp-foot">
-        <div className="lp-wrap lp-footin">
-          {/* 누를 면은 .lp-footlink 한 곳에서 정한다(44px) — 인라인으로 적으면 좁은 화면 규칙이 이기지 못한다. */}
-          <a href="/terms" className="lp-footlink">이용약관</a>
-          <a href="/privacy" className="lp-footlink">개인정보처리방침</a>
-          <span className="lp-footnote">© GOWON Chat (데모) — 약관·방침은 초안이며 법률 검토 전입니다.</span>
-        </div>
-      </footer>
+      {/* 푸터는 약관·방침과 **같은 한 벌**이다(`PublicFooter`) — 종전에는 두 화면이 각자
+        * 마크업을 들고 있어 한쪽을 고치면 갈라졌고, 가운데 한 줄에 링크 두 개뿐이어서
+        * 기준 원본 AICC Portal 랜딩의 4단 푸터와 다른 물건이었다. */}
+      <PublicFooter />
 
       {/* 랜딩에서는 런처만 띄운다 — 위젯이 저절로 펼쳐지면 375px에서 제품 소개를 통째로 덮는다(DS 5-1). */}
       {/* 빠른 답장은 지식베이스 상위 질문에서 뽑는다(DS 19-1) — 정적 페이지라 배포 시점 기준, 콘솔에서

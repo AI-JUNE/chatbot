@@ -3,6 +3,7 @@
 import { Children, cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 import Link from 'next/link';
 import BrandMark from '@/components/BrandMark';
+import PublicFooter from '@/components/PublicFooter';
 
 /** 본문의 `<h2>` 를 순서대로 찾아 id 를 붙이고 목차 항목을 만든다(페이지 쪽은 제목만 쓰면 된다). */
 function indexSections(children: ReactNode): { nodes: ReactNode; toc: { id: string; label: string }[] } {
@@ -58,9 +59,11 @@ export default function LegalLayout({
       </header>
 
       <main id="main" tabIndex={-1} className="lg-wrap lg-main">
+        {/* 목차의 이름은 **보이는 제목 하나**를 가리킨다 — `aria-label="목차"` 를 따로 적으면
+          * 들어갈 때 이름으로 한 번, 읽어 내려가며 제목으로 한 번, 같은 말을 두 번 듣는다. */}
         {toc.length > 0 && (
-          <nav aria-label="목차" className="lg-toc">
-            <div className="lg-toc-title">목차</div>
+          <nav aria-labelledby="lg-toc-title" className="lg-toc">
+            <div className="lg-toc-title" id="lg-toc-title">목차</div>
             <ol className="lg-toc-list">
               {toc.map((s) => (
                 <li key={s.id}><a href={`#${s.id}`}>{s.label}</a></li>
@@ -92,15 +95,9 @@ export default function LegalLayout({
         </article>
       </main>
 
-      <footer className="lg-foot">
-        {/* 랜딩 푸터와 **같은 규격 한 벌**을 본다(.lp-foot/.lp-footin/.lp-footlink) — 종전에는 여백·글자가
-          * 양쪽 인라인에 각각 적혀 있어, 한쪽을 고치면 두 공개 화면의 푸터가 갈라졌다. */}
-        <div className="lg-wrap lp-footin">
-          <Link href="/terms" className="lp-footlink">이용약관</Link>
-          <Link href="/privacy" className="lp-footlink">개인정보처리방침</Link>
-          <span className="lp-footnote">© GOWON Chat (데모) — 약관·방침은 초안이며 법률 검토 전입니다.</span>
-        </div>
-      </footer>
+      {/* 랜딩과 **같은 한 벌**이다 — 규격만 같은 것이 아니라 마크업까지 한 곳에서 온다
+        * (종전에는 양쪽이 각자 들고 있어 한쪽을 고치면 두 공개 화면의 푸터가 갈라졌다). */}
+      <PublicFooter />
     </div>
   );
 }
