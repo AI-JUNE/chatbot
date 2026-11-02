@@ -93,11 +93,12 @@ export default function LegalLayout({
       </main>
 
       <footer className="lg-foot">
-        <div className="lg-wrap" style={{ padding: '26px 22px 34px', textAlign: 'center', fontSize: 12.5, color: 'var(--mut)' }}>
-          {/* 랜딩 푸터와 같은 .lp-footlink 규격(44px) — 두 푸터가 갈라지지 않게 한 곳에서 본다. */}
+        {/* 랜딩 푸터와 **같은 규격 한 벌**을 본다(.lp-foot/.lp-footin/.lp-footlink) — 종전에는 여백·글자가
+          * 양쪽 인라인에 각각 적혀 있어, 한쪽을 고치면 두 공개 화면의 푸터가 갈라졌다. */}
+        <div className="lg-wrap lp-footin">
           <Link href="/terms" className="lp-footlink">이용약관</Link>
           <Link href="/privacy" className="lp-footlink">개인정보처리방침</Link>
-          <span style={{ display: 'block', marginTop: 10 }}>© GOWON Chat (데모) — 약관·방침은 초안이며 법률 검토 전입니다.</span>
+          <span className="lp-footnote">© GOWON Chat (데모) — 약관·방침은 초안이며 법률 검토 전입니다.</span>
         </div>
       </footer>
     </div>

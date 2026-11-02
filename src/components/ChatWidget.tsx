@@ -1730,8 +1730,11 @@ export default function ChatWidget({
         flexDirection: 'column', overflow: 'hidden', marginBottom: 12,
       };
 
+  /* `gw-root` 는 **종이에서 걷어낼 손잡이**다 — 임베드된 상담창은 iframe 이라 호스트 쪽
+   * 인쇄 규칙(DS 59-1)이 프레임을 통째로 감추는데, 우리 공개 화면(랜딩·약관)의 상담창은
+   * 같은 문서에 있어 그 규칙이 닿지 않았다(떠 있는 런처가 본문 위에 도장처럼 찍혔다). */
   return (
-    <div style={wrapStyle}>
+    <div className="gw-root" style={wrapStyle}>
       {open && (
         <div
           ref={panelRef}

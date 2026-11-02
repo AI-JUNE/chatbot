@@ -456,6 +456,65 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
   .lp-cta .lp-btn{flex:1 1 100%}
 }
 
+/* ── 공개 화면의 겉틀 + 랜딩 섹션 띠 — 기준 원본의 `.wrap`/`.sec`/`.sec.white`/`.sec-h`/`.band` 이식 ──
+ * 종전에는 <section> 자체가 본문 폭이었다(인라인 `maxWidth:1080` + `padding:'64px 22px 8px'`).
+ * 그 상자에 바탕색을 주면 좌우 22px 이 뚫린 1080px 블록이 되므로 **전면 띠를 쓸 수 없는 구조**였고,
+ * 그래서 히어로를 뺀 여덟 섹션이 모두 같은 --bg 위에 이어져 **경계가 하나도 없었다**
+ * (기준 원본은 `.sec`/`.sec.white` 로 흰 면과 바탕 면을 번갈아 두어 섹션을 띠로 가른다).
+ * 띠(`.lp-sec`)와 본문 폭(`.lp-wrap`)을 두 겹으로 나눈다 — 화면은 둘을 겹쳐 쓰기만 한다. */
+.lp-wrap,.lg-wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+/* 두 공개 화면(랜딩·약관)의 상단바·푸터는 **같은 규격 한 벌**을 본다. 랜딩 쪽은 종전에 인라인이었고
+ * 그래서 인쇄 규칙이 스티키 배치를 이기지 못했다(미디어 쿼리는 인라인을 덮지 못한다 — DS 13-2). */
+.lp-top,.lg-top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.lp-foot,.lg-foot{border-top:1px solid var(--line);background:var(--surface)}
+.lp-footin{padding:26px 22px 34px;text-align:center;font-size:12.5px;color:var(--mut)}
+.lp-footnote{display:block;margin-top:10px}
+
+.lp-sec{padding:96px 0}
+.lp-sec[data-face="white"]{background:var(--surface)}
+.lp-sec[data-face="hero"]{background:linear-gradient(180deg,var(--brand-50) 0%,var(--bg) 62%);padding:64px 0 56px}
+/* 마무리 띠 — 기준 원본 `.band`. 종전에는 바탕 면 위에 둥근 어두운 **카드**가 떠 있어, 375px 에서는
+ * 좌우 22px 이 뚫린 광고 배너처럼 보였다(기준 원본의 마무리는 화면을 가로지르는 전면 띠다). */
+.lp-sec[data-face="ink"]{background:var(--ink);color:#fff}
+.lp-sec[data-face="ink"] .lp-wrap{text-align:center}
+/* 흰 면 위의 카드·상자는 **바탕 면 색**을 입는다 — 흰 카드를 흰 면에 얹으면 1px 테두리 하나만 남고,
+ * 그 선은 강제 색 모드에서 사용자 색으로 치환되고 흑백 인쇄에서는 사라진다(기준 원본도 바탕 면에서는
+ * `.hn{background:var(--bg)}` 로 같은 짝바꿈을 한다). 상자 **안의** 상자(KPI 칸)는 거꾸로 흰색이
+ * 된다 — 둘이 같은 색이 되면 칸 경계가 사라진다. */
+.lp-sec[data-face="white"] .lp-card,.lp-sec[data-face="white"] .lp-panel{background:var(--bg)}
+.lp-sec[data-face="white"] .lp-stat{background:var(--surface)}
+.lp-stat{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:16px}
+.lp-stat span{display:block;font-size:12.5px;font-weight:700;color:var(--sub)}
+.lp-stat b{display:block;font-size:26px;font-weight:800;color:var(--mut);margin-top:6px;letter-spacing:-.02em}
+
+/* 섹션 제목 블록 — 기준 원본 `.sec-h`(폭 680 · 아래 36). 종전에는 자리마다 달랐다:
+ * 리드 폭 620·640·없음, 제목 아래 간격 24·26·30px. 한 벌에서 온다. */
+.lp-sech{max-width:680px;margin-bottom:36px}
+.lp-sech h2{font-size:clamp(23px,3.4vw,32px);font-weight:800;letter-spacing:-.025em;line-height:1.3;margin:10px 0 0}
+.lp-sech p{font-size:15.5px;color:var(--sub);line-height:1.7;margin:10px 0 0}
+/* 상자 안에 든 제목 블록(체험 패널) — 같은 자를 쓰고 폭·크기만 한 단 내린다. */
+.lp-sech[data-size="sm"]{max-width:560px;margin-bottom:0}
+.lp-sech[data-size="sm"] h2{font-size:clamp(21px,2.6vw,27px)}
+.lp-sech[data-size="sm"] p{font-size:14.5px}
+.lp-sec[data-face="ink"] .lp-sech{max-width:620px;margin:0 auto 26px}
+.lp-sec[data-face="ink"] .lp-sech p{color:var(--line-2)}
+/* 섹션 이름표 — 약관·방침 제목 위의 이름표와 같은 규격이다(두 공개 화면이 한 자를 본다). */
+.lp-kicker,.lg-eyebrow{display:block;font-size:12.5px;font-weight:800;letter-spacing:.06em;
+  color:var(--brand-600);text-transform:uppercase}
+/* 히어로의 리드문 — 섹션 리드(`.lp-sech p`)보다 한 단 크다(기준 원본 `.lead`). */
+.lp-lead{font-size:17px;color:var(--sub);line-height:1.7;max-width:520px}
+/* 작은 보조 한 줄(히어로 아래·KPI 패널 아래·마무리 띠 아래) — 어두운 면에서는 짝 토큰을 쓴다
+ * (--mut 는 밝은 면에서 AA 를 넘기려고 어둡게 잡은 값이라 어두운 면에서는 거꾸로 묻힌다). */
+.lp-note{font-size:12.5px;color:var(--mut);margin-top:14px}
+.lp-sec[data-face="ink"] .lp-note{color:var(--mut-on-ink)}
+.lp-faqlist{display:flex;flex-direction:column;gap:10px}
+.lp-demo{display:flex;flex-wrap:wrap;gap:20px;align-items:center;justify-content:space-between}
+/* 기준 원본 `@media (max-width:980px){.sec{padding:64px 0}}` — 우리 랜딩이 접히는 폭(900px)에 맞춘다.
+   (히어로·마무리 띠는 제 여백을 쓴다 — 속성 선택자가 이 규칙보다 특이도가 높다.) */
+@media (max-width:900px){
+  .lp-sec{padding:64px 0}
+}
+
 /* ── 랜딩의 누르는 것 — 기준 원본(AICC Portal `index.html`)의 `.btn`/`.btn.main`/`.btn.lg` 이식 ──
  * 종전에는 다섯 자리가 각자 인라인으로 패딩·굵기를 적어 높이가 제각각이었고(상단바 39.6px ·
  * 히어로 49.2px · 체험 49.2px · 최종 CTA 52.4px — 기준 원본은 48px 과 58px 두 가지다), **손을 올려도
@@ -517,9 +576,9 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
   .lp-btn:active,.lp-btn:hover svg,.lp-card:hover{transform:none}
 }
 
-/* ── 약관·방침 페이지 (DS 4-4) — 랜딩과 같은 상단바·카드·푸터 규격 ── */
-.lg-wrap{max-width:1080px;margin:0 auto;padding:0 22px}
-.lg-top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+/* ── 약관·방침 페이지 (DS 4-4) — 랜딩과 같은 상단바·카드·푸터 규격 ──
+ * 본문 폭(`.lg-wrap`)·상단바(`.lg-top`)·푸터(`.lg-foot`)·이름표(`.lg-eyebrow`)는 랜딩과 **한 벌**이라
+ * 위쪽 「공개 화면의 겉틀」 블록에 함께 적혀 있다(여기에 또 적으면 두 화면이 갈라진다). */
 .lg-topin{height:62px;display:flex;align-items:center;justify-content:space-between;gap:18px}
 /* 「홈으로」 는 랜딩 상단바의 CTA 와 같은 자리에 선 같은 종류의 버튼이다 — 규격은 `.lp-btn`
  * 한 벌에서 오고(48px · 라운드 12 · 손 올림 반응) 여기에는 더 적을 것이 없다.
@@ -531,7 +590,6 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 .lg-toc-list a{display:block;font-size:13px;font-weight:600;color:var(--sub);padding:7px 8px;border-radius:8px;line-height:1.35}
 .lg-toc-list a:hover{background:var(--bg);color:var(--ink)}
 .lg-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow-card);padding:36px 40px 44px}
-.lg-eyebrow{font-size:12.5px;font-weight:800;letter-spacing:.06em;color:var(--brand-600);text-transform:uppercase}
 .lg-title{font-size:clamp(24px,3.4vw,32px);font-weight:800;letter-spacing:-.025em;line-height:1.25;margin:8px 0 14px}
 .lg-meta{display:flex;flex-wrap:wrap;gap:6px}
 .lg-pill{font-size:11.5px;font-weight:700;border-radius:999px;padding:4px 10px;border:1px solid var(--line);color:var(--sub);background:var(--bg);line-height:1.4}
@@ -545,7 +603,6 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 .legal-body ul{margin:0 0 10px;padding-left:18px;color:var(--sub)}
 .legal-body li{margin:0 0 4px}
 .todo{font-weight:800;color:var(--warn);background:var(--warn-50);border:1px solid var(--warn-200);border-radius:5px;padding:0 5px;font-size:.93em;white-space:nowrap}
-.lg-foot{border-top:1px solid var(--line);background:var(--surface)}
 @media (max-width:900px){
   .lg-main{grid-template-columns:minmax(0,1fr);gap:16px;padding-top:20px;padding-bottom:56px}
   .lg-toc{position:static;padding:12px 10px}
@@ -599,7 +656,7 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
   .ac-toast-fail{border:2px solid ButtonText}
   /* 카드 경계는 1px 테두리뿐이라 이 모드에서 서로 붙어 한 덩어리로 읽힌다 */
   .ac-kpicard,.ac-nscard,.ac-stat,.ac-preview,.lg-card,.ac-login-card,
-  .lp-card,.lp-panel,.lp-faq{border-width:2px}
+  .lp-card,.lp-panel,.lp-faq,.lp-stat{border-width:2px}
   /* 불러오는 중 자리 표시 — 배경색이 지워져 빈 칸이 된다(막대가 없으면 멈춘 화면으로 보인다) */
   .ac-skel{border:1px solid GrayText}
 }
@@ -636,4 +693,28 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
      (버튼을 숨기지는 않는다 — 최근 대화 행·켜기/끄기 스위치도 button 이라, 종이에서 읽을
      내용 자체가 함께 사라진다.) */
   .ac-body button{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+
+  /* ── 공개 화면(랜딩·약관) ──
+   * 도입 담당자는 이 화면을 품의서에 붙이려고 종이·PDF 로 내보낸다. 종전에는 그 결과가
+   * ① **마무리 섹션이 빈 칸으로 찍혔다** — 브라우저는 기본으로 배경을 생략하는데 그 섹션은
+   *    어두운 면(--ink) 위의 흰 글자여서, 배경이 사라지면 흰 종이에 흰 글자가 남는다
+   *    (제목·본문·버튼 글씨가 통째로 사라진다 — 콘솔 버튼에서 이미 겪은 자리다),
+   * ② 상단바가 스티키 그대로라 첫 장 위에 겹쳐 찍히고 섹션 메뉴 칩·CTA 가 함께 찍혔다,
+   * ③ 떠 있는 상담창 런처가 본문 위에 도장처럼 찍혔다(임베드 쪽은 DS 59-1 이 이미 막았는데,
+   *    우리 화면의 위젯은 iframe 이 아니라 같은 문서라 그 규칙이 닿지 않는다).
+   * 어두운 면은 **종이에서 밝은 면이 된다** — 색을 지키지 않고 글자색을 되돌린다. */
+  .lp-top,.lg-top{position:static;background:none;backdrop-filter:none}
+  .lp-nav,.lp-topcta,.lg-top .lp-btn,.lp-cta,.gw-root{display:none}
+  /* 띠 리듬 96px 은 화면의 숨 쉬는 간격이다 — 종이에서는 그만큼이 빈 줄로 찍혀 장수를 늘린다.
+     (히어로를 함께 적는다 — 그쪽 여백은 속성 선택자에 있어 `.lp-sec` 한 줄로는 덮이지 않는다.) */
+  .lp-sec,.lp-sec[data-face="hero"]{padding:20px 0}
+  .lp-sec[data-face="white"],.lp-sec[data-face="hero"]{background:none}
+  .lp-sec[data-face="ink"]{background:none;color:var(--ink)}
+  .lp-sec[data-face="ink"] .lp-sech p,.lp-sec[data-face="ink"] .lp-note{color:var(--sub)}
+  /* 흰 버튼은 테두리도 흰색이다 — 배경이 사라지면 글자만 떠 있는 줄이 된다. */
+  .lp-btn-ondark{border-color:var(--line-2);color:var(--ink)}
+  .lp-sec[data-face="white"] .lp-card,.lp-sec[data-face="white"] .lp-panel,
+  .lp-sec[data-face="white"] .lp-stat,.lp-card,.lp-panel,.lp-stat,.lp-faq,.lg-card{box-shadow:none;break-inside:avoid}
+  /* 제목만 장 끝에 남고 카드가 다음 장으로 넘어가지 않게 한다. */
+  .lp-sech{break-after:avoid}
 }

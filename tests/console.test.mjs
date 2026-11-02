@@ -1123,8 +1123,12 @@ test('콘솔에서 글자를 키울 수 있다 — 기준 원본의 「큰 글�
   //    셸 안에서 뷰포트 단위를 쓰는 자리는 **전부** --vz 로 나눠야 한다(clamp 안의 글자 크기는 제외 —
   //    배율로 커질 요소가 아니라 화면 폭에 따라 커지는 랜딩 제목이다).
   const decls = css.replace(/\/\*[\s\S]*?\*\//g, ''); // 주석은 규칙이 아니다
+  // `font-size:clamp(...)` 안의 vw 는 **글자 크기**다 — 콘솔 배율이 아니라 화면 폭에 따라 커지는
+  //  공개 화면(랜딩 섹션 제목·약관 제목)의 값이라 --vz 로 나눌 대상이 아니다. 길이(높이·폭)에
+  //  쓰인 뷰포트 단위만 센다(DS 82-3 이 랜딩 제목 규격을 CSS 로 옮기면서 clamp 가 셋이 되었다).
+  const fontClamps = (decls.match(/font-size:clamp\([^)]*\)/g) || []).join(' ');
   const unguarded = (decls.match(/[\d.]+v[hw]\b(?!\s*\/\s*var\(--vz\))/g) || [])
-    .filter((m) => !decls.includes(`clamp(24px,${m}`));
+    .filter((m) => !fontClamps.includes(m));
   assert.deepEqual(unguarded, [], `--vz 로 나누지 않은 뷰포트 단위가 남았다: ${unguarded.join(', ')}`);
   for (const rule of [
     /\.ac-shell\{[^}]*min-height:calc\(100vh \/ var\(--vz\)\)/,

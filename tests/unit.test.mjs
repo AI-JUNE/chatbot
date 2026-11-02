@@ -1570,11 +1570,14 @@ test('보조 문구 색이 모든 배경에서 WCAG AA(4.5:1)를 넘는다 (DS 1
   assert.ok(contrast(t['--mut'], t['--ink']) < 4.5, '--mut 가 어두운 면에서도 통과하면 짝 토큰이 필요 없다 — 전제가 바뀌었다');
   // 위계는 유지한다(mut 가 sub 보다 연해 보여야 보조 문구로 읽힌다).
   assert.ok(contrast(t['--mut'], t['--surface']) < contrast(t['--sub'], t['--surface']), '--mut 가 --sub 보다 진하다');
-  // 어두운 카드(최종 CTA)는 --mut 를 쓰지 않는다.
-  const cta = (read('src/app/page.tsx').split('<section id="contact"')[1] || '').split('</section>')[0];
-  assert.ok(cta, '랜딩 최종 CTA 섹션을 찾지 못했다');
-  assert.equal(/var\(--mut\)/.test(cta), false, '어두운 CTA 카드가 밝은 면용 --mut 를 쓴다');
-  assert.match(cta, /var\(--mut-on-ink\)/, '어두운 CTA 카드가 짝 토큰을 쓰지 않는다');
+  // 어두운 면(최종 CTA 띠)은 --mut 를 쓰지 않는다. 규격은 DS 82-1 에서 CSS 한 벌로 옮겼다 —
+  // 인라인으로 적으면 인쇄 규칙이 흰 글자를 되돌릴 수 없어 종이에서 그 섹션이 빈 칸이 된다.
+  const css82 = read('src/app/globals.css');
+  const cta = (read('src/app/page.tsx').split('data-face="ink"')[1] || '').split('</section>')[0];
+  assert.ok(cta, '랜딩 최종 CTA 띠를 찾지 못했다');
+  assert.equal(/var\(--mut\)|var\(--sub\)/.test(cta), false, '어두운 띠가 화면에서 밝은 면용 글자색을 적는다');
+  assert.match(css82, /\.lp-sec\[data-face="ink"\] \.lp-note\{color:var\(--mut-on-ink\)\}/, '어두운 띠의 보조 문구가 짝 토큰을 쓰지 않는다');
+  assert.equal(/\.lp-sec\[data-face="ink"\][^\n]*color:var\(--mut\)[;}]/.test(css82), false, '어두운 띠가 밝은 면용 --mut 를 쓴다');
 });
 
 test('앵커가 스티키 상단바 아래로 숨지 않는다 (DS 10-2)', () => {
@@ -5120,7 +5123,8 @@ test('랜딩 카드가 클래스 한 벌에서 오고 누를 수 없는 상자�
 
   // 고대비(강제 색) 모드에서는 1px 테두리가 서로 붙어 한 덩어리로 읽힌다 — 콘솔 카드와 같이 2px 로.
   const forced = css.match(/@media \(forced-colors: active\)\{[\s\S]*?\n\}/)[0];
-  assert.match(forced, /\.lp-card,\.lp-panel,\.lp-faq\{border-width:2px\}/, '랜딩 카드가 고대비 규칙에서 빠졌다');
+  // KPI 칸(.lp-stat)도 함께 들어간다 — 상자 **안의** 1px 테두리라 이 모드에서 상자와 붙어 보인다(DS 82-1).
+  assert.match(forced, /\.lp-card,\.lp-panel,\.lp-faq,\.lp-stat\{border-width:2px\}/, '랜딩 카드·KPI 칸이 고대비 규칙에서 빠졌다');
 });
 
 test('FAQ 가 기준 원본 여닫는 줄 규격을 쓰고 펼친 카드를 테두리로 말한다 (DS 81-3)', () => {
@@ -5155,4 +5159,124 @@ test('모션 최소화에서 전환·리프트가 실제로 꺼진다 — 선언
   assert.match(block, /\.lp-btn:active,\.lp-btn:hover svg,\.lp-card:hover\{transform:none\}/, '움직임(transform)이 남아 있다');
   // 끈 뒤에도 무엇이 바뀌었는지는 보인다 — 색·테두리까지 되돌리면 손 올림 반응 자체가 사라진다.
   assert.equal(/background:/.test(block), false, '모션 설정이 색까지 되돌린다');
+});
+
+
+/* ══════════ 디자인 — 79차 재감사: 섹션을 나누는 자리 (DS 82-1·82-2·82-3·82-4) ══════════
+ *
+ * 81차는 랜딩의 **누르는 것·카드**를 기준 원본 규격으로 옮기고, 남은 일을 「다음 회차 후보」로
+ * 적어 두었다 — 「섹션의 흰 면/바탕 면 교차(`.sec.white` · 96px 리듬)」. 열어 보니 그것은
+ * 색을 고르는 일이 아니라 **구조**였다: `<section>` 자체가 본문 폭이어서(인라인 maxWidth:1080)
+ * 전면 띠를 쓸 수 없었고, 그 때문에 ① 섹션 경계가 하나도 없었고 ② 그 section 들에 접근 이름이
+ * 하나도 없어 region 랜드마크가 0개였고 ③ 제목 블록의 폭·간격이 자리마다 달랐고
+ * ④ 어두운 CTA 의 글자색이 인라인이라 종이에서는 그 섹션이 빈 칸으로 찍혔다.
+ */
+
+test('랜딩 섹션이 전면 띠 + 본문 폭 두 겹이고 흰 면/바탕 면이 번갈아 온다 (DS 82-1)', () => {
+  const css = read('src/app/globals.css');
+  const page = read('src/app/page.tsx');
+
+  // 띠와 본문 폭이 **다른 요소**다 — 한 상자가 둘을 겸하면 바탕색이 좌우 여백에서 끊긴다.
+  assert.match(css, /\n\.lp-sec\{padding:96px 0\}/, '기준 원본의 섹션 리듬(96px)이 아니다');
+  assert.match(css, /\.lp-wrap,\.lg-wrap\{max-width:1080px;margin:0 auto;padding:0 22px\}/, '본문 폭이 한 벌에서 오지 않는다');
+  assert.match(css, /@media \(max-width:900px\)\{\n  \.lp-sec\{padding:64px 0\}\n\}/, '좁은 화면 리듬(기준 원본 64px)이 없다');
+  // 그 규칙은 기본값보다 **뒤에** 있어야 이긴다(미디어 쿼리는 특이도를 더하지 않는다).
+  assert.ok(css.indexOf('.lp-sec{padding:64px 0}') > css.indexOf('\n.lp-sec{padding:96px 0}'), '좁은 화면 리듬이 기본값보다 앞에 있다');
+
+  // 화면은 인라인으로 폭·여백을 다시 적지 않는다 — 적으면 위 규칙이 전부 무력해진다.
+  assert.equal(/maxWidth: 1080/.test(page), false, '섹션이 다시 인라인 본문 폭을 들고 있다');
+  assert.equal(/const wrap = /.test(page), false, '인라인 wrap 상수가 되살아났다');
+  const secs = [...page.matchAll(/<section[^>]*>/g)].map((m) => m[0]);
+  assert.equal(secs.length, 9, `랜딩 섹션 수가 바뀌었다: ${secs.length}`);
+  for (const tag of secs) {
+    assert.match(tag, /className="lp-sec"/, `띠 규격을 쓰지 않는 섹션이 있다: ${tag.slice(0, 80)}`);
+    assert.equal(/style=\{\{/.test(tag), false, `섹션에 인라인 스타일이 남아 있다: ${tag.slice(0, 80)}`);
+  }
+
+  // 흰 면과 바탕 면이 **번갈아** 온다(같은 면이 이어지면 그 경계만 사라져 리듬이 깨진다).
+  const faces = secs.map((t) => (t.match(/data-face="(\w+)"/) || [, 'bg'])[1]);
+  assert.deepEqual(faces, ['hero', 'white', 'bg', 'white', 'bg', 'white', 'bg', 'white', 'ink'], `면 교차가 깨졌다: ${faces.join(' ')}`);
+  assert.match(css, /\.lp-sec\[data-face="white"\]\{background:var\(--surface\)\}/, '흰 면 규격이 없다');
+  // 마무리는 둥근 카드가 아니라 화면을 가로지르는 띠다(기준 원본 `.band`).
+  assert.match(css, /\.lp-sec\[data-face="ink"\]\{background:var\(--ink\);color:#fff\}/, '마무리 띠가 전면 띠가 아니다');
+  assert.equal(/borderRadius: 'var\(--r-lg\)', padding: '44px 32px'/.test(page), false, '마무리가 다시 둥근 카드가 되었다');
+
+  // 흰 면 위의 카드는 바탕 면 색을 입고, 그 안의 칸은 거꾸로 흰색이 된다(둘이 같은 색이면 경계가 없다).
+  assert.match(css, /\.lp-sec\[data-face="white"\] \.lp-card,\.lp-sec\[data-face="white"\] \.lp-panel\{background:var\(--bg\)\}/, '흰 면 위 카드의 짝바꿈이 없다');
+  assert.match(css, /\.lp-sec\[data-face="white"\] \.lp-stat\{background:var\(--surface\)\}/, '상자 안의 칸이 상자와 같은 색이 된다');
+  // KPI 칸도 규격이 CSS 한 곳이다(인라인 바탕이면 위 짝바꿈이 닿지 않는다).
+  assert.match(page, /<div key=\{label\} className="lp-stat">/, 'KPI 칸이 인라인 규격으로 돌아갔다');
+});
+
+test('랜딩 섹션 아홉 곳이 스크린리더에 이름 붙은 region 으로 보인다 (DS 82-2)', () => {
+  const page = read('src/app/page.tsx');
+  // 이름 없는 <section> 은 region 랜드마크가 되지 않는다 — 랜드마크 목록에서 본문이 한 덩어리다.
+  const secs = [...page.matchAll(/<section[^>]*>/g)].map((m) => m[0]);
+  const named = secs.map((t) => (t.match(/aria-labelledby="([\w-]+)"/) || [])[1]);
+  assert.equal(named.filter(Boolean).length, secs.length, `이름이 없는 섹션이 있다: ${secs.filter((t, i) => !named[i]).join(' / ')}`);
+  assert.equal(new Set(named).size, named.length, `섹션 이름이 겹친다: ${named.join(' ')}`);
+  // 가리키는 id 가 실제 제목에 붙어 있어야 이름이 읽힌다(가리키는 곳이 없으면 이름이 없는 것과 같다).
+  for (const id of named) {
+    assert.match(page, new RegExp(`<h[12] id="${id}"`), `${id} 를 가진 제목이 없다 — 이름이 비어 있다`);
+  }
+  // 히어로는 h1, 나머지 여덟은 h2 다(제목 단계가 한 단계씩 내려가야 목차로 읽힌다).
+  assert.equal((page.match(/<h1 id="/g) || []).length, 1, '히어로 제목이 h1 하나가 아니다');
+  assert.equal((page.match(/<h2 id="/g) || []).length, 8, 'h2 로 이름을 주는 섹션 수가 바뀌었다');
+
+  // 메뉴가 가리키는 앵커는 **제목 블록**에 붙는다 — 띠에 붙이면 위쪽 여백(96px)이 착지점에
+  // 더해져 제목이 화면 174px 아래로 내려간다(DS 10-2 의 scroll-padding 78px + 96px).
+  for (const [, id] of page.matchAll(/href="#([a-z][a-z0-9-]*)"/g)) {
+    if (id === 'main') continue;
+    const m = page.match(new RegExp(`id="${id}" className="(lp-sech|lp-panel lp-demo)"`));
+    assert.ok(m, `#${id} 앵커가 제목 블록·패널이 아니라 띠에 붙어 있다`);
+  }
+});
+
+test('랜딩 제목 블록이 한 규격에서 오고 글자 규격이 인라인으로 돌아가지 않는다 (DS 82-3)', () => {
+  const css = read('src/app/globals.css');
+  const page = read('src/app/page.tsx');
+
+  // 기준 원본 `.sec-h{max-width:680px;margin-bottom:36px}` — 종전에는 리드 폭 620·640·없음,
+  // 제목 아래 간격 24·26·30px 이 자리마다 인라인으로 적혀 있었다.
+  assert.match(css, /\.lp-sech\{max-width:680px;margin-bottom:36px\}/, '제목 블록 규격이 없다');
+  assert.match(css, /\.lp-sech h2\{font-size:clamp\(23px,3\.4vw,32px\)/, '섹션 제목 글자 규격이 CSS 에 없다');
+  assert.match(css, /\.lp-sech p\{font-size:15\.5px;color:var\(--sub\)/, '섹션 리드 규격이 CSS 에 없다');
+  assert.match(css, /\.lp-kicker,\.lg-eyebrow\{/, '섹션 이름표가 약관 화면과 같은 자를 보지 않는다');
+  // 상수 사본이 돌아오지 않는다 — 돌아오면 자리마다 다시 갈라진다.
+  for (const gone of ['const sectionLabel', 'const h2 = ', 'const lead = ']) {
+    assert.equal(page.includes(gone), false, `인라인 글자 규격 상수가 되살아났다: ${gone}`);
+  }
+  // 제목 블록 안에는 인라인 스타일이 없다(있으면 어떤 클래스 규칙도 이기지 못한다).
+  for (const [tag] of page.matchAll(/<(?:span|h1|h2|p)[^>]*className="lp-(?:kicker|sech|lead|note)[^"]*"[^>]*>/g)) {
+    assert.equal(/style=\{\{/.test(tag), false, `제목 블록에 인라인 스타일이 남아 있다: ${tag.slice(0, 90)}`);
+  }
+  // 섹션 여덟 곳이 모두 그 블록을 쓴다(히어로만 제 제목 규격이다).
+  assert.equal((page.match(/className="lp-sech"/g) || []).length, 8, '제목 블록을 쓰는 자리 수가 바뀌었다');
+  assert.equal((page.match(/className="lp-sech" data-size="sm"/g) || []).length, 1, '상자 안 제목 블록(체험)이 같은 자를 쓰지 않는다');
+});
+
+test('공개 화면(랜딩·약관)을 종이에 내보내면 빈 칸·떠 있는 것이 찍히지 않는다 (DS 82-4)', () => {
+  const css = read('src/app/globals.css');
+  const print = css.slice(css.indexOf('@media print{'));
+  assert.ok(print.includes('@page{margin:14mm}'), '인쇄 블록을 찾지 못했다');
+
+  // ① 어두운 띠는 종이에서 밝은 면이 된다 — 브라우저가 배경을 생략하면 흰 글자만 남는다.
+  assert.match(print, /\.lp-sec\[data-face="ink"\]\{background:none;color:var\(--ink\)\}/, '어두운 띠가 종이에서 흰 글자로 남는다');
+  assert.match(print, /\.lp-sec\[data-face="ink"\] \.lp-sech p,\.lp-sec\[data-face="ink"\] \.lp-note\{color:var\(--sub\)\}/, '어두운 띠의 본문·보조 문구가 종이에서 사라진다');
+  assert.match(print, /\.lp-btn-ondark\{border-color:var\(--line-2\)/, '흰 버튼이 종이에서 테두리까지 사라진다');
+  // ② 스티키 상단바·메뉴 칩·CTA 는 종이에서 걷는다 — 인쇄 규칙이 이기려면 규격이 클래스여야 한다.
+  assert.match(print, /\.lp-top,\.lg-top\{position:static/, '상단바가 종이에서 겹쳐 찍힌다');
+  assert.match(print, /\.lp-nav,\.lp-topcta,\.lg-top \.lp-btn,\.lp-cta,\.gw-root\{display:none\}/, '누를 수 없는 것들이 종이에 찍힌다');
+  assert.match(read('src/app/page.tsx'), /<header className="lp-top">/, '랜딩 상단바가 다시 인라인 배치를 쓴다');
+  assert.equal(/position: 'sticky'/.test(read('src/app/page.tsx')), false, '인라인 스티키가 되살아났다 — 미디어 쿼리가 이기지 못한다');
+  // ③ 떠 있는 상담창은 같은 문서에 있어 임베드용 규칙(DS 59-1)이 닿지 않는다 — 손잡이를 둔다.
+  assert.match(read('src/components/ChatWidget.tsx'), /<div className="gw-root" style=\{wrapStyle\}>/, '위젯 뿌리에 인쇄용 손잡이가 없다');
+
+  // 두 공개 화면의 겉틀이 한 벌이다(약관 쪽이 제 사본을 다시 들고 있으면 둘이 갈라진다).
+  assert.match(css, /\.lp-top,\.lg-top\{position:sticky/, '상단바 규격이 한 벌이 아니다');
+  assert.match(css, /\.lp-foot,\.lg-foot\{border-top:1px solid var\(--line\)/, '푸터 규격이 한 벌이 아니다');
+  for (const dup of ['\n.lg-wrap{', '\n.lg-top{', '\n.lg-foot{', '\n.lg-eyebrow{']) {
+    assert.equal(css.includes(dup), false, `약관 화면이 같은 규격의 사본을 들고 있다: ${dup.trim()}`);
+  }
+  assert.match(read('src/app/privacy/LegalLayout.tsx'), /<div className="lg-wrap lp-footin">/, '약관 푸터가 랜딩과 같은 규격을 쓰지 않는다');
 });

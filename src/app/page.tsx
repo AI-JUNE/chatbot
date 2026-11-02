@@ -137,14 +137,15 @@ const FAQ = [
   },
 ] as const;
 
-/* 카드·버튼의 바탕·테두리·그림자·높이는 `globals.css` 의 `.lp-card`·`.lp-panel`·`.lp-btn` 한 벌에서 온다.
- * 여기에 인라인으로 적으면 어떤 클래스 규칙으로도 이길 수 없어 손 올림 반응도, 좁은 화면 규칙도
- * 붙지 않는다(DS 13-2·16-2 가 상단바·푸터에서 이미 겪은 자리다). 이 파일에는 여백만 남긴다. */
-
-const sectionLabel = { fontSize: 12.5, fontWeight: 800, letterSpacing: '.06em', color: 'var(--brand-600)', textTransform: 'uppercase' } as const;
-const h2 = { fontSize: 'clamp(23px,3.4vw,32px)', fontWeight: 800, letterSpacing: '-.025em', lineHeight: 1.3, margin: '10px 0 10px' } as const;
-const lead = { fontSize: 15.5, color: 'var(--sub)', lineHeight: 1.7, margin: 0 } as const;
-const wrap = { maxWidth: 1080, margin: '0 auto', padding: '0 22px' } as const;
+/* 카드·버튼·섹션 띠·제목 블록의 바탕·테두리·그림자·높이·글자 규격은 `globals.css` 한 벌에서 온다
+ * (`.lp-sec`·`.lp-wrap`·`.lp-sech`·`.lp-card`·`.lp-panel`·`.lp-btn`). 여기에 인라인으로 적으면
+ * 어떤 클래스 규칙으로도 이길 수 없어 손 올림 반응도, 좁은 화면 규칙도, **인쇄 규칙도** 붙지
+ * 않는다(DS 13-2·16-2·81-1 이 상단바·푸터·버튼에서 이미 겪은 자리다). 이 파일에는 여백만 남긴다.
+ *
+ * 섹션은 **띠 + 본문 폭** 두 겹이다(기준 원본 `.sec` > `.wrap`) — `data-face` 가 그 띠의 면을
+ * 고르고(hero·white·없음=바탕 면·ink), 흰 면과 바탕 면이 번갈아 와 섹션 경계가 보인다.
+ * 섹션마다 `aria-labelledby` 로 **제목을 이름으로 붙인다** — 이름이 없는 section 요소는
+ * 스크린리더에서 region 랜드마크가 되지 않아, 랜드마크 목록에 본문이 한 덩어리로만 보인다. */
 
 export default function Home() {
   return (
@@ -153,7 +154,7 @@ export default function Home() {
       <a href="#main" className="skip-link">본문 바로가기</a>
 
       {/* ── 상단바 ── */}
-      <header style={{ position: 'sticky', top: 0, zIndex: 20, background: 'rgba(255,255,255,.86)', backdropFilter: 'blur(10px)', borderBottom: '1px solid var(--line)' }}>
+      <header className="lp-top">
         {/* 폭·높이·정렬을 전부 클래스로 옮겼다(`wrap` 인라인을 쓰지 않는다) — 좁은 화면에서는
           * 메뉴가 둘째 줄로 접혀 높이와 세로 여백이 달라지는데, 인라인으로 적은 값은
           * 미디어 쿼리가 이기지 못한다(`padding:'0 22px'` 하나가 세로 여백을 통째로 막는다). */}
@@ -179,16 +180,16 @@ export default function Home() {
         * 스크린리더의 랜드마크 이동이 아무 데도 데려다주지 못한다). */}
       <main id="main" tabIndex={-1}>
       {/* ── 히어로 ── */}
-      <section style={{ background: 'linear-gradient(180deg,var(--brand-50) 0%,var(--bg) 62%)', padding: '64px 0 56px' }}>
-        <div className="lp-hero" style={wrap}>
+      <section className="lp-sec" data-face="hero" aria-labelledby="hero-h">
+        <div className="lp-hero lp-wrap">
           <div>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, color: 'var(--brand-600)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 999, padding: '7px 14px' }}>
               <Icon name="spark" size={14} /> 인공지능(AI)이 응대합니다
             </span>
-            <h1 style={{ fontSize: 'clamp(32px,5vw,54px)', fontWeight: 800, letterSpacing: '-.035em', lineHeight: 1.14, margin: '18px 0 16px' }}>
+            <h1 id="hero-h" style={{ fontSize: 'clamp(32px,5vw,54px)', fontWeight: 800, letterSpacing: '-.035em', lineHeight: 1.14, margin: '18px 0 16px' }}>
               등록한 자료를 <span style={{ color: 'var(--brand)' }}>근거로</span> 답하는<br />상담 챗봇
             </h1>
-            <p style={{ ...lead, fontSize: 17, maxWidth: 520 }}>
+            <p className="lp-lead">
               FAQ와 안내문을 등록하면 AI가 1차 응대하고, 답변마다 어느 자료에서 나왔는지 함께 보여줍니다.
               확인이 필요한 문의는 대화 요약과 함께 상담원에게 넘깁니다.
             </p>
@@ -201,7 +202,7 @@ export default function Home() {
                 도입 상담 요청
               </a>
             </div>
-            <p style={{ fontSize: 12.5, color: 'var(--mut)', marginTop: 14 }}>
+            <p className="lp-note">
               코드 한 줄만 넣으면 됩니다. 개발 작업은 필요하지 않습니다.
             </p>
           </div>
@@ -236,155 +237,177 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ── 동작 방식(신뢰) ── */}
-      <section id="trust" style={{ ...wrap, padding: '72px 22px 8px' }}>
-        <span style={sectionLabel}>동작 방식</span>
-        <h2 style={h2}>믿을 수 있는 답만 내보냅니다</h2>
-        <p style={{ ...lead, maxWidth: 620 }}>
-          생성형 답변의 가장 큰 위험은 그럴듯한 오답입니다. 이 챗봇은 답을 만들기 전에 등록된 자료를 먼저 찾고, 찾지 못하면 답하지 않습니다.
-        </p>
-        <div className="lp-grid" style={{ marginTop: 30 }}>
-          {TRUST.map((t) => (
-            <div key={t.title} className="lp-card" style={{ padding: '22px 20px' }}>
-              <span style={{ display: 'inline-flex', width: 36, height: 36, borderRadius: 11, background: 'var(--brand-50)', color: 'var(--brand-600)', alignItems: 'center', justifyContent: 'center' }}>
-                <Icon name={t.icon} size={18} />
-              </span>
-              <h3 style={{ fontSize: 16, fontWeight: 800, margin: '12px 0 8px', letterSpacing: '-.015em' }}>{t.title}</h3>
-              <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: 0 }}>{t.body}</p>
-            </div>
-          ))}
+      {/* ── 동작 방식(신뢰) ──
+        * 앵커(`id`)는 **제목 블록**에 붙는다 — 띠에 붙이면 위쪽 여백 96px 이 착지점(78px)에 더해져
+        * 제목이 화면 174px 아래로 내려간다. `scroll-margin` 은 쓰지 않는다(DS 10-2·13-2 단일 출처). */}
+      <section className="lp-sec" data-face="white" aria-labelledby="trust-h">
+        <div className="lp-wrap">
+          <div id="trust" className="lp-sech">
+            <span className="lp-kicker">동작 방식</span>
+            <h2 id="trust-h">믿을 수 있는 답만 내보냅니다</h2>
+            <p>생성형 답변의 가장 큰 위험은 그럴듯한 오답입니다. 이 챗봇은 답을 만들기 전에 등록된 자료를 먼저 찾고, 찾지 못하면 답하지 않습니다.</p>
+          </div>
+          <div className="lp-grid">
+            {TRUST.map((t) => (
+              <div key={t.title} className="lp-card" style={{ padding: '22px 20px' }}>
+                <span style={{ display: 'inline-flex', width: 36, height: 36, borderRadius: 11, background: 'var(--brand-50)', color: 'var(--brand-600)', alignItems: 'center', justifyContent: 'center' }}>
+                  <Icon name={t.icon} size={18} />
+                </span>
+                <h3 style={{ fontSize: 16, fontWeight: 800, margin: '12px 0 8px', letterSpacing: '-.015em' }}>{t.title}</h3>
+                <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: 0 }}>{t.body}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
       {/* ── 기능 ── */}
-      <section id="features" style={{ ...wrap, padding: '64px 22px 8px' }}>
-        <span style={sectionLabel}>기능</span>
-        <h2 style={h2}>상담 운영에서 실제로 쓰는 것만</h2>
-        <div className="lp-grid" style={{ marginTop: 26 }}>
-          {FEATURES.map((f) => (
-            <div key={f.title} className="lp-card" style={{ padding: '20px 20px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--brand-50)', color: 'var(--brand-600)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Icon name={f.icon} size={17} />
-                </span>
-                <h3 style={{ fontSize: 15, fontWeight: 800, letterSpacing: '-.015em' }}>{f.title}</h3>
+      <section className="lp-sec" aria-labelledby="features-h">
+        <div className="lp-wrap">
+          <div id="features" className="lp-sech">
+            <span className="lp-kicker">기능</span>
+            <h2 id="features-h">상담 운영에서 실제로 쓰는 것만</h2>
+          </div>
+          <div className="lp-grid">
+            {FEATURES.map((f) => (
+              <div key={f.title} className="lp-card" style={{ padding: '20px 20px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--brand-50)', color: 'var(--brand-600)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Icon name={f.icon} size={17} />
+                  </span>
+                  <h3 style={{ fontSize: 15, fontWeight: 800, letterSpacing: '-.015em' }}>{f.title}</h3>
+                </div>
+                <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: '11px 0 0' }}>{f.body}</p>
               </div>
-              <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: '11px 0 0' }}>{f.body}</p>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </section>
 
       {/* ── 채널 ── */}
-      <section id="channels" style={{ ...wrap, padding: '64px 22px 8px' }}>
-        <span style={sectionLabel}>채널</span>
-        <h2 style={h2}>고객이 있는 곳에서 같은 답을</h2>
-        <div className="lp-grid" style={{ marginTop: 26 }}>
-          {CHANNELS.map((c) => (
-            <div key={c.title} className="lp-card" style={{ padding: '22px 20px' }}>
-              <span style={{ display: 'inline-flex', width: 36, height: 36, borderRadius: 11, background: 'var(--brand-50)', color: 'var(--brand-600)', alignItems: 'center', justifyContent: 'center' }}>
-                <Icon name={c.icon} size={18} />
-              </span>
-              <h3 style={{ fontSize: 16, fontWeight: 800, margin: '12px 0 8px' }}>{c.title}</h3>
-              <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: '0 0 12px' }}>{c.body}</p>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--brand-600)', background: 'var(--brand-50)', borderRadius: 999, padding: '5px 11px' }}>{c.state}</span>
-            </div>
-          ))}
+      <section className="lp-sec" data-face="white" aria-labelledby="channels-h">
+        <div className="lp-wrap">
+          <div id="channels" className="lp-sech">
+            <span className="lp-kicker">채널</span>
+            <h2 id="channels-h">고객이 있는 곳에서 같은 답을</h2>
+          </div>
+          <div className="lp-grid">
+            {CHANNELS.map((c) => (
+              <div key={c.title} className="lp-card" style={{ padding: '22px 20px' }}>
+                <span style={{ display: 'inline-flex', width: 36, height: 36, borderRadius: 11, background: 'var(--brand-50)', color: 'var(--brand-600)', alignItems: 'center', justifyContent: 'center' }}>
+                  <Icon name={c.icon} size={18} />
+                </span>
+                <h3 style={{ fontSize: 16, fontWeight: 800, margin: '12px 0 8px' }}>{c.title}</h3>
+                <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: '0 0 12px' }}>{c.body}</p>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--brand-600)', background: 'var(--brand-50)', borderRadius: 999, padding: '5px 11px' }}>{c.state}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
       {/* ── 도입 단계 ── */}
-      <section id="steps" style={{ ...wrap, padding: '64px 22px 8px' }}>
-        <span style={sectionLabel}>도입</span>
-        <h2 style={h2}>오픈까지 세 단계</h2>
-        <div className="lp-grid" style={{ marginTop: 26 }}>
-          {STEPS.map((s) => (
-            <div key={s.n} className="lp-card" style={{ padding: '22px 20px' }}>
-              <span aria-hidden="true" style={{ display: 'inline-flex', width: 30, height: 30, borderRadius: '50%', background: 'var(--brand)', color: '#fff', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14 }}>{s.n}</span>
-              <h3 style={{ fontSize: 16, fontWeight: 800, margin: '13px 0 8px' }}>{s.title}</h3>
-              <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: 0 }}>{s.body}</p>
-            </div>
-          ))}
+      <section className="lp-sec" aria-labelledby="steps-h">
+        <div className="lp-wrap">
+          <div id="steps" className="lp-sech">
+            <span className="lp-kicker">도입</span>
+            <h2 id="steps-h">오픈까지 세 단계</h2>
+          </div>
+          <div className="lp-grid">
+            {STEPS.map((s) => (
+              <div key={s.n} className="lp-card" style={{ padding: '22px 20px' }}>
+                <span aria-hidden="true" style={{ display: 'inline-flex', width: 30, height: 30, borderRadius: '50%', background: 'var(--brand)', color: '#fff', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14 }}>{s.n}</span>
+                <h3 style={{ fontSize: 16, fontWeight: 800, margin: '13px 0 8px' }}>{s.title}</h3>
+                <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: 0 }}>{s.body}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
       {/* ── 운영 콘솔 미리보기 ── */}
-      <section style={{ ...wrap, padding: '64px 22px 8px' }}>
-        <span style={sectionLabel}>운영</span>
-        <h2 style={h2}>무엇이 자동으로 끝났는지 확인합니다</h2>
-        <p style={{ ...lead, maxWidth: 640 }}>
-          운영 콘솔이 대화량·자동 완결·상담원 전환을 집계합니다. 아직 측정되지 않은 값은 숫자를 지어내지 않고 「측정 중」으로 둡니다.
-        </p>
-        <div className="lp-panel" style={{ padding: 20, marginTop: 24 }}>
-          <div className="lp-kpi">
-            {CONSOLE_KPI.map(([label, value]) => (
-              <div key={label} style={{ background: 'var(--bg)', border: '1px solid var(--line)', borderRadius: 12, padding: '16px 16px' }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--sub)' }}>{label}</div>
-                <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--mut)', marginTop: 6, letterSpacing: '-.02em' }}>{value}</div>
-              </div>
-            ))}
+      <section className="lp-sec" data-face="white" aria-labelledby="metrics-h">
+        <div className="lp-wrap">
+          <div className="lp-sech">
+            <span className="lp-kicker">운영</span>
+            <h2 id="metrics-h">무엇이 자동으로 끝났는지 확인합니다</h2>
+            <p>운영 콘솔이 대화량·자동 완결·상담원 전환을 집계합니다. 아직 측정되지 않은 값은 숫자를 지어내지 않고 「측정 중」으로 둡니다.</p>
           </div>
-          <p style={{ fontSize: 12.5, color: 'var(--mut)', margin: '14px 0 0' }}>
-            운영을 시작하면 이 자리에 실제 집계값이 들어갑니다.
-          </p>
+          <div className="lp-panel" style={{ padding: 20 }}>
+            <div className="lp-kpi">
+              {CONSOLE_KPI.map(([label, value]) => (
+                <div key={label} className="lp-stat">
+                  <span>{label}</span>
+                  <b>{value}</b>
+                </div>
+              ))}
+            </div>
+            <p className="lp-note">
+              운영을 시작하면 이 자리에 실제 집계값이 들어갑니다.
+            </p>
+          </div>
         </div>
       </section>
 
       {/* ── 체험 ── */}
-      <section id="demo" style={{ ...wrap, padding: '64px 22px 8px' }}>
-        <div className="lp-panel" style={{ padding: '30px 26px', display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ maxWidth: 560 }}>
-            <span style={sectionLabel}>체험</span>
-            <h2 style={{ ...h2, fontSize: 'clamp(21px,2.6vw,27px)', margin: '8px 0 8px' }}>지금 바로 물어보세요</h2>
-            <p style={{ ...lead, fontSize: 14.5 }}>
-              이 페이지에 떠 있는 상담창이 실제 제품입니다. 답변에 붙는 근거 표시와 상담원 전환까지 그대로 확인하실 수 있습니다.
-            </p>
+      <section className="lp-sec" aria-labelledby="demo-h">
+        <div className="lp-wrap">
+          <div id="demo" className="lp-panel lp-demo" style={{ padding: '30px 26px' }}>
+            <div className="lp-sech" data-size="sm">
+              <span className="lp-kicker">체험</span>
+              <h2 id="demo-h">지금 바로 물어보세요</h2>
+              <p>이 페이지에 떠 있는 상담창이 실제 제품입니다. 답변에 붙는 근거 표시와 상담원 전환까지 그대로 확인하실 수 있습니다.</p>
+            </div>
+            {/* 「오른쪽 아래를 보세요」는 화면을 보는 사람에게만 닿는 안내였다(WCAG 1.3.3) — 누를 수 있는
+              * 단추로 바꿔 위치를 몰라도 시작할 수 있게 한다. 누르면 상담창이 열리고 입력창으로 초점이 간다. */}
+            <button type="button" data-gowon-open className="lp-btn lp-btn-main lp-btn-lg">
+              상담창 열기 <Icon name="arrow" size={17} />
+            </button>
           </div>
-          {/* 「오른쪽 아래를 보세요」는 화면을 보는 사람에게만 닿는 안내였다(WCAG 1.3.3) — 누를 수 있는
-            * 단추로 바꿔 위치를 몰라도 시작할 수 있게 한다. 누르면 상담창이 열리고 입력창으로 초점이 간다. */}
-          <button type="button" data-gowon-open className="lp-btn lp-btn-main lp-btn-lg">
-            상담창 열기 <Icon name="arrow" size={17} />
-          </button>
         </div>
       </section>
 
       {/* ── FAQ ── */}
-      <section id="faq" style={{ ...wrap, padding: '64px 22px 8px' }}>
-        <span style={sectionLabel}>자주 묻는 질문</span>
-        <h2 style={h2}>도입 전에 많이 받는 질문</h2>
-        <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {FAQ.map((f) => (
-            <details key={f.q} className="lp-faq lp-panel">
-              <summary>{f.q}</summary>
-              <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.75, margin: '10px 0 0' }}>{f.a}</p>
-            </details>
-          ))}
+      <section className="lp-sec" data-face="white" aria-labelledby="faq-h">
+        <div className="lp-wrap">
+          <div id="faq" className="lp-sech">
+            <span className="lp-kicker">자주 묻는 질문</span>
+            <h2 id="faq-h">도입 전에 많이 받는 질문</h2>
+          </div>
+          <div className="lp-faqlist">
+            {FAQ.map((f) => (
+              <details key={f.q} className="lp-faq lp-panel">
+                <summary>{f.q}</summary>
+                <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.75, margin: '10px 0 0' }}>{f.a}</p>
+              </details>
+            ))}
+          </div>
         </div>
       </section>
 
-      {/* ── 최종 CTA ── */}
-      <section id="contact" style={{ ...wrap, padding: '64px 22px 80px' }}>
-        <div style={{ background: 'var(--ink)', borderRadius: 'var(--r-lg)', padding: '44px 32px', textAlign: 'center', color: '#fff' }}>
-          <h2 style={{ fontSize: 'clamp(22px,3vw,30px)', fontWeight: 800, letterSpacing: '-.025em', margin: 0 }}>
-            가지고 계신 FAQ로 먼저 확인해 보세요
-          </h2>
-          <p style={{ fontSize: 15, color: 'var(--line-2)', lineHeight: 1.7, margin: '14px auto 24px', maxWidth: 520 }}>
-            운영 중인 안내 자료를 그대로 등록해 실제 문의에 어떻게 답하는지 보여 드립니다. 파일럿 기간의 집계값으로 도입을 판단하실 수 있습니다.
-          </p>
+      {/* ── 최종 CTA — 기준 원본 `.band` 와 같이 화면을 가로지르는 어두운 띠다(둥근 카드가 아니다).
+        * 글자색은 CSS 한 벌에서 온다 — 인라인으로 적으면 인쇄 규칙이 흰 글자를 되돌릴 수 없어
+        * 종이에서는 이 섹션이 통째로 빈 칸으로 찍힌다. */}
+      <section className="lp-sec" data-face="ink" aria-labelledby="contact-h">
+        <div className="lp-wrap">
+          <div id="contact" className="lp-sech">
+            <h2 id="contact-h">가지고 계신 FAQ로 먼저 확인해 보세요</h2>
+            <p>운영 중인 안내 자료를 그대로 등록해 실제 문의에 어떻게 답하는지 보여 드립니다. 파일럿 기간의 집계값으로 도입을 판단하실 수 있습니다.</p>
+          </div>
           <a href="mailto:gowonceo@gmail.com?subject=GOWON%20Chat%20%EB%8F%84%EC%9E%85%20%EB%AC%B8%EC%9D%98" className="lp-btn lp-btn-lg lp-btn-ondark">
             도입 문의 보내기
           </a>
-          <p style={{ fontSize: 12, color: 'var(--mut-on-ink)', margin: '16px 0 0' }}>이 화면의 응답은 데모 데이터로 보여 드립니다 — 도입 후에는 고객사 안내 자료와 담당 창구로 연결됩니다.</p>
+          <p className="lp-note">이 화면의 응답은 데모 데이터로 보여 드립니다 — 도입 후에는 고객사 안내 자료와 담당 창구로 연결됩니다.</p>
         </div>
       </section>
       </main>
 
-      <footer style={{ borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
-        <div style={{ ...wrap, padding: '26px 22px 34px', textAlign: 'center', fontSize: 12.5, color: 'var(--mut)' }}>
+      <footer className="lp-foot">
+        <div className="lp-wrap lp-footin">
           {/* 누를 면은 .lp-footlink 한 곳에서 정한다(44px) — 인라인으로 적으면 좁은 화면 규칙이 이기지 못한다. */}
           <a href="/terms" className="lp-footlink">이용약관</a>
           <a href="/privacy" className="lp-footlink">개인정보처리방침</a>
-          <span style={{ display: 'block', marginTop: 10 }}>© GOWON Chat (데모) — 약관·방침은 초안이며 법률 검토 전입니다.</span>
+          <span className="lp-footnote">© GOWON Chat (데모) — 약관·방침은 초안이며 법률 검토 전입니다.</span>
         </div>
       </footer>
 
