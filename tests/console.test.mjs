@@ -39,7 +39,11 @@ function linkNodeModules(dir) {
 async function loadConsole() {
   if (cached) return cached;
   const dir = mkdtempSync(path.join(tmpdir(), 'gowon-console-'));
-  cpSync(path.join(REPO, 'src', 'app', 'admin', 'page.tsx'), path.join(dir, 'AdminPage.tsx'));
+  // 공용 BrandMark 는 별도 파일이라 단독 컴파일에서 `@/` 별칭을 풀지 못한다 — 그 한 줄을 컴포넌트 본문으로 바꿔 끼운다.
+  const mark = readFileSync(path.join(REPO, 'src', 'components', 'BrandMark.tsx'), 'utf8').replace('export default function', 'function');
+  const page = readFileSync(path.join(REPO, 'src', 'app', 'admin', 'page.tsx'), 'utf8')
+    .replace("import BrandMark from '@/components/BrandMark';", () => mark);
+  writeFileSync(path.join(dir, 'AdminPage.tsx'), page);
   linkNodeModules(dir);
   writeFileSync(
     path.join(dir, 'tsconfig.json'),

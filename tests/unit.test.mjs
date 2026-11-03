@@ -889,7 +889,7 @@ test('브랜드 마크(파비콘)가 있고 화면과 같은 도형을 쓴다', 
   const initial = /d="(M20\.9 9\.9[^"]+)"/.exec(svg)?.[1];
   assert.ok(body && initial, '말풍선 몸통·이니셜 경로가 있어야 한다');
   // 랜딩·콘솔의 마크가 파비콘과 같은 도형이어야 한다(브랜드가 화면마다 달라지지 않게)
-  for (const f of ['src/app/page.tsx', 'src/app/admin/page.tsx', 'public/brand-mark.svg', 'src/components/BrandMark.tsx']) {
+  for (const f of ['public/brand-mark.svg', 'src/components/BrandMark.tsx']) {
     const s = read(f);
     assert.ok(s.includes(body), `${f}의 마크 몸통이 파비콘과 다르다`);
     assert.ok(s.includes(initial), `${f}의 마크 이니셜이 파비콘과 다르다`);
@@ -990,10 +990,13 @@ test('관리 콘솔 화면에 내부 구현 문구가 남아 있지 않다', () 
 test('약관·방침 레이아웃은 랜딩과 같은 셸(상단바·브랜드 마크·목차·푸터)을 쓴다', () => {
   const s = read('src/app/privacy/LegalLayout.tsx');
   assert.match(s, /from '@\/components\/BrandMark'/, '브랜드 마크는 공용 컴포넌트를 쓴다');
-  assert.match(s, /aria-label="목차"/);
+  assert.match(s, /aria-labelledby="lg-toc-title"/, '목차의 이름은 보이는 제목 하나에서 온다');
   assert.match(s, /aria-labelledby="legal-title"/);
-  assert.match(s, /href="\/terms"/);
-  assert.match(s, /href="\/privacy"/);
+  // 푸터(약관·방침 링크)는 랜딩과 같은 한 벌 — 마크업이 공용 컴포넌트에서 온다.
+  assert.match(s, /<PublicFooter \/>/, '약관 푸터가 공용 컴포넌트가 아니다');
+  const foot = read('src/components/PublicFooter.tsx');
+  assert.match(foot, /\['\/terms', /);
+  assert.match(foot, /\['\/privacy', /);
   assert.equal(s.includes('/admin'), false, '법적 고지 페이지는 운영자 화면을 안내하지 않는다');
   // 이모지·하드코딩 색 0건 — 토큰(var())만
   assert.equal(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(s), false, '이모지 아이콘이 남아 있다');
@@ -1206,7 +1209,7 @@ test('랜딩의 main 랜드마크가 상단바·푸터를 삼키지 않는다 (D
   assert.ok(main > 0, 'main 랜드마크가 없다');
   // 페이지 전체를 감싼 main 은 스크린리더의 랜드마크 이동을 무의미하게 만든다.
   assert.ok(s.indexOf('<header') < main, '상단바가 main 안에 있다');
-  assert.ok(s.indexOf('<footer') > s.indexOf('</main>'), '푸터가 main 안에 있다');
+  assert.ok(s.indexOf('<PublicFooter') > s.indexOf('</main>'), '푸터가 main 안에 있다');
   assert.ok(s.indexOf('<ChatWidget') > s.indexOf('</main>'), '위젯이 main 안에 있다');
   // 하드코딩 hex 없이 토큰만(DS 4-4 와 같은 규칙).
   const hex = stripComments(s).match(/#[0-9A-Fa-f]{6}/g) || [];
@@ -1604,7 +1607,9 @@ test('이름 붙인 상자가 보조기술에 전달된다 — generic div 금�
   }
   // 랜딩 히어로 예시는 figure/figcaption 으로 묶여 「예시」임이 먼저 전달된다.
   const page = read('src/app/page.tsx');
-  assert.match(page, /<figure aria-label="상담 화면 예시 — 실제 답변은 등록한 자료에 따라 달라집니다"/, '히어로 예시가 figure 가 아니다');
+  // 이름은 보이는 figcaption 하나에서 온다 — aria-label 을 함께 적으면 같은 문장을 두 번 듣는다.
+  assert.match(page, /<figure className="lp-panel"/, '히어로 예시가 figure 가 아니다');
+  assert.equal(/<figure[^>]*aria-label/.test(page), false, 'figure 에 aria-label 이 겹쳐 같은 문장을 두 번 읽는다');
   assert.match(page, /<figcaption/, '예시 안내문이 figcaption 으로 묶이지 않았다');
   // 콘솔 미리보기의 타이핑 표시는 위젯과 같은 규격(role="status")이어야 들린다.
   const admin = read('src/app/admin/page.tsx');
@@ -1941,15 +1946,13 @@ test('푸터 법무 링크가 손가락으로 누를 수 있는 규격을 지킨
   assert.ok(chip && Number(h[1]) >= Number(chip[1]), '법무 링크가 목차 칩보다 작다');
 
   // 두 푸터가 같은 규격을 본다 — 인라인으로 갈라지지 않게.
+  // (푸터 마크업은 PublicFooter 한 곳 — 두 화면은 그것을 쓰기만 한다.)
   for (const f of ['src/app/page.tsx', 'src/app/privacy/LegalLayout.tsx']) {
-    const src = read(f);
-    for (const href of ['/terms', '/privacy']) {
-      const m = src.match(new RegExp(`href="${href}"[^>]*>`));
-      assert.ok(m, `${f} 에 ${href} 링크가 없다`);
-      assert.match(m[0], /className="lp-footlink"/, `${f} 의 ${href} 링크가 공용 규격을 쓰지 않는다`);
-      assert.equal(/style=\{\{/.test(m[0]), false, `${f} 의 ${href} 링크에 인라인 스타일이 남아 있다`);
-    }
+    assert.match(read(f), /<PublicFooter \/>/, `${f} 가 공용 푸터를 쓰지 않는다`);
   }
+  const foot = read('src/components/PublicFooter.tsx');
+  assert.match(foot, /<Link key=\{href\} href=\{href\} className="lp-footlink">/, '법무 링크가 공용 규격을 쓰지 않는다');
+  assert.equal(/style=\{\{/.test(foot), false, '푸터에 인라인 스타일이 남아 있다');
 });
 
 
@@ -5266,7 +5269,7 @@ test('공개 화면(랜딩·약관)을 종이에 내보내면 빈 칸·떠 있�
   assert.match(print, /\.lp-btn-ondark\{border-color:var\(--line-2\)/, '흰 버튼이 종이에서 테두리까지 사라진다');
   // ② 스티키 상단바·메뉴 칩·CTA 는 종이에서 걷는다 — 인쇄 규칙이 이기려면 규격이 클래스여야 한다.
   assert.match(print, /\.lp-top,\.lg-top\{position:static/, '상단바가 종이에서 겹쳐 찍힌다');
-  assert.match(print, /\.lp-nav,\.lp-topcta,\.lg-top \.lp-btn,\.lp-cta,\.gw-root\{display:none\}/, '누를 수 없는 것들이 종이에 찍힌다');
+  assert.match(print, /\.lp-nav,\.lp-topcta,\.lg-top \.lp-btn,\.lp-cta,\.gw-root,\.lp-footcol,\.lg-toc\{display:none\}/, '누를 수 없는 것들이 종이에 찍힌다');
   assert.match(read('src/app/page.tsx'), /<header className="lp-top">/, '랜딩 상단바가 다시 인라인 배치를 쓴다');
   assert.equal(/position: 'sticky'/.test(read('src/app/page.tsx')), false, '인라인 스티키가 되살아났다 — 미디어 쿼리가 이기지 못한다');
   // ③ 떠 있는 상담창은 같은 문서에 있어 임베드용 규칙(DS 59-1)이 닿지 않는다 — 손잡이를 둔다.
@@ -5278,5 +5281,5 @@ test('공개 화면(랜딩·약관)을 종이에 내보내면 빈 칸·떠 있�
   for (const dup of ['\n.lg-wrap{', '\n.lg-top{', '\n.lg-foot{', '\n.lg-eyebrow{']) {
     assert.equal(css.includes(dup), false, `약관 화면이 같은 규격의 사본을 들고 있다: ${dup.trim()}`);
   }
-  assert.match(read('src/app/privacy/LegalLayout.tsx'), /<div className="lg-wrap lp-footin">/, '약관 푸터가 랜딩과 같은 규격을 쓰지 않는다');
+  assert.match(read('src/app/privacy/LegalLayout.tsx'), /<PublicFooter \/>/, '약관 푸터가 랜딩과 같은 한 벌을 쓰지 않는다');
 });
