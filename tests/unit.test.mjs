@@ -915,7 +915,7 @@ test('404·오류 화면이 브랜드 규격으로 있고 내부 오류 내용�
   assert.match(sys, /GOWON Chat/, '제품명');
   assert.match(sys, /aria-labelledby="sys-title"/, '화면 제목 연결');
   assert.match(sys, /<h1 id="sys-title"/, '제목은 h1');
-  assert.match(sys, /minHeight: 42/, '버튼 터치 영역');
+  assert.match(sys, /\.sys-btn\{[^}]*min-height:44px/, '버튼 터치 영역 44px (DS 83-1)');
   assert.match(sys, /flexWrap: 'wrap'/, '375px 에서 버튼이 줄바꿈');
 
   const nf = read('src/app/not-found.tsx');
@@ -5282,4 +5282,18 @@ test('공개 화면(랜딩·약관)을 종이에 내보내면 빈 칸·떠 있�
     assert.equal(css.includes(dup), false, `약관 화면이 같은 규격의 사본을 들고 있다: ${dup.trim()}`);
   }
   assert.match(read('src/app/privacy/LegalLayout.tsx'), /<PublicFooter \/>/, '약관 푸터가 랜딩과 같은 한 벌을 쓰지 않는다');
+});
+
+/* ══════════ DS 83-1 — 404·오류 화면 버튼이 눌러도 반응했다 ══════════ */
+
+test('시스템 화면 버튼은 클래스 규격이고 호버·눌림·모션 최소화를 갖는다 (DS 83-1)', () => {
+  const sys = read('src/components/SystemPage.tsx');
+  assert.match(sys, /<style>\{SYS_CSS\}<\/style>/, 'global-error 는 globals.css 가 없어 화면 안에 규칙을 둔다');
+  assert.match(sys, /@media \(hover:hover\)\{[^]*?\.sys-btn[^]*?:hover/, '호버는 hover:hover 안에');
+  assert.match(sys, /\.sys-btn:active\{transform:scale\(\.98\)\}/, '눌림');
+  assert.match(sys, /prefers-reduced-motion:reduce\)\{\.sys-btn\{transition:none\}/, '모션 최소화');
+  assert.match(sys, /forced-colors:active/, '고대비');
+  assert.equal(/const (BTN|PRIMARY|GHOST) =/.test(sys), false, '인라인 버튼 상수가 되살아나지 않는다');
+  assert.equal((sys.match(/className="sys-btn"/g) || []).length, 2, '링크·버튼 둘 다 클래스');
+  assert.equal(/style=\{a\.primary/.test(sys), false);
 });
