@@ -48,9 +48,9 @@ export default function PublicFooter() {
               GOWON Chat
             </Link>
             <p className="lp-footabout">
-              등록한 안내 자료를 근거로 AI가 1차 응대하고, 확인이 필요한 문의만 상담원에게 넘기는 상담 챗봇.
+              등록한 안내 자료를 근거로 1차 응대하고, 확인이 필요한 문의만 상담원에게 넘기는 상담 챗봇입니다.
               <br />
-              운영 주식회사 고원(GOWON) · 문의{' '}
+              운영 주식회사 고원(GOWON). 문의{' '}
               <a href={CONTACT_MAILTO} className="lp-footmail">{CONTACT_EMAIL}</a>
             </p>
           </div>
@@ -65,7 +65,7 @@ export default function PublicFooter() {
           </nav>
 
           <nav aria-labelledby="foot-support" className="lp-footcol">
-            <p className="lp-foottitle" id="foot-support">도입·지원</p>
+            <p className="lp-foottitle" id="foot-support">도입 안내</p>
             {SUPPORT.map(([href, label]) => (
               <a key={href} href={href} className="lp-footlink">{label}</a>
             ))}
@@ -81,8 +81,8 @@ export default function PublicFooter() {
         </div>
 
         <div className="lp-footbot">
-          <span className="lp-footnote">© GOWON Chat (데모) — 약관·방침은 초안이며 법률 검토 전입니다.</span>
-          <span className="lp-footnote">사업자 등록 정보·대표 연락처는 확정 후 이 자리에 표기합니다.</span>
+          <span className="lp-footnote">© 주식회사 고원. 약관과 개인정보처리방침은 법률 검토 전 초안입니다.</span>
+          <span className="lp-footnote">사업자등록번호와 대표 연락처는 확정 후 이 자리에 표기합니다.</span>
         </div>
       </div>
     </footer>

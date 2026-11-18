@@ -168,9 +168,10 @@ export default function Home() {
               <a key={href} href={href}>{label}</a>
             ))}
           </nav>
-          <a href="#contact" className="lp-topcta lp-btn lp-btn-main">
-            도입 문의
-          </a>
+          <div className="lp-topcta">
+            <a href="/admin" className="lp-btn">로그인</a>
+            <a href="#contact" className="lp-btn lp-btn-main">도입 문의</a>
+          </div>
         </div>
       </header>
 

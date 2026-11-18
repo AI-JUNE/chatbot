@@ -429,7 +429,8 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 /* 메뉴 글자 규격은 여기 한 곳이다(링크는 상속으로 받는다 — `a{color:inherit}` 가 위에 있다).
  * 인라인으로 적으면 아래 좁은 화면 규칙도, 손 올림 반응도 이기지 못한다(DS 13-2·16-2 와 같은 자리). */
 .lp-nav{display:flex;gap:20px;margin-left:12px;font-size:13.5px;font-weight:600;color:var(--sub)}
-.lp-topcta{margin-left:auto}
+.lp-topcta{margin-left:auto;display:flex;gap:8px}
+@media (max-width:420px){.lp-topcta .lp-btn{padding-left:14px;padding-right:14px}}
 .lp-hero{display:grid;grid-template-columns:minmax(320px,1fr) minmax(280px,380px);gap:44px;align-items:center}
 .lp-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(272px,1fr))}
 .lp-kpi{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}

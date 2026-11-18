@@ -941,9 +941,11 @@ test('404·오류 화면이 브랜드 규격으로 있고 내부 오류 내용�
 
 test('랜딩에 설치 스니펫·개발자용 정보가 노출되지 않는다', () => {
   const s = read('src/app/page.tsx');
-  for (const leak of ['embed.js', 'data-position', 'data-offset', 'data-z', '<script src', '/admin']) {
+  for (const leak of ['embed.js', 'data-position', 'data-offset', 'data-z', '<script src']) {
     assert.equal(s.includes(leak), false, `랜딩에 운영자용 정보 노출: ${leak}`);
   }
+  // 웹 개편 기준서 3절: 상단바의 「로그인」 한 자리만 콘솔로 간다(그 밖에 콘솔 주소를 적지 않는다).
+  assert.equal((s.match(/\/admin/g) || []).length, 1, '랜딩의 콘솔 주소는 상단바 로그인 한 자리뿐이다');
 });
 
 test('랜딩이 의사결정에 필요한 섹션을 갖춘다', () => {
@@ -5083,8 +5085,8 @@ test('랜딩의 누르는 것이 기준 원본 버튼 규격 한 벌에서 온�
   for (const tag of btns) {
     assert.equal(/style=\{\{/.test(tag), false, `버튼에 인라인 스타일이 남아 있다: ${tag.slice(0, 80)}`);
   }
-  // 다섯 자리(상단바·히어로 2·체험·최종 CTA)가 모두 그 규격을 쓴다.
-  assert.equal(btns.length, 5, '랜딩 버튼 수가 바뀌었다 — 규격 밖의 자리가 생겼는지 본다');
+  // 여섯 자리(상단바 2·히어로 2·체험·최종 CTA)가 모두 그 규격을 쓴다.
+  assert.equal(btns.length, 6, '랜딩 버튼 수가 바뀌었다 — 규격 밖의 자리가 생겼는지 본다');
   // 두 공개 화면의 상단바가 같은 버튼을 쓴다(약관·방침의 「홈으로」).
   assert.match(read('src/app/privacy/LegalLayout.tsx'), /className="lp-btn"/, '약관·방침 상단바가 랜딩과 다른 버튼 규격을 쓴다');
   assert.equal(/\.lg-home\{/.test(css), false, '「홈으로」 전용 규격이 되살아났다 — 같은 버튼이 두 벌이 된다');
@@ -5296,4 +5298,17 @@ test('시스템 화면 버튼은 클래스 규격이고 호버·눌림·모션 �
   assert.equal(/const (BTN|PRIMARY|GHOST) =/.test(sys), false, '인라인 버튼 상수가 되살아나지 않는다');
   assert.equal((sys.match(/className="sys-btn"/g) || []).length, 2, '링크·버튼 둘 다 클래스');
   assert.equal(/style=\{a\.primary/.test(sys), false);
+});
+
+/* AICC 웹 개편 2단계 — 상단바(로그인 + 도입 문의)와 꼬리말 문구 */
+test('웹 개편 2단계: 상단바에 로그인·도입 문의, 꼬리말에 AI 문구 냄새·꾸밈 기호가 없다', () => {
+  const page = read('src/app/page.tsx');
+  assert.match(page, /<div className="lp-topcta">[\s\S]*href="\/admin" className="lp-btn">로그인<\/a>[\s\S]*lp-btn-main">도입 문의<\/a>/, '상단바 로그인·도입 문의 쌍');
+  const foot = read('src/components/PublicFooter.tsx');
+  const shown = foot.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  for (const bad of ['(데모)', ' — ', '·', '→']) {
+    assert.equal(shown.includes(bad), false, `꼬리말에 「${bad}」가 남아 있다`);
+  }
+  assert.match(foot, /사업자등록번호/, '회사 정보 자리');
+  assert.equal(shown.includes('/admin'), false, '꼬리말에 콘솔 주소를 두지 않는다');
 });
