@@ -8,21 +8,21 @@
    * 그 화면은 고객사 사이트 위의 상담창이기도 하다 — 「AICC Portal 옆에 두었을 때 같은 회사
    * 제품으로 보이는가」가 우리가 손대지 않은 곳에서 깨진다. 폼 컨트롤·스크롤바도 여기에 맞춰진다. */
   color-scheme:light;
-  --bg:#F8FAFC; --surface:#FFFFFF; --line:#E2E8F0; --line-2:#CBD5E1;
-  --ink:#0F172A; --sub:#475569; --mut:#5F6E85;
+  --bg:#F7F8FA; --surface:#FFFFFF; --line:#E5E8EB; --line-2:#D1D6DB;
+  --ink:#191F28; --sub:#4E5968; --mut:#5F6B78;
   /* 어두운 배경(--ink) 위 보조 문구 — --mut 의 짝. --mut 는 밝은 면(surface·bg·틴트)에서
    * 4.5:1 을 넘기려고 어둡게 잡았으므로 어두운 면 위에서는 이 토큰을 쓴다. */
   --mut-on-ink:#94A3B8;
-  --brand:#2563EB; --brand-600:#1D4ED8; --brand-50:#EFF6FF;
+  --brand:#2457C5; --brand-600:#1C459E; --brand-50:#EEF3FC;
   /* 손을 올린 카드의 테두리 틴트 — 기준 원본(`index.html` 의 `.pr:hover`·`.fc:hover`)이 쓰는 자리를
    * 이 저장소의 브랜드 계열(50·200·600) 안에서 고른 값이다. 이 색은 **무엇을 말하지 않는다**
    * (손을 올렸다는 사실은 테두리·그림자·2px 리프트가 함께 말하고, 누를 수 있다는 사실은 커서와
    * 초점 테두리가 말한다) — 그래서 글자 대비 기준을 따로 세우지 않는다. */
-  --brand-200:#BFDBFE;
+  --brand-200:#C3D3F0;
   /* 상태 본문색 — 상태 칩·배너·오류 문구가 글자색으로 쓴다. Tailwind 기본값(500~600)은
    * 밝은 면에서 3:1 안팎이라 AA(4.5:1)에 못 미친다 — DS 10-1 과 같은 기준으로 한 단 내렸다.
    * 밝은 면 6종(surface·bg·brand-50·success-50·warn-50·danger-50) 전부에서 최소 4.59:1. */
-  --success:#15803D; --warn:#B45309; --danger:#C42121;
+  --success:#3C764C; --warn:#99610E; --danger:#C42121;
   /* 상태 배경 틴트 — 상태 칩·배너가 쓴다. 본문색(--success/--warn/--danger)과 짝이다. */
   --success-50:#F0FDF4; --warn-50:#FFFBEB; --danger-50:#FEF2F2;
   /* 같은 계열의 테두리 — 틴트 배경 위에 얹는 경고·오류 배너가 쓴다(배경보다 한 단 진하다). */
@@ -37,11 +37,11 @@
    * 배율을 바꿀 때 두 값이 갈라지면 안 되므로 테스트가 짝을 고정한다. */
   --vz:1;
   --r:16px; --r-sm:10px; --r-lg:18px;
-  --shadow-card:0 1px 2px rgba(15,23,42,.04), 0 12px 30px -18px rgba(15,23,42,.18);
+  --shadow-card:0 1px 2px rgba(25,31,40,.04), 0 8px 24px -18px rgba(25,31,40,.35);
   --shadow-pop:0 10px 15px -3px rgba(15,23,42,.08), 0 30px 60px -30px rgba(15,23,42,.45);
   /* 손을 올린 카드가 떠오를 때의 그림자 — 기준 원본의 `0 14px 32px -22px rgba(36,87,197,.35)` 를
-   * 이 저장소의 브랜드색(37,99,235)으로 옮겼다(중성 회색인 --shadow-card 와 달리 브랜드 쪽으로 번진다). */
-  --shadow-lift:0 14px 32px -22px rgba(37,99,235,.35);
+   * 이 저장소의 브랜드색(36,87,197)으로 옮겼다(중성 회색인 --shadow-card 와 달리 브랜드 쪽으로 번진다). */
+  --shadow-lift:0 14px 32px -22px rgba(36,87,197,.35);
   --font:'Pretendard Variable',Pretendard,-apple-system,system-ui,'Malgun Gothic',sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}

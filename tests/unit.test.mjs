@@ -721,7 +721,7 @@ test('정산 리포트 접근은 인증·감사 로그를 거친다', () => {
 
 test('디자인 토큰이 AICC Portal 팔레트를 쓴다', () => {
   const css = read('src/app/globals.css');
-  for (const token of ['--brand:#2563EB', '--ink:#0F172A', '--line:#E2E8F0', '--bg:#F8FAFC']) {
+  for (const token of ['--brand:#2457C5', '--ink:#191F28', '--line:#E5E8EB', '--bg:#F7F8FA']) {
     assert.ok(css.includes(token), `토큰 ${token} 이 없다`);
   }
   assert.match(css, /--shadow-card:/, '카드 그림자 규격이 토큰으로 있어야 한다');
@@ -934,7 +934,7 @@ test('404·오류 화면이 브랜드 규격으로 있고 내부 오류 내용�
   assert.match(ge, /<html lang="ko">/, 'global-error 는 루트 레이아웃을 대체하므로 lang 을 직접 준다');
   // 토큰 사본은 SystemPage 의 SYSTEM_TOKENS 한 벌뿐이다(DS 16-1) — global-error 는 그것을 body 에 얹는다.
   assert.match(ge, /SYSTEM_TOKENS/, 'globals.css 가 없으므로 토큰을 직접 얹어야 한다');
-  assert.match(sys, /'--brand': '#2563EB'/, '토큰 사본이 SystemPage 에 있어야 한다');
+  assert.match(sys, /'--brand': '#2457C5'/, '토큰 사본이 SystemPage 에 있어야 한다');
 });
 
 /* ══════════ 랜딩 — 상용 수준 구조 & 운영자 정보 비노출 ══════════ */
@@ -1025,8 +1025,8 @@ test('루트 레이아웃이 링크 미리보기(OG·트위터)·테마색·meta
   assert.match(s, /openGraph: \{[^}]*locale: 'ko_KR'/);
   assert.match(s, /twitter: \{ card: 'summary_large_image'/);
   assert.match(s, /export const viewport: Viewport/);
-  assert.match(s, /themeColor: '#2563EB'/, '테마색은 globals.css --brand 와 같아야 한다');
-  assert.match(read('src/app/globals.css'), /--brand:#2563EB;/);
+  assert.match(s, /themeColor: '#2457C5'/, '테마색은 globals.css --brand 와 같아야 한다');
+  assert.match(read('src/app/globals.css'), /--brand:#2457C5;/);
 });
 
 test('미리보기 이미지는 1200x630 PNG 파일 규약으로 있고 대체 텍스트가 붙어 있다', () => {

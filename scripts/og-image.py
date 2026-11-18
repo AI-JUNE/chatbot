@@ -4,7 +4,7 @@
 from PIL import Image, ImageDraw, ImageFont
 import os
 W, H = 1200, 630
-BRAND, BRAND600, BRAND50, INK, SUB, LINE, SURFACE = '#2563EB', '#1D4ED8', '#EFF6FF', '#0F172A', '#475569', '#E2E8F0', '#FFFFFF'
+BRAND, BRAND600, BRAND50, INK, SUB, LINE, SURFACE = '#2457C5', '#1C459E', '#EEF3FC', '#191F28', '#4E5968', '#E5E8EB', '#FFFFFF'
 S = 3  # 슈퍼샘플링(안티앨리어싱)
 img = Image.new('RGB', (W*S, H*S), SURFACE)
 d = ImageDraw.Draw(img)

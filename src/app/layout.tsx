@@ -40,7 +40,7 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   // 브랜드 primary — globals.css 의 --brand 와 같은 값(메타 태그는 var() 를 쓸 수 없다).
-  themeColor: '#2563EB',
+  themeColor: '#2457C5',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

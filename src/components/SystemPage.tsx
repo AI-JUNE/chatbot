@@ -18,18 +18,18 @@ import BrandMark from './BrandMark';
  * 테스트가 `globals.css` 의 `:root` 를 실제로 파싱해 이 표와 대조한다(값이 갈라지면 실패).
  */
 export const SYSTEM_TOKENS = {
-  '--bg': '#F8FAFC',
+  '--bg': '#F7F8FA',
   '--surface': '#FFFFFF',
-  '--line': '#E2E8F0',
-  '--ink': '#0F172A',
-  '--sub': '#475569',
-  '--mut': '#5F6E85',
-  '--brand': '#2563EB',
-  '--brand-600': '#1D4ED8',
-  '--brand-50': '#EFF6FF',
+  '--line': '#E5E8EB',
+  '--ink': '#191F28',
+  '--sub': '#4E5968',
+  '--mut': '#5F6B78',
+  '--brand': '#2457C5',
+  '--brand-600': '#1C459E',
+  '--brand-50': '#EEF3FC',
   '--r-sm': '10px',
   '--r-lg': '18px',
-  '--shadow-card': '0 1px 2px rgba(15,23,42,.04), 0 12px 30px -18px rgba(15,23,42,.18)',
+  '--shadow-card': '0 1px 2px rgba(25,31,40,.04), 0 8px 24px -18px rgba(25,31,40,.35)',
   '--font': "'Pretendard Variable',Pretendard,-apple-system,system-ui,'Malgun Gothic',sans-serif",
 } as CSSProperties;
 
