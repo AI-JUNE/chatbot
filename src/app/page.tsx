@@ -16,7 +16,7 @@ import { CONTACT_MAILTO } from '@/lib/site';
  * - 근거 없는 성과 수치·타사 로고·고객사 후기를 쓰지 않는다. 측정값이 없으면 「측정 중」이라고 쓴다.
  * - 설치 스니펫·관리 콘솔 같은 **운영자용 정보는 랜딩에 노출하지 않는다**(관리 콘솔 「설치」 탭에 있다).
  */
-export const metadata = { title: 'GOWON Chat — 등록한 자료를 근거로 답하는 AI 상담' };
+export const metadata = { title: 'GOWON Chat | 등록한 자료를 근거로 답하는 상담 챗봇' };
 
 const NAV = [
   ['#trust', '동작 방식'],
@@ -62,7 +62,7 @@ const TRUST = [
   {
     icon: 'cite' as IconKey,
     title: '답변마다 근거를 붙입니다',
-    body: '등록한 안내 자료의 어느 항목에서 나온 답인지 문장 그대로 함께 보여줍니다. 고객은 답을 믿을지 스스로 판단할 수 있습니다.',
+    body: '등록한 안내 자료의 어느 항목에서 나온 답인지 문장 그대로 함께 보여 줍니다. 고객이 답의 출처를 직접 확인할 수 있습니다.',
   },
   {
     icon: 'guard' as IconKey,
@@ -72,7 +72,7 @@ const TRUST = [
   {
     icon: 'handoff' as IconKey,
     title: '필요할 때 사람에게 넘깁니다',
-    body: '전환 요청·불만·긴급 문의는 지금까지의 대화 요약과 함께 상담원에게 접수됩니다. 고객이 같은 말을 두 번 하지 않습니다.',
+    body: '전환 요청, 불만, 긴급 문의는 지금까지의 대화 요약과 함께 상담원에게 접수됩니다. 고객이 같은 말을 두 번 하지 않습니다.',
   },
 ] as const;
 
@@ -83,12 +83,12 @@ const SCENES = [
 ] as const;
 
 const FEATURES = [
-  { icon: 'library' as IconKey, title: '자료 등록만으로 시작', body: '쓰던 FAQ·안내문을 그대로 올리면 바로 답합니다. 시나리오를 하나하나 그릴 필요가 없습니다.' },
-  { icon: 'checklist' as IconKey, title: '정해진 안내는 항상 같게', body: '영업시간·환불처럼 답이 정해진 문의는 규칙으로 고정해 매번 같은 문장으로 답합니다.' },
-  { icon: 'form' as IconKey, title: '접수도 대화로', body: '예약·장애 신고처럼 받을 항목이 많은 문의는 몇 단계인지 보여주며 차례로 물어봅니다.' },
+  { icon: 'library' as IconKey, title: '자료 등록만으로 시작', body: '쓰던 FAQ와 안내문을 그대로 올리면 바로 답합니다. 시나리오를 항목별로 따로 만들 필요가 없습니다.' },
+  { icon: 'checklist' as IconKey, title: '정해진 안내는 항상 같게', body: '영업시간, 환불처럼 답이 정해진 문의는 규칙으로 고정해 매번 같은 문장으로 답합니다.' },
+  { icon: 'form' as IconKey, title: '접수도 대화로', body: '예약, 장애 신고처럼 받을 항목이 많은 문의는 몇 단계인지 알려 주며 차례로 묻습니다.' },
   { icon: 'swap' as IconKey, title: '전환하면 순번까지', body: '상담원으로 넘길 때 접수번호와 접수 순번을 알려 줍니다. 없는 예상 대기시간은 만들지 않습니다.' },
   { icon: 'rating' as IconKey, title: '평가가 곧 보완 목록', body: '고객이 남긴 「도움됐어요 / 아쉬워요」가 어떤 자료를 손봐야 하는지 알려 줍니다.' },
-  { icon: 'lock' as IconKey, title: '연락처는 흘리지 않습니다', body: '연락처와 대화 내용은 로그·오류 리포트에서 가려집니다. 관리 기능은 권한을 확인합니다.' },
+  { icon: 'lock' as IconKey, title: '연락처는 가려서 기록합니다', body: '연락처와 대화 내용은 로그와 오류 기록에서 가려집니다. 관리 기능은 권한을 확인한 뒤 열립니다.' },
 ] as const;
 
 /* `tone` 은 콘솔 상태 배지(`.ac-badge[data-tone]`)와 **같은 짝**이다 — 기준 원본 랜딩도
@@ -96,15 +96,15 @@ const FEATURES = [
  * 종전에는 세 상태가 전부 같은 브랜드 틴트 하나여서, **지금 쓸 수 있는 채널과 아직 못 쓰는
  * 채널이 화면에서 구분되지 않았다**. 뜻은 글자가 말하고(색을 못 보는 사람에게도 같다) 색은 거든다. */
 const CHANNELS = [
-  { icon: 'chat' as IconKey, title: '웹 채팅', body: '홈페이지 오른쪽 아래에 뜨는 상담창. 모바일에서는 전체화면으로 열립니다.', state: '운영 중', tone: 'on' },
-  { icon: 'kakao' as IconKey, title: '카카오톡 채널', body: '같은 지식·같은 규칙으로 카카오톡 문의에 응답합니다.', state: '연동 준비 — 채널 승인 후 활성화', tone: 'wait' },
-  { icon: 'call' as IconKey, title: '콜봇 연계', body: 'AICC 콜봇과 같은 지식·같은 상담원 전환 규칙을 공유합니다.', state: '연계 설계 완료', tone: 'plan' },
+  { icon: 'chat' as IconKey, title: '웹 채팅', body: '홈페이지 오른쪽 아래에 상담창이 뜹니다. 모바일에서는 전체 화면으로 열립니다.', state: '운영 중', tone: 'on' },
+  { icon: 'kakao' as IconKey, title: '카카오톡 채널', body: '웹 채팅과 같은 자료, 같은 규칙으로 카카오톡 문의에 응답합니다.', state: '연동 준비 중. 채널 승인 후 사용', tone: 'wait' },
+  { icon: 'call' as IconKey, title: '콜봇 연계', body: 'AICC 콜봇과 같은 자료, 같은 상담원 전환 규칙을 함께 씁니다.', state: '연계 설계 완료', tone: 'plan' },
 ] as const;
 
 const STEPS = [
-  { n: '1', title: '안내 자료 등록', body: '기존 FAQ·안내문을 관리 콘솔에 붙여 넣습니다. 항목마다 근거 라벨이 자동으로 붙습니다.' },
-  { n: '2', title: '규칙·전환 기준 확인', body: '고정 안내와 상담원 전환 조건을 확인합니다. 응답 테스트에서 실제 답을 미리 봅니다.' },
-  { n: '3', title: '설치 후 오픈', body: '관리 콘솔에서 발급되는 설치 코드를 사이트에 넣으면 끝입니다. 개발 작업은 필요하지 않습니다.' },
+  { n: '1', title: '안내 자료 등록', body: '기존 FAQ와 안내문을 관리 콘솔에 붙여 넣습니다. 항목마다 근거 라벨이 자동으로 붙습니다.' },
+  { n: '2', title: '규칙과 전환 기준 확인', body: '고정 안내와 상담원 전환 조건을 확인합니다. 응답 테스트에서 실제 답을 미리 봅니다.' },
+  { n: '3', title: '설치 후 오픈', body: '관리 콘솔에서 발급되는 설치 코드를 사이트에 넣으면 오픈됩니다. 별도 개발 작업은 필요하지 않습니다.' },
 ] as const;
 
 const CONSOLE_KPI = [
@@ -117,7 +117,7 @@ const CONSOLE_KPI = [
 const FAQ = [
   {
     q: '학습(파인튜닝)이 필요한가요?',
-    a: '필요하지 않습니다. 등록한 안내 자료에서 답을 찾아 근거와 함께 보여주는 방식이라, 자료를 고치면 답도 즉시 바뀝니다.',
+    a: '필요하지 않습니다. 등록한 안내 자료에서 답을 찾아 근거와 함께 보여 주는 방식이라, 자료를 고치면 답도 바로 바뀝니다.',
   },
   {
     q: '엉뚱한 답을 하면 어떻게 하나요?',
@@ -125,19 +125,19 @@ const FAQ = [
   },
   {
     q: '상담원 연결은 어떻게 되나요?',
-    a: '고객이 요청하거나 불만·긴급으로 판단되면 접수번호를 발급하고 대화 요약을 함께 넘깁니다. 실제 상담원 알림 연동은 고객사 환경에 맞춰 연결합니다.',
+    a: '고객이 요청하거나 불만이나 긴급 문의로 판단되면 접수번호를 발급하고 대화 요약을 함께 넘깁니다. 실제 상담원 알림 연동은 고객사 환경에 맞춰 연결합니다.',
   },
   {
     q: '개인정보는 어떻게 다루나요?',
-    a: '연락처는 접수에 필요한 경우에만 받고, 로그·오류 리포트에서는 가려집니다. 대화 본문의 영구 저장은 고객사 승인 후에만 켭니다.',
+    a: '연락처는 접수에 필요한 경우에만 받고, 로그와 오류 기록에서는 가려집니다. 대화 본문의 영구 저장은 고객사 승인 후에만 켭니다.',
   },
   {
     q: '카카오톡에서도 같은 답을 하나요?',
-    a: '같은 지식과 같은 규칙을 씁니다. 채널이 달라도 답과 전환 기준이 달라지지 않습니다.',
+    a: '같은 자료와 같은 규칙을 씁니다. 채널이 달라도 답과 전환 기준이 달라지지 않습니다.',
   },
   {
     q: '효과는 얼마나 되나요?',
-    a: '도입 전 실측 없이 수치를 말씀드리지 않습니다. 운영 콘솔이 자동 완결·전환 비율을 실제로 집계하므로, 파일럿 기간의 자기 데이터로 판단하시는 편을 권합니다.',
+    a: '도입 전 실측 없이 수치를 말씀드리지 않습니다. 운영 콘솔이 자동 완결과 전환 비율을 집계하므로, 시범 운영 기간의 실제 데이터로 판단하시길 권합니다.',
   },
 ] as const;
 
@@ -195,7 +195,7 @@ export default function Home() {
               등록한 자료를 <span style={{ color: 'var(--brand)' }}>근거로</span> 답하는<br />상담 챗봇
             </h1>
             <p className="lp-lead">
-              FAQ와 안내문을 등록하면 AI가 1차 응대하고, 답변마다 어느 자료에서 나왔는지 함께 보여줍니다.
+              FAQ와 안내문을 등록해 두면 챗봇이 1차 응대를 맡고, 답변마다 어느 자료에서 나왔는지 함께 보여 줍니다.
               확인이 필요한 문의는 대화 요약과 함께 상담원에게 넘깁니다.
             </p>
             <div className="lp-cta">
@@ -208,7 +208,7 @@ export default function Home() {
               </a>
             </div>
             <p className="lp-note">
-              코드 한 줄만 넣으면 됩니다. 개발 작업은 필요하지 않습니다.
+              설치 코드를 홈페이지에 붙이면 됩니다. 별도 개발 작업은 필요하지 않습니다.
             </p>
           </div>
 
@@ -222,7 +222,7 @@ export default function Home() {
               <span aria-hidden="true" style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(255,255,255,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14 }}>G</span>
               <div style={{ lineHeight: 1.25 }}>
                 <div style={{ fontWeight: 800, fontSize: 14 }}>GOWON Chat</div>
-                <div style={{ fontSize: 10.5, opacity: .9 }}>AI가 응대합니다</div>
+                <div style={{ fontSize: 10.5, opacity: .9 }}>AI 상담 안내</div>
               </div>
             </div>
             <div style={{ background: 'var(--bg)', padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -230,15 +230,15 @@ export default function Home() {
                 환불은 며칠까지 가능한가요?
               </div>
               <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 14, borderBottomLeftRadius: 4, padding: '9px 12px', fontSize: 13, lineHeight: 1.6, maxWidth: '90%' }}>
-                수령일로부터 7일 이내에 신청하실 수 있어요. 사용 흔적이 있으면 접수가 제한될 수 있습니다.
+                수령일로부터 7일 이내에 신청하실 수 있습니다. 사용 흔적이 있으면 접수가 제한될 수 있습니다.
               </div>
               <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderLeft: '3px solid var(--brand)', borderRadius: 10, padding: '8px 10px', fontSize: 11.5, color: 'var(--sub)', maxWidth: '90%' }}>
-                <div style={{ fontWeight: 700, color: 'var(--brand-600)', fontSize: 11 }}>근거 · 안내문 4. 환불 규정</div>
+                <div style={{ fontWeight: 700, color: 'var(--brand-600)', fontSize: 11 }}>근거: 안내문 4. 환불 규정</div>
                 <div style={{ marginTop: 3 }}>“수령일로부터 7일 이내 신청 가능”</div>
               </div>
             </div>
             <figcaption style={{ background: 'var(--bg)', padding: '0 14px 14px', fontSize: 11, color: 'var(--mut)', textAlign: 'center' }}>
-              화면 예시입니다 — 실제 답변은 등록한 자료에 따라 달라집니다.
+              화면 예시입니다. 실제 답변은 등록한 자료에 따라 달라집니다.
             </figcaption>
           </figure>
         </div>
@@ -251,8 +251,8 @@ export default function Home() {
         <div className="lp-wrap">
           <div id="trust" className="lp-sech">
             <span className="lp-kicker">동작 방식</span>
-            <h2 id="trust-h">믿을 수 있는 답만 내보냅니다</h2>
-            <p>생성형 답변의 가장 큰 위험은 그럴듯한 오답입니다. 이 챗봇은 답을 만들기 전에 등록된 자료를 먼저 찾고, 찾지 못하면 답하지 않습니다.</p>
+            <h2 id="trust-h">등록한 자료에 있는 내용만 안내합니다</h2>
+            <p>챗봇은 답하기 전에 등록된 자료에서 해당 항목을 먼저 찾습니다. 찾지 못한 문의는 임의로 답하지 않고 담당자에게 넘깁니다.</p>
           </div>
           <div className="lp-grid">
             {TRUST.map((t) => (
@@ -359,7 +359,7 @@ export default function Home() {
           <div className="lp-sech">
             <span className="lp-kicker">운영</span>
             <h2 id="metrics-h">무엇이 자동으로 끝났는지 확인합니다</h2>
-            <p>운영 콘솔이 대화량·자동 완결·상담원 전환을 집계합니다. 아직 측정되지 않은 값은 숫자를 지어내지 않고 「측정 중」으로 둡니다.</p>
+            <p>운영 콘솔이 대화량, 자동 완결, 상담원 전환을 집계합니다. 아직 측정되지 않은 값은 「측정 중」으로 표시합니다.</p>
           </div>
           <div className="lp-panel" style={{ padding: 20 }}>
             <div className="lp-kpi">
@@ -384,7 +384,7 @@ export default function Home() {
             <div className="lp-sech" data-size="sm">
               <span className="lp-kicker">체험</span>
               <h2 id="demo-h">지금 바로 물어보세요</h2>
-              <p>이 페이지에 떠 있는 상담창이 실제 제품입니다. 답변에 붙는 근거 표시와 상담원 전환까지 그대로 확인하실 수 있습니다.</p>
+              <p>이 페이지에 떠 있는 상담창은 실제 제품 화면입니다. 답변에 붙는 근거 표시와 상담원 전환까지 직접 확인하실 수 있습니다.</p>
             </div>
             {/* 「오른쪽 아래를 보세요」는 화면을 보는 사람에게만 닿는 안내였다(WCAG 1.3.3) — 누를 수 있는
               * 단추로 바꿔 위치를 몰라도 시작할 수 있게 한다. 누르면 상담창이 열리고 입력창으로 초점이 간다. */}
@@ -419,8 +419,8 @@ export default function Home() {
       <section className="lp-sec" data-face="brand" aria-labelledby="contact-h">
         <div className="lp-wrap">
           <div id="contact" className="lp-sech">
-            <h2 id="contact-h">가지고 계신 FAQ로 먼저 확인해 보세요</h2>
-            <p>운영 중인 안내 자료를 그대로 등록해 실제 문의에 어떻게 답하는지 보여 드립니다. 파일럿 기간의 집계값으로 도입을 판단하실 수 있습니다.</p>
+            <h2 id="contact-h">보유하신 FAQ로 먼저 확인하실 수 있습니다</h2>
+            <p>운영 중인 안내 자료를 그대로 등록해 실제 문의에 어떻게 답하는지 보여 드립니다. 시범 운영 기간의 집계값으로 도입 여부를 판단하실 수 있습니다.</p>
           </div>
           {/* 주소·제목은 `lib/site` 한 곳에서 온다 — 푸터도 같은 값을 본다(사본이 없으면 갈라지지 않는다). */}
           <a href={CONTACT_MAILTO} className="lp-btn lp-btn-lg lp-btn-ondark">
