@@ -1578,11 +1578,13 @@ test('보조 문구 색이 모든 배경에서 WCAG AA(4.5:1)를 넘는다 (DS 1
   // 어두운 면(최종 CTA 띠)은 --mut 를 쓰지 않는다. 규격은 DS 82-1 에서 CSS 한 벌로 옮겼다 —
   // 인라인으로 적으면 인쇄 규칙이 흰 글자를 되돌릴 수 없어 종이에서 그 섹션이 빈 칸이 된다.
   const css82 = read('src/app/globals.css');
-  const cta = (read('src/app/page.tsx').split('data-face="ink"')[1] || '').split('</section>')[0];
+  const cta = (read('src/app/page.tsx').split('data-face="brand"')[1] || '').split('</section>')[0];
   assert.ok(cta, '랜딩 최종 CTA 띠를 찾지 못했다');
   assert.equal(/var\(--mut\)|var\(--sub\)/.test(cta), false, '어두운 띠가 화면에서 밝은 면용 글자색을 적는다');
-  assert.match(css82, /\.lp-sec\[data-face="ink"\] \.lp-note\{color:var\(--mut-on-ink\)\}/, '어두운 띠의 보조 문구가 짝 토큰을 쓰지 않는다');
-  assert.equal(/\.lp-sec\[data-face="ink"\][^\n]*color:var\(--mut\)[;}]/.test(css82), false, '어두운 띠가 밝은 면용 --mut 를 쓴다');
+  assert.match(css82, /\.lp-sec\[data-face="brand"\] \.lp-note\{color:var\(--on-brand-mut\)\}/, 'brand 띠의 보조 문구가 짝 토큰을 쓰지 않는다');
+  assert.ok(contrast(t['--on-brand-mut'], t['--brand']) >= 4.5, '--on-brand-mut 가 --brand 위에서 AA 미달');
+  assert.ok(contrast('#FFFFFF', t['--brand']) >= 4.5, '흰 글자가 --brand 위에서 AA 미달');
+  assert.equal(/\.lp-sec\[data-face="brand"\][^\n]*color:var\(--mut\)[;}]/.test(css82), false, '어두운 띠가 밝은 면용 --mut 를 쓴다');
 });
 
 test('앵커가 스티키 상단바 아래로 숨지 않는다 (DS 10-2)', () => {
@@ -5200,10 +5202,10 @@ test('랜딩 섹션이 전면 띠 + 본문 폭 두 겹이고 흰 면/바탕 면�
 
   // 흰 면과 바탕 면이 **번갈아** 온다(같은 면이 이어지면 그 경계만 사라져 리듬이 깨진다).
   const faces = secs.map((t) => (t.match(/data-face="(\w+)"/) || [, 'bg'])[1]);
-  assert.deepEqual(faces, ['hero', 'white', 'bg', 'white', 'bg', 'white', 'bg', 'white', 'ink'], `면 교차가 깨졌다: ${faces.join(' ')}`);
+  assert.deepEqual(faces, ['hero', 'white', 'bg', 'white', 'bg', 'white', 'bg', 'white', 'brand'], `면 교차가 깨졌다: ${faces.join(' ')}`);
   assert.match(css, /\.lp-sec\[data-face="white"\]\{background:var\(--surface\)\}/, '흰 면 규격이 없다');
   // 마무리는 둥근 카드가 아니라 화면을 가로지르는 띠다(기준 원본 `.band`).
-  assert.match(css, /\.lp-sec\[data-face="ink"\]\{background:var\(--ink\);color:#fff\}/, '마무리 띠가 전면 띠가 아니다');
+  assert.match(css, /\.lp-sec\[data-face="brand"\]\{background:var\(--brand\);color:#fff\}/, '마무리 띠가 brand 바탕 전면 띠가 아니다');
   assert.equal(/borderRadius: 'var\(--r-lg\)', padding: '44px 32px'/.test(page), false, '마무리가 다시 둥근 카드가 되었다');
 
   // 흰 면 위의 카드는 바탕 면 색을 입고, 그 안의 칸은 거꾸로 흰색이 된다(둘이 같은 색이면 경계가 없다).
@@ -5266,8 +5268,8 @@ test('공개 화면(랜딩·약관)을 종이에 내보내면 빈 칸·떠 있�
   assert.ok(print.includes('@page{margin:14mm}'), '인쇄 블록을 찾지 못했다');
 
   // ① 어두운 띠는 종이에서 밝은 면이 된다 — 브라우저가 배경을 생략하면 흰 글자만 남는다.
-  assert.match(print, /\.lp-sec\[data-face="ink"\]\{background:none;color:var\(--ink\)\}/, '어두운 띠가 종이에서 흰 글자로 남는다');
-  assert.match(print, /\.lp-sec\[data-face="ink"\] \.lp-sech p,\.lp-sec\[data-face="ink"\] \.lp-note\{color:var\(--sub\)\}/, '어두운 띠의 본문·보조 문구가 종이에서 사라진다');
+  assert.match(print, /\.lp-sec\[data-face="brand"\]\{background:none;color:var\(--ink\)\}/, '어두운 띠가 종이에서 흰 글자로 남는다');
+  assert.match(print, /\.lp-sec\[data-face="brand"\] \.lp-sech p,\.lp-sec\[data-face="brand"\] \.lp-note\{color:var\(--sub\)\}/, '어두운 띠의 본문·보조 문구가 종이에서 사라진다');
   assert.match(print, /\.lp-btn-ondark\{border-color:var\(--line-2\)/, '흰 버튼이 종이에서 테두리까지 사라진다');
   // ② 스티키 상단바·메뉴 칩·CTA 는 종이에서 걷는다 — 인쇄 규칙이 이기려면 규격이 클래스여야 한다.
   assert.match(print, /\.lp-top,\.lg-top\{position:static/, '상단바가 종이에서 겹쳐 찍힌다');

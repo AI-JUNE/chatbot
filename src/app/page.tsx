@@ -389,7 +389,7 @@ export default function Home() {
       {/* ── 최종 CTA — 기준 원본 `.band` 와 같이 화면을 가로지르는 어두운 띠다(둥근 카드가 아니다).
         * 글자색은 CSS 한 벌에서 온다 — 인라인으로 적으면 인쇄 규칙이 흰 글자를 되돌릴 수 없어
         * 종이에서는 이 섹션이 통째로 빈 칸으로 찍힌다. */}
-      <section className="lp-sec" data-face="ink" aria-labelledby="contact-h">
+      <section className="lp-sec" data-face="brand" aria-labelledby="contact-h">
         <div className="lp-wrap">
           <div id="contact" className="lp-sech">
             <h2 id="contact-h">가지고 계신 FAQ로 먼저 확인해 보세요</h2>
@@ -399,7 +399,7 @@ export default function Home() {
           <a href={CONTACT_MAILTO} className="lp-btn lp-btn-lg lp-btn-ondark">
             도입 문의 보내기
           </a>
-          <p className="lp-note">이 화면의 응답은 데모 데이터로 보여 드립니다 — 도입 후에는 고객사 안내 자료와 담당 창구로 연결됩니다.</p>
+          <p className="lp-note">체험 화면입니다. 도입 후에는 고객사 안내 자료와 담당 창구로 연결됩니다.</p>
         </div>
       </section>
       </main>

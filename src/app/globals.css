@@ -13,6 +13,8 @@
   /* 어두운 배경(--ink) 위 보조 문구 — --mut 의 짝. --mut 는 밝은 면(surface·bg·틴트)에서
    * 4.5:1 을 넘기려고 어둡게 잡았으므로 어두운 면 위에서는 이 토큰을 쓴다. */
   --mut-on-ink:#94A3B8;
+  /* brand 바탕 마무리 띠 위 보조 문구(콜봇 포털 규격: 흰 글자). #2457C5 위 5:1 이상. */
+  --on-brand-mut:#DEE6F6;
   --brand:#2457C5; --brand-600:#1C459E; --brand-50:#EEF3FC;
   /* 손을 올린 카드의 테두리 틴트 — 기준 원본(`index.html` 의 `.pr:hover`·`.fc:hover`)이 쓰는 자리를
    * 이 저장소의 브랜드 계열(50·200·600) 안에서 고른 값이다. 이 색은 **무엇을 말하지 않는다**
@@ -495,8 +497,8 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 .lp-sec[data-face="hero"]{background:linear-gradient(180deg,var(--brand-50) 0%,var(--bg) 62%);padding:64px 0 56px}
 /* 마무리 띠 — 기준 원본 `.band`. 종전에는 바탕 면 위에 둥근 어두운 **카드**가 떠 있어, 375px 에서는
  * 좌우 22px 이 뚫린 광고 배너처럼 보였다(기준 원본의 마무리는 화면을 가로지르는 전면 띠다). */
-.lp-sec[data-face="ink"]{background:var(--ink);color:#fff}
-.lp-sec[data-face="ink"] .lp-wrap{text-align:center}
+.lp-sec[data-face="brand"]{background:var(--brand);color:#fff}
+.lp-sec[data-face="brand"] .lp-wrap{text-align:center}
 /* 흰 면 위의 카드·상자는 **바탕 면 색**을 입는다 — 흰 카드를 흰 면에 얹으면 1px 테두리 하나만 남고,
  * 그 선은 강제 색 모드에서 사용자 색으로 치환되고 흑백 인쇄에서는 사라진다(기준 원본도 바탕 면에서는
  * `.hn{background:var(--bg)}` 로 같은 짝바꿈을 한다). 상자 **안의** 상자(KPI 칸)는 거꾸로 흰색이
@@ -516,8 +518,8 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 .lp-sech[data-size="sm"]{max-width:560px;margin-bottom:0}
 .lp-sech[data-size="sm"] h2{font-size:clamp(21px,2.6vw,27px)}
 .lp-sech[data-size="sm"] p{font-size:14.5px}
-.lp-sec[data-face="ink"] .lp-sech{max-width:620px;margin:0 auto 26px}
-.lp-sec[data-face="ink"] .lp-sech p{color:var(--line-2)}
+.lp-sec[data-face="brand"] .lp-sech{max-width:620px;margin:0 auto 26px}
+.lp-sec[data-face="brand"] .lp-sech p{color:var(--on-brand-mut)}
 /* 섹션 이름표 — 약관·방침 제목 위의 이름표와 같은 규격이다(두 공개 화면이 한 자를 본다). */
 .lp-kicker,.lg-eyebrow{display:block;font-size:12.5px;font-weight:800;letter-spacing:.06em;
   color:var(--brand-600);text-transform:uppercase}
@@ -526,7 +528,7 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 /* 작은 보조 한 줄(히어로 아래·KPI 패널 아래·마무리 띠 아래) — 어두운 면에서는 짝 토큰을 쓴다
  * (--mut 는 밝은 면에서 AA 를 넘기려고 어둡게 잡은 값이라 어두운 면에서는 거꾸로 묻힌다). */
 .lp-note{font-size:12.5px;color:var(--mut);margin-top:14px}
-.lp-sec[data-face="ink"] .lp-note{color:var(--mut-on-ink)}
+.lp-sec[data-face="brand"] .lp-note{color:var(--on-brand-mut)}
 .lp-faqlist{display:flex;flex-direction:column;gap:10px}
 .lp-demo{display:flex;flex-wrap:wrap;gap:20px;align-items:center;justify-content:space-between}
 /* 기준 원본 `@media (max-width:980px){.sec{padding:64px 0}}` — 우리 랜딩이 접히는 폭(900px)에 맞춘다.
@@ -765,8 +767,8 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
      (히어로를 함께 적는다 — 그쪽 여백은 속성 선택자에 있어 `.lp-sec` 한 줄로는 덮이지 않는다.) */
   .lp-sec,.lp-sec[data-face="hero"]{padding:20px 0}
   .lp-sec[data-face="white"],.lp-sec[data-face="hero"]{background:none}
-  .lp-sec[data-face="ink"]{background:none;color:var(--ink)}
-  .lp-sec[data-face="ink"] .lp-sech p,.lp-sec[data-face="ink"] .lp-note{color:var(--sub)}
+  .lp-sec[data-face="brand"]{background:none;color:var(--ink)}
+  .lp-sec[data-face="brand"] .lp-sech p,.lp-sec[data-face="brand"] .lp-note{color:var(--sub)}
   /* 흰 버튼은 테두리도 흰색이다 — 배경이 사라지면 글자만 떠 있는 줄이 된다. */
   .lp-btn-ondark{border-color:var(--line-2);color:var(--ink)}
   .lp-sec[data-face="white"] .lp-card,.lp-sec[data-face="white"] .lp-panel,
