@@ -49,6 +49,17 @@ test('시크릿이 소스에 하드코딩되어 있지 않다', () => {
   }
 });
 
+/* ── AICC 웹개편 3단계: 활용 장면 사진 카드 ── */
+test('랜딩 활용 장면: 사진 3장이 실제로 있고 대체 글이 있으며 꾸밈 기호가 없다', () => {
+  const s = read('src/app/page.tsx');
+  const srcs = [...s.matchAll(/src: '(\/img\/landing\/[^']+\.webp)'/g)].map((m) => m[1]);
+  assert.equal(srcs.length, 3);
+  for (const p of srcs) assert.equal(has('public' + p), true, p);
+  assert.equal([...s.matchAll(/alt: '[^']{6,}'/g)].length, 3);
+  const block = s.slice(s.indexOf('const SCENES'), s.indexOf('const FEATURES'));
+  assert.doesNotMatch(block, /[·—→]/);
+});
+
 /* ── AI 고지 (AI기본법 §10.1) ── */
 test('랜딩에 AI 응대 고지가 있다', () => {
   assert.match(read('src/app/page.tsx'), /인공지능\(AI\)이 응대합니다/);
@@ -5194,7 +5205,7 @@ test('랜딩 섹션이 전면 띠 + 본문 폭 두 겹이고 흰 면/바탕 면�
   assert.equal(/maxWidth: 1080/.test(page), false, '섹션이 다시 인라인 본문 폭을 들고 있다');
   assert.equal(/const wrap = /.test(page), false, '인라인 wrap 상수가 되살아났다');
   const secs = [...page.matchAll(/<section[^>]*>/g)].map((m) => m[0]);
-  assert.equal(secs.length, 9, `랜딩 섹션 수가 바뀌었다: ${secs.length}`);
+  assert.equal(secs.length, 10, `랜딩 섹션 수가 바뀌었다: ${secs.length}`);
   for (const tag of secs) {
     assert.match(tag, /className="lp-sec"/, `띠 규격을 쓰지 않는 섹션이 있다: ${tag.slice(0, 80)}`);
     assert.equal(/style=\{\{/.test(tag), false, `섹션에 인라인 스타일이 남아 있다: ${tag.slice(0, 80)}`);
@@ -5202,7 +5213,7 @@ test('랜딩 섹션이 전면 띠 + 본문 폭 두 겹이고 흰 면/바탕 면�
 
   // 흰 면과 바탕 면이 **번갈아** 온다(같은 면이 이어지면 그 경계만 사라져 리듬이 깨진다).
   const faces = secs.map((t) => (t.match(/data-face="(\w+)"/) || [, 'bg'])[1]);
-  assert.deepEqual(faces, ['hero', 'white', 'bg', 'white', 'bg', 'white', 'bg', 'white', 'brand'], `면 교차가 깨졌다: ${faces.join(' ')}`);
+  assert.deepEqual(faces, ['hero', 'white', 'bg', 'white', 'bg', 'white', 'bg', 'white', 'bg', 'brand'], `면 교차가 깨졌다: ${faces.join(' ')}`);
   assert.match(css, /\.lp-sec\[data-face="white"\]\{background:var\(--surface\)\}/, '흰 면 규격이 없다');
   // 마무리는 둥근 카드가 아니라 화면을 가로지르는 띠다(기준 원본 `.band`).
   assert.match(css, /\.lp-sec\[data-face="brand"\]\{background:var\(--brand\);color:#fff\}/, '마무리 띠가 brand 바탕 전면 띠가 아니다');
@@ -5228,7 +5239,7 @@ test('랜딩 섹션 아홉 곳이 스크린리더에 이름 붙은 region 으로
   }
   // 히어로는 h1, 나머지 여덟은 h2 다(제목 단계가 한 단계씩 내려가야 목차로 읽힌다).
   assert.equal((page.match(/<h1 id="/g) || []).length, 1, '히어로 제목이 h1 하나가 아니다');
-  assert.equal((page.match(/<h2 id="/g) || []).length, 8, 'h2 로 이름을 주는 섹션 수가 바뀌었다');
+  assert.equal((page.match(/<h2 id="/g) || []).length, 9, 'h2 로 이름을 주는 섹션 수가 바뀌었다');
 
   // 메뉴가 가리키는 앵커는 **제목 블록**에 붙는다 — 띠에 붙이면 위쪽 여백(96px)이 착지점에
   // 더해져 제목이 화면 174px 아래로 내려간다(DS 10-2 의 scroll-padding 78px + 96px).
@@ -5258,7 +5269,7 @@ test('랜딩 제목 블록이 한 규격에서 오고 글자 규격이 인라인
     assert.equal(/style=\{\{/.test(tag), false, `제목 블록에 인라인 스타일이 남아 있다: ${tag.slice(0, 90)}`);
   }
   // 섹션 여덟 곳이 모두 그 블록을 쓴다(히어로만 제 제목 규격이다).
-  assert.equal((page.match(/className="lp-sech"/g) || []).length, 8, '제목 블록을 쓰는 자리 수가 바뀌었다');
+  assert.equal((page.match(/className="lp-sech"/g) || []).length, 9, '제목 블록을 쓰는 자리 수가 바뀌었다');
   assert.equal((page.match(/className="lp-sech" data-size="sm"/g) || []).length, 1, '상자 안 제목 블록(체험)이 같은 자를 쓰지 않는다');
 });
 

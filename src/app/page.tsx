@@ -76,6 +76,12 @@ const TRUST = [
   },
 ] as const;
 
+const SCENES = [
+  { src: '/img/landing/night-office.webp', alt: '야간 사무실에서 문의 화면을 확인하는 모습', title: '야간과 주말 문의', body: '상담원이 없는 시간에 들어온 문의를 먼저 받아 접수하고, 연결이 필요한 건은 다음 근무 시간에 넘깁니다.' },
+  { src: '/img/landing/ops-team.webp', alt: '운영팀이 함께 상담 현황을 보는 모습', title: '운영팀의 자료 관리', body: '자주 묻는 질문과 안내문을 운영팀이 직접 고치고, 고친 내용은 다음 답변부터 바뀝니다.' },
+  { src: '/img/landing/hero-agent.webp', alt: '헤드셋을 쓰고 고객을 응대하는 상담원', title: '상담원 전환', body: '상담원에게 넘길 때 대화 요약과 접수번호를 함께 전달해 고객이 같은 말을 되풀이하지 않습니다.' },
+] as const;
+
 const FEATURES = [
   { icon: 'library' as IconKey, title: '자료 등록만으로 시작', body: '쓰던 FAQ·안내문을 그대로 올리면 바로 답합니다. 시나리오를 하나하나 그릴 필요가 없습니다.' },
   { icon: 'checklist' as IconKey, title: '정해진 안내는 항상 같게', body: '영업시간·환불처럼 답이 정해진 문의는 규칙으로 고정해 매번 같은 문장으로 답합니다.' },
@@ -262,8 +268,29 @@ export default function Home() {
         </div>
       </section>
 
+      {/* ── 활용 장면 — 사진은 콜봇 포털과 같은 회사 자산이다. 제품 전용 사진 필요: 야간 접수 장면, 상담원 전환 장면. ── */}
+      <section className="lp-sec" aria-labelledby="scenes-h">
+        <div className="lp-wrap">
+          <div id="scenes" className="lp-sech">
+            <span className="lp-kicker">활용 장면</span>
+            <h2 id="scenes-h">문의가 몰리는 시간에 먼저 받습니다</h2>
+          </div>
+          <div className="lp-grid">
+            {SCENES.map((s) => (
+              <div key={s.title} className="lp-card lp-photo">
+                <img src={s.src} alt={s.alt} width={720} height={480} loading="lazy" decoding="async" />
+                <div>
+                  <h3 style={{ fontSize: 16, fontWeight: 800, margin: '0 0 8px', letterSpacing: '-.015em' }}>{s.title}</h3>
+                  <p style={{ fontSize: 13.5, color: 'var(--sub)', lineHeight: 1.7, margin: 0 }}>{s.body}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* ── 기능 ── */}
-      <section className="lp-sec" aria-labelledby="features-h">
+      <section className="lp-sec" data-face="white" aria-labelledby="features-h">
         <div className="lp-wrap">
           <div id="features" className="lp-sech">
             <span className="lp-kicker">기능</span>
@@ -286,7 +313,7 @@ export default function Home() {
       </section>
 
       {/* ── 채널 ── */}
-      <section className="lp-sec" data-face="white" aria-labelledby="channels-h">
+      <section className="lp-sec" aria-labelledby="channels-h">
         <div className="lp-wrap">
           <div id="channels" className="lp-sech">
             <span className="lp-kicker">채널</span>
@@ -308,7 +335,7 @@ export default function Home() {
       </section>
 
       {/* ── 도입 단계 ── */}
-      <section className="lp-sec" aria-labelledby="steps-h">
+      <section className="lp-sec" data-face="white" aria-labelledby="steps-h">
         <div className="lp-wrap">
           <div id="steps" className="lp-sech">
             <span className="lp-kicker">도입</span>
@@ -327,7 +354,7 @@ export default function Home() {
       </section>
 
       {/* ── 운영 콘솔 미리보기 ── */}
-      <section className="lp-sec" data-face="white" aria-labelledby="metrics-h">
+      <section className="lp-sec" aria-labelledby="metrics-h">
         <div className="lp-wrap">
           <div className="lp-sech">
             <span className="lp-kicker">운영</span>
@@ -351,7 +378,7 @@ export default function Home() {
       </section>
 
       {/* ── 체험 ── */}
-      <section className="lp-sec" aria-labelledby="demo-h">
+      <section className="lp-sec" data-face="white" aria-labelledby="demo-h">
         <div className="lp-wrap">
           <div id="demo" className="lp-panel lp-demo" style={{ padding: '30px 26px' }}>
             <div className="lp-sech" data-size="sm">
@@ -369,7 +396,7 @@ export default function Home() {
       </section>
 
       {/* ── FAQ ── */}
-      <section className="lp-sec" data-face="white" aria-labelledby="faq-h">
+      <section className="lp-sec" aria-labelledby="faq-h">
         <div className="lp-wrap">
           <div id="faq" className="lp-sech">
             <span className="lp-kicker">자주 묻는 질문</span>

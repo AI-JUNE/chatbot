@@ -435,6 +435,10 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 @media (max-width:420px){.lp-topcta .lp-btn{padding-left:14px;padding-right:14px}}
 .lp-hero{display:grid;grid-template-columns:minmax(320px,1fr) minmax(280px,380px);gap:44px;align-items:center}
 .lp-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(272px,1fr))}
+/* 활용 장면 사진 카드 — 콜봇 포털 사진을 쓴다. 사진은 카드 위쪽, 글은 아래. */
+.lp-photo{padding:0;overflow:hidden}
+.lp-photo img{display:block;width:100%;height:auto;aspect-ratio:3/2;object-fit:cover;background:var(--line)}
+.lp-photo > div{padding:18px 20px 22px}
 .lp-kpi{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 /* 히어로의 CTA 줄 — 기준 원본 `.cta-row`. 좁은 화면 규칙이 있어 인라인으로 적지 않는다. */
 .lp-cta{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
