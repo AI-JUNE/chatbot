@@ -14,6 +14,12 @@ test('표 머리와 배지는 sand 바탕을 쓴다', () => {
   assert.match(css, /\.ac-badge\{[^}]*background:var\(--sand\)/);
 });
 
+test('콘솔 머리줄 상태 배지에 개발자 표현이 없다', () => {
+  const page = readFileSync('src/app/admin/page.tsx', 'utf8');
+  assert.ok(!page.includes("'인증 미설정'"));
+  assert.match(page, /로그인 없이 열림/);
+});
+
 test('표 줄 높이가 넉넉하다', () => {
   assert.match(css, /\.ac-table td\{padding:13px 12px/);
 });

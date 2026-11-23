@@ -4872,7 +4872,7 @@ export default function AdminPage() {
             </span>
           </div>
           <h1 id="ac-login-title" style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-.02em', marginBottom: 6 }}>로그인</h1>
-          <p style={{ fontSize: 13.5, color: 'var(--sub)', marginBottom: 18 }}>운영자에게 받은 관리 토큰으로 콘솔을 엽니다.</p>
+          <p style={{ fontSize: 13.5, color: 'var(--sub)', marginBottom: 18 }}>운영 담당자에게 받은 관리 토큰을 입력하면 콘솔이 열립니다.</p>
           <div className="ac-field">
             <label htmlFor="ac-login-token">관리 토큰</label>
             <div className="ac-login-input">
@@ -5105,9 +5105,9 @@ export default function AdminPage() {
               <span
                 className="ac-badge"
                 data-tone={authInfo.authed ? 'on' : authInfo.tokenConfigured ? 'warn' : 'off'}
-                title={authInfo.authed ? '관리 토큰으로 로그인한 상태입니다.' : authInfo.tokenConfigured ? '로그인하면 변경 이력에 관리자 인증이 남습니다.' : '아직 관리자 인증이 설정되지 않아 누구나 열 수 있습니다.'}
+                title={authInfo.authed ? '관리 토큰으로 로그인한 상태입니다.' : authInfo.tokenConfigured ? '로그인하면 변경 이력에 관리자 인증이 남습니다.' : '로그인 절차가 아직 정해지지 않아 주소를 아는 사람은 누구나 열 수 있습니다.'}
               >
-                {authInfo.authed ? '로그인됨' : authInfo.tokenConfigured ? '로그인 전' : '인증 미설정'}
+                {authInfo.authed ? '로그인됨' : authInfo.tokenConfigured ? '로그인 전' : '로그인 없이 열림'}
               </span>
             )}
             {authInfo?.authed ? (
