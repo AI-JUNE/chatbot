@@ -3,7 +3,7 @@ import './globals.css';
 /** 링크 미리보기(카카오톡·슬랙 등)에 쓰이는 절대 주소의 기준 — robots.txt·sitemap.xml 과 같은 출처. */
 import { SITE_URL } from '@/lib/site';
 
-const TITLE = 'GOWON Chat — 자료를 근거로 답하는 상담 챗봇';
+const TITLE = 'GOWON Chat | 자료를 근거로 답하는 상담 챗봇';
 const DESCRIPTION = '등록한 안내 자료를 근거로 AI가 1차 응대하고, 확인이 필요한 문의만 상담원에게 넘기는 상담 챗봇.';
 
 /**

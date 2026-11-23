@@ -6,7 +6,7 @@ import LegalLayout from '../privacy/LegalLayout';
 import { LEGAL_UPDATED } from '@/lib/site';
 
 export const metadata: Metadata = {
-  title: '이용약관 — GOWON Chat',
+  title: '이용약관 | GOWON Chat',
   description: 'GOWON Chat 상담 챗봇 서비스 이용약관(검토 초안).',
 };
 

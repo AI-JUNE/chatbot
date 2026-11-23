@@ -3,7 +3,7 @@
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: '관리 콘솔 — GOWON Chat',
+  title: '관리 콘솔 | GOWON Chat',
   robots: { index: false, follow: false, nocache: true },
 };
 
