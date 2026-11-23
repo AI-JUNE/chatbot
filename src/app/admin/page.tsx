@@ -2462,7 +2462,7 @@ function GlobalSearch({ search, onFirstOpen }: { search: (term: string, raw: str
 
   return (
     <div className="ac-gsearch" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false); }}>
-      <label htmlFor="ac-gsearch" className="ac-srhide">전체 검색 — 대화·안내 자료·규칙·상담원 요청·고객사</label>
+      <label htmlFor="ac-gsearch" className="ac-srhide">전체 검색: 대화, 안내 자료, 규칙, 상담원 요청, 고객사</label>
       <svg className="ac-gsearch-icon" aria-hidden="true" focusable="false" width="15" height="15" viewBox="0 0 16 16" fill="none">
         <path d="M7 12.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zM11 11l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
       </svg>
@@ -5277,7 +5277,7 @@ export default function AdminPage() {
             <section style={S.card}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12 }}>
                 <h2 style={S.h2}>고객사별 현황</h2>
-                <span style={S.tag}>보관 중인 기록 기준 · 대화 많은 곳부터</span>
+                <span style={S.tag}>보관 중인 기록 기준, 대화 많은 곳부터</span>
               </div>
               <ScrollX label="고객사별 현황">
                 <table className="ac-table">
@@ -6018,7 +6018,7 @@ export default function AdminPage() {
                     <rect x="20" y="36" width="32" height="14" rx="6" strokeDasharray="3 3" />
                   </svg>
                   <p style={{ fontSize: 14, fontWeight: 700, marginTop: 8 }}>아직 만든 규칙이 없습니다</p>
-                  <p style={{ fontSize: 13, color: 'var(--sub)', marginTop: 4 }}>오른쪽에서 「고객이 쓰는 표현 → 답변」을 정하면 바로 상담창에 적용됩니다.</p>
+                  <p style={{ fontSize: 13, color: 'var(--sub)', marginTop: 4 }}>오른쪽에서 고객이 쓰는 표현과 그에 맞는 답변을 정하면 바로 상담창에 적용됩니다.</p>
                 </div>
               ) : shownCustom.length === 0 ? (
                 <div className="ac-empty">
@@ -6228,7 +6228,7 @@ export default function AdminPage() {
               {/* 미리보기: 시험 문장 → 규칙 적용 여부 + 고객에게 보일 말풍선 */}
               <div role="group" className="ac-rulepreview" aria-labelledby="ac-rule-pv">
                 <div className="ac-field" style={{ marginBottom: 8 }}>
-                  <label id="ac-rule-pv" htmlFor="cr-probe">미리보기 — 고객이 보낼 말을 적어 보세요</label>
+                  <label id="ac-rule-pv" htmlFor="cr-probe">미리보기: 고객이 보낼 말을 적어 보세요</label>
                   <input id="cr-probe" style={S.input} placeholder="예: 택배가 언제 오나요?" value={ruleProbe} onChange={(e) => setRuleProbe(e.target.value)} />
                 </div>
                 <div className="ac-pv-mini" role="log" aria-live="polite">
@@ -6824,14 +6824,14 @@ export default function AdminPage() {
                           </div>
                         </div>
                         <div className="ac-field">
-                          <label htmlFor="a-date">계약일 <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(계약 상태면 필수 · 정산 기준일)</span></label>
+                          <label htmlFor="a-date">계약일 <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(계약 상태면 필수, 정산 기준일)</span></label>
                           <input id="a-date" type="date" style={inputStyle(aErr.contractedAt)} value={aForm.contractedAt}
                             aria-invalid={aErr.contractedAt ? 'true' : undefined} aria-describedby={aErr.contractedAt ? 'a-date-err' : undefined}
                             onChange={(e) => { setAForm({ ...aForm, contractedAt: e.target.value }); if (aErr.contractedAt) setAErr({ ...aErr, contractedAt: undefined }); }} />
                           {aErr.contractedAt && <p id="a-date-err" className="ac-err">{aErr.contractedAt}</p>}
                         </div>
                         <div className="ac-field">
-                          <label htmlFor="a-fee">월 이용료(원) <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(계약서 금액 · 비우면 정산 합계에서 제외)</span></label>
+                          <label htmlFor="a-fee">월 이용료(원) <span style={{ color: 'var(--mut)', fontWeight: 500 }}>(계약서 금액, 비우면 정산 합계에서 제외)</span></label>
                           <input id="a-fee" style={inputStyle(aErr.monthlyFeeKrw)} inputMode="numeric" value={aForm.monthlyFeeKrw} placeholder="예: 300000"
                             aria-invalid={aErr.monthlyFeeKrw ? 'true' : undefined} aria-describedby={aErr.monthlyFeeKrw ? 'a-fee-err' : undefined}
                             onChange={(e) => { setAForm({ ...aForm, monthlyFeeKrw: e.target.value }); if (aErr.monthlyFeeKrw) setAErr({ ...aErr, monthlyFeeKrw: undefined }); }} />
@@ -7015,7 +7015,7 @@ export default function AdminPage() {
                   <EmptyArt kind="kb" />
                   <p style={{ fontSize: 14, fontWeight: 700 }}>{monthLabel}에 정산 대상 고객사가 없습니다</p>
                   <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>파트너 귀속 고객사를 「계약」 상태로 두고 계약일을 입력하면 그 달부터 여기에 나타납니다.</p>
-                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => goTab('partner')}>파트너·귀속 열기</button>
+                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => goTab('partner')}>파트너와 귀속 열기</button>
                 </div>
                 {/* 「왜 한 건도 없는가」 — 제외 사유를 펼쳐 둔 채로 보여 준다 (DS 57-3). */}
                 <SettleNotes notes={r.notes} open />
@@ -7268,7 +7268,7 @@ export default function AdminPage() {
               <div className="ac-toolbar">
                 <div style={{ marginRight: 4 }}>
                   <h2 id="audit-h" style={S.h2}>관리 작업 기록</h2>
-                  <p style={{ ...S.tag, marginTop: 2 }}>안내 자료·규칙 편집, 상담 요청 처리, 백업 복원 이력. 토큰 값은 기록하지 않습니다.</p>
+                  <p style={{ ...S.tag, marginTop: 2 }}>안내 자료와 규칙 편집, 상담 요청 처리, 백업 복원 이력. 토큰 값은 기록하지 않습니다.</p>
                   {/* 보여 준 수를 전부라고 말하지 않는다 (DS 48-1) — 이 표는 최근 100건만 받고,
                       서버가 든 것도 한도까지뿐이다. 옛 응답(모수 없음)에는 종전 문구를 쓴다. */}
                   <p style={{ ...S.tag, marginTop: 2 }}>

@@ -587,7 +587,7 @@ test('정산 리포트가 조건 툴바·요약 KPI·합계/근거 표·빈 상�
   assert.match(t, /이 합계는 확정 금액이 아닙니다/, '경고 문구');
   assert.equal((t.match(/<table className="ac-table">/g) || []).length, 2, '파트너별 합계·고객사별 근거 표');
   assert.match(t, /ISSUE_LABELS\[row\.issue\]/, '미산출 사유 pill');
-  assert.match(t, /정산 대상 고객사가 없습니다[\s\S]*파트너·귀속 열기/, '빈 상태 + 다음 행동');
+  assert.match(t, /정산 대상 고객사가 없습니다[\s\S]*파트너와 귀속 열기/, '빈 상태 + 다음 행동');
   assert.match(t, /role="alert"[\s\S]{0,400}다시 시도/, '오류에는 다시 시도');
   assert.match(t, /role="status" aria-live="polite"/, '계산 중 안내');
   assert.match(t, /busyBtn\(settleBusy, settleBusy/, '계산 중 버튼 잠금');
@@ -3290,7 +3290,7 @@ test('정산 대상이 0건인 달에도 제외 사유를 보여 준다 (DS 57-3
   // ③ 빈 상태에서는 **펼친 채로** 뜬다 — 접힌 요약 한 줄로는 「왜 없는가」가 보이지 않는다.
   const empty = src.slice(src.indexOf('에 정산 대상 고객사가 없습니다'), src.indexOf("{r && r.rows.length > 0 && ("));
   assert.match(empty, /<SettleNotes notes=\{r\.notes\} open \/>/, '빈 상태에서 제외 사유가 펼쳐지지 않는다');
-  assert.ok(empty.includes('파트너·귀속 열기'), '빈 상태의 다음 행동이 사라졌다');
+  assert.ok(empty.includes('파트너와 귀속 열기'), '빈 상태의 다음 행동이 사라졌다');
   // ④ 표가 있는 자리는 종전처럼 접힌 채로 둔다(그 달에는 표가 먼저 읽혀야 한다).
   assert.match(src, /\{\/\* 표가 있는 자리와 없는 자리가[^\n]*\n\s*<SettleNotes notes=\{r\.notes\} \/>/, '표 아래 주석 자리가 바뀌었다');
 });
