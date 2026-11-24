@@ -1,0 +1,11 @@
+const fs = require('fs');
+const p = 'src/app/globals.css';
+let s = fs.readFileSync(p, 'utf8');
+const before = s;
+s = s.replace(/font-weight:\s*800/g, 'font-weight:700');
+s = s.replace(/border-radius:\s*999px/g, 'border-radius:4px');
+s = s.replace(/background:rgba\(255,255,255,\.86\);backdrop-filter:blur\(10px\)/, 'background:var(--surface)');
+s = s.replace(/background:linear-gradient\(180deg,var\(--brand-50\) 0%,var\(--bg\) 62%\)/, 'background:var(--brand-50)');
+s = s.replace(/background:linear-gradient\(90deg,transparent,rgba\(255,255,255,\.65\),transparent\)/, 'background:rgba(255,255,255,.65)');
+fs.writeFileSync(p, s, 'utf8');
+console.log(before.length, s.length);

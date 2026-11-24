@@ -99,11 +99,11 @@ main:focus{outline:none}
  * 테넌트 색(--brand)이 무엇이든(이음 #BE5535) 구분되게 카드 색 테두리를 두르고,
  * 색만으로 말하지 않는다: 숫자가 곧 뜻이고, 이름은 런처의 접근 이름·.gw-srhide 가 전한다. */
 .gw-unread{position:absolute;top:-1px;right:-1px;min-width:21px;height:21px;padding:0 5px;
-  border-radius:999px;background:var(--warn);color:#fff;border:2px solid var(--surface);
-  font-size:11px;font-weight:800;line-height:17px;text-align:center;font-variant-numeric:tabular-nums}
+  border-radius:4px;background:var(--warn);color:#fff;border:2px solid var(--surface);
+  font-size:11px;font-weight:700;line-height:17px;text-align:center;font-variant-numeric:tabular-nums}
 /* 다시 열었을 때 「어디부터 새 답인가」(DS 28-3) — 양쪽으로 선을 뻗은 한 줄.
  * 글자는 테넌트 색을 따라간다(--brand-600 은 위젯이 인라인으로 덮어쓰는 계열이다). */
-.gw-newline{display:flex;align-items:center;gap:8px;margin:0;font-size:10.5px;font-weight:800;
+.gw-newline{display:flex;align-items:center;gap:8px;margin:0;font-size:10.5px;font-weight:700;
   color:var(--brand-600);letter-spacing:-.01em;white-space:nowrap}
 .gw-newline::before,.gw-newline::after{content:"";flex:1;height:1px;background:var(--line-2)}
 /* 화면에서는 감추고 스크린리더에만 남기는 글 — 콘솔의 .ac-srhide 와 같은 규격. */
@@ -125,15 +125,15 @@ main:focus{outline:none}
 .ac-shell{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:calc(100vh / var(--vz));background:var(--bg)}
 .ac-side{background:var(--surface);border-right:1px solid var(--line);padding:16px 12px;position:sticky;top:0;height:calc(100vh / var(--vz));overflow-y:auto;display:flex;flex-direction:column}
 .ac-brand{display:flex;align-items:center;gap:9px;padding:4px 8px 14px}
-.ac-logo{width:32px;height:32px;border-radius:9px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0}
+.ac-logo{width:32px;height:32px;border-radius:9px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0}
 .ac-nav{display:flex;flex-direction:column}
 .ac-navgroup{display:flex;flex-direction:column;gap:2px}
-.ac-group{font-size:10.5px;font-weight:800;letter-spacing:.08em;color:var(--mut);margin:12px 10px 5px}
+.ac-group{font-size:10.5px;font-weight:700;letter-spacing:.08em;color:var(--mut);margin:12px 10px 5px}
 .ac-navbtn{display:flex;align-items:center;gap:9px;width:100%;padding:9px 10px;border-radius:10px;font-size:13.5px;font-weight:600;color:var(--sub);text-align:left;line-height:1.25;min-height:38px}
 .ac-navbtn:hover{background:var(--bg);color:var(--ink)}
-.ac-navbtn[aria-current="page"]{background:var(--brand-50);color:var(--brand-600);font-weight:800}
+.ac-navbtn[aria-current="page"]{background:var(--brand-50);color:var(--brand-600);font-weight:700}
 /* 대기 중인 상담원 요청 수(DS 24-1) — 색만으로 말하지 않는다(숫자가 곧 뜻이고, 이름은 .ac-srhide 가 읽어 준다). */
-.ac-navcount{margin-left:auto;flex-shrink:0;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--warn);color:#fff;font-size:11px;font-weight:800;line-height:20px;text-align:center;font-variant-numeric:tabular-nums}
+.ac-navcount{margin-left:auto;flex-shrink:0;min-width:20px;height:20px;padding:0 6px;border-radius:4px;background:var(--warn);color:#fff;font-size:11px;font-weight:700;line-height:20px;text-align:center;font-variant-numeric:tabular-nums}
 .ac-top{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line);padding:0 24px;min-height:48px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .ac-crumb{display:flex;align-items:center;gap:6px;min-width:0;flex:1;font-size:12.5px;color:var(--sub)}
 .ac-crumb-sep{color:var(--mut)}
@@ -141,7 +141,7 @@ main:focus{outline:none}
 .ac-pagehead h1{font-size:20px;font-weight:700;letter-spacing:-.01em;line-height:1.3}
 .ac-pagehead p{font-size:13px;color:var(--sub);margin-top:4px}
 .ac-body{padding:20px 24px 72px;max-width:1180px}
-.ac-badge{font-size:11.5px;font-weight:700;border-radius:999px;padding:4px 10px;border:1px solid var(--line);color:var(--sub);background:var(--sand);white-space:nowrap}
+.ac-badge{font-size:11.5px;font-weight:700;border-radius:4px;padding:4px 10px;border:1px solid var(--line);color:var(--sub);background:var(--sand);white-space:nowrap}
 .ac-badge[data-tone="on"]{color:var(--success);border-color:var(--success-200);background:var(--success-50)}
 .ac-badge[data-tone="warn"]{color:var(--warn);border-color:var(--warn-200);background:var(--warn-50)}
 .ac-token{border:1px solid var(--line-2);border-radius:10px;padding:7px 11px;font-size:13px;width:180px;background:var(--bg);color:var(--ink)}
@@ -158,7 +158,7 @@ main:focus{outline:none}
 .ac-gsearch-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--mut);pointer-events:none}
 .ac-gsearch-kbd{position:absolute;right:9px;top:50%;transform:translateY(-50%);font-size:10.5px;font-weight:700;color:var(--mut);border:1px solid var(--line);border-radius:6px;padding:2px 6px;background:var(--surface);pointer-events:none;font-family:inherit;white-space:nowrap}
 .ac-gsearch-pop{position:absolute;top:calc(100% + 6px);left:0;width:min(460px,calc(100vw / var(--vz) - 32px));z-index:40;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow-pop);padding:6px;max-height:min(calc(70vh / var(--vz)),460px);overflow:auto}
-.ac-gsearch-group{font-size:10.5px;font-weight:800;letter-spacing:.08em;color:var(--mut);padding:8px 10px 4px}
+.ac-gsearch-group{font-size:10.5px;font-weight:700;letter-spacing:.08em;color:var(--mut);padding:8px 10px 4px}
 /* 「84건 중 3건」 — 보여 준 수와 찾은 수가 다르다는 사실을 머리줄에 적는다(DS 31-3). */
 .ac-gsearch-gcnt{font-weight:700;letter-spacing:0;color:var(--mut);opacity:.85}
 .ac-gsearch-opt[data-more="true"] .ac-gsearch-title{color:var(--brand-600)}
@@ -183,16 +183,16 @@ main:focus{outline:none}
 .ac-kpi{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(186px,1fr))}
 .ac-kpicard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow-card)}
 .ac-kpilabel{font-size:12.5px;font-weight:700;color:var(--sub)}
-.ac-kpivalue{font-size:30px;font-weight:800;letter-spacing:-.03em;line-height:1.15;margin-top:6px;color:var(--ink)}
+.ac-kpivalue{font-size:30px;font-weight:700;letter-spacing:-.03em;line-height:1.15;margin-top:6px;color:var(--ink)}
 .ac-kpivalue[data-empty="true"]{font-size:17px;color:var(--mut);letter-spacing:0}
 .ac-kpinote{font-size:11.5px;color:var(--mut);margin-top:5px}
-.ac-pill{display:inline-block;font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;background:var(--brand-50);color:var(--brand-600)}
+.ac-pill{display:inline-block;font-size:11px;font-weight:700;border-radius:4px;padding:2px 8px;background:var(--brand-50);color:var(--brand-600)}
 /* 가로로 넘치는 영역(표·코드 블록) — 넘침을 화면 밖이 아니라 이 상자 안에 가둔다(DS 9-1).
    넘치는 동안에는 tabindex 가 붙어 키보드로도 스크롤할 수 있다(초점 테두리를 반드시 보인다). */
 .ac-scrollx{overflow-x:auto;overscroll-behavior-x:contain}
 .ac-scrollx:focus-visible{outline:2px solid var(--brand);outline-offset:-2px;border-radius:var(--r-sm)}
 .ac-table{width:100%;border-collapse:collapse;font-size:13px}
-.ac-table th{font-size:11.5px;font-weight:800;letter-spacing:.04em;color:var(--mut);text-align:left;padding:11px 12px;background:var(--sand);border-bottom:1px solid var(--line);white-space:nowrap}
+.ac-table th{font-size:11.5px;font-weight:700;letter-spacing:.04em;color:var(--mut);text-align:left;padding:11px 12px;background:var(--sand);border-bottom:1px solid var(--line);white-space:nowrap}
 .ac-table th:first-child{border-top-left-radius:var(--r-sm)}
 .ac-table th:last-child{border-top-right-radius:var(--r-sm)}
 .ac-table td{padding:13px 12px;border-bottom:1px solid var(--line);color:var(--ink);vertical-align:top}
@@ -253,7 +253,7 @@ main:focus{outline:none}
    스크린리더에는 .ac-srhide 문장 하나만 읽힌다(막대는 aria-hidden). */
 @keyframes ac-shimmer{to{transform:translateX(100%)}}
 .ac-skel{display:block;position:relative;overflow:hidden;background:var(--line);border-radius:7px;min-height:10px}
-.ac-skel::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(255,255,255,.65),transparent);animation:ac-shimmer 1.4s ease-in-out infinite}
+.ac-skel::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:rgba(255,255,255,.65);animation:ac-shimmer 1.4s ease-in-out infinite}
 .ac-skelrows{display:flex;flex-direction:column;gap:12px;padding:16px}
 .ac-skelrow{display:flex;gap:12px;align-items:center}
 .ac-skelchart{display:flex;align-items:flex-end;gap:10px;height:140px;padding:8px 4px 0}
@@ -302,7 +302,7 @@ main:focus{outline:none}
 .ac-turn{margin-bottom:14px}
 .ac-bubble{max-width:88%;border-radius:14px;padding:9px 12px;font-size:13.5px;line-height:1.55}
 .ac-bubble p{white-space:pre-wrap;word-break:break-word}
-.ac-bubble-who{display:block;font-size:10.5px;font-weight:800;letter-spacing:.04em;color:var(--mut);margin-bottom:2px}
+.ac-bubble-who{display:block;font-size:10.5px;font-weight:700;letter-spacing:.04em;color:var(--mut);margin-bottom:2px}
 .ac-bubble-user{margin-left:auto;background:var(--brand);color:#fff;border-bottom-right-radius:4px}
 .ac-bubble-user .ac-bubble-who{color:rgba(255,255,255,.8)}
 .ac-bubble-bot{background:var(--surface);border:1px solid var(--line);border-bottom-left-radius:4px;margin-top:6px}
@@ -316,8 +316,8 @@ main:focus{outline:none}
 .ac-dl dd{color:var(--ink);margin:0;min-width:0;word-break:break-word}
 .ac-preview{border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--shadow-card);background:var(--surface)}
 .ac-preview-head{display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--brand);color:#fff}
-.ac-preview-avatar{width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.22);display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;flex-shrink:0}
-.ac-preview-ai{font-size:10.5px;font-weight:700;background:rgba(255,255,255,.18);border-radius:999px;padding:3px 8px;white-space:nowrap}
+.ac-preview-avatar{width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.22);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex-shrink:0}
+.ac-preview-ai{font-size:10.5px;font-weight:700;background:rgba(255,255,255,.18);border-radius:4px;padding:3px 8px;white-space:nowrap}
 /* 대화 목록 높이는 420px 가 기본이지만, 카드 전체(헤더 58 + 각주 44)가 스티키 높이를 넘으면
  * 아래쪽이 잘린다 — 화면이 낮을 때는 화면에 맞춰 줄인다(DS 26-3). 초점을 받으면 키보드로도
  * 스크롤할 수 있다(DS 26-2 — 말풍선뿐인 상자에는 초점 받을 것이 없다). */
@@ -335,26 +335,26 @@ main:focus{outline:none}
 .ac-rulecard[data-editing="true"]{background:var(--brand-50)}
 .ac-rulecard[data-off="true"] .ac-ruleflow{opacity:.55}
 .ac-rulehead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
-.ac-rulename{font-size:14px;font-weight:800;color:var(--ink);margin-right:auto}
+.ac-rulename{font-size:14px;font-weight:700;color:var(--ink);margin-right:auto}
 .ac-ruleflow{display:grid;grid-template-columns:minmax(0,1fr) 24px minmax(0,1.2fr);gap:10px;align-items:start}
 .ac-rulecond,.ac-rulereply{min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
 .ac-rulereply{background:var(--surface)}
-.ac-rulekey{display:block;font-size:11px;font-weight:800;letter-spacing:.04em;color:var(--mut);margin-bottom:6px}
+.ac-rulekey{display:block;font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--mut);margin-bottom:6px}
 .ac-rulereply p{font-size:13.5px;line-height:1.5;color:var(--ink);white-space:pre-wrap;word-break:break-word}
-.ac-rulearrow{align-self:center;text-align:center;color:var(--brand);font-weight:800;font-size:18px}
+.ac-rulearrow{align-self:center;text-align:center;color:var(--brand);font-weight:700;font-size:18px}
 .ac-rulereply-input{width:100%;border:1px solid var(--line-2);border-radius:10px;padding:7px 10px;font-size:13.5px;line-height:1.5;font-family:inherit;color:var(--ink);background:var(--surface);resize:vertical}
 .ac-rulehint{font-size:11.5px;color:var(--mut);margin-top:4px;font-weight:500}
 .ac-ruleactions{display:flex;gap:4px;margin-top:8px;justify-content:flex-end}
 .ac-chips{display:flex;flex-wrap:wrap;gap:5px}
-.ac-chip{display:inline-block;font-size:12px;font-weight:700;border-radius:999px;padding:3px 9px;background:var(--surface);border:1px solid var(--line-2);color:var(--sub)}
+.ac-chip{display:inline-block;font-size:12px;font-weight:700;border-radius:4px;padding:3px 9px;background:var(--surface);border:1px solid var(--line-2);color:var(--sub)}
 .ac-chip[data-hit="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
-.ac-switch{position:relative;width:38px;height:22px;border-radius:999px;background:var(--line-2);flex-shrink:0;transition:background .15s}
+.ac-switch{position:relative;width:38px;height:22px;border-radius:4px;background:var(--line-2);flex-shrink:0;transition:background .15s}
 .ac-switch[aria-checked="true"]{background:var(--success)}
 .ac-switch:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 .ac-switch-knob{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.25);transition:transform .15s}
 .ac-switch[aria-checked="true"] .ac-switch-knob{transform:translateX(16px)}
 .ac-step{display:flex;gap:10px;align-items:flex-start;margin-bottom:12px}
-.ac-stepno{width:22px;height:22px;border-radius:50%;background:var(--brand);color:#fff;font-size:11.5px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.ac-stepno{width:22px;height:22px;border-radius:50%;background:var(--brand);color:#fff;font-size:11.5px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
 .ac-check{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:var(--ink);margin-top:8px;cursor:pointer}
 .ac-check input{margin-top:3px;flex-shrink:0}
 .ac-rulepreview{margin-top:4px;padding-top:12px;border-top:1px dashed var(--line)}
@@ -369,7 +369,7 @@ main:focus{outline:none}
 .ac-nscard[data-health="awaiting_approval"],.ac-nscard[data-health="disabled"]{border-color:var(--warn-200);background:var(--warn-50)}
 .ac-statgrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:12px}
 .ac-stat{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--bg);min-width:0}
-.ac-statlabel{font-size:11.5px;font-weight:800;letter-spacing:.04em;color:var(--mut)}
+.ac-statlabel{font-size:11.5px;font-weight:700;letter-spacing:.04em;color:var(--mut)}
 
 /* 파트너·귀속 · 정산 리포트 */
 .ac-seg{display:inline-flex;padding:3px;border-radius:10px;background:var(--bg);border:1px solid var(--line)}
@@ -482,7 +482,7 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 .lp-wrap,.lg-wrap{max-width:1080px;margin:0 auto;padding:0 22px}
 /* 두 공개 화면(랜딩·약관)의 상단바·푸터는 **같은 규격 한 벌**을 본다. 랜딩 쪽은 종전에 인라인이었고
  * 그래서 인쇄 규칙이 스티키 배치를 이기지 못했다(미디어 쿼리는 인라인을 덮지 못한다 — DS 13-2). */
-.lp-top,.lg-top{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.lp-top,.lg-top{position:sticky;top:0;z-index:20;background:var(--surface);border-bottom:1px solid var(--line)}
 .lp-foot,.lg-foot{border-top:1px solid var(--line);background:var(--surface)}
 /* 푸터 안쪽 — 기준 원본 `footer{padding:44px 0 56px;font-size:13.5px;line-height:1.85}`.
  * 종전에는 26px/12.5px 가운데 정렬 한 줄이었다(링크 둘 + 고지 한 줄). */
@@ -490,13 +490,13 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 /* 기준 원본 `.foot{grid-template-columns:1.4fr 1fr 1fr 1fr}` — 좁은 화면에서는 2단(아래 규칙). */
 .lp-footgrid{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:24px}
 .lp-footbrand{display:inline-flex;align-items:center;gap:9px;min-height:44px;
-  font-weight:800;font-size:16px;letter-spacing:-.02em;color:var(--ink)}
+  font-weight:700;font-size:16px;letter-spacing:-.02em;color:var(--ink)}
 .lp-footabout{margin-top:4px;max-width:34em}
 .lp-footmail{color:var(--brand-600);font-weight:600;word-break:break-all}
 /* 묶음 제목 — 기준 원본 `.foot h4{font-size:14px;color:var(--ink)}`. 제목 요소가 아니라 문단이다:
  * 랜딩의 제목 단계(h1 하나 + 섹션 h2 여덟)에 푸터 묶음 셋을 끼워 넣지 않는다. 대신 이 글이
  * 묶음(nav)의 **접근 이름**이 된다(`aria-labelledby` — 이름을 따로 적으면 같은 말이 두 번 읽힌다). */
-.lp-foottitle{font-size:14px;font-weight:800;color:var(--ink);margin-bottom:2px}
+.lp-foottitle{font-size:14px;font-weight:700;color:var(--ink);margin-bottom:2px}
 .lp-footcol{display:flex;flex-direction:column}
 .lp-footbot{margin-top:28px;padding-top:20px;border-top:1px solid var(--line);
   display:flex;justify-content:space-between;gap:8px 24px;flex-wrap:wrap}
@@ -508,7 +508,7 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 
 .lp-sec{padding:96px 0}
 .lp-sec[data-face="white"]{background:var(--surface)}
-.lp-sec[data-face="hero"]{background:linear-gradient(180deg,var(--brand-50) 0%,var(--bg) 62%);padding:64px 0 56px}
+.lp-sec[data-face="hero"]{background:var(--brand-50);padding:64px 0 56px}
 /* 마무리 띠 — 기준 원본 `.band`. 종전에는 바탕 면 위에 둥근 어두운 **카드**가 떠 있어, 375px 에서는
  * 좌우 22px 이 뚫린 광고 배너처럼 보였다(기준 원본의 마무리는 화면을 가로지르는 전면 띠다). */
 .lp-sec[data-face="brand"]{background:var(--brand);color:#fff}
@@ -521,12 +521,12 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 .lp-sec[data-face="white"] .lp-stat{background:var(--surface)}
 .lp-stat{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:16px}
 .lp-stat span{display:block;font-size:12.5px;font-weight:700;color:var(--sub)}
-.lp-stat b{display:block;font-size:26px;font-weight:800;color:var(--mut);margin-top:6px;letter-spacing:-.02em}
+.lp-stat b{display:block;font-size:26px;font-weight:700;color:var(--mut);margin-top:6px;letter-spacing:-.02em}
 
 /* 섹션 제목 블록 — 기준 원본 `.sec-h`(폭 680 · 아래 36). 종전에는 자리마다 달랐다:
  * 리드 폭 620·640·없음, 제목 아래 간격 24·26·30px. 한 벌에서 온다. */
 .lp-sech{max-width:680px;margin-bottom:36px}
-.lp-sech h2{font-size:clamp(23px,3.4vw,32px);font-weight:800;letter-spacing:-.025em;line-height:1.3;margin:10px 0 0}
+.lp-sech h2{font-size:clamp(23px,3.4vw,32px);font-weight:700;letter-spacing:-.025em;line-height:1.3;margin:10px 0 0}
 .lp-sech p{font-size:15.5px;color:var(--sub);line-height:1.7;margin:10px 0 0}
 /* 상자 안에 든 제목 블록(체험 패널) — 같은 자를 쓰고 폭·크기만 한 단 내린다. */
 .lp-sech[data-size="sm"]{max-width:560px;margin-bottom:0}
@@ -535,7 +535,7 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
 .lp-sec[data-face="brand"] .lp-sech{max-width:620px;margin:0 auto 26px}
 .lp-sec[data-face="brand"] .lp-sech p{color:var(--on-brand-mut)}
 /* 섹션 이름표 — 약관·방침 제목 위의 이름표와 같은 규격이다(두 공개 화면이 한 자를 본다). */
-.lp-kicker,.lg-eyebrow{display:block;font-size:12.5px;font-weight:800;letter-spacing:.06em;
+.lp-kicker,.lg-eyebrow{display:block;font-size:12.5px;font-weight:700;letter-spacing:.06em;
   color:var(--brand-600);text-transform:uppercase}
 /* 히어로의 리드문 — 섹션 리드(`.lp-sech p`)보다 한 단 크다(기준 원본 `.lead`). */
 .lp-lead{font-size:17px;color:var(--sub);line-height:1.7;max-width:520px}
@@ -599,7 +599,7 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
  * 중립 칩은 바탕 면 색이 아니라 흰색이다 — 흰 면의 카드가 `--bg` 를 입으므로(DS 82-1 짝바꿈),
  * 칩까지 `--bg` 면 카드와 한 색이 되어 칩의 경계가 사라진다. */
 .lp-st{display:inline-flex;align-items:center;font-size:11.5px;font-weight:700;line-height:1.45;
-  border-radius:999px;padding:5px 11px;border:1px solid var(--line-2);background:var(--surface);color:var(--sub)}
+  border-radius:4px;padding:5px 11px;border:1px solid var(--line-2);background:var(--surface);color:var(--sub)}
 .lp-st[data-tone="on"]{border-color:var(--success-200);background:var(--success-50);color:var(--success)}
 .lp-st[data-tone="wait"]{border-color:var(--warn-200);background:var(--warn-50);color:var(--warn)}
 
@@ -635,24 +635,24 @@ body[data-view-scale="big"] .ac-login{zoom:1.13}
  * (종전에는 이 버튼만 38px·라운드 10 이어서 두 공개 화면의 상단바가 미묘하게 달랐다.) */
 .lg-main{flex:1;display:grid;grid-template-columns:220px minmax(0,760px);gap:28px;align-items:start;padding-top:40px;padding-bottom:72px}
 .lg-toc{position:sticky;top:78px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 14px;box-shadow:var(--shadow-card)}
-.lg-toc-title{font-size:11.5px;font-weight:800;letter-spacing:.08em;color:var(--mut);margin:0 6px 8px}
+.lg-toc-title{font-size:11.5px;font-weight:700;letter-spacing:.08em;color:var(--mut);margin:0 6px 8px}
 .lg-toc-list{list-style:none;display:flex;flex-direction:column;gap:2px}
 .lg-toc-list a{display:block;font-size:13px;font-weight:600;color:var(--sub);padding:7px 8px;border-radius:8px;line-height:1.35}
 .lg-toc-list a:hover{background:var(--bg);color:var(--ink)}
 .lg-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow-card);padding:36px 40px 44px}
-.lg-title{font-size:clamp(24px,3.4vw,32px);font-weight:800;letter-spacing:-.025em;line-height:1.25;margin:8px 0 14px}
+.lg-title{font-size:clamp(24px,3.4vw,32px);font-weight:700;letter-spacing:-.025em;line-height:1.25;margin:8px 0 14px}
 .lg-meta{display:flex;flex-wrap:wrap;gap:6px}
-.lg-pill{font-size:11.5px;font-weight:700;border-radius:999px;padding:4px 10px;border:1px solid var(--line);color:var(--sub);background:var(--bg);line-height:1.4}
+.lg-pill{font-size:11.5px;font-weight:700;border-radius:4px;padding:4px 10px;border:1px solid var(--line);color:var(--sub);background:var(--bg);line-height:1.4}
 .lg-pill[data-tone="warn"]{color:var(--warn);border-color:var(--warn-200);background:var(--warn-50)}
 .legal-notice{display:flex;gap:9px;margin:18px 0 0;padding:13px 15px;border-radius:var(--r-sm);font-size:13.5px;line-height:1.65;background:var(--warn-50);border:1px solid var(--warn-200);color:var(--warn)}
 .legal-body{margin-top:26px;font-size:14.5px;line-height:1.75;color:var(--ink)}
-.legal-body h2{font-size:16.5px;font-weight:800;margin:28px 0 8px;letter-spacing:-.01em}
+.legal-body h2{font-size:16.5px;font-weight:700;margin:28px 0 8px;letter-spacing:-.01em}
 .legal-body h2:first-child{margin-top:0}
 .legal-body p{margin:0 0 10px;color:var(--sub)}
 .legal-body a{color:var(--brand-600);font-weight:600}
 .legal-body ul{margin:0 0 10px;padding-left:18px;color:var(--sub)}
 .legal-body li{margin:0 0 4px}
-.todo{font-weight:800;color:var(--warn);background:var(--warn-50);border:1px solid var(--warn-200);border-radius:5px;padding:0 5px;font-size:.93em;white-space:nowrap}
+.todo{font-weight:700;color:var(--warn);background:var(--warn-50);border:1px solid var(--warn-200);border-radius:5px;padding:0 5px;font-size:.93em;white-space:nowrap}
 @media (max-width:900px){
   .lg-main{grid-template-columns:minmax(0,1fr);gap:16px;padding-top:20px;padding-bottom:56px}
   .lg-toc{position:static;padding:12px 10px}
