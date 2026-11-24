@@ -5024,6 +5024,7 @@ export default function AdminPage() {
   };
 
   const currentLabel = TAB_LABEL[tab] ?? '대시보드';
+  const currentGroup = TAB_GROUPS.find((g) => g.tabs.some(([k]) => k === tab))?.group ?? '운영';
 
   // 테넌트 FAQ·감사 로그 표는 탭 본문이 IIFE 가 아니라 여기서 한 장을 만든다(그릴 때 쓰는 값은 같다).
   const tenantFaqView = tableView('tenantFaq', tenantView?.faq ?? [], {
@@ -5079,10 +5080,11 @@ export default function AdminPage() {
       <div style={{ minWidth: 0 }}>
         {/* ── 상단 헤더: 현재 화면 · 인증 상태 · 관리 토큰 ── */}
         <header className="ac-top">
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <h1 style={{ fontSize: 19, fontWeight: 800, letterSpacing: '-.02em' }}>{currentLabel}</h1>
-            <p style={{ fontSize: 12.5, color: 'var(--sub)', marginTop: 2 }}>{TAB_DESC[tab]}</p>
-          </div>
+          <nav className="ac-crumb" aria-label="현재 위치">
+            <span>관리 콘솔</span>
+            <span aria-hidden="true" className="ac-crumb-sep">/</span>
+            <span>{currentGroup}</span>
+          </nav>
           <GlobalSearch
             search={searchAll}
             // 고객사·파트너는 탭을 열기 전엔 비어 있으므로, 검색을 처음 열 때 한 번 채운다
@@ -5137,6 +5139,10 @@ export default function AdminPage() {
         )}
 
         <main id="ac-main" ref={mainRef} tabIndex={-1} aria-label={currentLabel} className="ac-body">
+      <div className="ac-pagehead">
+        <h1>{currentLabel}</h1>
+        <p>{TAB_DESC[tab]}</p>
+      </div>
       {tab === 'dash' && (
         <>
           <section style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>

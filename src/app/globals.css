@@ -122,7 +122,7 @@ main:focus{outline:none}
 /* ── 관리 콘솔 셸 (AICC Portal admin 셸 규격) ──
    넓은 화면: 좌측 사이드바 + 스티키 헤더 + 본문.
    좁은 화면(≤900px): 사이드바가 상단 가로 스크롤 메뉴로 접힌다(그룹 제목은 감춘다). */
-.ac-shell{display:grid;grid-template-columns:236px minmax(0,1fr);min-height:calc(100vh / var(--vz));background:var(--bg)}
+.ac-shell{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:calc(100vh / var(--vz));background:var(--bg)}
 .ac-side{background:var(--surface);border-right:1px solid var(--line);padding:16px 12px;position:sticky;top:0;height:calc(100vh / var(--vz));overflow-y:auto;display:flex;flex-direction:column}
 .ac-brand{display:flex;align-items:center;gap:9px;padding:4px 8px 14px}
 .ac-logo{width:32px;height:32px;border-radius:9px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0}
@@ -134,7 +134,12 @@ main:focus{outline:none}
 .ac-navbtn[aria-current="page"]{background:var(--brand-50);color:var(--brand-600);font-weight:800}
 /* 대기 중인 상담원 요청 수(DS 24-1) — 색만으로 말하지 않는다(숫자가 곧 뜻이고, 이름은 .ac-srhide 가 읽어 준다). */
 .ac-navcount{margin-left:auto;flex-shrink:0;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--warn);color:#fff;font-size:11px;font-weight:800;line-height:20px;text-align:center;font-variant-numeric:tabular-nums}
-.ac-top{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line);padding:14px 24px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ac-top{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line);padding:0 24px;min-height:48px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ac-crumb{display:flex;align-items:center;gap:6px;min-width:0;flex:1;font-size:12.5px;color:var(--sub)}
+.ac-crumb-sep{color:var(--mut)}
+.ac-pagehead{margin-bottom:16px}
+.ac-pagehead h1{font-size:20px;font-weight:700;letter-spacing:-.01em;line-height:1.3}
+.ac-pagehead p{font-size:13px;color:var(--sub);margin-top:4px}
 .ac-body{padding:20px 24px 72px;max-width:1180px}
 .ac-badge{font-size:11.5px;font-weight:700;border-radius:999px;padding:4px 10px;border:1px solid var(--line);color:var(--sub);background:var(--sand);white-space:nowrap}
 .ac-badge[data-tone="on"]{color:var(--success);border-color:var(--success-200);background:var(--success-50)}

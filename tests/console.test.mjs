@@ -259,7 +259,7 @@ test('콘솔 화면에 내부 구현 문구·미완성 값이 노출되지 않�
 
 test('콘솔 셸이 375px 화면에서 접히도록 반응형 규칙을 갖춘다', opts, () => {
   const css = readFileSync(new URL('../src/app/globals.css', import.meta.url), 'utf8');
-  assert.match(css, /\.ac-shell\{[^}]*grid-template-columns:236px/, '넓은 화면은 사이드바 고정폭');
+  assert.match(css, /\.ac-shell\{[^}]*grid-template-columns:240px/, '넓은 화면은 사이드바 고정폭');
   const mobile = css.slice(css.indexOf('@media (max-width:900px){'));
   assert.match(mobile, /\.ac-shell\{grid-template-columns:minmax\(0,1fr\)\}/, '좁은 화면에서는 한 단으로 접혀야 한다');
   assert.match(mobile, /\.ac-navgroup\{display:contents\}/, '메뉴가 가로 한 줄로 흘러야 한다');
