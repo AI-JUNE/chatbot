@@ -1,0 +1,38 @@
+/* 이 저장소의 단일 색 출처. 원본 gowon-ds.css 의 :root 토큰 블록만 그대로 옮겼다(컴포넌트 규칙은 .gw-panel 등이
+   위젯의 기존 클래스와 이름이 겹쳐 가져오지 않는다. 컴포넌트는 콘솔 골격 단계에서 --gw-* 토큰으로 새로 쓴다).
+   아래 값을 바꾸려면 원본과 기준서를 먼저 바꾼다.
+   GOWON 디자인 시스템 v1.0 (2026-11-23) 토큰과 기본 컴포넌트.
+   기준 문서: _자동개발/prompts/_GOWON_디자인시스템_v1.0.md. 이 파일과 문서 값은 항상 같아야 한다.
+   서비스 전용 값은 --svc-* 로 따로 두고 아래 공통 토큰을 덮어쓰지 않는다. 다크 모드는 v1.1 에서 의미 토큰만 다시 정의한다. */
+:root{
+  /* 중립 */
+  --gw-n0:#FFFFFF; --gw-n50:#F7F8F9; --gw-n100:#F1F2F4; --gw-n200:#DCDFE4; --gw-n300:#B3B9C4;
+  --gw-n600:#626F86; --gw-n700:#44546F; --gw-n900:#172B4D;
+  /* 주색 */
+  --gw-blue-600:#0C66E4; --gw-blue-700:#0055CC; --gw-blue-50:#E9F2FF;
+  /* 상태 (글자 / 바탕) */
+  --gw-success:#216E4E; --gw-success-bg:#DCFFF1;
+  --gw-warning:#7F5F01; --gw-warning-bg:#FFF7D6;
+  --gw-danger:#AE2E24;  --gw-danger-bg:#FFECEB; --gw-danger-solid:#C9372C;
+  --gw-info:#0055CC;    --gw-info-bg:#E9F2FF;
+  --gw-discovery:#5E4DB2; --gw-discovery-bg:#F3F0FF;
+  /* 의미 토큰: 컴포넌트는 이것만 쓴다 */
+  --gw-text:var(--gw-n900); --gw-text-subtle:var(--gw-n700); --gw-text-subtlest:var(--gw-n600);
+  --gw-surface:var(--gw-n0); --gw-surface-sunken:var(--gw-n50); --gw-surface-hover:var(--gw-n100);
+  --gw-surface-selected:var(--gw-blue-50);
+  --gw-border:rgba(9,30,66,.14); --gw-border-strong:rgba(9,30,66,.31); --gw-border-focus:#388BFF;
+  --gw-link:var(--gw-blue-600);
+  /* 글자 */
+  --gw-font:"Pretendard Variable",Pretendard,"Noto Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  --gw-fs-sm:12px; --gw-lh-sm:16px; --gw-fs-md:14px; --gw-lh-md:20px; --gw-fs-lg:16px; --gw-lh-lg:24px;
+  --gw-fs-h3:16px; --gw-fs-h2:20px; --gw-fs-h1:24px;
+  /* 모서리, 그림자, 움직임 */
+  --gw-r-sm:3px; --gw-r-md:4px; --gw-r-lg:8px;
+  --gw-shadow-raised:0 1px 1px rgba(9,30,66,.25),0 0 1px rgba(9,30,66,.31);
+  --gw-shadow-overlay:0 8px 12px rgba(9,30,66,.15),0 0 1px rgba(9,30,66,.31);
+  --gw-ease:cubic-bezier(.15,1,.3,1); --gw-t-fast:100ms; --gw-t-med:200ms;
+  /* 골격 */
+  --gw-ctrl-h:32px; --gw-row-h:40px; --gw-topbar-h:48px; --gw-sidebar-w:240px; --gw-sidebar-w-collapsed:56px;
+  --gw-content-max:1280px; --gw-panel-w:440px;
+}
+@media (prefers-reduced-motion:reduce){:root{--gw-t-fast:0ms;--gw-t-med:0ms}}

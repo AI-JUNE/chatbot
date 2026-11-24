@@ -18,19 +18,19 @@ import BrandMark from './BrandMark';
  * 테스트가 `globals.css` 의 `:root` 를 실제로 파싱해 이 표와 대조한다(값이 갈라지면 실패).
  */
 export const SYSTEM_TOKENS = {
-  '--bg': '#F7F8FA',
+  '--bg': '#F7F8F9',
   '--surface': '#FFFFFF',
-  '--line': '#E5E8EB',
-  '--ink': '#191F28',
-  '--sub': '#4E5968',
-  '--mut': '#5F6B78',
-  '--brand': '#2457C5',
-  '--brand-600': '#1C459E',
-  '--brand-50': '#EEF3FC',
-  '--r-sm': '10px',
-  '--r-lg': '18px',
-  '--shadow-card': '0 1px 2px rgba(25,31,40,.04), 0 8px 24px -18px rgba(25,31,40,.35)',
-  '--font': "'Pretendard Variable',Pretendard,-apple-system,system-ui,'Malgun Gothic',sans-serif",
+  '--line': '#DCDFE4',
+  '--ink': '#172B4D',
+  '--sub': '#44546F',
+  '--mut': '#5B687F',
+  '--brand': '#0C66E4',
+  '--brand-600': '#0055CC',
+  '--brand-50': '#E9F2FF',
+  '--r-sm': '4px',
+  '--r-lg': '8px',
+  '--shadow-card': '0 1px 1px rgba(9,30,66,.25),0 0 1px rgba(9,30,66,.31)',
+  '--font': '"Pretendard Variable",Pretendard,"Noto Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif',
 } as CSSProperties;
 
 export type SystemAction =

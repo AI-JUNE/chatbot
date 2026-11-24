@@ -8,25 +8,29 @@
    * 그 화면은 고객사 사이트 위의 상담창이기도 하다 — 「AICC Portal 옆에 두었을 때 같은 회사
    * 제품으로 보이는가」가 우리가 손대지 않은 곳에서 깨진다. 폼 컨트롤·스크롤바도 여기에 맞춰진다. */
   color-scheme:light;
-  --bg:#F7F8FA; --surface:#FFFFFF; --line:#E5E8EB; --line-2:#D1D6DB; --sand:#F1F3F6;
-  --ink:#191F28; --sub:#4E5968; --mut:#5F6B78;
+  /* 색 값은 gowon-tokens.css(--gw-*)가 유일한 출처다. 아래는 기존 화면이 쓰는 이름을 그 토큰으로 잇는 별칭이다. */
+  --bg:var(--gw-n50); --surface:var(--gw-n0); --line:var(--gw-n200); --line-2:var(--gw-n200); --sand:var(--gw-n100);
+  --ink:var(--gw-n900); --sub:var(--gw-n700); --mut:var(--svc-mut);
+  /* 서비스 전용 값(--svc-*, 공통 토큰은 덮어쓰지 않는다): --gw-n600 은 흰 바탕 5.0:1 이지만 선택·위험 틴트 바탕에서는
+   * 4.46~4.50:1 로 AA 에 못 미친다. 틴트 위에 얹는 보조 문구가 이 제품에 있어 n600 과 n700 사이로 한 단 내렸다. */
+  --svc-mut:#5B687F;
   /* 어두운 배경(--ink) 위 보조 문구 — --mut 의 짝. --mut 는 밝은 면(surface·bg·틴트)에서
    * 4.5:1 을 넘기려고 어둡게 잡았으므로 어두운 면 위에서는 이 토큰을 쓴다. */
   --mut-on-ink:#94A3B8;
-  /* brand 바탕 마무리 띠 위 보조 문구(콜봇 포털 규격: 흰 글자). #2457C5 위 5:1 이상. */
-  --on-brand-mut:#DEE6F6;
-  --brand:#2457C5; --brand-600:#1C459E; --brand-50:#EEF3FC;
+  /* brand 바탕 마무리 띠 위 보조 문구(흰 글자). #0C66E4 위 4.5:1 이상. */
+  --on-brand-mut:#FFFFFF;
+  --brand:var(--gw-blue-600); --brand-600:var(--gw-blue-700); --brand-50:var(--gw-blue-50);
   /* 손을 올린 카드의 테두리 틴트 — 기준 원본(`index.html` 의 `.pr:hover`·`.fc:hover`)이 쓰는 자리를
    * 이 저장소의 브랜드 계열(50·200·600) 안에서 고른 값이다. 이 색은 **무엇을 말하지 않는다**
    * (손을 올렸다는 사실은 테두리·그림자·2px 리프트가 함께 말하고, 누를 수 있다는 사실은 커서와
    * 초점 테두리가 말한다) — 그래서 글자 대비 기준을 따로 세우지 않는다. */
-  --brand-200:#C3D3F0;
+  --brand-200:#B3D0F7;
   /* 상태 본문색 — 상태 칩·배너·오류 문구가 글자색으로 쓴다. Tailwind 기본값(500~600)은
    * 밝은 면에서 3:1 안팎이라 AA(4.5:1)에 못 미친다 — DS 10-1 과 같은 기준으로 한 단 내렸다.
    * 밝은 면 6종(surface·bg·brand-50·success-50·warn-50·danger-50) 전부에서 최소 4.59:1. */
-  --success:#3C764C; --warn:#99610E; --danger:#C42121;
+  --success:var(--gw-success); --warn:var(--gw-warning); --danger:var(--gw-danger);
   /* 상태 배경 틴트 — 상태 칩·배너가 쓴다. 본문색(--success/--warn/--danger)과 짝이다. */
-  --success-50:#F0FDF4; --warn-50:#FFFBEB; --danger-50:#FEF2F2;
+  --success-50:var(--gw-success-bg); --warn-50:var(--gw-warning-bg); --danger-50:var(--gw-danger-bg);
   /* 같은 계열의 테두리 — 틴트 배경 위에 얹는 경고·오류 배너가 쓴다(배경보다 한 단 진하다). */
   --success-200:#BBF7D0; --warn-200:#FDE68A; --danger-200:#FECACA;
   /* 짙은 면(--ink·--danger) 위에 얹는 윤곽·눌림 — 바탕색을 모르는 채로 한 단 밝게 한다.
@@ -38,13 +42,12 @@
    * 그래서 뷰포트 단위를 쓰는 자리는 이 값으로 **먼저 나눠 둔다**(1 일 때는 아무 일도 없다).
    * 배율을 바꿀 때 두 값이 갈라지면 안 되므로 테스트가 짝을 고정한다. */
   --vz:1;
-  --r:16px; --r-sm:10px; --r-lg:18px;
-  --shadow-card:0 1px 2px rgba(25,31,40,.04), 0 8px 24px -18px rgba(25,31,40,.35);
-  --shadow-pop:0 10px 15px -3px rgba(15,23,42,.08), 0 30px 60px -30px rgba(15,23,42,.45);
-  /* 손을 올린 카드가 떠오를 때의 그림자 — 기준 원본의 `0 14px 32px -22px rgba(36,87,197,.35)` 를
-   * 이 저장소의 브랜드색(36,87,197)으로 옮겼다(중성 회색인 --shadow-card 와 달리 브랜드 쪽으로 번진다). */
-  --shadow-lift:0 14px 32px -22px rgba(36,87,197,.35);
-  --font:'Pretendard Variable',Pretendard,-apple-system,system-ui,'Malgun Gothic',sans-serif;
+  --r:var(--gw-r-lg); --r-sm:var(--gw-r-md); --r-lg:var(--gw-r-lg);
+  --shadow-card:var(--gw-shadow-raised);
+  --shadow-pop:var(--gw-shadow-overlay);
+  /* 손을 올린 카드가 떠오를 때의 그림자 — 디자인 시스템은 색 그림자를 금지하므로 overlay 한 종류를 쓴다. */
+  --shadow-lift:var(--gw-shadow-overlay);
+  --font:var(--gw-font);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 /* 스티키 상단바(62px) 높이만큼 앵커 착지점을 내린다 — 없으면 #trust·#faq 같은 링크가

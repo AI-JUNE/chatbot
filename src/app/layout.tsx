@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import './gowon-tokens.css';
 import './globals.css';
 /** 링크 미리보기(카카오톡·슬랙 등)에 쓰이는 절대 주소의 기준 — robots.txt·sitemap.xml 과 같은 출처. */
 import { SITE_URL } from '@/lib/site';
@@ -40,7 +41,7 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   // 브랜드 primary — globals.css 의 --brand 와 같은 값(메타 태그는 var() 를 쓸 수 없다).
-  themeColor: '#2457C5',
+  themeColor: '#0C66E4',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

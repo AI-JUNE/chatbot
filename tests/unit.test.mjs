@@ -732,8 +732,13 @@ test('정산 리포트 접근은 인증·감사 로그를 거친다', () => {
 
 test('디자인 토큰이 AICC Portal 팔레트를 쓴다', () => {
   const css = read('src/app/globals.css');
-  for (const token of ['--brand:#2457C5', '--ink:#191F28', '--line:#E5E8EB', '--bg:#F7F8FA']) {
+  // DS 1단계: 색 값은 gowon-tokens.css(GOWON 디자인 시스템 v1.0)가 출처이고 globals.css 는 별칭이다.
+  for (const token of ['--brand:var(--gw-blue-600)', '--ink:var(--gw-n900)', '--line:var(--gw-n200)', '--bg:var(--gw-n50)']) {
     assert.ok(css.includes(token), `토큰 ${token} 이 없다`);
+  }
+  const ds = read('src/app/gowon-tokens.css');
+  for (const v of ['--gw-blue-600:#0C66E4', '--gw-n900:#172B4D', '--gw-n200:#DCDFE4', '--gw-n50:#F7F8F9']) {
+    assert.ok(ds.includes(v), `디자인 시스템 토큰 ${v} 이 없다`);
   }
   assert.match(css, /--shadow-card:/, '카드 그림자 규격이 토큰으로 있어야 한다');
   assert.match(css, /prefers-reduced-motion/, '모션 최소화 설정을 존중해야 한다');
@@ -945,7 +950,7 @@ test('404·오류 화면이 브랜드 규격으로 있고 내부 오류 내용�
   assert.match(ge, /<html lang="ko">/, 'global-error 는 루트 레이아웃을 대체하므로 lang 을 직접 준다');
   // 토큰 사본은 SystemPage 의 SYSTEM_TOKENS 한 벌뿐이다(DS 16-1) — global-error 는 그것을 body 에 얹는다.
   assert.match(ge, /SYSTEM_TOKENS/, 'globals.css 가 없으므로 토큰을 직접 얹어야 한다');
-  assert.match(sys, /'--brand': '#2457C5'/, '토큰 사본이 SystemPage 에 있어야 한다');
+  assert.match(sys, /'--brand': '#0C66E4'/, '토큰 사본이 SystemPage 에 있어야 한다');
 });
 
 /* ══════════ 랜딩 — 상용 수준 구조 & 운영자 정보 비노출 ══════════ */
@@ -1038,8 +1043,9 @@ test('루트 레이아웃이 링크 미리보기(OG·트위터)·테마색·meta
   assert.match(s, /openGraph: \{[^}]*locale: 'ko_KR'/);
   assert.match(s, /twitter: \{ card: 'summary_large_image'/);
   assert.match(s, /export const viewport: Viewport/);
-  assert.match(s, /themeColor: '#2457C5'/, '테마색은 globals.css --brand 와 같아야 한다');
-  assert.match(read('src/app/globals.css'), /--brand:#2457C5;/);
+  assert.match(s, /themeColor: '#0C66E4'/, '테마색은 --gw-blue-600 과 같아야 한다');
+  assert.match(read('src/app/gowon-tokens.css'), /--gw-blue-600:#0C66E4;/);
+  assert.match(read('src/app/globals.css'), /--brand:var\(--gw-blue-600\);/);
 });
 
 test('미리보기 이미지는 1200x630 PNG 파일 규약으로 있고 대체 텍스트가 붙어 있다', () => {
@@ -1551,9 +1557,17 @@ test('모션 최소화 설정에서 화면이 미끄러지지 않는다 (DS 8-3)
 
 /** globals.css :root 에서 토큰 hex 를 읽는다(단일 출처를 실제로 파싱한다). */
 function tokens() {
+  // 색 값의 단일 출처는 gowon-tokens.css(--gw-*)이고 globals.css 는 그 별칭이다 — 별칭을 따라가 hex 로 푼다.
+  const gw = {};
+  const gwRoot = read('src/app/gowon-tokens.css').split(':root{')[1].split('\n}')[0];
+  for (const [, k, v] of gwRoot.matchAll(/(--gw-[a-z0-9-]+)\s*:\s*(#[0-9A-Fa-f]{6})/g)) gw[k] = v;
   const root = read('src/app/globals.css').split(':root{')[1].split('\n}')[0];
   const out = {};
   for (const [, k, v] of root.matchAll(/(--[a-z0-9-]+)\s*:\s*(#[0-9A-Fa-f]{6})/g)) out[k] = v;
+  for (const [, k, ref] of root.matchAll(/(--[a-z0-9-]+)\s*:\s*var\((--(?:gw|svc)-[a-z0-9-]+)\)/g)) {
+    const v = gw[ref] || out[ref];
+    if (v) out[k] = v;
+  }
   return out;
 }
 
@@ -1915,10 +1929,15 @@ test('시스템 화면 토큰 사본이 :root 와 한 글자도 다르지 않다
 
   // 그림자·글꼴처럼 hex 가 아닌 토큰도 :root 원문과 같아야 한다(종전 사본은 그림자 두 겹 중 한 겹만 들었다).
   const root = read('src/app/globals.css').split(':root{')[1].split('\n}')[0];
+  const gwRoot = read('src/app/gowon-tokens.css').split(':root{')[1].split('\n}')[0];
   for (const k of ['--shadow-card', '--font']) {
     const m = root.match(new RegExp(`${k}\\s*:\\s*([^;]+);`));
     assert.ok(m, `:root 에 ${k} 가 없다`);
-    const want = m[1].trim().replace(/\s+/g, ' ');
+    // 별칭이면 gowon-tokens.css 의 원문으로 푼다.
+    const alias = m[1].trim().match(/^var\((--gw-[a-z0-9-]+)\)$/);
+    const src = alias ? gwRoot.match(new RegExp(`${alias[1]}\\s*:\\s*([^;]+);`)) : m;
+    assert.ok(src, `${k} 별칭의 원문을 gowon-tokens.css 에서 찾지 못했다`);
+    const want = src[1].trim().replace(/\s+/g, ' ');
     const got = (copy[k] || '').replace(/\s+/g, ' ');
     assert.equal(got, want, `${k} 사본이 :root 와 다르다 — 최후 화면만 다른 규격으로 보인다`);
   }
@@ -2009,8 +2028,10 @@ test('글꼴은 동적 서브셋 판을 쓰고 CDN 연결을 미리 연다 (DS 1
   // ③ 시트가 싣는 family 와 토큰의 첫 이름이 같아야 한다.
   const font = read('src/app/globals.css').match(/--font:([^;]+);/);
   assert.ok(font, '--font 토큰이 없다');
-  assert.ok(font[1].trim().startsWith("'Pretendard Variable'"),
-    `--font 의 첫 이름이 'Pretendard Variable' 이 아니다: ${font[1].trim()}`);
+  assert.equal(font[1].trim(), 'var(--gw-font)', '--font 는 디자인 시스템 글꼴 토큰의 별칭이다');
+  const dsFont = read('src/app/gowon-tokens.css').match(/--gw-font:([^;]+);/);
+  assert.ok(dsFont && dsFont[1].trim().startsWith('"Pretendard Variable"'),
+    `--gw-font 의 첫 이름이 Pretendard Variable 이 아니다: ${dsFont && dsFont[1].trim()}`);
   assert.match(css[1], /\/variable\/pretendardvariable-/,
     '시트가 가변 글꼴 판이 아니면 --font 의 첫 이름은 한 번도 로드되지 않는다(죽은 자리)');
 });

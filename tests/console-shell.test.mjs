@@ -6,7 +6,9 @@ import { readFileSync } from 'node:fs';
 const css = readFileSync('src/app/globals.css', 'utf8');
 
 test('sand 토큰이 기준값으로 정의돼 있다', () => {
-  assert.match(css, /--sand:#F1F3F6/);
+  // 색 값의 출처는 gowon-tokens.css 다(DS 1단계). sand 는 중립 100(#F1F2F4)의 별칭이다.
+  assert.match(css, /--sand:var\(--gw-n100\)/);
+  assert.match(readFileSync('src/app/gowon-tokens.css', 'utf8'), /--gw-n100:#F1F2F4/);
 });
 
 test('표 머리와 배지는 sand 바탕을 쓴다', () => {
