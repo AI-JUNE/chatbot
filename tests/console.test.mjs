@@ -119,7 +119,7 @@ test('콘솔 셸이 사이드바·현재 탭 강조·상단 헤더로 렌더된�
   assert.match(html, /class="ac-top"/, '상단 헤더');
   assert.match(html, /<svg[^>]*aria-hidden="true"/, '메뉴 아이콘은 장식이므로 숨겨야 한다');
   // 모든 탭이 메뉴에 있다
-  for (const label of ['대시보드', '상담원 요청', '테넌트 지식', '지식베이스', '시나리오 룰', '응답 테스트', '파트너·귀속', '정산 리포트', '설치', '감사 로그']) {
+  for (const label of ['운영 현황', '상담사 전환 요청', '테넌트 지식', '답변 지식', '시나리오', '응답 테스트', '파트너 귀속', '정산 리포트', '설치', '감사 로그']) {
     assert.ok(html.includes(label), `메뉴 누락: ${label}`);
   }
   // 관리 토큰 입력은 헤더가 아니라 로그인 화면에 있다(DS 2-8) — 헤더에는 로그인/로그아웃 진입만 남긴다
@@ -131,7 +131,7 @@ test('콘솔 셸이 사이드바·현재 탭 강조·상단 헤더로 렌더된�
 
 test('대시보드 KPI 4개가 값 없이도 「측정 중」으로 렌더된다 (DS 2-2)', opts, async () => {
   const html = await render();
-  for (const k of ['오늘 대화', '자동완결률', '상담원 전환', '평균 응답 시간']) {
+  for (const k of ['오늘 대화', '봇 처리율', '상담사 전환', '평균 응답 시간']) {
     assert.ok(html.includes(k), `KPI 누락: ${k}`);
   }
   // 지어낸 수치가 들어가면 안 된다 — 로딩 상태에서 0건/0% 로 단정하지 않는다
@@ -722,7 +722,7 @@ test('탭마다 브라우저 제목이 달라진다 — 북마크·방문 기록
   }));
   for (const k of tabKeys) assert.ok(labelled.get(k), `사이드바에 라벨이 없는 탭: ${k}`);
   // 열 개의 제목이 서로 달라야 목록에서 구분된다.
-  const titles = new Set(tabKeys.map((k) => `${labelled.get(k)} — 관리 콘솔 · GOWON Chat`));
+  const titles = new Set(tabKeys.map((k) => `${labelled.get(k)} | 관리 콘솔 | GOWON Chat`));
   assert.equal(titles.size, tabKeys.length, '같은 제목을 쓰는 탭이 있다');
 });
 

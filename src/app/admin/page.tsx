@@ -2119,9 +2119,9 @@ const PARTNER_STATUS_TONE: Record<PartnerView['status'], { background: string; c
 type TabKey = 'dash' | 'kb' | 'rules' | 'esc' | 'partner' | 'settle' | 'tenant' | 'test' | 'install' | 'audit';
 
 const TAB_GROUPS: { group: string; tabs: readonly (readonly [TabKey, string])[] }[] = [
-  { group: '운영', tabs: [['dash', '대시보드'], ['esc', '상담원 요청'], ['tenant', '테넌트 지식']] },
-  { group: '콘텐츠', tabs: [['kb', '지식베이스'], ['rules', '시나리오 룰'], ['test', '응답 테스트']] },
-  { group: '사업', tabs: [['partner', '파트너·귀속'], ['settle', '정산 리포트']] },
+  { group: '운영', tabs: [['dash', '운영 현황'], ['esc', '상담사 전환 요청'], ['tenant', '테넌트 지식']] },
+  { group: '콘텐츠', tabs: [['kb', '답변 지식'], ['rules', '시나리오'], ['test', '응답 테스트']] },
+  { group: '사업', tabs: [['partner', '파트너 귀속'], ['settle', '정산 리포트']] },
   { group: '설정', tabs: [['install', '설치'], ['audit', '감사 로그']] },
 ];
 
@@ -2185,21 +2185,21 @@ const TAB_LABEL = Object.fromEntries(TAB_GROUPS.flatMap((g) => g.tabs)) as Recor
 /** 브라우저 제목. 탭마다 다르게 둔다 — 주소(`#kb`)는 탭을 가리키는데 제목이 하나면
  *  북마크·방문 기록·탭 목록에 열 줄이 전부 같은 글자로 쌓인다(WCAG 2.4.2 Page Titled). */
 function docTitle(tab: TabKey): string {
-  return `${TAB_LABEL[tab] ?? '대시보드'} — 관리 콘솔 · GOWON Chat`;
+  return `${TAB_LABEL[tab] ?? '운영 현황'} | 관리 콘솔 | GOWON Chat`;
 }
 
 /** 상단 헤더에 쓰는 탭 설명 — 이 화면에서 무엇을 하는지 한 줄로 알린다. */
 const TAB_DESC: Record<TabKey, string> = {
-  dash: '오늘의 응대 현황과 최근 대화를 확인합니다.',
-  kb: '챗봇이 답변 근거로 쓰는 안내 자료를 등록·수정합니다.',
-  rules: '특정 표현에 정해진 답을 돌려주는 규칙을 관리합니다.',
-  esc: '상담원 연결 요청을 확인하고 처리 상태를 바꿉니다.',
-  partner: '파트너와 고객사, 유치 경로를 관리합니다.',
-  settle: '월별 파트너 수수료를 집계해 내려받습니다.',
-  tenant: '지금 배포본이 무엇을 근거로 답하는지 확인합니다(읽기 전용).',
-  test: '고객에게 나갈 답변을 미리 보내보고 근거를 확인합니다.',
-  install: '고객사 홈페이지에 상담창을 붙이는 방법을 안내합니다.',
-  audit: '누가 무엇을 바꿨는지 기록을 확인합니다.',
+  dash: '오늘 대화 집계와 최근 대화 목록.',
+  kb: '답변 근거로 쓰는 안내 자료의 등록과 수정.',
+  rules: '특정 표현에 정해진 답을 돌려주는 규칙 관리.',
+  esc: '상담사 전환 요청의 접수 상태와 처리 이력.',
+  partner: '파트너와 고객사, 유치 경로 관리.',
+  settle: '월별 파트너 수수료 집계와 다운로드.',
+  tenant: '현재 배포본의 답변 근거 목록(읽기 전용).',
+  test: '고객에게 나갈 답변과 근거를 사전에 확인.',
+  install: '고객사 홈페이지에 상담창을 설치하는 방법.',
+  audit: '변경자와 변경 내용의 기록.',
 };
 
 /** 내비게이션 아이콘 — 16px 뷰박스의 선 아이콘(현재 글자색을 따른다). */
@@ -5023,7 +5023,7 @@ export default function AdminPage() {
     return { hits, found };
   };
 
-  const currentLabel = TAB_LABEL[tab] ?? '대시보드';
+  const currentLabel = TAB_LABEL[tab] ?? '운영 현황';
   const currentGroup = TAB_GROUPS.find((g) => g.tabs.some(([k]) => k === tab))?.group ?? '운영';
 
   // 테넌트 FAQ·감사 로그 표는 탭 본문이 IIFE 가 아니라 여기서 한 장을 만든다(그릴 때 쓰는 값은 같다).
@@ -5146,7 +5146,7 @@ export default function AdminPage() {
       {tab === 'dash' && (
         <>
           <section style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-            <h2 style={{ ...S.h2, marginRight: 'auto' }}>오늘의 응대 현황</h2>
+            <h2 style={{ ...S.h2, marginRight: 'auto' }}>오늘 응대 현황</h2>
             <SyncStatus at={escSyncAt} onRefresh={() => loadEsc()} />
             <button type="button" {...busyBtn(dlBusy === '대화 기록', dlBusy !== '')} onClick={downloadLogsCsv}>
               {dlBusy === '대화 기록' ? '내려받는 중…' : '대화 기록 내려받기'}
@@ -5192,7 +5192,7 @@ export default function AdminPage() {
                 }
               />
               <KpiCard
-                label="자동완결률"
+                label="봇 처리율"
                 /* 비율을 적는 자는 한 곳이다 (DS 67-1) — 종전 식(`Math.round(autoRate * 100)`)은
                    999/1000 을 「100%」로 적어 상담원으로 넘어간 한 건을 지웠다. 셈도 서버가
                    미리 반올림해 둔 `autoRate` 가 아니라 **괄호 안에 적는 그 두 수**로 한다. */
@@ -5207,7 +5207,7 @@ export default function AdminPage() {
                 }
               />
               <KpiCard
-                label="상담원 전환"
+                label="상담사 전환"
                 value={`${comma(stats.conversation.today?.escalated ?? 0)}건`}
                 note={`접수 대기 ${comma(stats.escalation.open)}건 · 누적 접수 ${comma(stats.escalation.total)}건`}
               />
@@ -5224,7 +5224,7 @@ export default function AdminPage() {
             </div>
           ) : (
             <div className="ac-kpi" style={{ marginBottom: 16 }} aria-busy="true">
-              {['오늘 대화', '자동완결률', '상담원 전환', '평균 응답 시간'].map((k) => (
+              {['오늘 대화', '봇 처리율', '상담사 전환', '평균 응답 시간'].map((k) => (
                 <KpiCard key={k} label={k} value="" loading note={phase.esc === 'error' ? '현황을 불러오지 못했습니다.' : '현황을 불러오는 중입니다.'} />
               ))}
             </div>
