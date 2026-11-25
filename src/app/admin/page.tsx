@@ -1,6 +1,6 @@
 'use client';
 
-// 관리 콘솔(MVP): 지식베이스(FAQ) CRUD · 시나리오 룰 편집 · 응답 테스트.
+// 관리 콘솔(MVP): 답변 지식(FAQ) CRUD · 시나리오 편집 · 응답 테스트.
 // 저장은 인메모리 스텁 — [승인 필요] DB 영구 저장·관리자 인증(현재 ADMIN_TOKEN 미설정 시 개방).
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 /** 브랜드 마크는 공용 컴포넌트 한 곳에서 온다 — 종전에는 이 파일과 랜딩이 각자 경로 데이터의 사본을 들고 있었다. */
@@ -50,7 +50,7 @@ interface ImportForm {
 
 const EMPTY_IMPORT: ImportForm = { title: '', category: '문서', maxChars: '500', text: '' };
 
-/** 이 문서를 등록하면 지식베이스에서 무엇이 바뀌는가 — 서버가 재서 보낸다(DS 44-1). */
+/** 이 문서를 등록하면 답변 지식에서 무엇이 바뀌는가 — 서버가 재서 보낸다(DS 44-1). */
 interface DocOverlapView {
   overwrite: { id: string; question: string; source?: string }[];
   stale: { id: string; question: string; source?: string }[];
@@ -160,7 +160,7 @@ function particle(word: string, withBatchim: string, withoutBatchim: string): st
 
 /**
  * 조사를 받침에 맞춰 붙인다 — 원본은 `src/lib/refusal.ts`(josa).
- * 종전에는 「감사 로그을(를) 내려받지 못했습니다」처럼 괄호가 그대로 보였다(DS 29-3).
+ * 종전에는 「감사 로그을(를) 다운로드하지 못했습니다」처럼 괄호가 그대로 보였다(DS 29-3).
  */
 function josa(word: string, withBatchim: string, withoutBatchim: string): string {
   return `${word}${particle(word, withBatchim, withoutBatchim)}`;
@@ -311,7 +311,7 @@ const EMPTY_CR_FORM: CustomRuleForm = { label: '', keywords: '', reply: '', esca
 const HANDOFF_REASON_LABELS: Record<string, string> = {
   low_confidence: '인식 신뢰도 부족',
   customer_request: '고객 요청',
-  policy: '정책상 상담원 처리',
+  policy: '정책상 상담사 처리',
   error: '시스템 오류',
   max_retry: '재시도 한도 초과',
 };
@@ -469,7 +469,7 @@ const MEASURING = '측정 중';
 /**
  * 근거 없이 답한 답변에 달린 평가를 묶는 이름 — 서버 `@/lib/feedback` 의 같은 문자열과 맞춰야 한다
  * (콘솔은 lib 을 불러오지 않으므로 옮겨 적고 **테스트가 두 쪽을 대조한다** — `MAX_DOC_CHARS` 와 같은 방식).
- * 이 줄은 자료가 아니므로 「지식베이스에서 찾기」로 데려가지 않는다.
+ * 이 줄은 자료가 아니므로 「답변 지식에서 찾기」로 데려가지 않는다.
  */
 const NO_CITATION_LABEL = '근거 없음';
 
@@ -602,7 +602,7 @@ function comma(n: number): string {
  *
  * 왜 화면도 이 자를 써야 하는가: 종전에 이 화면은 `Math.round(x * 100)` 로 적었다. 그 식은
  * **양 끝에서 거짓말을 한다** — 1000쌍 중 999쌍을 챗봇이 마무리했으면 「자동완결률 100%」가
- * 되어 상담원으로 넘어간 한 건이 사라지고, 반대로 1쌍만 마무리했으면 「0%」가 되어 그 한 건이
+ * 되어 상담사으로 넘어간 한 건이 사라지고, 반대로 1쌍만 마무리했으면 「0%」가 되어 그 한 건이
  * 사라진다. 운영자는 「100%」를 비율이 아니라 **「전부」라는 사실**로 읽고 그대로 보고서에
  * 옮겨 적는다(§13 이 금한 「없는 수」다). 그래서 0% 와 100% 는 실제로 0 과 전부일 때만 적는다.
  */
@@ -629,8 +629,8 @@ function percentLabel(part: number, whole: number): string | null {
  * 「많이 묻는 주제」 막대는 `Math.max(6, …)` 로 **바닥**을 두었는데(1건짜리 주제도 보인다),
  * 추세 차트의 두 막대에는 그 바닥이 없었다 — 7일 최대가 300건인 주 안에서 1건인 날은
  * `Math.round(1 / 300 * 100) = 0` 이라 **막대가 그려지지 않는다**. 대화 수는 막대 위에 글자로
- * 적어 주므로 바닥에 떠 있는 「1」로 읽을 수는 있지만, 색으로만 구분되는 **「상담원 제안」 몫은
- * 적어 주는 수가 없어 통째로 사라진다** — 그 날 상담원에게 넘어간 대화가 그래프에서 0건이 된다.
+ * 적어 주므로 바닥에 떠 있는 「1」로 읽을 수는 있지만, 색으로만 구분되는 **「상담사 전환 제안」 몫은
+ * 적어 주는 수가 없어 통째로 사라진다** — 그 날 상담사에게 넘어간 대화가 그래프에서 0건이 된다.
  * 눈으로 훑는 운영자에게 그래프는 「언제 일이 있었나」를 보는 자리다.
  *
  * 0 은 0 이다(없는 것을 있다고 하지 않는다). 0 이 아닌 값은 **적어도 `min` 만큼** 보인다 —
@@ -909,7 +909,7 @@ function ConfirmDialog({ req }: { req: ConfirmReq }) {
 }
 
 /**
- * 최근 대화 상세 서랍 — 같은 대화(세션)의 주제·근거·상담원 전환 여부를 보여준다.
+ * 최근 대화 상세 서랍 — 같은 대화(세션)의 주제·근거·상담사 전환 여부를 보여준다.
  *
  * **이 화면에 들어 있는 만큼만 보여 준다** (DS 71-3). 콘솔은 전체 기록이 아니라 최근 한 묶음을
  * 받아 두고 그중 이 대화의 것을 고른다 — 종전에는 그렇게 고른 수를 「주고받은 메시지 n쌍」이라
@@ -985,7 +985,7 @@ function ConversationDrawer({
           {/* 보여 준 수를 대화 전체라고 말하지 않는다 (DS 71-3). */}
           <span className="ac-pill">{partial ? `최근 ${turns.length}쌍 · 보관 ${kept}쌍` : `주고받은 메시지 ${turns.length}쌍`}</span>
           <span className="ac-pill" style={escalated ? TONE.warn : TONE.ok}>
-            {escalated ? '상담원 제안됨' : '자동 응대로 완료'}
+            {escalated ? '상담사 전환 제안됨' : '자동 응대로 완료'}
           </span>
           {ticket && <span className="ac-pill">접수 {TICKET_STATUS_LABELS[ticket.status]}</span>}
           {/* 가린 것이 있으면 그 사실을 말한다 — 말풍선의 `***` 가 고객이 쓴 글자가 아니다(DS 39-1). */}
@@ -1012,7 +1012,7 @@ function ConversationDrawer({
                 <div className="ac-bubble-tags">
                   <span className="ac-pill">{t.intentLabel || UNNAMED_TOPIC}</span>
                   <span className="ac-pill">{sourceView(t.source)}</span>
-                  {t.escalate && <span className="ac-pill" style={TONE.warn}>상담원 제안</span>}
+                  {t.escalate && <span className="ac-pill" style={TONE.warn}>상담사 전환 제안</span>}
                   <span style={{ fontSize: 11, color: 'var(--mut)', marginLeft: 'auto' }}>{timeLabel(t.at)}</span>
                 </div>
               </div>
@@ -1022,9 +1022,9 @@ function ConversationDrawer({
 
         <div className="ac-drawer-foot">
           {ticket ? (
-            <button type="button" style={S.btn} onClick={onOpenTicket}>상담원 요청 보기</button>
+            <button type="button" style={S.btn} onClick={onOpenTicket}>상담사 전환 요청 보기</button>
           ) : (
-            <span style={{ fontSize: 12.5, color: 'var(--mut)' }}>이 대화에서 접수된 상담원 요청은 없습니다.</span>
+            <span style={{ fontSize: 12.5, color: 'var(--mut)' }}>이 대화에서 접수된 상담사 전환 요청은 없습니다.</span>
           )}
           <button type="button" style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={onClose}>닫기</button>
         </div>
@@ -1033,7 +1033,7 @@ function ConversationDrawer({
   );
 }
 
-/** 상담원 요청 상세 서랍 — 고객의 마지막 말·사유·이관 요약·연락처(마스킹)·처리 상태 변경. */
+/** 상담사 전환 요청 상세 서랍 — 고객의 마지막 말·사유·이관 요약·연락처(마스킹)·처리 상태 변경. */
 function TicketDrawer({
   ticket, hasConversation, busy, onClose, onStatus, onOpenConversation, closeRef,
 }: {
@@ -1071,7 +1071,7 @@ function TicketDrawer({
         <div className="ac-drawer-head">
           <div style={{ minWidth: 0 }}>
             <h2 id="ac-ticket-title" style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-.01em' }}>
-              상담원 요청 <span title={t.id} style={{ fontWeight: 600, color: 'var(--sub)' }}>{shortTicket(t.id)}</span>
+              상담사 전환 요청 <span title={t.id} style={{ fontWeight: 600, color: 'var(--sub)' }}>{shortTicket(t.id)}</span>
             </h2>
             <p style={{ fontSize: 12, color: 'var(--mut)', marginTop: 2 }}>
               접수 {timeLabel(t.createdAt)} · 마지막 변경 {timeLabel(t.updatedAt)} · 대화 {shortSession(t.sessionId)}
@@ -1641,7 +1641,7 @@ function TrendChart({ daily }: { daily: DayView[] }) {
           const full = H - pad.t - pad.b;
           // 비율을 길이로 바꾸는 자는 한 곳이다 (DS 67-3) — 종전에는 이 두 줄에 바닥이 없어
           // 7일 최대가 300건인 주의 1건짜리 날이 **막대 없이** 그려졌고, 수를 적어 주지 않는
-          // 「상담원 제안」 몫은 통째로 사라졌다. 넘겨 받은 몫은 전체 막대를 넘지 않는다.
+          // 「상담사 전환 제안」 몫은 통째로 사라졌다. 넘겨 받은 몫은 전체 막대를 넘지 않는다.
           const h = barLen(d.turns, max, full, TREND_BAR_MIN);
           const x = pad.l + slot * i + (slot - barW) / 2;
           const y = pad.t + full - h;
@@ -1686,7 +1686,7 @@ function TrendChart({ daily }: { daily: DayView[] }) {
       <figcaption style={{ fontSize: 11.5, color: 'var(--mut)', marginTop: 6 }}>
         <span style={{ display: 'flex', gap: 14 }}>
           <span><span aria-hidden="true" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 3, background: 'var(--brand)', marginRight: 5 }} />대화</span>
-          <span><span aria-hidden="true" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 3, background: 'var(--warn)', marginRight: 5 }} />상담원 제안</span>
+          <span><span aria-hidden="true" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 3, background: 'var(--warn)', marginRight: 5 }} />상담사 전환 제안</span>
           <span style={{ marginLeft: 'auto' }}>일자는 한국 시간 기준</span>
         </span>
         {/* 「—」가 무엇인지 적지 않으면 받는 사람은 그것도 0으로 읽는다 (DS 43-1). */}
@@ -1719,7 +1719,7 @@ interface TurnView {
 }
 
 /** 응답 근거 표시 — 화면에서는 내부 코드 대신 사람이 읽는 말로 보여준다.
- *  원본은 `src/lib/intents.ts`(SOURCE_LABELS·CHANNEL_LABELS)이며 내려받기 파일도 그 값을 쓴다.
+ *  원본은 `src/lib/intents.ts`(SOURCE_LABELS·CHANNEL_LABELS)이며 다운로드 파일도 그 값을 쓴다.
  *  콘솔은 lib 을 불러오지 않으므로(클라이언트 번들) 여기에 옮겨 적고 테스트가 두 사전을 맞춰 고정한다. */
 const SOURCE_VIEW_LABELS: Record<string, string> = {
   rule: '시나리오 규칙',
@@ -1798,7 +1798,7 @@ interface AuditView {
 /**
  * 작업 이름도 **서버가 붙여 보낸다**(`src/lib/audit.ts` 의 작업 표시명 → `actionLabel` 필드).
  * 종전에는 이 파일의 사전 9개로 이름을 붙이고 없으면 코드를 그려, 「사업」 그룹에서 새로 생긴
- * 4종(파트너·고객사 편집, 정산 내려받기)이 `partner.upsert` 처럼 영문 코드로 표·필터에 남았다.
+ * 4종(파트너·고객사 편집, 정산 다운로드)이 `partner.upsert` 처럼 영문 코드로 표·필터에 남았다.
  */
 const UNNAMED_AUDIT_ACTION = '관리 작업';
 
@@ -1901,7 +1901,7 @@ const STORAGE_HEALTH: Record<StorageNsView['health'], { label: string; hint: str
   empty: { label: '저장분 없음', hint: '아직 저장된 내용이 없습니다. 편집하면 자동 저장됩니다.' },
   disabled: { label: '저장 꺼짐', hint: '배포 설정에서 저장이 꺼져 있어 재시작하면 사라집니다.' },
   awaiting_approval: { label: '승인 대기', hint: '개인정보가 포함되어 있어, 저장 승인이 나기 전까지는 서버에 보관하지 않습니다.' },
-  readonly: { label: '읽기전용 환경', hint: '이 환경에서는 변경 내용을 서버에 보관할 수 없습니다. 「백업 내려받기」로 파일을 받아 두세요.' },
+  readonly: { label: '읽기전용 환경', hint: '이 환경에서는 변경 내용을 서버에 보관할 수 없습니다. 「백업 다운로드」로 파일을 받아 두세요.' },
   // 「아래」처럼 자리를 가리키는 말을 쓰지 않는다 — 이 문장은 카드 안과 저장 토스트
   // **두 자리에서** 쓰이고(DS 47-1), 토스트에는 가리킬 아래가 없다. 오류 원문은 카드가 따로 적는다.
   error: { label: '저장 실패', hint: '저장 중 오류가 생겼습니다. 데이터는 메모리에 남아 있습니다.' },
@@ -2249,9 +2249,9 @@ function NavIcon({ tab }: { tab: TabKey }) {
   );
 }
 
-// ---- 전역 검색(헤더) — 대화·안내 자료·규칙·상담원 요청·고객사를 한 칸에서 찾아 그 화면으로 보낸다 ----
-type SearchKind = '화면' | '지식베이스' | '시나리오 룰' | '상담원 요청' | '최근 대화' | '고객사' | '파트너';
-const SEARCH_KIND_ORDER: SearchKind[] = ['화면', '상담원 요청', '최근 대화', '지식베이스', '시나리오 룰', '고객사', '파트너'];
+// ---- 전역 검색(헤더) — 대화·안내 자료·규칙·상담사 전환 요청·고객사를 한 칸에서 찾아 그 화면으로 보낸다 ----
+type SearchKind = '화면' | '답변 지식' | '시나리오' | '상담사 전환 요청' | '최근 대화' | '고객사' | '파트너';
+const SEARCH_KIND_ORDER: SearchKind[] = ['화면', '상담사 전환 요청', '최근 대화', '답변 지식', '시나리오', '고객사', '파트너'];
 /**
  * 종류별 최대 표시 수 — 목록이 화면을 덮지 않게 한다. 전체 상한은 두지 않는다(종전에는 12건이었다):
  * 종류가 일곱이라 목록은 이미 「7종 × (3건 + 모두 보기 1줄)」로 묶여 있고, 전체를 또 자르면
@@ -2462,7 +2462,7 @@ function GlobalSearch({ search, onFirstOpen }: { search: (term: string, raw: str
 
   return (
     <div className="ac-gsearch" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false); }}>
-      <label htmlFor="ac-gsearch" className="ac-srhide">전체 검색: 대화, 안내 자료, 규칙, 상담원 요청, 고객사</label>
+      <label htmlFor="ac-gsearch" className="ac-srhide">전체 검색: 대화, 안내 자료, 규칙, 상담사 전환 요청, 고객사</label>
       <svg className="ac-gsearch-icon" aria-hidden="true" focusable="false" width="15" height="15" viewBox="0 0 16 16" fill="none">
         <path d="M7 12.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zM11 11l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
       </svg>
@@ -2540,7 +2540,7 @@ function GlobalSearch({ search, onFirstOpen }: { search: (term: string, raw: str
 
 /** 관리 토큰 보관함 — **탭 단위**(sessionStorage)다.
  * `localStorage` 는 브라우저를 닫아도 남는다: 공용 PC·회의실 PC 에서 다음 사람이 /admin 을 열면
- * 이미 로그인된 콘솔이 뜨고, 거기서 대화 기록·연락처·백업까지 내려받을 수 있다.
+ * 이미 로그인된 콘솔이 뜨고, 거기서 대화 기록·연락처·백업까지 다운로드할 수 있다.
  * 위젯 대화(DS 7-1)가 같은 이유로 sessionStorage 를 쓴다 — 자격 증명이 대화보다 오래 남을 이유는 없다.
  * 저장소를 못 쓰는 환경(사생활 보호 모드 등)에서도 콘솔은 그대로 동작한다(그 탭에서만 다시 로그인). */
 const TOKEN_KEY = 'cb_admin_token';
@@ -2620,7 +2620,7 @@ const S = {
 };
 
 /**
- * 진행 중인 버튼의 공통 속성(내려받기·복원).
+ * 진행 중인 버튼의 공통 속성(다운로드·복원).
  *
  * `disabled` 를 쓰지 않는다: 키보드로 누른 버튼이 그 순간 비활성이 되면 **초점이 본문 밖으로 떨어져**
  * 사용자가 화면 맨 위부터 Tab 을 다시 눌러야 한다. 초점은 그대로 두고 `aria-disabled` 로 알린 뒤,
@@ -2706,8 +2706,8 @@ function afetch(input: string, init: RequestInit = {}, ms: number = REQUEST_TIME
 /**
  * ── 아무도 보고 있지 않은 사이에 들어온 일 (DS 24-1) ──
  * 관리 콘솔의 화면은 **연 순간의 사진**이었다. 불러오기는 마운트 때 한 번뿐이고 되풀이가 없다.
- * 그런데 이 화면에서 가장 중요한 데이터(상담원 연결 요청)는 운영자가 아니라 **고객이** 만든다 —
- * 고객은 「상담원이 확인 후 순서대로 연락드릴게요」라는 약속과 접수 순번을 받고 기다리는데,
+ * 그런데 이 화면에서 가장 중요한 데이터(상담사 전환 요청)는 운영자가 아니라 **고객이** 만든다 —
+ * 고객은 「상담사이 확인 후 순서대로 연락드릴게요」라는 약속과 접수 순번을 받고 기다리는데,
  * 운영자 쪽 화면은 누군가 「새로고침」을 누르기 전까지 그 접수가 들어온 사실조차 모른다.
  * 콘솔을 띄워 놓고 기다리는 것이 이 탭의 쓰임새라는 점에서, 그 기다림은 영원히 헛돈다.
  *
@@ -2734,7 +2734,7 @@ function shouldPoll(visibility: string, online: boolean, busy: boolean): boolean
  */
 function newRequestNotice(prev: number | null, next: number): string {
   if (prev === null || next <= prev) return '';
-  return `새 상담원 연결 요청 ${next - prev}건 — 「상담원 요청」에서 확인해 주세요.`;
+  return `새 상담사 전환 요청 ${next - prev}건 — 「상담사 전환 요청」에서 확인해 주세요.`;
 }
 
 /** 사이드바 배지 글자 — 세 자리를 넘으면 메뉴 이름을 밀어내므로 줄인다(뜻은 .ac-srhide 가 전한다). */
@@ -2802,7 +2802,7 @@ function ruleExamples(r: RuleView): string[] {
  * 고객사 안내 자료가 아닌 기본 구성으로 답한다(그 사실을 화면에서는 알 수 없다 · DS 59-2).
  */
 interface InstallOpts {
-  /** 빈 문자열이면 기본 구성(지식베이스)으로 답한다. */
+  /** 빈 문자열이면 기본 구성(답변 지식)으로 답한다. */
   tenant: string;
   position: 'right' | 'left';
   offset: number;
@@ -3257,7 +3257,7 @@ export default function AdminPage() {
       window.removeEventListener('keydown', onKey);
     };
   }, [drawerSession, closeDrawer]);
-  // ---- 상담원 요청 큐(필터·검색·상세 서랍) ----
+  // ---- 상담사 전환 요청 큐(필터·검색·상세 서랍) ----
   const [escFilter, setEscFilter] = useState<'all' | TicketView['status']>('all');
   const [escQuery, setEscQuery] = useState('');
   /**
@@ -3765,7 +3765,7 @@ export default function AdminPage() {
   const downloadSettlementCsv = () => {
     // 잠긴 버튼도 눌러 볼 수 있다(초점을 잃지 않으려고 `disabled` 를 쓰지 않는다) — 이유를 밝힌다.
     if (!settleView || settleView.rows.length === 0) {
-      notify('내려받을 산출 근거가 없습니다. 기준월을 바꾸거나 「다시 계산」을 눌러 주세요.', 'fail');
+      notify('다운로드할 산출 근거가 없습니다. 기준월을 바꾸거나 「다시 계산」을 눌러 주세요.', 'fail');
       return;
     }
     const qs = new URLSearchParams({ month: settleMonth, format: 'csv' });
@@ -4029,7 +4029,7 @@ export default function AdminPage() {
     loadStorage();
   }, [tab, authInfo?.allowed, loadAudit, loadStorage]);
 
-  // 내려받는 중인 항목 이름(빈 문자열이면 진행 중 아님) — 버튼에 진행 표시를 달고 중복 클릭을 막는다.
+  // 다운로드 중인 항목 이름(빈 문자열이면 진행 중 아님) — 버튼에 진행 표시를 달고 중복 클릭을 막는다.
   const [dlBusy, setDlBusy] = useState('');
   // 백업 복원 진행 중 — 덮어쓰기는 시간이 걸릴 수 있어 멈춘 것처럼 보이지 않게 한다.
   const [restoreBusy, setRestoreBusy] = useState(false);
@@ -4320,7 +4320,7 @@ export default function AdminPage() {
   const resetAll = async () => {
     const ok = await askConfirm({
       title: '기본 자료로 되돌릴까요?',
-      body: '등록한 안내 자료를 모두 지우고 처음 상태로 되돌립니다. 되돌릴 수 없으니, 필요하면 먼저 「백업 내려받기」로 받아 두세요.',
+      body: '등록한 안내 자료를 모두 지우고 처음 상태로 되돌립니다. 되돌릴 수 없으니, 필요하면 먼저 「백업 다운로드」로 받아 두세요.',
       confirmLabel: '모두 지우고 초기화',
     });
     if (!ok) return;
@@ -4340,7 +4340,7 @@ export default function AdminPage() {
       // **새 자료를 적던 중**이면 건드리지 않는다: 그 글은 지워진 것과 아무 상관이 없다.
       if (editingId) { setEditingId(null); setEditingRev(null); setKbConflict(null); loadKbForm(EMPTY_FORM); setKbErr({}); }
       await loadKB();
-      flashSaved('기본 지식베이스로 초기화했습니다.', data.saved as SavedView | undefined);
+      flashSaved('기본 답변 지식으로 초기화했습니다.', data.saved as SavedView | undefined);
     } catch {
       failed('초기화하지 못했습니다');
     }
@@ -4556,9 +4556,9 @@ export default function AdminPage() {
     }
   };
 
-  // ---- 내려받기 ----
+  // ---- 다운로드 ----
   /**
-   * 파일 내려받기 공통 경로.
+   * 파일 다운로드 공통 경로.
    *
    * 종전에는 `window.open('...?token=…')` 으로 열었다. 두 가지가 잘못이다.
    *  1) **관리 토큰이 주소창·브라우저 방문 기록·서버 접근 로그에 그대로 남는다.** 콘솔을 잠깐 빌려준
@@ -4582,7 +4582,7 @@ export default function AdminPage() {
           const d = await res.json();
           detail = typeof d?.message === 'string' ? d.message : typeof d?.error === 'string' ? d.error : '';
         } catch { /* 본문을 읽지 못해도 아래에서 일반 안내를 보여준다 */ }
-        failed(`${josa(what, '을', '를')} 내려받지 못했습니다`, detail);
+        failed(`${josa(what, '을', '를')} 다운로드하지 못했습니다`, detail);
         return;
       }
       const blob = await res.blob();
@@ -4597,9 +4597,9 @@ export default function AdminPage() {
       a.click();
       a.remove();
       URL.revokeObjectURL(href);
-      flash(`${josa(what, '을', '를')} 내려받았습니다.`);
+      flash(`${josa(what, '을', '를')} 다운로드했습니다.`);
     } catch {
-      failed(`${josa(what, '을', '를')} 내려받지 못했습니다`, '연결을 확인한 뒤 다시 시도해 주세요.');
+      failed(`${josa(what, '을', '를')} 다운로드하지 못했습니다`, '연결을 확인한 뒤 다시 시도해 주세요.');
     } finally {
       setDlBusy('');
     }
@@ -4629,7 +4629,7 @@ export default function AdminPage() {
       title: '이 파일로 덮어쓸까요?',
       target: file.name,
       // 변경 이력만은 덮지 않는다 (DS 48-3) — 무엇이 바뀌고 무엇이 그대로인지 묻기 전에 말한다.
-      body: '지금 등록된 안내 자료와 규칙이 파일의 내용으로 바뀝니다. 변경 이력은 덮어쓰지 않고, 파일에만 있는 기록을 더합니다. 되돌릴 수 없으니, 먼저 「백업 내려받기」로 현재 상태를 받아 두세요.',
+      body: '지금 등록된 안내 자료와 규칙이 파일의 내용으로 바뀝니다. 변경 이력은 덮어쓰지 않고, 파일에만 있는 기록을 더합니다. 되돌릴 수 없으니, 먼저 「백업 다운로드」로 현재 상태를 받아 두세요.',
       confirmLabel: '덮어쓰기',
     });
     if (!ok) return;
@@ -4848,7 +4848,7 @@ export default function AdminPage() {
     // 「응답 테스트」로 주고받은 말도 그대로 대화 기록이 된다(DS 24-2) — 대시보드의 빈 상태가
     // 「응답 테스트에서 대화하면 여기에 쌓입니다」라고 안내하고 버튼까지 두는데, 종전에는 그대로
     // 따라 해도 돌아온 화면이 똑같이 비어 있었다. 시킨 대로 했으면 결과가 보여야 한다.
-    // 전환이 일어났다면 접수도 함께 생기므로 상담원 요청·KPI 도 같이 갱신된다.
+    // 전환이 일어났다면 접수도 함께 생기므로 상담사 전환 요청·KPI 도 같이 갱신된다.
     if (answered) loadEsc(true);
   };
 
@@ -4949,11 +4949,11 @@ export default function AdminPage() {
         run: () => goTab(key),
       })));
 
-    take('상담원 요청', tickets
+    take('상담사 전환 요청', tickets
       .filter((t) => searchMatch(term, t.message, t.reason, shortTicket(t.id), HANDOFF_REASON_LABELS[t.reasonCode ?? ''], TICKET_STATUS_LABELS[t.status]))
       .map((t) => ({
         key: `ticket:${t.id}`,
-        kind: '상담원 요청' as const,
+        kind: '상담사 전환 요청' as const,
         title: `${shortTicket(t.id)} · ${TICKET_STATUS_LABELS[t.status]}`,
         detail: clip(t.message),
         run: (from: HTMLElement | null) => { goTab('esc'); setEscFilter('all'); setEscQuery(''); openTicket(t.id, from); },
@@ -4965,26 +4965,26 @@ export default function AdminPage() {
         key: `turn:${t.id}`,
         kind: '최근 대화' as const,
         title: clip(t.message, 48),
-        detail: `${timeLabel(t.at)} · 대화 ${shortSession(t.sessionId)} · ${t.escalate ? '상담원 제안' : '자동 응대'}`,
+        detail: `${timeLabel(t.at)} · 대화 ${shortSession(t.sessionId)} · ${t.escalate ? '상담사 전환 제안' : '자동 응대'}`,
         run: (from: HTMLElement | null) => { goTab('dash'); openDrawer(t.sessionId, from); },
       })), () => goTab('dash'));
 
-    take('지식베이스', entries
+    take('답변 지식', entries
       .filter((e) => searchMatch(term, e.question, e.answer, e.category, e.keywords.join(' ')))
       .map((e) => ({
         key: `kb:${e.id}`,
-        kind: '지식베이스' as const,
+        kind: '답변 지식' as const,
         title: clip(e.question, 48),
         detail: `${e.category || '분류 없음'} · ${clip(e.answer, 56)}`,
         run: () => { goTab('kb'); setKbCat(''); setKbQuery(e.question); },
       })), () => { goTab('kb'); setKbCat(''); setKbQuery(word); });
 
-    take('시나리오 룰', [
+    take('시나리오', [
       ...customRules
         .filter((r) => searchMatch(term, r.label, r.keywords.join(' '), r.reply))
         .map((r) => ({
           key: `rule:${r.intent}`,
-          kind: '시나리오 룰' as const,
+          kind: '시나리오' as const,
           title: r.label,
           detail: `내가 만든 규칙 · ${r.keywords.slice(0, 4).join(', ')}`,
           run: () => { goTab('rules'); setRuleQuery(r.label); },
@@ -4993,7 +4993,7 @@ export default function AdminPage() {
         .filter((r) => searchMatch(term, r.label, ruleExamples(r).join(' '), r.effectiveReply))
         .map((r) => ({
           key: `builtin:${r.intent}`,
-          kind: '시나리오 룰' as const,
+          kind: '시나리오' as const,
           title: r.label,
           detail: `기본 규칙 · ${ruleExamples(r).slice(0, 4).join(', ')}`,
           run: () => { goTab('rules'); setRuleQuery(r.label); },
@@ -5062,7 +5062,7 @@ export default function AdminPage() {
                 >
                   <NavIcon tab={key} />
                   <span>{label}</span>
-                  {/* 대기 중인 상담원 요청은 다른 탭에서 일하는 동안에도 보여야 한다(DS 24-1).
+                  {/* 대기 중인 상담사 전환 요청은 다른 탭에서 일하는 동안에도 보여야 한다(DS 24-1).
                       숫자 모양은 눈으로, 뜻은 스크린리더로 — 「99+」를 그대로 읽히지 않는다. */}
                   {key === 'esc' && openCount > 0 && (
                     <>
@@ -5149,10 +5149,10 @@ export default function AdminPage() {
             <h2 style={{ ...S.h2, marginRight: 'auto' }}>오늘 응대 현황</h2>
             <SyncStatus at={escSyncAt} onRefresh={() => loadEsc()} />
             <button type="button" {...busyBtn(dlBusy === '대화 기록', dlBusy !== '')} onClick={downloadLogsCsv}>
-              {dlBusy === '대화 기록' ? '내려받는 중…' : '대화 기록 내려받기'}
+              {dlBusy === '대화 기록' ? '다운로드 중…' : '대화 기록 다운로드'}
             </button>
             <button type="button" {...busyBtn(dlBusy === '백업', dlBusy !== '')} onClick={downloadBackup}>
-              {dlBusy === '백업' ? '내려받는 중…' : '백업 내려받기'}
+              {dlBusy === '백업' ? '다운로드 중…' : '백업 다운로드'}
             </button>
             <button
               type="button"
@@ -5194,7 +5194,7 @@ export default function AdminPage() {
               <KpiCard
                 label="봇 처리율"
                 /* 비율을 적는 자는 한 곳이다 (DS 67-1) — 종전 식(`Math.round(autoRate * 100)`)은
-                   999/1000 을 「100%」로 적어 상담원으로 넘어간 한 건을 지웠다. 셈도 서버가
+                   999/1000 을 「100%」로 적어 상담사으로 넘어간 한 건을 지웠다. 셈도 서버가
                    미리 반올림해 둔 `autoRate` 가 아니라 **괄호 안에 적는 그 두 수**로 한다. */
                 value={stats.conversation.totalTurns > 0
                   ? percentLabel(stats.conversation.autoHandled, stats.conversation.totalTurns) ?? MEASURING
@@ -5293,7 +5293,7 @@ export default function AdminPage() {
                       <th scope="col">고객사</th>
                       <th scope="col">대화</th>
                       <th scope="col">사람 수(대화 단위)</th>
-                      <th scope="col">상담원 제안</th>
+                      <th scope="col">상담사 전환 제안</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -5535,7 +5535,7 @@ export default function AdminPage() {
                               >
                                 <span className="ac-row-main">
                                   <span className="ac-row-msg" title={d.citation}>{clip(d.citation, 90)}</span>
-                                  <span className="ac-row-reply">지식베이스에서 이 자료를 찾습니다</span>
+                                  <span className="ac-row-reply">답변 지식에서 이 자료를 찾습니다</span>
                                 </span>
                                 <span className="ac-row-side">{pill}</span>
                               </button>
@@ -5600,7 +5600,7 @@ export default function AdminPage() {
                       <span className="ac-pill">{t.tenantLabel || UNNAMED_TENANT}</span>
                       <span className="ac-pill">{t.intentLabel || UNNAMED_TOPIC}</span>
                       <span className="ac-pill">{sourceView(t.source)}</span>
-                      {t.escalate && <span className="ac-pill" style={TONE.warn}>상담원 제안</span>}
+                      {t.escalate && <span className="ac-pill" style={TONE.warn}>상담사 전환 제안</span>}
                     </span>
                   </button>
                   </li>
@@ -5608,7 +5608,7 @@ export default function AdminPage() {
               </ul>
             )}
             <p style={{ ...S.tag, marginTop: 12 }}>
-              대화 기록은 최근 분량만 보관합니다. 오래 보관하려면 위의 「대화 기록 내려받기」를 이용해 주세요.
+              대화 기록은 최근 분량만 보관합니다. 오래 보관하려면 위의 「대화 기록 다운로드」를 이용해 주세요.
             </p>
           </section>
         </>
@@ -5790,7 +5790,7 @@ export default function AdminPage() {
                 {comma(docLen(imp.text))} / {comma(MAX_DOC_CHARS)}자
               </span>
             </div>
-            {/* 등록하면 지식베이스에서 무엇이 바뀌는가 — 미리보기에도, 등록한 뒤에도 같은 자리에서 말한다(DS 44-1). */}
+            {/* 등록하면 답변 지식에서 무엇이 바뀌는가 — 미리보기에도, 등록한 뒤에도 같은 자리에서 말한다(DS 44-1). */}
             {impOverlap && (impOverlap.overwrite.length > 0 || impOverlap.stale.length > 0) && (
               <div role="status" style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
                 {impOverlap.overwrite.length > 0 && (
@@ -5994,7 +5994,7 @@ export default function AdminPage() {
         const probeHits = probeKeywords(ruleProbe, formKeywords);
         const onEdit = async (r: CustomRuleView) => {
           // 빌더에 적던 규칙을 말없이 갈아 끼우지 않는다(DS 27-2).
-          if (!(await confirmDiscard(formDirty(crForm, formBase.current.rule), '시나리오 룰 빌더'))) return;
+          if (!(await confirmDiscard(formDirty(crForm, formBase.current.rule), '시나리오 빌더'))) return;
           setCrEditing(r.intent);
           // 무엇을 보고 고치기 시작했는지 함께 들고 간다 (DS 46-1).
           setCrEditingRev(r.rev ?? null);
@@ -6037,7 +6037,7 @@ export default function AdminPage() {
                     <li key={r.intent} className="ac-rulecard" data-editing={crEditing === r.intent ? 'true' : undefined} data-off={r.enabled ? undefined : 'true'}>
                       <div className="ac-rulehead">
                         <strong className="ac-rulename">{r.label}</strong>
-                        {r.escalate && <span className="ac-pill" style={TONE.warn}>상담원 연결</span>}
+                        {r.escalate && <span className="ac-pill" style={TONE.warn}>상담사 전환</span>}
                         {r.shadowedBy && <span className="ac-pill" style={TONE.danger}>가려짐</span>}
                         <button
                           type="button"
@@ -6090,7 +6090,7 @@ export default function AdminPage() {
               <div className="ac-toolbar">
                 <h2 id="ac-rule-builtin" style={{ ...S.h2, marginRight: 'auto' }}>기본 규칙 <span style={{ fontSize: 12.5, color: 'var(--mut)', fontWeight: 600 }}>{shownBuiltin.length}/{rules.length}건</span></h2>
               </div>
-              <p style={{ ...S.tag, padding: '10px 16px 0' }}>인사·요금·상담원 연결처럼 어느 상담에나 필요한 규칙입니다. 켜고 끄거나 답변 문구만 바꿀 수 있고, 조건은 바꿀 수 없습니다.</p>
+              <p style={{ ...S.tag, padding: '10px 16px 0' }}>인사·요금·상담사 전환처럼 어느 상담에나 필요한 규칙입니다. 켜고 끄거나 답변 문구만 바꿀 수 있고, 조건은 바꿀 수 없습니다.</p>
               {rules.length === 0 ? (
                 <LoadState phase={phase.rules === 'done' ? 'error' : phase.rules} busy="규칙을 불러오는 중입니다" fail="규칙을 불러오지 못했습니다" onRetry={loadRules} rows={4} />
               ) : shownBuiltin.length === 0 ? (
@@ -6106,7 +6106,7 @@ export default function AdminPage() {
                       <li key={r.intent} className="ac-rulecard" data-off={r.enabled ? undefined : 'true'}>
                         <div className="ac-rulehead">
                           <strong className="ac-rulename">{r.label}</strong>
-                          {r.escalate && <span className="ac-pill" style={TONE.warn}>상담원 연결</span>}
+                          {r.escalate && <span className="ac-pill" style={TONE.warn}>상담사 전환</span>}
                           {r.replyOverride && <span className="ac-pill">답변 수정됨</span>}
                           <button
                             type="button"
@@ -6226,7 +6226,7 @@ export default function AdminPage() {
                   {crErr.reply && <p id="cr-reply-err" className="ac-err">{crErr.reply}</p>}
                   <label className="ac-check">
                     <input type="checkbox" checked={crForm.escalate} onChange={(e) => setCrForm({ ...crForm, escalate: e.target.checked })} />
-                    <span>답변 뒤에 상담원 접수를 안내합니다<span className="ac-rulehint" style={{ display: 'block' }}>접수번호를 발급하고 연락처를 받습니다.</span></span>
+                    <span>답변 뒤에 상담사 접수를 안내합니다<span className="ac-rulehint" style={{ display: 'block' }}>접수번호를 발급하고 연락처를 받습니다.</span></span>
                   </label>
                 </div>
               </div>
@@ -6243,7 +6243,7 @@ export default function AdminPage() {
                     <div className="ac-pv-bot">
                       {crForm.reply.trim()}
                       {/* 「적용됩니다」라고 단정하지 않는다 — 먼저 걸리는 규칙이 있으면 이 답은 나가지 않는다(DS 44-3). */}
-                      <span className="ac-pv-cite">이 문장에 「{probeHits[0]}」 표현이 있습니다{crForm.escalate ? ' · 적용되면 이어서 상담원 접수 안내' : ''}</span>
+                      <span className="ac-pv-cite">이 문장에 「{probeHits[0]}」 표현이 있습니다{crForm.escalate ? ' · 적용되면 이어서 상담사 접수 안내' : ''}</span>
                     </div>
                   ) : ruleProbe.trim() ? (
                     <p className="ac-pv-note">{probeHits.length === 0 ? '이 문장에는 입력한 표현이 없어 규칙이 적용되지 않습니다.' : '답변을 입력하면 말풍선으로 보여 드립니다.'}</p>
@@ -6350,7 +6350,7 @@ export default function AdminPage() {
           <>
             <div className="ac-kpi" style={{ marginBottom: 16 }}>
               <KpiCard label="대기 중" value={String(totals.open)} note="아직 상담을 시작하지 않은 요청" />
-              <KpiCard label="상담 중" value={String(totals.in_progress)} note="상담원이 응대하고 있는 요청" />
+              <KpiCard label="상담 중" value={String(totals.in_progress)} note="상담사이 응대하고 있는 요청" />
               <KpiCard label="완료" value={String(totals.resolved)} note={`취소 ${totals.canceled}건 별도`} />
               <KpiCard label="자동 응대 완료율" value={autoRate} empty={autoRate === MEASURING} note={turnsTotal > 0 ? `전체 ${turnsTotal}쌍 중 ${stats?.conversation.autoHandled ?? 0}쌍은 챗봇이 마무리` : '대화가 쌓이면 계산합니다'} />
             </div>
@@ -6418,12 +6418,12 @@ export default function AdminPage() {
               )}
 
               {tickets.length === 0 && phase.esc !== 'done' ? (
-                <LoadState phase={phase.esc} busy="상담원 요청을 불러오는 중입니다" fail="상담원 요청을 불러오지 못했습니다" onRetry={() => loadEsc()} rows={4} />
+                <LoadState phase={phase.esc} busy="상담사 전환 요청을 불러오는 중입니다" fail="상담사 전환 요청을 불러오지 못했습니다" onRetry={() => loadEsc()} rows={4} />
               ) : tickets.length === 0 ? (
                 <div className="ac-empty">
                   <EmptyArt kind="chat" />
-                  <p style={{ fontSize: 14, fontWeight: 700 }}>접수된 상담원 연결 요청이 없습니다</p>
-                  <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>고객이 상담창에서 「상담원 연결하기」를 누르거나 챗봇이 답하지 못하면 여기에 쌓입니다.</p>
+                  <p style={{ fontSize: 14, fontWeight: 700 }}>접수된 상담사 전환 요청이 없습니다</p>
+                  <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>고객이 상담창에서 「상담사 전환하기」를 누르거나 챗봇이 답하지 못하면 여기에 쌓입니다.</p>
                   <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => goTab('test')}>응답 테스트에서 시험해 보기</button>
                 </div>
               ) : filtered.length === 0 ? (
@@ -6432,9 +6432,9 @@ export default function AdminPage() {
                   <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => { setEscFilter('all'); setEscQuery(''); }}>필터 지우기</button>
                 </div>
               ) : (
-                <ScrollX label="상담원 요청 목록">
+                <ScrollX label="상담사 전환 요청 목록">
                   <table className="ac-table">
-                    <caption className="ac-srhide">상담원 요청 목록</caption>
+                    <caption className="ac-srhide">상담사 전환 요청 목록</caption>
                     <thead>
                       <tr>
                         <SortTh label="접수" col="id" sort={tableSort.esc} onSort={toggleSort('esc')} />
@@ -6495,7 +6495,7 @@ export default function AdminPage() {
                   </table>
                 </ScrollX>
               )}
-              <Pager info={escView} label="상담원 요청" onPage={escView.onPage} />
+              <Pager info={escView} label="상담사 전환 요청" onPage={escView.onPage} />
             </section>
             {ticketsWarn && (
               <p style={{ ...S.tag, marginTop: -6 }}>
@@ -6985,7 +6985,7 @@ export default function AdminPage() {
                   {...busyBtn(dlBusy === '정산 리포트', dlBusy !== '' || !r || r.rows.length === 0, S.btn)}
                   onClick={downloadSettlementCsv}
                 >
-                  {dlBusy === '정산 리포트' ? '내려받는 중…' : 'CSV 내려받기'}
+                  {dlBusy === '정산 리포트' ? '다운로드 중…' : 'CSV 다운로드'}
                 </button>
               </div>
               <p style={{ ...S.tag, padding: '10px 16px' }}>
@@ -7306,7 +7306,7 @@ export default function AdminPage() {
                   {...busyBtn(dlBusy === '변경 이력', dlBusy !== '')}
                   onClick={() => downloadFile('/api/admin/audit?format=csv', '변경 이력', 'chatbot-audit.csv')}
                 >
-                  {dlBusy === '변경 이력' ? '내려받는 중…' : 'CSV 내려받기'}
+                  {dlBusy === '변경 이력' ? '다운로드 중…' : 'CSV 다운로드'}
                 </button>
               </div>
               {auditEvents.length === 0 && phase.audit !== 'done' ? (
@@ -7315,8 +7315,8 @@ export default function AdminPage() {
                 <div className="ac-empty">
                   <EmptyArt kind="kb" />
                   <p style={{ fontSize: 14, fontWeight: 700 }}>기록된 관리 작업이 없습니다</p>
-                  <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>지식베이스나 규칙을 수정하면 누가 언제 무엇을 바꿨는지 이곳에 남습니다.</p>
-                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => goTab('kb')}>지식베이스 열기</button>
+                  <p style={{ fontSize: 13, color: 'var(--mut)', marginTop: 4 }}>답변 지식나 규칙을 수정하면 누가 언제 무엇을 바꿨는지 이곳에 남습니다.</p>
+                  <button type="button" style={{ ...S.btnGhost, marginTop: 12 }} onClick={() => goTab('kb')}>답변 지식 열기</button>
                 </div>
               ) : shown.length === 0 ? (
                 <div className="ac-empty">
@@ -7517,7 +7517,7 @@ export default function AdminPage() {
                   <span style={S.tag}>
                     {testTenant
                       ? '고객사 전용 안내 자료·문구로 답합니다(「테넌트 지식」의 자료).'
-                      : '「지식베이스」에 등록한 안내 자료로 답합니다.'}
+                      : '「답변 지식」에 등록한 안내 자료로 답합니다.'}
                   </span>
                 </div>
               )}
@@ -7616,7 +7616,7 @@ export default function AdminPage() {
               <div className="ac-preview-foot">
                 {sel
                   ? `${sel.name} 고객에게는 이렇게 보입니다. 이 고객사의 안내 자료는 파일이 원본이라 콘솔에서 고칠 수 없습니다(「테넌트 지식」에서 확인).`
-                  : '고객에게는 이렇게 보입니다. 문구를 바꾸려면 「지식베이스」나 「시나리오 룰」에서 수정하세요.'}
+                  : '고객에게는 이렇게 보입니다. 문구를 바꾸려면 「답변 지식」나 「시나리오」에서 수정하세요.'}
               </div>
             </section>
               );
@@ -7676,7 +7676,7 @@ export default function AdminPage() {
           <p style={{ ...S.tag, marginBottom: 10 }}>
             {installTenant
               ? '고른 고객사의 안내 자료·문구·색으로 답합니다.'
-              : '「지식베이스」에 등록한 안내 자료로 답합니다.'}
+              : '「답변 지식」에 등록한 안내 자료로 답합니다.'}
           </p>
           {/* 한 줄짜리 스니펫이라 좁은 화면에서는 반드시 넘친다 — 마우스 휠 없이도 끝까지 볼 수 있어야 한다. */}
           <ScrollX label="설치 코드">

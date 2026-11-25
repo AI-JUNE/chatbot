@@ -433,7 +433,7 @@ test('상담원 요청이 요약 KPI·상태 필터·표·상세 서랍으로 �
   assert.match(t, /aria-haspopup="dialog"/, '접수번호 버튼은 서랍을 연다');
   assert.match(t, /TICKET_STATUS_TONE\[t\.status\]/, '상태 pill 색');
   // 빈 상태·검색 0건
-  assert.match(t, /접수된 상담원 연결 요청이 없습니다/, '빈 상태');
+  assert.match(t, /접수된 상담사 전환 요청이 없습니다/, '빈 상태');
   assert.match(t, /조건에 맞는 요청이 없습니다/, '필터 0건');
   assert.match(t, /필터 지우기/, '필터 0건 복구 행동');
   // 식별자·세션은 전부 노출하지 않는다
@@ -462,7 +462,7 @@ test('감사 로그·저장소 상태가 표·카드 그리드로 렌더되고 �
   assert.match(t, /htmlFor="audit-filter"[\s\S]*id="audit-filter"/, '작업 종류 필터 라벨');
   assert.match(t, /<table className="ac-table">/, '표');
   assert.match(t, /기록된 관리 작업이 없습니다/, '빈 상태');
-  assert.match(t, /지식베이스 열기/, '빈 상태 다음 행동');
+  assert.match(t, /답변 지식 열기/, '빈 상태 다음 행동');
   assert.match(t, /선택한 종류의 작업이 없습니다/, '필터 0건');
   assert.match(t, /className="ac-nsgrid"/, '저장소 네임스페이스 카드 그리드');
   assert.match(t, /data-health=\{n\.health\}/, '카드 상태 색');
@@ -1067,7 +1067,7 @@ test('대기 건수가 늘어난 때만 알린다 (DS 24-1)', opts, async () => 
   assert.equal(newRequestNotice(3, 1), '', '처리해서 줄었는데 「새 요청」이라 알린다');
   const msg = newRequestNotice(1, 3);
   assert.match(msg, /2건/, '늘어난 만큼(2건)을 세지 않는다');
-  assert.match(msg, /상담원 요청/, '어디서 확인하는지 알려주지 않는다');
+  assert.match(msg, /상담사 전환 요청/, '어디서 확인하는지 알려주지 않는다');
   assert.equal(/[A-Za-z]/.test(msg), false, `알림에 영문 코드가 섞였다: ${msg}`);
   // 메뉴 배지는 세 자리를 넘으면 이름을 밀어낸다 — 숫자는 줄이되 뜻은 .ac-srhide 가 전한다.
   assert.equal(waitingBadge(0), '0');
@@ -1607,7 +1607,7 @@ test('표가 길어지면 장을 나누고 「몇 건 중 어디인가」를 말
   assert.match(comp, /if \(!first\) onPage\(info\.page - 1\)/, '끝에서는 눌려도 아무 일이 없어야 한다');
 
   // 길어지는 표 6장에 페이저가 붙어 있다(파트너·정산 합계는 행 수가 계약 수로 묶여 있어 정렬만).
-  for (const label of ['안내 자료', '상담원 요청', '고객사', '고객사별 산출 근거', '테넌트 FAQ', '관리 작업 기록']) {
+  for (const label of ['안내 자료', '상담사 전환 요청', '고객사', '고객사별 산출 근거', '테넌트 FAQ', '관리 작업 기록']) {
     assert.match(src, new RegExp(`<Pager info=\\{\\w+\\} label="${label}"`), `페이저 누락: ${label}`);
   }
   assert.equal((src.match(/<Pager info=/g) || []).length, 6, '페이저 수');
@@ -2713,7 +2713,7 @@ test('쓰기 응답이 보관 결과를 싣고 화면이 그 사실을 말한다
   for (const sig of [
     /flashSaved\(data\.duplicate \? duplicateSavedText\('자료'\) : editingId \? '수정되었습니다/,
     /flashSaved\('삭제되었습니다\.', data\.saved/,
-    /flashSaved\('기본 지식베이스로 초기화했습니다\.', data\.saved/,
+    /flashSaved\('기본 답변 지식으로 초기화했습니다\.', data\.saved/,
     /duplicateSavedText\('규칙'\) : crEditing \? '규칙을 수정했습니다[\s\S]{0,80}data\.saved/,
     /flashSaved\('규칙을 삭제했습니다\.', data\.saved/,
     /duplicateSavedText\('파트너'\) : data\.created \? '파트너를 등록했습니다[\s\S]{0,120}data\.saved/,

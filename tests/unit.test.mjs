@@ -1278,7 +1278,7 @@ test('내려받기는 관리 토큰을 주소에 싣지 않는다 (DS 5-8)', () 
   assert.match(s, /downloadFile\(`\/api\/admin\/settlement\?/, '정산 CSV 누락');
   // 진행 표시 — 멈춘 것처럼 보이지 않게(§1).
   assert.match(s, /const \[dlBusy, setDlBusy\] = useState\(''\)/, '내려받는 중 상태가 없다');
-  const spins = s.match(/내려받는 중…/g) || [];
+  const spins = s.match(/다운로드 중…/g) || [];
   assert.ok(spins.length >= 4, `진행 표시가 빠진 내려받기 버튼이 있다(${spins.length}/4)`);
   // 진행 중 버튼을 disabled 로 만들면 키보드로 누른 사용자의 초점이 본문 밖으로 떨어진다.
   assert.match(s, /function busyBtn\(/, '진행 중 버튼 공통 속성이 없다');
