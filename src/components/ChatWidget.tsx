@@ -937,7 +937,7 @@ export function launcherLabel(open: boolean, title: string, unread: number): str
  */
 export function unreadNotice(title: string, unread: number): string {
   if (unread <= 0) return '';
-  return `${title} 새 답변 ${countPhrase(unread)} — 상담창을 열어 확인해 주세요.`;
+  return `${title} 새 답변 ${countPhrase(unread)}, 상담창에서 확인할 수 있습니다.`;
 }
 
 /**
@@ -1523,7 +1523,7 @@ export default function ChatWidget({
     // 되풀이한다. 답이 오기 전에 먼저 사실을 밝히고, 누를 수 없게 된 카드를 거둔다.
     if (threadExpired(lastTurnAt(msgs), Date.now())) {
       setMsgs((m) => m.map((x) => (x.form || x.suggestions ? { ...x, form: undefined, suggestions: undefined } : x)));
-      pushBot({ text: '한동안 대화가 없어 앞서 주고받은 내용은 보관하지 않았습니다. 방금 하신 말씀부터 다시 도와드릴게요.' });
+      pushBot({ text: '한동안 대화가 없어 앞서 주고받은 내용은 보관하지 않았습니다. 방금 입력하신 내용부터 이어서 안내합니다.' });
     }
     // 이 요청이 속한 대화 세대. 답이 오는 사이에 「닫고 처음으로」를 누르면 달라진다.
     const gen = genRef.current;
@@ -2125,8 +2125,8 @@ export default function ChatWidget({
                         {vote === undefined && (
                           <>
                             <span>도움이 됐나요?</span>
-                            <button onClick={() => rate(m, 'up')} aria-label="이 답변이 도움이 됐어요" style={{ ...chipStyle, padding: '4px 9px', minHeight: 26 }}><WIcon name="thumb" size={14} /></button>
-                            <button onClick={() => rate(m, 'down')} aria-label="이 답변이 도움이 되지 않았어요" style={{ ...chipStyle, padding: '4px 9px', minHeight: 26 }}><WIcon name="thumb" size={14} flip /></button>
+                            <button onClick={() => rate(m, 'up')} aria-label="이 답변이 도움이 되었습니다" style={{ ...chipStyle, padding: '4px 9px', minHeight: 26 }}><WIcon name="thumb" size={14} /></button>
+                            <button onClick={() => rate(m, 'down')} aria-label="이 답변이 도움이 되지 않았습니다" style={{ ...chipStyle, padding: '4px 9px', minHeight: 26 }}><WIcon name="thumb" size={14} flip /></button>
                           </>
                         )}
                         {/*
@@ -2140,7 +2140,7 @@ export default function ChatWidget({
                             <span role="status" style={{ color: 'var(--danger)' }}>평가를 보내지 못했어요.</span>
                             <button
                               onClick={() => rate(m, vote.verdict)}
-                              aria-label={vote.verdict === 'up' ? '도움이 됐어요 평가를 다시 보내기' : '도움이 되지 않았어요 평가를 다시 보내기'}
+                              aria-label={vote.verdict === 'up' ? '도움됨 평가 다시 보내기' : '도움 안 됨 평가 다시 보내기'}
                               // 복구 동작이라 평가 칩(26px)보다 큰 손가락 목표를 준다 — 「다시 보내기」와 같은 규격.
                               style={{ ...chipStyle, padding: '7px 12px', minHeight: 34, color: 'var(--danger)', borderColor: 'var(--danger)' }}
                             >

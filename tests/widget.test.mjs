@@ -729,7 +729,7 @@ test('런처가 읽지 않은 답을 이름과 소리로도 말한다 (DS 28-1)'
   // 접힌 상담창의 대화 목록(aria-live)은 DOM 에 없다 — 알리는 영역이 따로 있어야 한다.
   assert.equal(m.unreadNotice('GOWON Chat', 0), '', '알릴 것이 없는데 말한다');
   assert.match(m.unreadNotice('GOWON Chat', 1), /새 답변 1개/);
-  assert.match(m.unreadNotice('GOWON Chat', 1), /상담창을 열어/, '무엇을 하라는 말이 없다');
+  assert.match(m.unreadNotice('GOWON Chat', 1), /상담창에서 확인/, '어디서 확인하는지 말이 없다');
 });
 
 /**
