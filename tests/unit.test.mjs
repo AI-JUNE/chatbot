@@ -817,7 +817,7 @@ test('위젯 상담원 전환이 버튼→연락처 카드→접수 완료 흐�
   // 버튼을 누르면 곧바로 접수하지 않고 카드를 연다(연락처 없이 접수되는 사고 방지)
   assert.match(s, /function openHandoff/, '카드를 여는 단계가 있어야 한다');
   assert.match(s, /stage: 'form' \| 'sending' \| 'done' \| 'error'/, '4개 상태를 모두 다뤄야 한다');
-  assert.match(s, /aria-label="상담원 연결 접수"/, '카드에 이름이 있어야 한다(스크린리더)');
+  assert.match(s, /aria-label="상담사 연결 접수"/, '카드에 이름이 있어야 한다(스크린리더)');
   assert.match(s, /htmlFor="gw-handoff-contact"/, '연락처 입력에 라벨이 있어야 한다');
   assert.match(s, /'gw-handoff-err gw-handoff-hint' : 'gw-handoff-hint'/, '이용 목적 안내가 입력과 연결돼야 한다');
   assert.match(s, /role="alert"/, '실패는 즉시 안내돼야 한다');

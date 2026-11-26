@@ -48,7 +48,7 @@ export default function PublicFooter() {
               GOWON Chat
             </Link>
             <p className="lp-footabout">
-              등록한 안내 자료를 근거로 1차 응대하고, 확인이 필요한 문의만 상담원에게 넘기는 상담 챗봇입니다.
+              등록한 안내 자료를 근거로 1차 응대하고, 확인이 필요한 문의만 상담사에게 넘기는 상담 챗봇입니다.
               <br />
               운영 주식회사 고원(GOWON). 문의{' '}
               <a href={CONTACT_MAILTO} className="lp-footmail">{CONTACT_EMAIL}</a>

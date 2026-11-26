@@ -837,7 +837,7 @@ test('아쉬워요를 누른 사람에게 다음 길을 준다 (DS 32-3)', opts,
   const rate = src.slice(src.indexOf('{/* 답변 평가'), src.indexOf('{/* 타이핑 인디케이터'));
 
   assert.match(rate, /vote\?\.verdict === 'down'/, '아쉬워요 뒤에 아무 길도 없다');
-  assert.match(rate, />\s*상담원 연결하기\s*</, '아쉬워요를 누른 사람이 사람에게 닿을 길이 없다');
+  assert.match(rate, />\s*상담사 연결하기\s*</, '아쉬워요를 누른 사람이 사람에게 닿을 길이 없다');
   assert.match(rate, /onClick=\{\(\) => openHandoff\(m\.key\)\}/, '같은 접수 카드를 쓰지 않는다');
   // 엔진이 이미 전환을 제안한 답변에는 위에 같은 버튼이 있다 — 두 번 보여 주지 않는다.
   assert.match(rate, /vote\?\.verdict === 'down' && !m\.escalate && \(/, '같은 버튼이 한 말풍선에 두 개 뜬다');
@@ -1121,7 +1121,7 @@ test('연락처 없이 접수한 뒤에도 연락처를 남길 수 있다 (DS 34
   // 끝난 접수는 그 셋 중 어느 말도 할 수 없다 — 머리글도 같은 함수가 고른다(DS 50-1).
   assert.match(
     view34,
-    /t\.created \? '상담원 연결이 접수됐어요'\s*\n\s*: addingContact \? '연락처를 남겼어요'/,
+    /t\.created \? '상담사 연결이 접수됐어요'\s*\n\s*: addingContact \? '연락처를 남겼어요'/,
     '방금 한 일과 다른 말을 한다',
   );
   assert.match(card, /\{view\.heading\}/, '카드가 고른 머리글을 그리지 않는다');
@@ -1137,7 +1137,7 @@ test('연락처 없이 접수한 뒤에도 연락처를 남길 수 있다 (DS 34
     src.indexOf("{(handoff.stage === 'form' || handoff.stage === 'sending'"),
     src.indexOf("{handoff.stage === 'done' && handoff.ticket && ("),
   );
-  assert.match(form, /handoff\.addingContact \? '연락처 남기기' : '상담원 연결'/, '연락처를 더하는 자리를 새 접수라고 부른다');
+  assert.match(form, /handoff\.addingContact \? '연락처 남기기' : '상담사 연결'/, '연락처를 더하는 자리를 새 접수라고 부른다');
   assert.match(form, /새로 접수되지는 않습니다/, '다시 접수되는 줄 알고 그만둔다');
   assert.match(form, /접수번호 \$\{handoff\.ticket\.id\}에 연락 받으실 곳을 추가합니다/, '어느 접수에 더하는지 보여 주지 않는다');
   // 그 자리에 「연락처 없이 접수」는 없다 — 그 선택은 이미 했고, 눌러도 같은 접수가 그대로 온다.
@@ -1228,12 +1228,12 @@ test('접수한 뒤에는 다른 답변에서 다시 접수를 권하지 않는�
   ]) {
     assert.match(guard, /filedTicket \?/, '접수번호를 들고 있는데 또 접수를 권한다');
     // 조사는 번호를 읽는 소리에 맞춘다(DS 61-2) — 종전에는 `{filedTicket.id}로` 였다.
-    assert.match(guard, /접수번호 \{josa\(filedTicket\.id, '으로', '로'\)\} 상담원 연결이 접수돼 있어요/, '접수번호를 알려 주지 않는다');
+    assert.match(guard, /접수번호 \{josa\(filedTicket\.id, '으로', '로'\)\} 상담사 연결이 접수돼 있어요/, '접수번호를 알려 주지 않는다');
     assert.equal(/stage === 'done'/.test(guard), false, '접수 여부를 카드 단계로 가른다');
     // 접수번호를 받기 전에 보내는 중이면 — 또 누르면 그 요청의 답이 먼저 누른 말풍선으로 돌아가
     // 방금 적던 카드를 덮는다. 그 사이에도 버튼을 그리지 않고 진행 중임을 밝힌다.
     assert.match(guard, /filing \?/, '보내는 중에 또 누를 수 있다');
-    assert.match(guard, /상담원 연결을 접수하고 있어요/, '보내는 중이라는 사실을 밝히지 않는다');
+    assert.match(guard, /상담사 연결을 접수하고 있어요/, '보내는 중이라는 사실을 밝히지 않는다');
   }
   assert.match(src, /const filing = handoff\?\.stage === 'sending' && !handoff\.ticket;/, '보내는 중 판정이 없다');
 });
@@ -1320,7 +1320,7 @@ test('연락처 없이 접수한 카드가 올 수 없는 답을 약속하지 �
   assert.match(card, /\{view\.canAddContact && \(/, '연락처가 없을 때만 나오는 자리가 아니다');
   assert.match(card, /onClick=\{addContact\}/, '데려갈 버튼이 그 자리에 없다');
   // 연락처가 붙어 있는 접수에는 종전 그대로다(멀쩡한 약속까지 거두지 않는다).
-  assert.match(view, /남겨주신 연락처로 상담원이 확인 후 연락드립니다/, '연락처를 남긴 사람에게 할 말까지 거뒀다');
+  assert.match(view, /남겨주신 연락처로 상담사가 확인 후 연락드립니다/, '연락처를 남긴 사람에게 할 말까지 거뒀다');
 
   // 위젯이 상담원 쪽 글을 받아 오는 창구는 없다 — 이것이 위 문구를 거둔 까닭이다.
   const calls = [...new Set([...src.matchAll(/\/api\/[\w/-]+/g)].map((m) => m[0]))].sort();
@@ -1476,7 +1476,7 @@ test('되살린 접수 카드가 모르는 상태를 아는 척하지 않는다 
   const live = m.filedCardView({ id: 'ESC-0007', statusLabel: '상담 중', created: false, contactOnFile: true, status: 'in_progress' });
   assert.equal(live.status, '상담 중', '확인한 상태를 보여 주지 않는다');
   assert.equal(live.checking, '', '이미 아는데도 확인 중이라고 말한다');
-  assert.match(live.note, /남겨주신 연락처로 상담원이 확인 후 연락드립니다/, '회신 약속이 사라졌다');
+  assert.match(live.note, /남겨주신 연락처로 상담사가 확인 후 연락드립니다/, '회신 약속이 사라졌다');
   assert.equal(live.canAddContact, false, '연락처를 남긴 사람에게 또 묻는다');
 
   // ③ **끝난 접수** — 이것이 이 회차가 고친 거짓말이다. 약속도, 「연락처 남기기」도 없다
@@ -1506,7 +1506,7 @@ test('되살린 접수 카드가 모르는 상태를 아는 척하지 않는다 
 
   // ⑤ 방금 접수한 카드는 종전 그대로다(되살린 것이 아니므로 되묻지 않는다).
   const fresh = m.filedCardView({ id: 'ESC-0008', statusLabel: '접수', created: true, contactOnFile: false });
-  assert.equal(fresh.heading, '상담원 연결이 접수됐어요');
+  assert.equal(fresh.heading, '상담사 연결이 접수됐어요');
   assert.equal(fresh.status, '접수', '방금 받은 상태까지 숨긴다');
   assert.equal(fresh.checking, '', '방금 접수한 카드가 확인 중이라고 말한다');
   assert.equal(fresh.canAddContact, true, '연락처를 남길 길이 없다');

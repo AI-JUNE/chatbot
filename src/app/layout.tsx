@@ -5,7 +5,7 @@ import './globals.css';
 import { SITE_URL } from '@/lib/site';
 
 const TITLE = 'GOWON Chat | 자료를 근거로 답하는 상담 챗봇';
-const DESCRIPTION = '등록한 안내 자료를 근거로 AI가 1차 응대하고, 확인이 필요한 문의만 상담원에게 넘기는 상담 챗봇.';
+const DESCRIPTION = '등록한 안내 자료를 근거로 AI가 1차 응대하고, 확인이 필요한 문의만 상담사에게 넘기는 상담 챗봇.';
 
 /**
  * 글꼴 — **동적 서브셋**(unicode-range) 판을 쓴다.

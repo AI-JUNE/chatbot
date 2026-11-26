@@ -1012,7 +1012,7 @@ export function filedCardView(t: FiledCard, addingContact = false): FiledCardVie
   return {
     heading: closed
       ? t.status === 'resolved' ? '상담이 끝난 접수예요' : '취소된 접수예요'
-      : t.created ? '상담원 연결이 접수됐어요'
+      : t.created ? '상담사 연결이 접수됐어요'
       : addingContact ? '연락처를 남겼어요'
       : '이미 접수된 요청이 있어요',
     status: unknown ? '' : t.statusLabel,
@@ -1028,7 +1028,7 @@ export function filedCardView(t: FiledCard, addingContact = false): FiledCardVie
           // **서버가 아는 것**으로 말한다(DS 34-2). 방금 보낸 값으로 판단하면, 앞서 다른 길로
           // 연락처를 남긴 사람이 뒤에 「연락처 없이 접수」를 눌렀을 때 「연락처를 남기지
           // 않으셔서」라고 거짓을 말한다 — 서버에는 그 번호가 그대로 있다.
-          ? '남겨주신 연락처로 상담원이 확인 후 연락드립니다. 추가로 궁금한 점은 계속 물어보셔도 괜찮아요.'
+          ? '남겨주신 연락처로 상담사가 확인 후 연락드립니다. 추가로 궁금한 점은 계속 물어보셔도 괜찮아요.'
           // 「이 대화창으로 안내드립니다」는 **상담원이 이 창에 말을 걸 수 있다**는 뜻인데 이
           // 제품에는 그 길이 없다 (DS 45-1) — 사실을 적고 아래의 「연락처 남기기」로 데려간다.
           : '연락처를 남기지 않으셔서 저희가 먼저 연락드릴 방법이 없어요. 아래에서 연락처를 남겨주시면 순서대로 연락드립니다. 추가로 궁금한 점은 계속 물어보셔도 괜찮아요.',
@@ -1949,18 +1949,18 @@ export default function ChatWidget({
                     {m.escalate && !m.ticketId && handoff?.key !== m.key && (
                       filedTicket ? (
                         <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--sub)' }}>
-                          접수번호 {josa(filedTicket.id, '으로', '로')} 상담원 연결이 접수돼 있어요.
+                          접수번호 {josa(filedTicket.id, '으로', '로')} 상담사 연결이 접수돼 있어요.
                         </div>
                       ) : filing ? (
                         <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--sub)' }}>
-                          상담원 연결을 접수하고 있어요.
+                          상담사 연결을 접수하고 있어요.
                         </div>
                       ) : (
                         <button
                           onClick={() => openHandoff(m.key)}
                           style={{ marginTop: 8, fontSize: 12.5, fontWeight: 700, color: '#fff', background: 'var(--brand)', borderRadius: 10, padding: '9px 14px' }}
                         >
-                          상담원 연결하기
+                          상담사 연결하기
                         </button>
                       )
                     )}
@@ -1969,7 +1969,7 @@ export default function ChatWidget({
                       <div
                         className="gw-rise"
                         role="group"
-                        aria-label="상담원 연결 접수"
+                        aria-label="상담사 연결 접수"
                         style={{
                           marginTop: 8, background: 'var(--surface)', border: '1px solid var(--line)',
                           borderLeft: '3px solid var(--brand)', borderRadius: 12, padding: '11px 12px',
@@ -1981,12 +1981,12 @@ export default function ChatWidget({
                             {/* 이미 접수한 건에 연락처만 더하는 자리는 **새 접수가 아니다**(DS 34-3) —
                                 접수번호를 함께 보여 주지 않으면 다시 접수되는 줄 알고 그만둔다. */}
                             <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--brand-600)' }}>
-                              {handoff.addingContact ? '연락처 남기기' : '상담원 연결'}
+                              {handoff.addingContact ? '연락처 남기기' : '상담사 연결'}
                             </div>
                             <p style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--sub)', marginTop: 4 }}>
                               {handoff.addingContact && handoff.ticket
                                 ? `접수번호 ${handoff.ticket.id}에 연락 받으실 곳을 추가합니다. 새로 접수되지는 않습니다.`
-                                : '연락 받으실 곳을 남겨 주세요. 지금까지 나눈 대화가 상담원에게 함께 전달됩니다.'}
+                                : '연락 받으실 곳을 남겨 주세요. 지금까지 나눈 대화가 상담사에게 함께 전달됩니다.'}
                             </p>
                             <label htmlFor="gw-handoff-contact" style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--ink)', margin: '9px 0 5px' }}>
                               연락처 (전화번호 또는 이메일)
@@ -2161,15 +2161,15 @@ export default function ChatWidget({
                         */}
                         {vote?.verdict === 'down' && !m.escalate && (
                           filedTicket ? (
-                            <span>접수번호 {josa(filedTicket.id, '으로', '로')} 상담원 연결이 접수돼 있어요.</span>
+                            <span>접수번호 {josa(filedTicket.id, '으로', '로')} 상담사 연결이 접수돼 있어요.</span>
                           ) : filing ? (
-                            <span>상담원 연결을 접수하고 있어요.</span>
+                            <span>상담사 연결을 접수하고 있어요.</span>
                           ) : handoff?.key !== m.key ? (
                             <button
                               onClick={() => openHandoff(m.key)}
                               style={{ ...chipStyle, padding: '4px 11px', minHeight: 26 }}
                             >
-                              상담원 연결하기
+                              상담사 연결하기
                             </button>
                           ) : null
                         )}
@@ -2266,7 +2266,7 @@ export default function ChatWidget({
             </div>
           )}
           <div style={{ padding: '0 14px 10px', background: 'var(--surface)', fontSize: 10.5, lineHeight: 1.45, color: 'var(--mut)', textAlign: 'center' }}>
-            <p style={{ margin: 0 }}>{tenant?.aiNotice || 'AI 자동응답 · 정확한 확인이 필요하면 상담원을 연결해 주세요'}</p>
+            <p style={{ margin: 0 }}>{tenant?.aiNotice || 'AI 자동응답 · 정확한 확인이 필요하면 상담사를 연결해 주세요'}</p>
             {/* 테넌트가 바꿀 수 없는 자리에 둔다 — 고원이 방침으로 한 약속이지 고객사 문구가 아니다. */}
             <p id="gw-pii" style={{ margin: '3px 0 0' }}>{SENSITIVE_INPUT_NOTICE}</p>
           </div>
