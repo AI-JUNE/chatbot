@@ -808,7 +808,7 @@ function useScrollableY<T extends HTMLElement>(signal: unknown): [RefObject<T>, 
  */
 function scrollFocusProps(scrollable: boolean, label?: string) {
   if (!scrollable) return {};
-  return label ? { tabIndex: 0, role: 'region', 'aria-label': `${label} — 세로로 스크롤할 수 있습니다` } : { tabIndex: 0 };
+  return label ? { tabIndex: 0, role: 'region', 'aria-label': `${label}, 세로로 스크롤할 수 있습니다` } : { tabIndex: 0 };
 }
 
 /**
@@ -1506,7 +1506,7 @@ function ScrollX({ label, children, style }: { label: string; children: ReactNod
       ref={ref}
       className="ac-scrollx"
       style={style}
-      {...(scrollable ? { role: 'region', tabIndex: 0, 'aria-label': `${label} — 가로로 스크롤할 수 있습니다` } : {})}
+      {...(scrollable ? { role: 'region', tabIndex: 0, 'aria-label': `${label}, 가로로 스크롤할 수 있습니다` } : {})}
     >
       {children}
     </div>
@@ -1631,7 +1631,7 @@ function TrendChart({ daily }: { daily: DayView[] }) {
         width="100%"
         height={H}
         role="img"
-        aria-label={`최근 7일 일자별 대화 건수 — ${label}`}
+        aria-label={`최근 7일 일자별 대화 건수, ${label}`}
         style={{ display: 'block', overflow: 'visible' }}
       >
         {[0, 0.5, 1].map((r) => (
@@ -2227,7 +2227,7 @@ function ExternalLink({ href, label, className, style, children }: {
       target="_blank"
       rel="noopener noreferrer"
       // 접근 이름은 보이는 글자로 시작한다(음성 입력이 이름으로 누를 수 있어야 한다).
-      aria-label={`${label} — 새 창에서 열립니다`}
+      aria-label={`${label}, 새 창에서 열립니다`}
       {...(className ? { className } : {})}
       {...(style ? { style } : {})}
     >
@@ -6658,7 +6658,7 @@ export default function AdminPage() {
                               <td style={{ color: a.partnerId ? 'var(--ink)' : 'var(--sub)' }}>{partnerName(a.partnerId)}</td>
                               <td><span className="ac-pill" style={ACCOUNT_STATUS_TONE[a.status]}>{ACCOUNT_STATUS_LABELS[a.status]}</span></td>
                               <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{SOURCE_LABELS[a.source] ?? '미확인'}</td>
-                              <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{a.contractedAt || '—'}</td>
+                              <td className="ac-col-wide" style={{ color: 'var(--sub)', whiteSpace: 'nowrap' }}>{a.contractedAt || '-'}</td>
                               <td className="ac-col-wide" style={{ whiteSpace: 'nowrap', color: typeof a.monthlyFeeKrw === 'number' ? 'var(--ink)' : 'var(--mut)' }}>{wonLabel(a.monthlyFeeKrw)}</td>
                               <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
                                 {canWrite && (
@@ -6717,7 +6717,7 @@ export default function AdminPage() {
                                 <td style={{ fontWeight: 700 }}>{p.name}</td>
                                 <td><span className="ac-pill" style={PARTNER_STATUS_TONE[p.status]}>{p.status === 'active' ? '운영 중' : '중지'}</span></td>
                                 <td style={{ color: p.feeRateBp === null ? 'var(--mut)' : 'var(--ink)', whiteSpace: 'nowrap' }}>{feeLabel(p.feeRateBp)}</td>
-                                <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{p.managerName || '—'}</td>
+                                <td className="ac-col-wide" style={{ color: 'var(--sub)' }}>{p.managerName || '-'}</td>
                                 <td style={{ whiteSpace: 'nowrap' }}>
                                   {r ? <>{r.total}곳<span style={{ ...S.tag, marginLeft: 4 }}>계약 {r.contracted}</span></> : <span style={S.tag}>0곳</span>}
                                 </td>
@@ -6737,8 +6737,8 @@ export default function AdminPage() {
                             <tr key={`missing-${r.partnerId}`}>
                               <td style={{ fontWeight: 700, color: 'var(--sub)' }}>{r.partnerName}</td>
                               <td><span className="ac-pill" style={TONE.warn}>찾을 수 없음</span></td>
-                              <td style={{ color: 'var(--mut)' }}>—</td>
-                              <td className="ac-col-wide" style={{ color: 'var(--mut)' }}>—</td>
+                              <td style={{ color: 'var(--mut)' }}>-</td>
+                              <td className="ac-col-wide" style={{ color: 'var(--mut)' }}>-</td>
                               <td style={{ whiteSpace: 'nowrap' }}>{r.total}곳<span style={{ ...S.tag, marginLeft: 4 }}>계약 {r.contracted}</span></td>
                               <td />
                             </tr>
@@ -6747,8 +6747,8 @@ export default function AdminPage() {
                             <tr>
                               <td style={{ fontWeight: 700, color: 'var(--sub)' }}>직접 계약</td>
                               <td><span className="ac-pill" style={TONE.mute}>고원 직접</span></td>
-                              <td style={{ color: 'var(--mut)' }}>—</td>
-                              <td className="ac-col-wide" style={{ color: 'var(--mut)' }}>—</td>
+                              <td style={{ color: 'var(--mut)' }}>-</td>
+                              <td className="ac-col-wide" style={{ color: 'var(--mut)' }}>-</td>
                               <td style={{ whiteSpace: 'nowrap' }}>{directRollup.total}곳<span style={{ ...S.tag, marginLeft: 4 }}>계약 {directRollup.contracted}</span></td>
                               <td />
                             </tr>
@@ -7345,7 +7345,7 @@ export default function AdminPage() {
                           <td style={{ minWidth: 160 }}>
                             {e.target && <span style={{ fontWeight: 700 }}>{e.target}</span>}
                             {e.detail && <span className="ac-clamp" style={{ color: 'var(--sub)', display: 'block' }}>{e.detail}</span>}
-                            {!e.target && !e.detail && <span style={{ color: 'var(--mut)' }}>—</span>}
+                            {!e.target && !e.detail && <span style={{ color: 'var(--mut)' }}>-</span>}
                           </td>
                           <td className="ac-col-wide">
                             <span className="ac-pill" style={e.authed ? TONE.ok : TONE.warn}>

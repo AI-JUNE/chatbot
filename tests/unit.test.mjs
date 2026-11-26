@@ -1695,7 +1695,7 @@ test('새 창으로 열리는 링크는 그 사실을 알린다 (DS 11-3)', () =
   assert.match(admin, /function ExternalLink\(/, '콘솔 새 창 링크 공통 껍데기가 없다');
   assert.equal((admin.match(/<ExternalLink /g) || []).length, 2, '콘솔 새 창 링크 수가 바뀌었다');
   // 접근 이름은 보이는 글자로 시작해야 음성 입력이 이름으로 누를 수 있다(WCAG 2.5.3).
-  assert.match(admin, /aria-label=\{`\$\{label\} — 새 창에서 열립니다`\}/, '콘솔 접근 이름이 보이는 글자로 시작하지 않는다');
+  assert.match(admin, /aria-label=\{`\$\{label\}, 새 창에서 열립니다`\}/, '콘솔 접근 이름이 보이는 글자로 시작하지 않는다');
   assert.match(widget, /aria-label=\{`\$\{m\.cta\.label\} — 새 창에서 열립니다`\}/, '위젯 접근 이름이 보이는 글자로 시작하지 않는다');
 });
 

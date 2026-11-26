@@ -3994,7 +3994,7 @@ test('0 이 아닌 막대가 사라지지 않는다 (DS 67-3)', opts, async () =
   const hand = code.match(/Math\.round\(\([^)]*\/ max\) \* (?:full|100)\)/g) || [];
   assert.deepEqual(hand, [], `막대 길이를 손으로 셈하는 자리가 남았다: ${hand.join(' / ')}`);
   // 스크린리더가 읽는 글은 막대가 아니라 수다 — 그 줄은 종전 그대로다(막대 바닥이 수를 바꾸지 않는다).
-  assert.match(chart, /aria-label=\{`최근 7일 일자별 대화 건수 — \$\{label\}`\}/, '그래프가 수를 말하지 않는다');
+  assert.match(chart, /aria-label=\{`최근 7일 일자별 대화 건수, \$\{label\}`\}/, '그래프가 수를 말하지 않는다');
 });
 
 /* ══════════ 68차 재감사 (DS 71-3) ══════════ */
