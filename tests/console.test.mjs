@@ -1768,7 +1768,7 @@ test('답하지 못한 질문 목록이 뜨고 그 질문으로 자료를 만들
   assert.match(route, /unansweredQuestions\(8\)/, '서버가 답하지 못한 질문을 내려보내지 않는다');
 
   const dash = src.slice(src.indexOf("{tab === 'dash' && ("), src.indexOf('{/* ── 답변 평가'));
-  assert.ok(dash.includes('<h2 style={S.h2}>자료에 없어 답하지 못한 질문</h2>'), '답하지 못한 질문 카드가 없다');
+  assert.ok(dash.includes('<h2 style={S.h2}>미응답 질문</h2>'), '미응답 질문 카드가 없다');
   // 보여 준 수를 찾은 수라 말하지 않는다(DS 31-3 과 같은 규칙) — 묶음 수·총 횟수를 함께 적는다.
   assert.match(dash, /unanswered\.groups > unanswered\.items\.length/, '자른 수를 전체라고 말한다');
   assert.match(dash, /가지 중 \$\{comma\(unanswered\.items\.length\)\}가지/, '몇 가지 중 몇 가지인지 말하지 않는다');
@@ -1787,7 +1787,7 @@ test('답하지 못한 질문 목록이 뜨고 그 질문으로 자료를 만들
   assert.match(fn, /kbFormRef\.current\?\.scrollIntoView/, '좁은 화면에서 폼이 보이지 않는다');
 
   const html = await render();
-  assert.equal(html.includes('자료에 없어 답하지 못한 질문'), false, '목록이 오기 전에 카드를 단정한다');
+  assert.equal(html.includes('미응답 질문'), false, '목록이 오기 전에 카드를 단정한다');
 });
 
 /**

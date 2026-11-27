@@ -5367,7 +5367,7 @@ export default function AdminPage() {
           {unanswered && unanswered.items.length > 0 && (
             <section style={S.card}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
-                <h2 style={S.h2}>자료에 없어 답하지 못한 질문</h2>
+                <h2 style={S.h2}>미응답 질문</h2>
                 <span style={S.tag} role="status">
                   {unanswered.groups > unanswered.items.length
                     ? `${comma(unanswered.groups)}가지 중 ${comma(unanswered.items.length)}가지 · 모두 ${comma(unanswered.turns)}번`
@@ -5378,7 +5378,7 @@ export default function AdminPage() {
                 등록된 자료·규칙에서 답을 찾지 못해 기본 안내로 끝난 질문입니다. 자주 온 질문이 위에 있습니다.
                 고객사마다 답변 근거로 쓰는 자료가 달라 묶음도 고객사별로 나뉩니다.
               </p>
-              <ul className="ac-rows" aria-label="답하지 못한 질문 목록">
+              <ul className="ac-rows" aria-label="미응답 질문 목록">
                 {unanswered.items.map((u) => {
                   /**
                    * 고객사 자료(테넌트 FAQ)는 파일이 원본이라 콘솔에서 고칠 수 없다 — 「자료 만들기」가
@@ -5518,7 +5518,7 @@ export default function AdminPage() {
                                         ? '지금은 없는 자료입니다(지워졌습니다). 같은 질문이 또 오면 새로 등록해 주세요.'
                                         : lost
                                           ? '백업에서 되살린 평가입니다. 근거를 들고 답한 평가이지만 어느 자료였는지는 남아 있지 않습니다 — 이 수만으로 고칠 자료를 고르지 마세요.'
-                                          : '등록된 자료 없이 답한 답변입니다. 위의 「답하지 못한 질문」부터 채워 주세요.'}
+                                          : '등록된 자료 없이 답한 답변입니다. 위의 「미응답 질문」부터 채워 주세요.'}
                                     </span>
                                   </span>
                                   <span className="ac-row-side">{pill}</span>
