@@ -14,7 +14,7 @@ export default function PrivacyPage() {
     <LegalLayout
       title="개인정보처리방침"
       updated={LEGAL_UPDATED}
-      meta="서비스: GOWON Chat(상담 챗봇) · 운영: 주식회사 고원(GOWON)"
+      meta="서비스: GOWON Chat(상담 챗봇), 운영: 주식회사 고원(GOWON)"
       draft
     >
       <h2>1. 총칙</h2>
@@ -41,7 +41,7 @@ export default function PrivacyPage() {
       <h2>4. 보유 및 이용 기간</h2>
       <p>
         수집·이용 목적이 달성되면 지체 없이 파기하는 것을 원칙으로 합니다. 상담사 연결을 위한 연락처는 상담
-        완료 후 지체 없이 파기합니다. 현재 데모 단계에서는 대화 기록이 서버 재시작 시 삭제되는 임시 저장
+        완료 후 지체 없이 파기합니다. 현재 샘플 운영 단계에서는 대화 기록이 서버 재시작 시 삭제되는 임시 저장
         방식으로 운영되며, 개인정보의 영구 저장 기능은 비활성 상태입니다.{' '}
         <span className="todo">[미확정]</span> 상용 운영 시 상담 로그·접속 로그의 구체적 보관기간은 관계
         법령과 운영정책에 맞춰 확정한 뒤 이 방침에 기재합니다.

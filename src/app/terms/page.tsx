@@ -15,7 +15,7 @@ export default function TermsPage() {
     <LegalLayout
       title="이용약관"
       updated={LEGAL_UPDATED}
-      meta="서비스: GOWON Chat(상담 챗봇) · 운영: 주식회사 고원(GOWON)"
+      meta="서비스: GOWON Chat(상담 챗봇), 운영: 주식회사 고원(GOWON)"
       draft
     >
       <h2>제1조 (목적)</h2>
