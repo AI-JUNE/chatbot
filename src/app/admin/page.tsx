@@ -5185,9 +5185,9 @@ export default function AdminPage() {
                    그날 전부가 아니다(새 인스턴스는 올라온 시각 이후만 안다). 종전에는 그 사실이
                    어디에도 없어 운영자는 이 수를 그날 전부로 읽었다. */
                 note={
-                  `대화 상대 ${comma(stats.conversation.today?.sessions ?? 0)}명 · 보관 중 ${comma(stats.conversation.totalTurns)}건`
+                  `대화 상대 ${comma(stats.conversation.today?.sessions ?? 0)}명, 보관 중 ${comma(stats.conversation.totalTurns)}건`
                   + (stats.conversation.today?.coverage === 'partial' && stats.conversation.retention
-                    ? ` · ${timeLabel(stats.conversation.retention.knownFrom)} 이후만 집계`
+                    ? `, ${timeLabel(stats.conversation.retention.knownFrom)} 이후만 집계`
                     : '')
                 }
               />
@@ -5209,7 +5209,7 @@ export default function AdminPage() {
               <KpiCard
                 label="상담사 전환"
                 value={`${comma(stats.conversation.today?.escalated ?? 0)}건`}
-                note={`접수 대기 ${comma(stats.escalation.open)}건 · 누적 접수 ${comma(stats.escalation.total)}건`}
+                note={`접수 대기 ${comma(stats.escalation.open)}건, 누적 접수 ${comma(stats.escalation.total)}건`}
               />
               <KpiCard
                 label="평균 응답 시간"
@@ -5217,7 +5217,7 @@ export default function AdminPage() {
                 empty={typeof stats.conversation.avgLatencyMs !== 'number'}
                 note={
                   typeof stats.conversation.avgLatencyMs === 'number'
-                    ? `서버가 답을 만드는 데 걸린 시간 · 최근 ${comma(stats.conversation.latencySamples ?? 0)}건 평균`
+                    ? `서버가 답을 만드는 데 걸린 시간, 최근 ${comma(stats.conversation.latencySamples ?? 0)}건 평균`
                     : '대화가 쌓이면 서버 처리 시간 기준으로 계산됩니다.'
                 }
               />
