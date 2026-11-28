@@ -1228,12 +1228,12 @@ test('접수한 뒤에는 다른 답변에서 다시 접수를 권하지 않는�
   ]) {
     assert.match(guard, /filedTicket \?/, '접수번호를 들고 있는데 또 접수를 권한다');
     // 조사는 번호를 읽는 소리에 맞춘다(DS 61-2) — 종전에는 `{filedTicket.id}로` 였다.
-    assert.match(guard, /접수번호 \{josa\(filedTicket\.id, '으로', '로'\)\} 상담사 연결이 접수돼 있어요/, '접수번호를 알려 주지 않는다');
+    assert.match(guard, /접수번호 \{josa\(filedTicket\.id, '으로', '로'\)\} 상담사 연결이 접수되었습니다/, '접수번호를 알려 주지 않는다');
     assert.equal(/stage === 'done'/.test(guard), false, '접수 여부를 카드 단계로 가른다');
     // 접수번호를 받기 전에 보내는 중이면 — 또 누르면 그 요청의 답이 먼저 누른 말풍선으로 돌아가
     // 방금 적던 카드를 덮는다. 그 사이에도 버튼을 그리지 않고 진행 중임을 밝힌다.
     assert.match(guard, /filing \?/, '보내는 중에 또 누를 수 있다');
-    assert.match(guard, /상담사 연결을 접수하고 있어요/, '보내는 중이라는 사실을 밝히지 않는다');
+    assert.match(guard, /상담사 연결을 접수하는 중입니다/, '보내는 중이라는 사실을 밝히지 않는다');
   }
   assert.match(src, /const filing = handoff\?\.stage === 'sending' && !handoff\.ticket;/, '보내는 중 판정이 없다');
 });

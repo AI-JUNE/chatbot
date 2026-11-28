@@ -772,7 +772,7 @@ test('위젯이 빠른 답장 칩과 답변 평가를 제공한다', () => {
   assert.match(s, /tenant \? \(tenant\.starters \?\? \[\]\) : \(fallbackStarters \?\? \[\]\)/, '빠른 답장은 서버가 준 실제 FAQ에서 와야 한다(테넌트 유무로 출처만 갈라져야 한다)');
   assert.match(s, /도움이 됐나요\?/, '답변 평가 문구');
   assert.match(s, /'\/api\/feedback'/, '평가는 서버에 기록돼야 한다');
-  assert.match(s, /평가를 보내지 못했어요/, '실패를 삼키지 않고 알려야 한다');
+  assert.match(s, /평가를 보내지 못했습니다/, '실패를 삼키지 않고 알려야 한다');
   // 평가 요청에 대화 본문을 싣지 않는다(개인정보)
   assert.equal(/verdict, citation: m\.citation\?\.source \|\| ''/.test(s), true, '평가에는 근거 라벨만 보내야 한다');
 });

@@ -1949,11 +1949,11 @@ export default function ChatWidget({
                     {m.escalate && !m.ticketId && handoff?.key !== m.key && (
                       filedTicket ? (
                         <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--sub)' }}>
-                          접수번호 {josa(filedTicket.id, '으로', '로')} 상담사 연결이 접수돼 있어요.
+                          접수번호 {josa(filedTicket.id, '으로', '로')} 상담사 연결이 접수되었습니다.
                         </div>
                       ) : filing ? (
                         <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--sub)' }}>
-                          상담사 연결을 접수하고 있어요.
+                          상담사 연결을 접수하는 중입니다.
                         </div>
                       ) : (
                         <button
@@ -2137,7 +2137,7 @@ export default function ChatWidget({
                         */}
                         {vote?.failed && (
                           <>
-                            <span role="status" style={{ color: 'var(--danger)' }}>평가를 보내지 못했어요.</span>
+                            <span role="status" style={{ color: 'var(--danger)' }}>평가를 보내지 못했습니다.</span>
                             <button
                               onClick={() => rate(m, vote.verdict)}
                               aria-label={vote.verdict === 'up' ? '도움됨 평가 다시 보내기' : '도움 안 됨 평가 다시 보내기'}
@@ -2161,9 +2161,9 @@ export default function ChatWidget({
                         */}
                         {vote?.verdict === 'down' && !m.escalate && (
                           filedTicket ? (
-                            <span>접수번호 {josa(filedTicket.id, '으로', '로')} 상담사 연결이 접수돼 있어요.</span>
+                            <span>접수번호 {josa(filedTicket.id, '으로', '로')} 상담사 연결이 접수되었습니다.</span>
                           ) : filing ? (
-                            <span>상담사 연결을 접수하고 있어요.</span>
+                            <span>상담사 연결을 접수하는 중입니다.</span>
                           ) : handoff?.key !== m.key ? (
                             <button
                               onClick={() => openHandoff(m.key)}
