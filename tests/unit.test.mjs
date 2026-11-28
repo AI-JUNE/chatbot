@@ -768,7 +768,7 @@ test('위젯이 타이핑 인디케이터·도착 애니메이션·시각을 렌
 
 test('위젯이 빠른 답장 칩과 답변 평가를 제공한다', () => {
   const s = read('src/components/ChatWidget.tsx');
-  assert.match(s, /이런 걸 물어보실 수 있어요/, '빠른 답장 안내');
+  assert.match(s, /추천 질문/, '빠른 답장 안내');
   assert.match(s, /tenant \? \(tenant\.starters \?\? \[\]\) : \(fallbackStarters \?\? \[\]\)/, '빠른 답장은 서버가 준 실제 FAQ에서 와야 한다(테넌트 유무로 출처만 갈라져야 한다)');
   assert.match(s, /도움이 됐나요\?/, '답변 평가 문구');
   assert.match(s, /'\/api\/feedback'/, '평가는 서버에 기록돼야 한다');

@@ -135,25 +135,25 @@ test('위젯이 테넌트 브랜드색·헤더·AI 고지와 함께 렌더된다
 
 test('위젯이 빠른 답장 칩을 등록된 질문 그대로 보여준다', opts, async () => {
   const html = await render({ tenant: TENANT });
-  assert.ok(html.includes('이런 걸 물어보실 수 있어요'));
+  assert.ok(html.includes('추천 질문'));
   for (const q of TENANT.starters) assert.ok(html.includes(q), `빠른 답장 누락: ${q}`);
 });
 
 test('빠른 답장 지식이 없으면 칩 영역 자체를 만들지 않는다(빈 상태)', opts, async () => {
   const html = await render({ tenant: { ...TENANT, starters: [] } });
-  assert.equal(html.includes('이런 걸 물어보실 수 있어요'), false, '없는 안내를 만들어 보여주면 안 된다');
+  assert.equal(html.includes('추천 질문'), false, '없는 안내를 만들어 보여주면 안 된다');
 });
 
 test('tenant 없는 기본 위젯도 fallbackStarters 로 빠른 답장을 보여준다 (DS 19-1)', opts, async () => {
   const FALLBACK = ['환불은 어떻게 하나요?', '상담원과 연결하고 싶어요', '영업시간이 어떻게 되나요?', '요금은 얼마인가요?'];
   const html = await render({ fallbackStarters: FALLBACK });
-  assert.ok(html.includes('이런 걸 물어보실 수 있어요'), '기본 위젯도 지식이 있으면 칩을 보여줘야 한다');
+  assert.ok(html.includes('추천 질문'), '기본 위젯도 지식이 있으면 칩을 보여줘야 한다');
   for (const q of FALLBACK) assert.ok(html.includes(q), `빠른 답장 누락: ${q}`);
 });
 
 test('tenant 가 있으면 자기 starters 가 비어 있어도 fallbackStarters 로 새지 않는다 (테넌트 격리, DS 19-1)', opts, async () => {
   const html = await render({ tenant: { ...TENANT, starters: [] }, fallbackStarters: ['일반 지식 질문 하나'] });
-  assert.equal(html.includes('이런 걸 물어보실 수 있어요'), false, '테넌트 대화에 일반 지식 칩이 섞이면 안 된다');
+  assert.equal(html.includes('추천 질문'), false, '테넌트 대화에 일반 지식 칩이 섞이면 안 된다');
   assert.equal(html.includes('일반 지식 질문 하나'), false, 'fallbackStarters 문구가 테넌트 위젯에 새어 나가면 안 된다');
 });
 
@@ -171,7 +171,7 @@ test('테넌트가 없어도 기본 위젯이 AI 고지와 함께 렌더된다',
   const html = await render({});
   assert.ok(html.includes('인공지능(AI)'), '기본 인사말의 AI 고지');
   assert.ok(html.includes('AI가 응대합니다'), '헤더 AI 고지');
-  assert.equal(html.includes('이런 걸 물어보실 수 있어요'), false, '지식 없이 칩을 만들면 안 된다');
+  assert.equal(html.includes('추천 질문'), false, '지식 없이 칩을 만들면 안 된다');
 });
 
 /* ── 말풍선이 긴 URL·주문번호로 대화창 밖으로 밀려나지 않는다 (DS 18-1) ── */

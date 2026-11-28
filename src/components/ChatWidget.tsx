@@ -143,11 +143,11 @@ function isCitation(v: unknown): v is Citation {
 // 표준 오류 응답(lib/http fail()) 소비 — code 기반 사용자 친화 문구.
 interface ApiErrorLike { ok?: boolean; code?: string; message?: string; error?: string }
 const ERROR_TEXT: Record<string, string> = {
-  rate_limited: '메시지를 너무 빠르게 보내고 있어요.',
-  payload_too_large: '메시지가 너무 길어요. 조금 줄여서 다시 보내주세요.',
-  invalid_input: '메시지를 처리하지 못했어요. 내용을 바꿔 다시 보내주세요.',
-  invalid_json: '요청 처리에 문제가 있었어요. 잠시 후 다시 시도해 주세요.',
-  internal: '일시적인 오류가 발생했어요. 잠시 후 다시 시도해 주세요.',
+  rate_limited: '메시지를 너무 빠르게 보내고 있습니다.',
+  payload_too_large: '메시지가 너무 깁니다. 줄여서 다시 보내 주세요.',
+  invalid_input: '메시지를 처리하지 못했습니다. 내용을 바꿔 다시 보내 주세요.',
+  invalid_json: '요청을 처리하지 못했습니다. 잠시 후 다시 시도하세요.',
+  internal: '일시적인 오류가 발생했습니다. 잠시 후 다시 시도하세요.',
 };
 function errorText(d: ApiErrorLike, res?: Response): string {
   const code = typeof d?.code === 'string' ? d.code : '';
@@ -156,7 +156,7 @@ function errorText(d: ApiErrorLike, res?: Response): string {
     const wait = Number.isFinite(ra) && ra > 0 ? `약 ${Math.ceil(ra)}초 후` : '잠시 후';
     return `${ERROR_TEXT.rate_limited} ${wait} 다시 시도해 주세요.`;
   }
-  return ERROR_TEXT[code] || d?.message || d?.error || '오류가 발생했어요. 잠시 후 다시 시도해 주세요.';
+  return ERROR_TEXT[code] || d?.message || d?.error || '오류가 발생했습니다. 잠시 후 다시 시도하세요.';
 }
 
 /**
@@ -1685,7 +1685,7 @@ export default function ChatWidget({
         // 접수는 「되었는지 몰라서 또 누르는」 자리다 — 기한이 지나 끊었다는 사실을 밝히고 다시 시도하게 한다.
         error: isTimeout(e)
           ? '접수 결과가 오지 않아 기다리기를 멈췄습니다. 다시 시도해 주세요.'
-          : '연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.',
+          : '연결이 원활하지 않습니다. 잠시 후 다시 시도하세요.',
       });
     }
   }
@@ -2202,7 +2202,7 @@ export default function ChatWidget({
           {/* ── 빠른 답장(등록된 FAQ 질문 그대로) ── */}
           {showStarters && (
             <div style={{ padding: '10px 14px 0', background: 'var(--surface)', borderTop: '1px solid var(--line)' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--mut)', marginBottom: 7 }}>이런 걸 물어보실 수 있어요</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--mut)', marginBottom: 7 }}>추천 질문</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {starters.map((q) => (
                   <button key={q} onClick={() => sendText(q)} aria-disabled={busy || undefined} style={chip(busy)}>{q}</button>
