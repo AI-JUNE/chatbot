@@ -1066,7 +1066,7 @@ test('접수 완료 카드가 서버가 아는 연락처로 말한다 (DS 34-2)'
 
   // 판정은 카드 JSX 가 아니라 **한 함수**가 한다(DS 50-1) — 화면은 고른 말을 그린다.
   const view = sliceFn(src, 'export function filedCardView(');
-  assert.match(view, /t\.contactOnFile\s*\n?\s*(\/\/[^\n]*\n\s*)*\?\s*'남겨주신 연락처로/, '회신 안내를 서버가 아는 값으로 말하지 않는다');
+  assert.match(view, /t\.contactOnFile\s*\n?\s*(\/\/[^\n]*\n\s*)*\?\s*'남긴 연락처로/, '회신 안내를 서버가 아는 값으로 말하지 않는다');
   assert.match(card, /\{view\.note\}/, '카드가 고른 말을 그리지 않는다');
   // 방금 보낸 값으로 판단하면 앞서 남긴 연락처를 없는 것으로 말한다.
   assert.equal(/handoff\.contact\.trim\(\)\s*\n?\s*\?\s*'남겨주신/.test(src), false, '화면에 남은 값으로 회신 여부를 판단한다');
@@ -1121,7 +1121,7 @@ test('연락처 없이 접수한 뒤에도 연락처를 남길 수 있다 (DS 34
   // 끝난 접수는 그 셋 중 어느 말도 할 수 없다 — 머리글도 같은 함수가 고른다(DS 50-1).
   assert.match(
     view34,
-    /t\.created \? '상담사 연결이 접수됐어요'\s*\n\s*: addingContact \? '연락처를 남겼어요'/,
+    /t\.created \? '상담사 연결이 접수되었습니다'\s*\n\s*: addingContact \? '연락처를 남겼습니다'/,
     '방금 한 일과 다른 말을 한다',
   );
   assert.match(card, /\{view\.heading\}/, '카드가 고른 머리글을 그리지 않는다');
@@ -1314,13 +1314,13 @@ test('연락처 없이 접수한 카드가 올 수 없는 답을 약속하지 �
   const code = (card + view).replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
 
   assert.equal(code.includes('이 대화창으로 안내드립니다'), false, '상담원이 이 창에 말을 걸 수 있다고 말한다');
-  assert.match(view, /먼저 연락드릴 방법이 없어요/, '연락이 갈 수 없다는 사실을 말하지 않는다');
+  assert.match(view, /먼저 연락할 방법이 없습니다/, '연락이 갈 수 없다는 사실을 말하지 않는다');
   // 사실만 말하고 끝내지 않는다 — 바로 아래의 「연락처 남기기」로 데려간다(DS 44-3 과 같은 규칙).
-  assert.match(view, /아래에서 연락처를 남겨주시면/, '다음에 할 일을 가리키지 않는다');
+  assert.match(view, /아래에서 연락처를 남기면/,'다음에 할 일을 가리키지 않는다');
   assert.match(card, /\{view\.canAddContact && \(/, '연락처가 없을 때만 나오는 자리가 아니다');
   assert.match(card, /onClick=\{addContact\}/, '데려갈 버튼이 그 자리에 없다');
   // 연락처가 붙어 있는 접수에는 종전 그대로다(멀쩡한 약속까지 거두지 않는다).
-  assert.match(view, /남겨주신 연락처로 상담사가 확인 후 연락드립니다/, '연락처를 남긴 사람에게 할 말까지 거뒀다');
+  assert.match(view, /남긴 연락처로 상담사가 확인 후 연락합니다/, '연락처를 남긴 사람에게 할 말까지 거뒀다');
 
   // 위젯이 상담원 쪽 글을 받아 오는 창구는 없다 — 이것이 위 문구를 거둔 까닭이다.
   const calls = [...new Set([...src.matchAll(/\/api\/[\w/-]+/g)].map((m) => m[0]))].sort();
@@ -1468,27 +1468,27 @@ test('되살린 접수 카드가 모르는 상태를 아는 척하지 않는다 
   // ① 되살린 카드 — 저장소에는 상태 **코드**가 없다(라벨만 있다). 그래서 모르는 상태다.
   const restored = m.filedCardView({ id: 'ESC-0007', statusLabel: '접수', created: false, contactOnFile: true, stale: true });
   assert.equal(restored.status, '', '저장돼 있던 그때의 상태를 지금 상태처럼 적는다');
-  assert.equal(restored.checking, '처리 상태를 확인하고 있어요.', '되묻는 중임을 밝히지 않는다');
-  assert.equal(restored.note.includes('연락드립니다'), false, '확인하지 못한 채 회신을 약속한다');
-  assert.match(restored.note, /계속 물어보셔도 괜찮아요/, '다음에 할 수 있는 일을 말하지 않는다');
+  assert.equal(restored.checking, '처리 상태를 확인하는 중입니다.', '되묻는 중임을 밝히지 않는다');
+  assert.equal(restored.note.includes('연락합니다'), false, '확인하지 못한 채 회신을 약속한다');
+  assert.match(restored.note, /이어서 입력할 수 있습니다/,'다음에 할 수 있는 일을 말하지 않는다');
 
   // ② 되물어 확인했다 — 열려 있는 접수에는 종전 그대로 말한다(멀쩡한 약속을 거두지 않는다).
   const live = m.filedCardView({ id: 'ESC-0007', statusLabel: '상담 중', created: false, contactOnFile: true, status: 'in_progress' });
   assert.equal(live.status, '상담 중', '확인한 상태를 보여 주지 않는다');
   assert.equal(live.checking, '', '이미 아는데도 확인 중이라고 말한다');
-  assert.match(live.note, /남겨주신 연락처로 상담사가 확인 후 연락드립니다/, '회신 약속이 사라졌다');
+  assert.match(live.note, /남긴 연락처로 상담사가 확인 후 연락합니다/, '회신 약속이 사라졌다');
   assert.equal(live.canAddContact, false, '연락처를 남긴 사람에게 또 묻는다');
 
   // ③ **끝난 접수** — 이것이 이 회차가 고친 거짓말이다. 약속도, 「연락처 남기기」도 없다
   //    (그 버튼은 새 접수를 만든다 — 끝난 접수에 더하는 길이 아니다).
   for (const [status, heading, must] of [
-    ['resolved', '상담이 끝난 접수예요', '처리가 끝났어요'],
-    ['canceled', '취소된 접수예요', '취소됐어요'],
+    ['resolved', '상담이 끝난 접수입니다', '처리가 끝났습니다'],
+    ['canceled', '취소된 접수입니다', '취소되었습니다'],
   ]) {
     const done = m.filedCardView({ id: 'ESC-0007', statusLabel: '완료', created: false, contactOnFile: false, status });
     assert.equal(done.heading, heading, `${status}: 끝난 접수를 아직 열려 있는 것처럼 말한다`);
     assert.ok(done.note.includes(must), `${status}: 끝난 사실을 말하지 않는다`);
-    assert.equal(done.note.includes('연락드립니다'), false, `${status}: 오지 않을 연락을 약속한다`);
+    assert.equal(done.note.includes('연락합니다'), false,`${status}: 오지 않을 연락을 약속한다`);
     assert.equal(done.canAddContact, false, `${status}: 끝난 접수에 연락처를 남기라고 권한다`);
     assert.equal(m.ticketClosed(status), true, `${status}: 끝난 접수로 보지 않는다`);
   }
@@ -1499,19 +1499,19 @@ test('되살린 접수 카드가 모르는 상태를 아는 척하지 않는다 
   //    404 가 「그 접수가 없다」의 증거가 되지 못한다(취소됐다고 말해서는 안 된다).
   const unknown = m.filedCardView({ id: 'ESC-0007', statusLabel: '접수', created: false, contactOnFile: false, stale: true, unchecked: true });
   assert.equal(unknown.status, '', '확인하지 못한 상태를 적는다');
-  assert.equal(unknown.checking, '지금은 처리 상태를 확인하지 못했어요.', '확인하지 못한 사실을 밝히지 않는다');
+  assert.equal(unknown.checking, '지금은 처리 상태를 확인하지 못했습니다.','확인하지 못한 사실을 밝히지 않는다');
   assert.equal(/취소|완료/.test(unknown.heading + unknown.note), false, '확인하지 못한 접수를 끝난 것으로 말한다');
   // 그래도 연락처를 남길 길은 열어 둔다 — 막으면 연락처 없이 접수한 사람에게 남는 길이 없다.
   assert.equal(unknown.canAddContact, true, '되묻지 못한 자리에서 연락처를 남길 길이 사라진다');
 
   // ⑤ 방금 접수한 카드는 종전 그대로다(되살린 것이 아니므로 되묻지 않는다).
   const fresh = m.filedCardView({ id: 'ESC-0008', statusLabel: '접수', created: true, contactOnFile: false });
-  assert.equal(fresh.heading, '상담사 연결이 접수됐어요');
+  assert.equal(fresh.heading, '상담사 연결이 접수되었습니다');
   assert.equal(fresh.status, '접수', '방금 받은 상태까지 숨긴다');
   assert.equal(fresh.checking, '', '방금 접수한 카드가 확인 중이라고 말한다');
   assert.equal(fresh.canAddContact, true, '연락처를 남길 길이 없다');
-  // 연락처만 더하고 온 자리(DS 34-3)는 「연락처를 남겼어요」다.
-  assert.equal(m.filedCardView({ id: 'ESC-0008', statusLabel: '접수', created: false, contactOnFile: true }, true).heading, '연락처를 남겼어요');
+  // 연락처만 더하고 온 자리(DS 34-3)는 「연락처를 남겼습니다」다.
+  assert.equal(m.filedCardView({ id: 'ESC-0008', statusLabel: '접수', created: false, contactOnFile: true }, true).heading, '연락처를 남겼습니다');
 });
 
 /**
